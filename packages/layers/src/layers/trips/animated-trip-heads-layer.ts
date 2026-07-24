@@ -119,6 +119,32 @@ export interface _AnimatedTripHeadsLayerProps {
    */
   antialiasing?: boolean;
 
+  /* ── 3D elevation (per-feature z) ──────────────────────────────────────
+   * Lift each head dot to a per-FEATURE altitude sourced from a tile column,
+   * mirroring {@link AnimatedPointLayer} / {@link AnimatedPathLayer}: the tile
+   * geometry stays 2D (lon/lat) and each dot's z becomes `column[feature] ×
+   * elevationScale` metres, ADDED to any z the geometry already carries. A
+   * trip rides ONE level for its whole life (e.g. an HRRR wind particle pinned
+   * to a pressure surface), so the height is per-feature, not per-vertex.
+   * Unset → dots stay at ground (z = 0, or the archive's own 3D z). */
+
+  /**
+   * Numeric (or categorical, via {@link elevationMapping}) tile column that
+   * sets each dot's altitude in metres. @default null (ground)
+   */
+  elevationProperty?: string | null;
+  /**
+   * Category-string → metres map for a CATEGORICAL {@link elevationProperty}
+   * (the height analogue of `gradientColorRamp`). @default null
+   */
+  elevationMapping?: Record<string, number> | null;
+  /**
+   * Multiplier applied to every {@link elevationProperty} value before it
+   * becomes the dot's z — the scene's shared vertical exaggeration. No effect
+   * when {@link elevationProperty} is unset. @default 1
+   */
+  elevationScale?: number;
+
   /* ── Outline / contrast-ring subsystem ─────────────────────────────────
    * A stroked ring around each moving dot keeps it legible over busy
    * basemaps. These map onto the ScatterplotLayer outline props; `head*`
@@ -193,6 +219,13 @@ interface PreparedTile {
   vertexTimes: Float32Array;
   /** Per-vertex gradient scalar (zero-copy from the tile), or null if absent. */
   vertexValues: Float32Array | null;
+  /**
+   * Per-FEATURE elevation in metres (RAW column value, or mapped category —
+   * NOT yet scaled by `elevationScale`, which is applied per active dot so a
+   * scale change needs no cache invalidation), or null when no elevation
+   * column is configured / present on this tile.
+   */
+  featureElevations: Float64Array | null;
   /** 2 or 3 — stride of the source `positions` buffer. */
   dims: number;
   featureCount: number;
@@ -204,6 +237,36 @@ interface PreparedTile {
 function makeTileKey(tile: Tile, layer: TileLayer): string {
   const { z, x, y, t } = tile.id;
   return `${z}/${x}/${y}/${t}:${layer.name}`;
+}
+
+/**
+ * Resolve a PER-FEATURE elevation (RAW metres, pre-scale) for every feature in
+ * a tile from an elevation column, mirroring the path layer's resolver: a
+ * CATEGORICAL column maps each feature's category through `mapping` (absent →
+ * 0); a NUMERIC column uses the value directly. Returns null when the column
+ * is absent (or categorical with no mapping) — the caller leaves the tile flat.
+ */
+function resolveFeatureElevations(
+  binary: BinaryFeatures,
+  prop: string,
+  mapping: Record<string, number> | null | undefined,
+): Float64Array | null {
+  const count = binary.featureCount;
+  const cat = binary.categoricalProps[prop];
+  if (cat && mapping) {
+    const out = new Float64Array(count);
+    for (let f = 0; f < count; f++) {
+      out[f] = mapping[cat.categories[cat.indices[f]]] ?? 0;
+    }
+    return out;
+  }
+  const num = binary.numericProps[prop];
+  if (num) {
+    const out = new Float64Array(count);
+    for (let f = 0; f < count; f++) out[f] = num[f];
+    return out;
+  }
+  return null;
 }
 
 /**
@@ -232,6 +295,15 @@ export class AnimatedTripHeadsLayer<
     radiusScale: { type: 'number', value: 1, min: 0 },
     headBillboard: false,
     antialiasing: true,
+    // Per-feature elevation (unset ⇒ flat, z stays 0 / the archive's own z).
+    elevationProperty: { type: 'object', value: null, optional: true },
+    elevationMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
+    elevationScale: { type: 'number', value: 1 },
     // Outline subsystem — ScatterplotLayer defaults (stroked off, filled on).
     headStroked: false,
     headFilled: true,
@@ -305,6 +377,19 @@ export class AnimatedTripHeadsLayer<
         binary.vertexValues && binary.vertexValues.length >= totalVerts
           ? binary.vertexValues
           : null,
+      // Per-feature elevation column (e.g. a wind particle's pressure-level
+      // height) — resolved once per tile. `elevationProperty` is treated as a
+      // build-time constant, like the gradient channel; a runtime change on the
+      // same layer instance would not re-resolve cached tiles (not a usage we
+      // support). Null (no column configured) short-circuits before the lookup.
+      featureElevations:
+        typeof this.props.elevationProperty === 'string'
+          ? resolveFeatureElevations(
+              binary,
+              this.props.elevationProperty,
+              this.props.elevationMapping,
+            )
+          : null,
       dims,
       featureCount: binary.featureCount,
       timeOffset: binary.timeOffset,
@@ -334,6 +419,7 @@ export class AnimatedTripHeadsLayer<
     p: PreparedTile,
     relTime: number,
     wantValues: boolean,
+    elevScale: number,
   ): { positions: Float64Array; values: Float32Array | null; count: number } {
     const {
       positions,
@@ -342,6 +428,7 @@ export class AnimatedTripHeadsLayer<
       endTimes,
       vertexTimes,
       vertexValues,
+      featureElevations,
       dims,
       featureCount,
     } = p;
@@ -407,6 +494,10 @@ export class AnimatedTripHeadsLayer<
         }
       }
 
+      // Per-feature elevation (metres × scale) lifts the whole trip's dot to
+      // its level — added ON TOP of any z the geometry already carries.
+      if (featureElevations) alt += featureElevations[i] * elevScale;
+
       const o = n * 3;
       out[o] = lon;
       out[o + 1] = lat;
@@ -471,6 +562,8 @@ export class AnimatedTripHeadsLayer<
       number,
       number,
     ];
+    // Vertical exaggeration applied to each dot's per-feature elevation column.
+    const elevScale = this.props.elevationScale ?? 1;
 
     const sublayers: Layer[] = [];
     for (const tile of tiles) {
@@ -483,6 +576,7 @@ export class AnimatedTripHeadsLayer<
           prepared,
           relTime,
           useGradient,
+          elevScale,
         );
         if (count === 0) continue;
 

@@ -707,6 +707,61 @@ export const DEMO_META: Record<string, DemoMeta> = {
     ],
     related: ['severe-weather-2024', 'storm-radar', 'goes-glm-lightning'],
   },
+  'storm-3d-conus': {
+    category: 'earth-ocean',
+    tagline:
+      'The whole country as one 3D radar object — the 21 May 2024 outbreak as a continental volumetric reflectivity cloud you can orbit and dive into.',
+    techniqueTag: 'Storm 4D · continental MRMS volume',
+    about: [
+      'The companion to the Greenfield demo, scaled from one supercell to the whole United States. Instead of decoding a single NEXRAD site, this reads NOAA’s MRMS 3D reflectivity mosaic — a pre-assembled national grid sampled at 33 vertical levels from 0.5 to 19 km every ~2 minutes — and keeps every 1 km cell above 10 dBZ as a 3D point at its true altitude. The result is the entire 21 May 2024 severe-weather outbreak rendered as one time-animated volumetric cloud: orbit the continent to watch the whole line light up, then dive into any storm to read its vertical structure gate by gate.',
+      'A single national 3D frame is roughly 13 million points — about the size of the entire single-radar Greenfield archive, every five minutes — so the demo leans on a stratified level-of-detail pyramid: the continental framing streams a sparse, strongest-echo-first skeleton, and the full 1 km grid resolves only as you zoom into a storm, with every gate preserved losslessly at the deepest zoom. A GPU reflectivity threshold peels the cloud down to its cores in real time. Because the national mosaic carries reflectivity only, there is no dealiased-velocity toggle or mesocyclone couplet here — those live in the single-radar Greenfield demo; the continental story is the echo field itself, with GLM lightning flickering beneath.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA MRMS 3D reflectivity mosaic (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-mrms-pds/',
+        license: 'Public domain (US Gov)',
+        note: 'MergedReflectivityQC_<height>, 33 levels 0.5–19 km, ~1 km / ~2 min, CONUS; 2024-05-21 20:00→20:35Z.',
+      },
+      {
+        name: 'NOAA GOES-16 GLM (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-goes/',
+        license: 'Public domain (US Gov)',
+        note: 'GLM L2 LCFA flashes — the existing continental goes-glm-lightning archive, subset by the demo clock.',
+      },
+    ],
+    buildCommand:
+      'python scripts/data-generation/mrms_volume.py --start 2024-05-21T20:00Z --end 2024-05-21T20:35Z --grid-km 1 --dbz-floor 10 --out-dir examples/showcase/public/data',
+    buildNote:
+      'mrms_volume.py reuses the MRMS S3 fetch of mrms_weather.py and the ' +
+      'dBZ-band + stratified min-zoom LOD + stt-build back-half of ' +
+      'nexrad_volume.py; no Py-ART and no radar geometry (MRMS is already ' +
+      'QC’d and Cartesian). Reflectivity only. goes-glm-lightning is the ' +
+      'existing continental archive, subset at render — no rebuild.',
+    techniques: [
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'DataFilterExtension',
+        docPath: '/docs/api/data-filter-extension',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
+      {
+        label: 'PlaybackGovernor',
+        docPath: '/docs/api/playback-governor',
+      },
+    ],
+    related: [
+      'storm-4d-greenfield',
+      'severe-weather-2024',
+      'goes-glm-lightning',
+    ],
+  },
 
   // ── Mobility ───────────────────────────────────────────────────────────
   'av-synthetic': {
@@ -800,6 +855,52 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     related: ['av-synthetic', 'argoverse-02678d04', 'comma-280-1641'],
+  },
+
+  'cosmos-drive-dreams': {
+    category: 'mobility',
+    tagline:
+      '300 world-model driving scenarios side by side, every agent animating at once — click one to watch its generated video play in sync with its own geometry.',
+    techniqueTag: 'Scenario gallery · vector ⇄ generated video',
+    about: [
+      'A gallery of 300 ten-second driving scenarios from NVIDIA’s Cosmos-Drive-Dreams, laid out on a synthetic grid and all playing simultaneously on one looping clock. Each cell is a complete scene — HD-map lanes and crosswalks, the ego trajectory, and every tracked vehicle and pedestrian as an oriented 3D box — streamed from four cross-scenario tile archives rather than 300 separate ones, which is what makes hundreds of worlds animating at once affordable in a browser.',
+      'The premise is that the vector scene is the authoritative artifact and the world model supplies one photoreal manifestation of it. Selecting a world flies the camera into its cell and plays the Cosmos-generated video for that exact scenario locked to the same playhead driving the geometry — scrub the timeline and the video follows frame for frame. Because the generated corpus renders each scenario under a different condition, the grid reads as a mosaic of weather: filter to every rainy world, every snowy one, or the handful of scenarios that exist in more than one generated reality at once.',
+      'Built by `cosmos_drive_dreams.py`, which pulls the per-clip label tars from Hugging Face, rebases every clip onto a shared epoch and its own grid cell (STT tiles are geographic, so each scenario’s local metre frame is anchored to a cell on an equatorial lattice with the basemap hidden), and streams the generated videos straight out of the dataset’s split tar archive without ever storing the 40 GB part. Three "hero" scenarios also carry their full LiDAR sweep, streamed only when you fly into them.',
+    ],
+    dataSources: [
+      {
+        name: 'NVIDIA PhysicalAI Cosmos-Drive-Dreams',
+        url: 'https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicle-Cosmos-Drive-Dreams',
+        license: 'CC BY 4.0',
+        note: 'Scenario annotations (HD map, boxes, ego pose, LiDAR) and Cosmos-generated videos © NVIDIA, redistributed with attribution.',
+      },
+    ],
+    buildCommand:
+      'python scripts/data-generation/cosmos_drive_dreams.py   # ~300 scenarios + videos',
+    buildNote:
+      'Phased and resumable (index → videos → select → download → transform → build → ' +
+      'sidecar → cleanup). The videos phase streams one part of the generated-video ' +
+      'tar and keeps only the MP4s it wants; scenario selection then follows video ' +
+      'coverage. Open the gallery at /worlds.',
+    techniques: [
+      {
+        label: 'AnimatedTripsLayer',
+        docPath: '/docs/api/animated-trips-layer',
+      },
+      {
+        label: 'AnimatedPathLayer',
+        docPath: '/docs/api/animated-path-layer',
+      },
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'DataFilterExtension',
+        docPath: '/docs/api/data-filter-extension',
+      },
+    ],
+    related: ['argoverse-02678d04', 'av-synthetic', 'nuscenes-0103'],
   },
 
   'argoverse-02678d04': {

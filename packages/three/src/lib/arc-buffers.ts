@@ -31,6 +31,7 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
@@ -39,6 +40,8 @@ import {
   type CategoricalColorSpec,
   type RampColorSpec,
 } from './color.js';
+import { featureCategorySlot, type StablePalette } from './palette.js';
+import { featureTileKey } from './id-pick.js';
 
 /**
  * Per-endpoint colour spec — an arc gradients from its source colour to its
@@ -69,6 +72,20 @@ export interface ArcBufferOptions {
   elevationScale?: number;
   /** Constant height lift (metres) on both endpoints. @default 0 */
   zLift?: number;
+  /**
+   * Numeric column feeding the GPU DataFilter (`sttFilterValue`, per arc). When
+   * set, `filterValues` is emitted (0 where a tile lacks the column, deck's
+   * constant fallback). @default null (no filter attribute)
+   */
+  filterProperty?: string | null;
+  /**
+   * GPU stable-palette path (deck `CategoryColorExtension`): when set, emit a
+   * per-arc `categoryIndices` slot buffer for the palette-texture lookup — the
+   * category LABEL is placed by `palette` (stable across tiles), NULL / missing →
+   * the palette's null slot. The CPU-expanded `colorSource`/`colorTarget` still
+   * ride along (the shader ignores them under the palette path). @default null
+   */
+  categoryIndex?: { property: string; palette: StablePalette } | null;
 }
 
 export interface ArcBuffers {
@@ -80,8 +97,28 @@ export interface ArcBuffers {
   starts: Float32Array; // float, relative to timeOrigin
   ends: Float32Array; // float, relative to timeOrigin
   heights: Float32Array; // float, per-arc height multiplier
+  /** float, per-arc DataFilter value; 0-length when no `filterProperty`. */
+  filterValues: Float32Array;
+  /** float, per-arc stable palette slot; 0-length when no `categoryIndex`. */
+  categoryIndices: Float32Array;
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
+  /**
+   * Per-merged-instance provenance (the GPU picking-catalog identity buffer).
+   * Merged arc instance `i` — the same `i` a GPU id-buffer pick decodes —
+   * resolves via `provenance.resolve(i)` to its source `(tileKey, featureIndex)`.
+   * Populated in the EXACT order arcs are written (1 arc per LineString feature),
+   * so index alignment with the geometry is guaranteed. Empty when `count === 0`.
+   * See `point-buffers.ts` (the template).
+   */
+  provenance: InstanceProvenance;
+  /**
+   * `tileKey` → the source layer's {@link BinaryFeatures}, so a resolved
+   * provenance entry can be joined back to columns via
+   * `getFeatureProperties(binary, featureIndex)`. Built from the SAME iteration
+   * (and the same {@link featureTileKey}) as {@link provenance}, so keys align.
+   */
+  binaryByTileKey: Map<string, BinaryFeatures>;
 }
 
 const DEFAULT_SOURCE: RGBA = [0, 150, 255, 255];
@@ -101,12 +138,12 @@ function featureColor(b: BinaryFeatures, f: number, mode: ArcColorMode): RGBA {
   return resolveCategoryColor(label, mode.mapping, mode.fallback);
 }
 
-/** Collect LineString layers + total arc (feature) count. */
+/** Collect LineString layers (with their tile key) + total arc (feature) count. */
 function collectArcLayers(tiles: Tile[]): {
-  layers: BinaryFeatures[];
+  parts: Array<{ b: BinaryFeatures; tileKey: string }>;
   arcCount: number;
 } {
-  const layers: BinaryFeatures[] = [];
+  const parts: Array<{ b: BinaryFeatures; tileKey: string }> = [];
   let arcCount = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
@@ -117,11 +154,11 @@ function collectArcLayers(tiles: Tile[]): {
         !b.startIndices
       )
         continue;
-      layers.push(b);
+      parts.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
       arcCount += b.featureCount;
     }
   }
-  return { layers, arcCount };
+  return { parts, arcCount };
 }
 
 /**
@@ -135,7 +172,9 @@ export function buildArcBuffers(
   timeOrigin: number,
   opts: ArcBufferOptions = {},
 ): ArcBuffers {
-  const { layers, arcCount } = collectArcLayers(tiles);
+  const { parts, arcCount } = collectArcLayers(tiles);
+  const provenance = new InstanceProvenance();
+  const binaryByTileKey = new Map<string, BinaryFeatures>();
   const empty = (): ArcBuffers => ({
     count: 0,
     posSource: new Float32Array(0),
@@ -145,8 +184,12 @@ export function buildArcBuffers(
     starts: new Float32Array(0),
     ends: new Float32Array(0),
     heights: new Float32Array(0),
+    filterValues: new Float32Array(0),
+    categoryIndices: new Float32Array(0),
     origin: [0, 0, 0],
     bbox: null,
+    provenance,
+    binaryByTileKey,
   });
   if (arcCount === 0) return empty();
 
@@ -163,7 +206,7 @@ export function buildArcBuffers(
   const constHeight = opts.height ?? 1;
 
   // RTC origin = first feature's source (first) vertex, projected (absolute world).
-  const first = layers[0];
+  const first = parts[0].b;
   const fdims = first.positionDimensions ?? 2;
   const origin = projection.project(
     first.positions[0],
@@ -178,6 +221,14 @@ export function buildArcBuffers(
   const starts = new Float32Array(arcCount);
   const ends = new Float32Array(arcCount);
   const heights = new Float32Array(arcCount);
+  const wantFilter = !!opts.filterProperty;
+  const filterValues = wantFilter
+    ? new Float32Array(arcCount)
+    : new Float32Array(0);
+  const catIndex = opts.categoryIndex ?? null;
+  const categoryIndices = catIndex
+    ? new Float32Array(arcCount)
+    : new Float32Array(0);
   let minX = Infinity,
     minY = Infinity,
     minZ = Infinity;
@@ -186,7 +237,9 @@ export function buildArcBuffers(
     maxZ = -Infinity;
 
   let a = 0; // arc instance index
-  for (const b of layers) {
+  for (const part of parts) {
+    const b = part.b;
+    binaryByTileKey.set(part.tileKey, b);
     const dims = b.positionDimensions ?? fdims;
     const elev = opts.elevationProperty
       ? b.numericProps[opts.elevationProperty]
@@ -194,9 +247,16 @@ export function buildArcBuffers(
     const heightCol = opts.heightProperty
       ? b.numericProps[opts.heightProperty]
       : undefined;
+    const filterCol =
+      wantFilter && opts.filterProperty
+        ? b.numericProps[opts.filterProperty]
+        : undefined;
     const rebase = b.timeOffset - timeOrigin;
     const si = b.startIndices!;
     for (let f = 0; f < b.featureCount; f++) {
+      // Provenance MUST be pushed in the same order arcs are written (merged
+      // index = a), so a decoded GPU id aligns with this feature.
+      provenance.push(part.tileKey, f);
       const srcVertex = si[f];
       const tgtVertex = si[f + 1] - 1;
       const srcBase = srcVertex * dims;
@@ -246,6 +306,14 @@ export function buildArcBuffers(
       starts[a] = (b.startTimes ? b.startTimes[f] : 0) + rebase;
       ends[a] = (b.endTimes ? b.endTimes[f] : 0) + rebase;
       heights[a] = heightCol ? heightCol[f] : constHeight;
+      if (wantFilter) filterValues[a] = filterCol ? filterCol[f] : 0;
+      if (catIndex)
+        categoryIndices[a] = featureCategorySlot(
+          b,
+          f,
+          catIndex.property,
+          catIndex.palette,
+        );
 
       // bbox tracks both endpoints (the raised mid is bounded by their span).
       for (const [x, y, zz] of [
@@ -272,7 +340,11 @@ export function buildArcBuffers(
     starts,
     ends,
     heights,
+    filterValues,
+    categoryIndices,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    provenance,
+    binaryByTileKey,
   };
 }

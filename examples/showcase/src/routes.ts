@@ -34,6 +34,7 @@ export default [
     // Chrome-free fullscreen surfaces (client-only; never prerendered).
     route('story/drifters', 'pages/DrifterStory.tsx'),
     route('drive/:sceneId?', 'pages/AvCockpit.tsx'),
+    route('worlds/:worldId?', 'pages/CosmosWorlds.tsx'),
     route('demo/:datasetId', 'pages/DemoPage.tsx'),
     // Backwards-compat: old /maplibre/:id deep-links route to the same viewer.
     // Same module reused → needs a distinct id.

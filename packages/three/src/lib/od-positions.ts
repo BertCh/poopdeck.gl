@@ -27,6 +27,7 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
@@ -35,6 +36,8 @@ import {
   type CategoricalColorSpec,
   type RampColorSpec,
 } from './color.js';
+import { featureCategorySlot } from './palette.js';
+import { featureTileKey } from './id-pick.js';
 import type {
   LineColorMode,
   LineSegmentBufferOptions,
@@ -68,10 +71,10 @@ function featureColor(b: BinaryFeatures, f: number, mode: LineColorMode): RGBA {
 }
 
 function collectOdLayers(tiles: Tile[]): {
-  layers: BinaryFeatures[];
+  parts: Array<{ b: BinaryFeatures; tileKey: string }>;
   segCount: number;
 } {
-  const layers: BinaryFeatures[] = [];
+  const parts: Array<{ b: BinaryFeatures; tileKey: string }> = [];
   let segCount = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
@@ -82,12 +85,12 @@ function collectOdLayers(tiles: Tile[]): {
         !b.startIndices
       )
         continue;
-      layers.push(b);
+      parts.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
       // One OD segment per feature (source→target endpoints).
       segCount += b.featureCount;
     }
   }
-  return { layers, segCount };
+  return { parts, segCount };
 }
 
 /**
@@ -107,7 +110,9 @@ export function buildOdLineSegmentBuffers(
   timeOrigin: number,
   opts: LineSegmentBufferOptions,
 ): LineSegmentBuffers {
-  const { layers, segCount } = collectOdLayers(tiles);
+  const { parts, segCount } = collectOdLayers(tiles);
+  const provenance = new InstanceProvenance();
+  const binaryByTileKey = new Map<string, BinaryFeatures>();
   const empty = (): LineSegmentBuffers => ({
     count: 0,
     posA: new Float32Array(0),
@@ -118,16 +123,22 @@ export function buildOdLineSegmentBuffers(
     ends: new Float32Array(0),
     timeA: new Float32Array(0),
     timeB: new Float32Array(0),
+    filterValues: new Float32Array(0),
+    categoryIndices: new Float32Array(0),
     origin: [0, 0, 0],
     bbox: null,
+    provenance,
+    binaryByTileKey,
   });
   if (segCount === 0) return empty();
 
   const zLift = opts.zLift ?? 0;
   const elevScale = opts.elevationScale ?? 1;
+  const wantFilter = !!opts.filterProperty;
+  const catIndex = opts.categoryIndex ?? null;
 
   // RTC origin = first feature's SOURCE vertex, projected (absolute world).
-  const first = layers[0];
+  const first = parts[0].b;
   const fdims = first.positionDimensions ?? 2;
   const origin = projection.project(
     first.positions[0],
@@ -143,6 +154,12 @@ export function buildOdLineSegmentBuffers(
   const ends = new Float32Array(segCount);
   const timeA = new Float32Array(segCount);
   const timeB = new Float32Array(segCount);
+  const filterValues = wantFilter
+    ? new Float32Array(segCount)
+    : new Float32Array(0);
+  const categoryIndices = catIndex
+    ? new Float32Array(segCount)
+    : new Float32Array(0);
   let minX = Infinity,
     minY = Infinity,
     minZ = Infinity;
@@ -151,14 +168,22 @@ export function buildOdLineSegmentBuffers(
     maxZ = -Infinity;
 
   let s = 0; // segment index (== feature index, but tiles concatenate)
-  for (const b of layers) {
+  for (const part of parts) {
+    const b = part.b;
+    binaryByTileKey.set(part.tileKey, b);
     const dims = b.positionDimensions ?? fdims;
     const elev = opts.elevationProperty
       ? b.numericProps[opts.elevationProperty]
       : undefined;
+    const filterCol =
+      wantFilter && opts.filterProperty
+        ? b.numericProps[opts.filterProperty]
+        : undefined;
     const rebase = b.timeOffset - timeOrigin;
     const si = b.startIndices!;
     for (let f = 0; f < b.featureCount; f++) {
+      // One provenance entry per OD instance (merged index = s), in draw order.
+      provenance.push(part.tileKey, f);
       const rgba = featureColor(b, f, opts.colorMode);
       const cr = rgba[0] / 255,
         cg = rgba[1] / 255,
@@ -166,6 +191,14 @@ export function buildOdLineSegmentBuffers(
         ca = (rgba[3] ?? 255) / 255;
       const start = (b.startTimes ? b.startTimes[f] : 0) + rebase;
       const end = (b.endTimes ? b.endTimes[f] : 0) + rebase;
+      if (wantFilter) filterValues[s] = filterCol ? filterCol[f] : 0;
+      if (catIndex)
+        categoryIndices[s] = featureCategorySlot(
+          b,
+          f,
+          catIndex.property,
+          catIndex.palette,
+        );
       const baseZ = elev ? elev[f] * elevScale : null;
 
       // First vertex = source, last vertex = target.
@@ -234,8 +267,12 @@ export function buildOdLineSegmentBuffers(
     ends,
     timeA,
     timeB,
+    filterValues,
+    categoryIndices,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    provenance,
+    binaryByTileKey,
   };
 }
 

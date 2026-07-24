@@ -149,6 +149,11 @@ scripts/data-generation/osrm-data/
 scripts/data-generation/av2-raw/
 *.osrm.*
 
+# Cosmos-Drive-Dreams working cache for the /worlds gallery (per-clip label tars
+# from Hugging Face + intermediate parquet + phase markers; several GB, deleted
+# by the generator's `cleanup` phase and re-fetchable at any time).
+scripts/data-generation/cosmos-raw/
+
 # OSM editing-history inputs for `stt-generate osm-edits` (large; downloaded
 # as a prerequisite, never committed). History extracts + the changeset dump.
 *.osh.pbf

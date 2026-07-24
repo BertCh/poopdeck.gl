@@ -290,6 +290,22 @@ export interface _SpatioTemporalLayerProps {
   loadOptions?: SttLoadOptions;
 
   /**
+   * Tile refinement strategy (deck.gl TileLayer vocabulary).
+   *
+   * - `'best-available'` (default): also fetch parent tiles up to 4 zooms
+   *   below the viewport zoom so the map shows coarse data while the primary
+   *   tiles stream, dropping each parent once its in-viewport children load.
+   * - `'no-overlap'`: fetch EXACTLY the viewport zoom. The right choice for
+   *   full-duplication archives (the no-thinning default bakes every feature
+   *   into every zoom level), where each parent level is a complete extra
+   *   copy of the visible data — 4 fallback levels ≈ 5× the fetch, decode
+   *   and vertex load for zero information gain. Costs the coarse-first-paint
+   *   fallback: tiles are blank until their own zoom level arrives.
+   * @default 'best-available'
+   */
+  refinementStrategy?: 'best-available' | 'no-overlap';
+
+  /**
    * Force a specific zoom level (useful for `GlobeView` to load low-zoom
    * tiles). `null` (default) derives zoom from the viewport.
    */
@@ -387,6 +403,10 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   // Scrub-time LOD degradation: off (the kill switch) until browser-verified
   // on the heavy demos — see docs/roadmap/scrub-lod-2026-07.md §8.5.
   scrubLod: { type: 'object', value: null, optional: true, compare: true },
+
+  // Parent-fallback fetch policy; 'no-overlap' for full-duplication archives
+  // (see the prop docs).
+  refinementStrategy: 'best-available',
 
   // GlobeView helpers: null/false = derive from the viewport (the default).
   zoomOverride: null,
@@ -1246,7 +1266,8 @@ export class SpatioTemporalLayer<
       maxZoom: metadata.maxZoom,
       // Use temporal bucket from metadata for deterministic tile loading
       temporalBucketMs: metadata.temporalBucketMs,
-      refinementStrategy: 'best-available', // Load parent tiles as fallback (deck.gl pattern)
+      // Parent-fallback policy (prop pass-through; 'best-available' default).
+      refinementStrategy: this.props.refinementStrategy ?? 'best-available',
       // Additive-octree LOD: when 'additive', load + render the union of zoom
       // levels [minZoom..cameraZoom] (each point lives at one home zoom). See the
       // lodMode prop and SpatiotemporalTilesetOptions.lodMode.

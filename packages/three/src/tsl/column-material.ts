@@ -24,14 +24,19 @@
  * a pure rotation under non-uniform radius/height scale) into world space, then a
  * fixed-sun `ambient + (1-ambient)·max(0, N·L)` term multiplies the albedo.
  *
- * ── TIME (`opacityNode`) ──────────────────────────────────────────────────────
- * WGSL rule: the window alpha is a `select()`, so we vary the RAW per-instance
- * `start`/`end` and recompute the alpha in the FRAGMENT stage — never wrap a
- * `select()` in a `varying()` (mirrors point-material.ts / surfel-material.ts).
+ * ── TIME ──────────────────────────────────────────────────────────────────────
+ * HARD cut (VERTEX stage): the prism offset is multiplied by the hard
+ * {@link timeFilterVisibleNode} gate, so a time-filtered prism outside its window
+ * collapses to a zero-volume prism at `base` (every vertex coincides → dies at
+ * assembly, no fragment cost; deck.gl #7509) instead of an alpha-cutoff discard.
+ * SOFT fade (`opacityNode`): the window alpha is a `select()`, so we vary the RAW
+ * per-instance `start`/`end` and recompute the alpha in the FRAGMENT stage —
+ * never wrap a `select()` in a `varying()` (mirrors point-material.ts).
  */
 
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { DoubleSide } from 'three';
+import type { Texture } from 'three';
 import {
   attribute,
   positionGeometry,
@@ -40,18 +45,28 @@ import {
   float,
   vec3,
   saturate,
+  select,
   type UniformNode,
   type TSLNode,
 } from './nodes.js';
+import { PaletteUniforms, paletteColorNode } from './palette.js';
 
 /** Ambient floor of the baked self-lit shade (shadowed faces stay readable). */
 const COLUMN_AMBIENT = 0.45;
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
+  timeFilterVisibleNode,
   updateTimeFilterUniforms,
 } from './time-filter.js';
 import type { TimeFilterParams } from './time-filter-math.js';
+import {
+  DataFilterUniforms,
+  dataFilterVisibleNode,
+  dataFilterAlphaNode,
+  updateDataFilterUniforms,
+  type DataFilterOptions,
+} from './data-filter.js';
 
 /** Live column uniforms (constant opacity multiplier on top of the time window). */
 export class ColumnUniforms {
@@ -65,6 +80,45 @@ export interface ColumnMaterialOptions {
   transparent?: boolean;
   /** Discard fragments below this alpha when transparent. @default 0.01 */
   alphaCutoff?: number;
+  /**
+   * Install the GPU column filter (deck `DataFilterExtension`): binds a
+   * per-instance `sttFilterValue` attribute and gates each prism by
+   * `filterRange`/`filterSoftRange` (hard range → prism collapse, soft band →
+   * fade). @default false
+   */
+  dataFilter?: boolean;
+  /**
+   * Install the time-as-height ("space-time cube") lift (deck `timeHeightScale`):
+   * binds the per-instance `sttLift` direction attribute + `heightScale` /
+   * `heightOrigin` uniforms and raises each prism's foot by
+   * `(sttStart − heightOrigin) × heightScale` metres along local up. A single
+   * scale uniform, so animating the flat⇄cube morph is free; `heightScale = 0`
+   * renders flat. Composes with the time-filter + column-filter collapse gates.
+   * @default false
+   */
+  timeHeight?: boolean;
+  /**
+   * GPU stable categorical colour (deck `CategoryColorExtension`): when set, the
+   * per-instance `sttColor` attribute is REPLACED by a palette-texture sample
+   * indexed by the per-instance `sttCategoryIndex` slot, so a category renders the
+   * same colour in every tile and recolouring is a uniform/texture swap. Off
+   * (undefined) leaves the constant/per-instance colour path BYTE-IDENTICAL.
+   * @default undefined
+   */
+  colorPalette?: { texture: Texture };
+}
+
+/**
+ * Live time-as-height uniforms (the space-time-cube lift). All times are
+ * RELATIVE to the layer `timeOrigin`, matching `sttStart`. Idles flat while
+ * `heightScale` is 0 (deck's `timeHeightScale` default), so an installed-but-
+ * unconfigured lift is a no-op.
+ */
+export class TimeHeightUniforms {
+  /** Metres of altitude per simulation millisecond (0 = flat). */
+  readonly heightScale: UniformNode = uniform(0);
+  /** Relative time (vs the layer timeOrigin) mapped to altitude 0. */
+  readonly heightOrigin: UniformNode = uniform(0);
 }
 
 export interface ColumnMaterialBundle {
@@ -72,6 +126,12 @@ export interface ColumnMaterialBundle {
   time: TimeFilterUniforms;
   column: ColumnUniforms;
   timeFiltered: boolean;
+  /** Present only when built with `dataFilter: true`; drives the column filter. */
+  filter?: DataFilterUniforms;
+  /** Present only when built with `timeHeight: true`; drives the space-time-cube lift. */
+  timeHeight?: TimeHeightUniforms;
+  /** Present only when built with `colorPalette`; carries the palette-texture width. */
+  palette?: PaletteUniforms;
 }
 
 function normalizeNode(v: TSLNode): TSLNode {
@@ -85,17 +145,50 @@ export function createColumnMaterial(
   const column = new ColumnUniforms();
   const timeFiltered = opts.timeFiltered ?? true;
   const transparent = opts.transparent ?? false;
+  const dataFilter = opts.dataFilter ?? false;
+  const filter = dataFilter ? new DataFilterUniforms() : undefined;
+  const timeHeight = opts.timeHeight ?? false;
+  const height = timeHeight ? new TimeHeightUniforms() : undefined;
+  const paletteU = opts.colorPalette ? new PaletteUniforms() : undefined;
 
   const base = attribute('sttBase', 'vec3');
   const bx = attribute('sttBasisX', 'vec3');
   const by = attribute('sttBasisY', 'vec3');
   const bz = attribute('sttBasisZ', 'vec3');
-  const color = attribute('sttColor', 'vec4');
+  // Colour: GPU stable-palette sample (per-instance `sttCategoryIndex` slot) when
+  // a palette texture is installed; otherwise the per-instance `sttColor` attr.
+  const color = paletteU
+    ? paletteColorNode(opts.colorPalette!.texture, paletteU)
+    : attribute('sttColor', 'vec4');
   const start = attribute('sttStart', 'float');
   const end = attribute('sttEnd', 'float');
+  const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
 
   const op = positionGeometry; // unit-prism object position
-  const local = base.add(bx.mul(op.x)).add(by.mul(op.y)).add(bz.mul(op.z));
+  const offset = bx.mul(op.x).add(by.mul(op.y)).add(bz.mul(op.z));
+  // HARD vertex-stage collapse: an out-of-window (time-filtered) OR out-of-range
+  // (column-filtered) prism shrinks to a zero-volume prism at `base` (all
+  // vertices coincide → dies at assembly). Not filtered ⇒ gate = 1 (no collapse).
+  // The soft window / soft-range fades stay in the fragment `opacityNode` below.
+  let visible = timeFiltered
+    ? timeFilterVisibleNode('window', time, start, end)
+    : float(1);
+  if (filter && filterValue) {
+    visible = visible.mul(dataFilterVisibleNode(filter, filterValue));
+  }
+  // Time-as-height ("space-time cube"): raise the prism FOOT by the feature's
+  // start time before adding the (window/filter-gated) body offset, so the whole
+  // prism rises coherently. `sttLift` carries world-units-per-metre-of-altitude
+  // (local up ÷ metersPerWorldUnit), so `sttLift × heightMeters` is the world
+  // displacement. A collapsed prism still coincides at the lifted foot → stays a
+  // zero-volume degenerate. `heightScale = 0` ⇒ +0 (byte-identical flat render).
+  let foot: TSLNode = base;
+  if (height) {
+    const lift = attribute('sttLift', 'vec3');
+    const heightMeters = start.sub(height.heightOrigin).mul(height.heightScale);
+    foot = base.add(lift.mul(heightMeters));
+  }
+  const local = foot.add(offset.mul(visible));
 
   const material = new MeshBasicNodeMaterial();
   material.positionNode = vec3(local);
@@ -124,7 +217,15 @@ export function createColumnMaterial(
   const fragAlpha = timeFiltered
     ? timeFilterAlphaNode('window', time, vStart, vEnd)
     : float(1);
-  material.opacityNode = vColor.a.mul(column.opacity).mul(fragAlpha);
+  let opacityNode = vColor.a.mul(column.opacity).mul(fragAlpha);
+  if (filter && filterValue) {
+    // Soft column-filter fade (vary the raw value; the alpha node is a
+    // mix()/step() graph, never a select(), so it is varying-safe).
+    opacityNode = opacityNode.mul(
+      dataFilterAlphaNode(filter, varying(filterValue)),
+    );
+  }
+  material.opacityNode = opacityNode;
 
   material.transparent = transparent;
   material.depthWrite = transparent ? false : true;
@@ -132,13 +233,29 @@ export function createColumnMaterial(
   material.side = DoubleSide;
   if (transparent) material.alphaTest = opts.alphaCutoff ?? 0.01;
 
-  return { material, time, column, timeFiltered };
+  return {
+    material,
+    time,
+    column,
+    timeFiltered,
+    filter,
+    timeHeight: height,
+    palette: paletteU,
+  };
 }
 
 export interface ColumnUniformValues {
   relativeCurrentTime: number;
   params?: TimeFilterParams;
   opacity?: number;
+  /** Column-filter props (no-op unless built with `dataFilter: true`). */
+  dataFilter?: DataFilterOptions;
+  /**
+   * Time-as-height lift params (no-op unless built with `timeHeight: true`).
+   * `heightScale` is metres of altitude per sim-ms; `heightOrigin` is the time
+   * mapped to altitude 0, RELATIVE to the layer timeOrigin.
+   */
+  timeHeight?: { heightScale: number; heightOrigin: number };
 }
 
 export function updateColumnUniforms(
@@ -147,4 +264,105 @@ export function updateColumnUniforms(
 ): void {
   updateTimeFilterUniforms(bundle.time, v.relativeCurrentTime, v.params);
   bundle.column.opacity.value = v.opacity ?? 1;
+  if (bundle.filter) updateDataFilterUniforms(bundle.filter, v.dataFilter);
+  if (bundle.timeHeight) {
+    bundle.timeHeight.heightScale.value = v.timeHeight?.heightScale ?? 0;
+    bundle.timeHeight.heightOrigin.value = v.timeHeight?.heightOrigin ?? 0;
+  }
+}
+
+// ── GPU id-buffer pick material (GPU picking catalog: column variant) ────────────
+//
+// BROWSER-VERIFY ONLY (needs a live WebGPU device). Renders each column's flat
+// per-instance id colour (`sttIdColor`, from `buildIdColors(mergedCount)`) into
+// the picker's off-screen target. It recomposes the SAME prism as the colour
+// material (identical `positionNode`), REUSING the identical vertex-stage collapse
+// gates — the time-filter {@link timeFilterVisibleNode} AND the column
+// {@link dataFilterVisibleNode}, AND the time-as-height lift — so an out-of-window
+// / out-of-filter-range / lifted prism picks EXACTLY where (and only when) it is
+// drawn. The id is written opaque at full intensity (never × alpha), so the
+// decoded RGB is an exact 24-bit index; off-time / off-range fragments are
+// discarded (opacity 0 + alphaTest) so they never win a pick. Bind
+// {@link updateColumnUniforms} to sync its time / filter / lift uniforms before
+// the pass. The returned bundle is shape-compatible with {@link ColumnMaterialBundle}.
+
+/**
+ * Build the column id material. `opts` mirror the colour material's gate options
+ * (`timeFiltered`, `dataFilter`, `timeHeight`, `alphaCutoff`) so the pick pass
+ * matches the on-screen prisms; the colour-only options (`transparent`,
+ * `colorPalette`) are ignored (the id is a flat per-instance colour).
+ */
+export function createColumnIdMaterial(
+  opts: ColumnMaterialOptions = {},
+): ColumnMaterialBundle {
+  const time = new TimeFilterUniforms();
+  const column = new ColumnUniforms();
+  const timeFiltered = opts.timeFiltered ?? true;
+  const dataFilter = opts.dataFilter ?? false;
+  const filter = dataFilter ? new DataFilterUniforms() : undefined;
+  const timeHeight = opts.timeHeight ?? false;
+  const height = timeHeight ? new TimeHeightUniforms() : undefined;
+
+  const base = attribute('sttBase', 'vec3');
+  const bx = attribute('sttBasisX', 'vec3');
+  const by = attribute('sttBasisY', 'vec3');
+  const bz = attribute('sttBasisZ', 'vec3');
+  const idColor = attribute('sttIdColor', 'vec3');
+  const start = attribute('sttStart', 'float');
+  const end = attribute('sttEnd', 'float');
+  const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
+
+  const op = positionGeometry; // unit-prism object position
+  const offset = bx.mul(op.x).add(by.mul(op.y)).add(bz.mul(op.z));
+  // SAME hard vertex-stage collapse as the colour material: out-of-window /
+  // out-of-range prisms shrink to a zero-volume degenerate at the (lifted) foot,
+  // so they never rasterise → are never pickable, exactly matching the eye.
+  let visible = timeFiltered
+    ? timeFilterVisibleNode('window', time, start, end)
+    : float(1);
+  if (filter && filterValue) {
+    visible = visible.mul(dataFilterVisibleNode(filter, filterValue));
+  }
+  let foot: TSLNode = base;
+  if (height) {
+    const lift = attribute('sttLift', 'vec3');
+    const heightMeters = start.sub(height.heightOrigin).mul(height.heightScale);
+    foot = base.add(lift.mul(heightMeters));
+  }
+  const local = foot.add(offset.mul(visible));
+
+  const material = new MeshBasicNodeMaterial();
+  material.positionNode = vec3(local);
+
+  // FRAGMENT: flat per-instance id colour, opaque wherever the prism is drawn AND
+  // on-time AND in-range. The soft window / column-filter fades are `select()` /
+  // mix() graphs recomputed here from VARIED raw inputs (never a varying-wrapped
+  // select), then thresholded to a hard 0/1 alpha so a barely-faded prism doesn't
+  // register a partial-alpha id.
+  material.colorNode = varying(idColor);
+  const cutoff = opts.alphaCutoff ?? 0.01;
+  let onGate: TSLNode | null = null;
+  if (timeFiltered) {
+    onGate = timeFilterAlphaNode(
+      'window',
+      time,
+      varying(start),
+      varying(end),
+    ).greaterThan(float(cutoff));
+  }
+  if (filter && filterValue) {
+    const fg = dataFilterAlphaNode(filter, varying(filterValue)).greaterThan(
+      float(cutoff),
+    );
+    onGate = onGate ? onGate.and(fg) : fg;
+  }
+  material.opacityNode = onGate ? select(onGate, float(1), float(0)) : float(1);
+
+  material.transparent = false;
+  material.depthWrite = true;
+  material.depthTest = true;
+  material.side = DoubleSide;
+  material.alphaTest = 0.5;
+
+  return { material, time, column, timeFiltered, filter, timeHeight: height };
 }

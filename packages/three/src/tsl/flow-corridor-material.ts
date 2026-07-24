@@ -46,6 +46,7 @@ import {
 import {
   TimeFilterUniforms,
   windowAlphaNode,
+  windowVisibleNode,
   updateTimeFilterUniforms,
 } from './time-filter.js';
 import type { TimeFilterParams } from './time-filter-math.js';
@@ -144,7 +145,24 @@ export function createFlowCorridorMaterial(
   const dir = ndcB.sub(ndcA).mul(flow.viewport).normalize();
   const perp = vec2(dir.y.negate(), dir.x);
   const clip = mix(clipA, clipB, along);
-  const off = perp.mul(side).mul(widthPx).div(flow.viewport).mul(clip.w);
+  // HARD vertex-stage collapse: when the corridor is window-filtered, an
+  // out-of-window segment gets width ×0 (zero-area degenerate strip → dies at
+  // assembly, no fragment cost; deck.gl #7509). Corridors that span the whole
+  // range (the default, `windowFilter` off) never collapse. The soft window fade
+  // stays in the fragment `opacityNode`.
+  const visible = opts.windowFilter
+    ? windowVisibleNode(
+        time,
+        attribute('sttStart', 'float'),
+        attribute('sttEnd', 'float'),
+      )
+    : float(1);
+  const off = perp
+    .mul(side)
+    .mul(widthPx)
+    .mul(visible)
+    .div(flow.viewport)
+    .mul(clip.w);
 
   const material = new MeshBasicNodeMaterial();
   material.vertexNode = vec4(

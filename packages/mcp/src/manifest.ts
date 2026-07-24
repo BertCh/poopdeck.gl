@@ -57,6 +57,11 @@ export interface RawManifest {
     max_zoom?: number;
     tile_count?: number;
     feature_count?: number;
+    /** Distinct source-feature count (pre-placement); absent on older/v1
+     * archives. When present it is the correct "N features" total — the
+     * `feature_count` above is index-weighted and double-counts tile-spanning
+     * features. */
+    distinct_feature_count?: number;
     layers?: string[];
     properties?: Record<string, string>;
     temporal_bucket_ms?: number;
@@ -123,7 +128,19 @@ export interface DatasetSummary {
   timeRange?: TimeRange;
   minZoom?: number;
   maxZoom?: number;
+  /**
+   * Best available "N features" total: the DISTINCT source-feature count when
+   * the archive records it (`metadata.distinct_feature_count`), otherwise the
+   * legacy index-weighted `feature_count` (which double-counts tile-spanning
+   * features). {@link featureCountIsDistinct} says which one this is.
+   */
   featureCount?: number;
+  /**
+   * True when {@link featureCount} is the distinct (non-double-counted) total;
+   * false when it falls back to the index-weighted count. Undefined when no
+   * count is available.
+   */
+  featureCountIsDistinct?: boolean;
   hasSummaryTier: boolean;
   summaryScheme?: string;
 }
@@ -304,10 +321,19 @@ function summarize(
       : undefined,
     minZoom: m.min_zoom,
     maxZoom: m.max_zoom,
+    // Prefer the distinct source-feature count when the archive records it;
+    // fall back to the legacy index-weighted total (double-counts tile-spanning
+    // features) only for older/v1 archives that lack the distinct field.
     featureCount: normalizeContentCount(
-      m.feature_count,
+      m.distinct_feature_count ?? m.feature_count,
       hasArchiveContent(manifest),
     ),
+    featureCountIsDistinct:
+      m.distinct_feature_count !== undefined
+        ? true
+        : m.feature_count !== undefined
+          ? false
+          : undefined,
     hasSummaryTier: !!m.summary_tier,
     summaryScheme: m.summary_tier?.scheme,
   };

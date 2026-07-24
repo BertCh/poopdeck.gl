@@ -182,27 +182,41 @@ describe('threeBackend descriptor — structural conformance gate', () => {
   });
 
   it.each(LAYER_FEATURES)(
-    'feature "%s" is a deliberate typed fallback (three ports none yet)',
+    'feature "%s" is a well-formed support/fallback declaration',
     (feature: LayerFeature) => {
       const support = threeLayerFeatures[feature];
       expect(support.kinds.length, `${feature}.kinds`).toBeGreaterThan(0);
-      // three implements none of the campaign features today; if one is ever
-      // ported, flip supported:true here AND wire its structural proof.
-      expect(support.supported, `${feature}.supported`).toBe(false);
-      if (!support.supported) {
+      // Every kind the declaration names — whether supported or a degrade
+      // target — must be a real LayerKind the descriptor knows about (no typos).
+      for (const kind of support.kinds) {
+        expect(
+          threeBackend.layerKinds[kind],
+          `feature "${feature}" names unknown kind "${kind}"`,
+        ).toBeDefined();
+      }
+      if (support.supported) {
+        // A ported feature must carry its enabling prop + a human summary.
+        expect(support.prop, `${feature}.prop`).toBeTruthy();
+        expect(support.summary, `${feature}.summary`).toBeTruthy();
+      } else {
         expect(support.fallback, `${feature}.fallback`).toBeTruthy();
         expect(support.reason, `${feature}.reason`).toBeTruthy();
-        // Every kind a fallback names must be a real LayerKind the descriptor
-        // knows about (so the degrade target is meaningful, not a typo).
-        for (const kind of support.kinds) {
-          expect(
-            threeBackend.layerKinds[kind],
-            `feature "${feature}" names unknown kind "${kind}"`,
-          ).toBeDefined();
-        }
       }
     },
   );
+
+  it('dataFilter is supported on the full deck kind set (icon included)', () => {
+    // Wave 1 + the icon follow-up wired DataFilter end-to-end on every kind deck
+    // filters on — arc/line/trips/column/polygon/icon. The supported set must be
+    // the complete deck set; dropping a kind would under-state three's reach.
+    // three deliberately does not depend on `@poopdeck.gl/layers`, so the deck
+    // set is asserted literally.
+    const support = threeLayerFeatures.dataFilter;
+    expect(support.supported).toBe(true);
+    expect([...support.kinds].sort()).toEqual(
+      ['arc', 'column', 'icon', 'line', 'polygon', 'trips'].sort(),
+    );
+  });
 
   it('timeHeightScale fallback is consistent with capabilities.timeAsHeight', () => {
     const support = threeLayerFeatures.timeHeightScale;

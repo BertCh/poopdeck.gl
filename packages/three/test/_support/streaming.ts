@@ -45,6 +45,7 @@ export type MockTileset = DrivableTileset & {
   setVisible(t: Tile[]): void;
   clear: ReturnType<typeof vi.fn>;
   setAnimationState: ReturnType<typeof vi.fn>;
+  setInteractive: ReturnType<typeof vi.fn>;
 };
 
 export function mockTileset(initial: Tile[] = []): MockTileset {
@@ -52,6 +53,7 @@ export function mockTileset(initial: Tile[] = []): MockTileset {
   const updates: UpdateArg[] = [];
   const clear = vi.fn();
   const setAnimationState = vi.fn();
+  const setInteractive = vi.fn();
   return {
     updates,
     get updateCount() {
@@ -71,6 +73,7 @@ export function mockTileset(initial: Tile[] = []): MockTileset {
       return visible;
     },
     setAnimationState,
+    setInteractive,
     clear,
   };
 }

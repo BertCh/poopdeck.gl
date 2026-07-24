@@ -34,7 +34,8 @@ import {
   Float32BufferAttribute,
   Uint32BufferAttribute,
 } from 'three';
-import type { Tile } from '@poopdeck.gl/core';
+import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
@@ -48,10 +49,19 @@ import {
 } from './polygon-buffers.js';
 import {
   createPolygonMaterial,
+  createPolygonIdMaterial,
   updatePolygonUniforms,
   type PolygonMaterialBundle,
   type PolygonTimeMode,
+  type PolygonUniformValues,
 } from '../tsl/polygon-material.js';
+import type { DataFilterOptions, DataFilterRange } from '../tsl/data-filter.js';
+import {
+  resolveIdPick,
+  type SttIdPickInfo,
+  type SttIdPickable,
+} from '../lib/id-pick.js';
+import type { GpuPicker } from '../lib/gpu-pick.js';
 
 export interface PolygonLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
@@ -71,15 +81,56 @@ export interface PolygonLayerOptions extends ThreeTimeWindowOptions {
   /** Write depth (extruded prisms usually want this). @default false */
   depthWrite?: boolean;
   opacity?: number;
+  // ── DataFilter (deck DataFilterExtension) ──────────────────────────────────
+  /**
+   * Numeric column feeding the GPU column filter (`sttFilterValue`, per vertex —
+   * a feature's value written to every one of its mesh vertices). When set, the
+   * material installs the filter and each feature is gated by {@link filterRange}
+   * / {@link filterSoftRange} (composes with `window` mode). @default null (no filter)
+   */
+  filterProperty?: string | null;
+  /** Inclusive `[min,max]` hard range; `null` idles the filter. @default null */
+  filterRange?: DataFilterRange | null;
+  /** `[min,max]` inside {@link filterRange} fading instead of hard-clipping. @default null */
+  filterSoftRange?: DataFilterRange | null;
+  /** Enable/disable the column filter. @default true */
+  filterEnabled?: boolean;
+  // ── Time-as-height / space-time cube (deck timeHeightScale) ────────────────
+  /**
+   * Time-as-height ("space-time cube") lift — metres of altitude per simulation
+   * millisecond. When set (including 0), the material installs the lift path and
+   * raises each feature along local up by
+   * `(featureStart − timeHeightOrigin) × timeHeightScale` metres via a single
+   * scale uniform (animating flat⇄cube is free; composes with `window` mode).
+   * `null`/omitted ⇒ flat, byte-identical to today. @default null (off)
+   */
+  timeHeightScale?: number | null;
+  /**
+   * Absolute time (epoch-ms) mapped to altitude 0, typically the dataset
+   * `timeRange.start`. Relativized against the layer `timeOrigin` on the CPU.
+   * @default 0
+   */
+  timeHeightOrigin?: number;
 }
 
 const DEFAULT_COLOR: RGBA = [120, 130, 150, 90];
 
-export class PolygonLayer extends BaseSttLayer {
+export class PolygonLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
   private bundle: PolygonMaterialBundle;
+
+  // ── GPU id-buffer pick identity (merged feature m → (tileKey, featureIndex)) ──
+  // Polygon is a MERGED mesh, so unlike the instanced kinds the id is a per-vertex
+  // attribute (`idColors`, from the builder); provenance is per emitted feature.
+  private provenance = new InstanceProvenance();
+  private binaryByTileKey = new Map<string, BinaryFeatures>();
+  private idColors: Float32Array = new Float32Array(0);
+  // Opt-in GPU id-buffer pick pass (lazily built on first pick; browser-verify).
+  private idBundle: PolygonMaterialBundle | null = null;
+  private idColorsPresent = false;
+  private currentTimeMs = 0;
 
   private readonly opts: Required<
     Omit<
@@ -108,10 +159,18 @@ export class PolygonLayer extends BaseSttLayer {
       elevationScale: options.elevationScale ?? 1,
       depthWrite: options.depthWrite ?? false,
       opacity: options.opacity ?? 1,
+      filterProperty: options.filterProperty ?? null,
+      filterRange: options.filterRange ?? null,
+      filterSoftRange: options.filterSoftRange ?? null,
+      filterEnabled: options.filterEnabled ?? true,
+      timeHeightScale: options.timeHeightScale ?? null,
+      timeHeightOrigin: options.timeHeightOrigin ?? 0,
     };
     this.bundle = createPolygonMaterial({
       mode: this.opts.mode,
       depthWrite: this.opts.depthWrite,
+      dataFilter: !!this.opts.filterProperty,
+      timeHeight: this.opts.timeHeightScale != null,
     });
     this.mesh = new Mesh(new BufferGeometry(), this.bundle.material);
     this.mesh.frustumCulled = false;
@@ -119,13 +178,57 @@ export class PolygonLayer extends BaseSttLayer {
     this.object.add(this.mesh);
   }
 
+  /** Deck-shaped column-filter props (a no-op push unless a filter is installed). */
+  private dataFilterOpts(): DataFilterOptions {
+    return {
+      filterEnabled: this.opts.filterEnabled,
+      filterRange: this.opts.filterRange,
+      filterSoftRange: this.opts.filterSoftRange,
+    };
+  }
+
+  /**
+   * Time-as-height lift params (a no-op push unless the lift is installed).
+   * `heightOrigin` is relativized against the layer `timeOrigin` so
+   * `(start − heightOrigin)` stays f32-exact, matching deck.
+   */
+  private timeHeightOpts():
+    | { heightScale: number; heightOrigin: number }
+    | undefined {
+    return this.opts.timeHeightScale != null
+      ? {
+          heightScale: this.opts.timeHeightScale,
+          heightOrigin: this.opts.timeHeightOrigin - this.timeOrigin,
+        }
+      : undefined;
+  }
+
+  /** The uniform values for the given playhead — shared by the fill render and the
+   *  id-pass so the pick pass gates on the SAME window / filter / lift. */
+  private uniformValues(absoluteTimeMs: number): PolygonUniformValues {
+    return {
+      relativeCurrentTime: this.relativeTime(absoluteTimeMs),
+      params: {
+        windowHalf: this.opts.windowHalf,
+        fadeIn: this.opts.fadeIn,
+        fadeOut: this.opts.fadeOut,
+      },
+      opacity: this.opts.opacity,
+      dataFilter: this.dataFilterOpts(),
+      timeHeight: this.timeHeightOpts(),
+    };
+  }
+
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
+    this.currentTimeMs = ctx.timeOrigin;
     const bufOpts: PolygonBufferOptions = {
       colorMode: this.opts.colorMode,
       zLift: this.opts.zLift,
       extrusionProperty: this.opts.extrusionProperty,
       elevationScale: this.opts.elevationScale,
+      filterProperty: this.opts.filterProperty,
+      timeHeight: this.opts.timeHeightScale != null,
     };
     const buf = buildPolygonBuffers(
       tiles,
@@ -133,6 +236,13 @@ export class PolygonLayer extends BaseSttLayer {
       ctx.timeOrigin,
       bufOpts,
     );
+    // Adopt the fresh pick-identity buffers (empty when vertexCount === 0, so a
+    // stale pick after a reload resolves to null rather than an old feature). The
+    // per-vertex id colours are set lazily on the new geometry in ensurePickPass.
+    this.provenance = buf.provenance;
+    this.binaryByTileKey = buf.binaryByTileKey;
+    this.idColors = buf.idColors;
+    this.idColorsPresent = false;
 
     this.mesh.geometry.dispose();
     const geom = new BufferGeometry();
@@ -140,6 +250,18 @@ export class PolygonLayer extends BaseSttLayer {
     geom.setAttribute('sttColor', new Float32BufferAttribute(buf.colors, 4));
     geom.setAttribute('sttStart', new Float32BufferAttribute(buf.starts, 1));
     geom.setAttribute('sttEnd', new Float32BufferAttribute(buf.ends, 1));
+    // DataFilter: bind the per-vertex filter value when a filterProperty emitted
+    // one (non-instanced, so the merged mesh's `sttFilterValue` is per vertex).
+    if (buf.filterValues.length > 0) {
+      geom.setAttribute(
+        'sttFilterValue',
+        new Float32BufferAttribute(buf.filterValues, 1),
+      );
+    }
+    // Time-as-height: bind the per-vertex lift direction when timeHeight emitted it.
+    if (buf.lift.length > 0) {
+      geom.setAttribute('sttLift', new Float32BufferAttribute(buf.lift, 3));
+    }
     geom.setIndex(new Uint32BufferAttribute(buf.indices, 1));
     geom.computeBoundingSphere();
     this.mesh.geometry = geom;
@@ -149,32 +271,101 @@ export class PolygonLayer extends BaseSttLayer {
     this.mesh.visible = buf.indices.length > 0;
 
     // Seed the uniforms so the static (`none`) path is correct before any frame.
-    updatePolygonUniforms(this.bundle, {
-      relativeCurrentTime: 0,
-      params: {
-        windowHalf: this.opts.windowHalf,
-        fadeIn: this.opts.fadeIn,
-        fadeOut: this.opts.fadeOut,
-      },
-      opacity: this.opts.opacity,
-    });
+    updatePolygonUniforms(this.bundle, this.uniformValues(ctx.timeOrigin));
   }
 
   setTime(absoluteTimeMs: number): void {
-    updatePolygonUniforms(this.bundle, {
-      relativeCurrentTime: this.relativeTime(absoluteTimeMs),
-      params: {
-        windowHalf: this.opts.windowHalf,
-        fadeIn: this.opts.fadeIn,
-        fadeOut: this.opts.fadeOut,
-      },
-      opacity: this.opts.opacity,
+    this.currentTimeMs = absoluteTimeMs;
+    updatePolygonUniforms(this.bundle, this.uniformValues(absoluteTimeMs));
+  }
+
+  // ── Picking (GPU id-buffer catalog: polygon variant — MERGED mesh) ───────────
+
+  /**
+   * Resolve a decoded merged-FEATURE index (from a GPU id-buffer readback) to a
+   * normalised {@link SttIdPickInfo} (`kind: 'polygon'`), or `null` for a miss.
+   * The coordinate is the feature's FIRST source vertex (`startIndices[i]`, the
+   * standard indexed-geometry path — polygons always carry `startIndices`). Pure —
+   * the unit-tested seam; call it directly with a decoded index.
+   */
+  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+    return resolveIdPick({
+      index,
+      provenance: this.provenance,
+      binaryByTileKey: this.binaryByTileKey,
+      kind: 'polygon',
+      layerId: this.id,
+      screen,
     });
+  }
+
+  /** Lazily build the id material + set the per-vertex `sttIdColor` attribute. */
+  private ensurePickPass(): void {
+    if (!this.idBundle) {
+      this.idBundle = createPolygonIdMaterial({
+        mode: this.opts.mode,
+        dataFilter: !!this.opts.filterProperty,
+        timeHeight: this.opts.timeHeightScale != null,
+      });
+    }
+    if (!this.idColorsPresent && this.idColors.length > 0) {
+      // Per-vertex id colours (each vertex of a feature shares its merged-index
+      // colour) — the merged-mesh analogue of the instanced `buildIdColors`.
+      this.mesh.geometry.setAttribute(
+        'sttIdColor',
+        new Float32BufferAttribute(this.idColors, 3),
+      );
+      this.idColorsPresent = true;
+    }
+  }
+
+  /**
+   * GPU polygon pick — auto-registered into the r3f `PickController` (a CPU box
+   * miss falls through to this). Renders the merged fill with the flat id material
+   * into `picker`'s off-screen target, reads back the merged FEATURE id at CSS
+   * pixel `(cssX, cssY)`, and resolves it through the provenance buffer. The
+   * `resolvePick` half is unit-tested; the render + readback needs a live GPU
+   * device and is browser-verify. The id material reuses the SAME vertex-stage
+   * collapse gates (window + column-filter + time-as-height lift), so only fills
+   * drawn THIS frame are pickable, at their animated (lifted) position. The pick
+   * renders the parent `object` (Group) so its RTC origin transform is applied,
+   * swapping only the child mesh's material.
+   */
+  async pick(
+    picker: GpuPicker,
+    camera: unknown,
+    cssX: number,
+    cssY: number,
+  ): Promise<SttIdPickInfo | null> {
+    if (this.provenance.length === 0 || !this.mesh.visible) return null;
+    this.ensurePickPass();
+    const idBundle = this.idBundle;
+    if (!idBundle) return null;
+    // Sync the id material's gates to the live playhead so only fills visible THIS
+    // frame are pickable, at their animated position.
+    updatePolygonUniforms(idBundle, this.uniformValues(this.currentTimeMs));
+
+    const mesh = this.mesh;
+    const renderMaterial = mesh.material;
+    const index = await picker.pick(this.object, camera, cssX, cssY, {
+      featureCount: this.provenance.length,
+      onBeforeRender: () => {
+        mesh.material = idBundle.material;
+      },
+      onAfterRender: () => {
+        mesh.material = renderMaterial;
+      },
+    });
+    if (index == null) return null;
+    return this.resolvePick(index, [cssX, cssY]);
   }
 
   dispose(): void {
     this.mesh.geometry.dispose();
     this.bundle.material.dispose();
+    this.idBundle?.material.dispose();
+    this.idBundle = null;
+    this.idColorsPresent = false;
   }
 }
 

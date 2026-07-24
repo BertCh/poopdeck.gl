@@ -201,6 +201,7 @@ sub-trajectory animates correctly.
 | ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--simplify`              | off     | Per-zoom Visvalingam–Whyatt simplification on LineStrings                                                                                                                                                                                            |
 | `--simplify-max-zoom <N>` | `14`    | Above this zoom, keep full vertex detail                                                                                                                                                                                                             |
+| `--simplify-metric`       | off     | Simplify with a latitude-corrected **metric** tolerance instead of the fixed per-zoom degree table. The longitude axis is scaled by `cos(latitude)` before simplifying, so a given zoom's tolerance means the same GROUND distance at every latitude (a fixed degree tolerance is up to ~2× coarser in E–W terms at 60° than at the equator). Opt-in — without it, builds are byte-identical to before. Takes effect together with `--simplify`. |
 | `--time-aware-simplify`   | off     | Use time-aware TD-TR (Synchronized Euclidean Distance) instead of plain spatial Visvalingam — preserves per-vertex timing so zoomed-out playback keeps moving objects in the right place at the right time. Takes effect together with `--simplify`. |
 
 ### Polygon pre-tessellation
@@ -686,7 +687,7 @@ unchanged. Full HTTP semantics:
 | `--bind <ADDR>`                                   | `127.0.0.1:8088` | Listen address.                                                                                                                                                                                                                                                                                                                       |
 
 `stt-serve` also accepts the full offline **per-tile** flag surface
-(`--simplify`/`--simplify-max-zoom`/`--time-aware-simplify`, `--pre-tessellate`,
+(`--simplify`/`--simplify-max-zoom`/`--simplify-metric`/`--time-aware-simplify`, `--pre-tessellate`,
 `--no-clip`/`--clip-min-vertices`, `--whole-feature-placement` (serve-parity
 with the `stt-build` kill switch — a file archive built with that flag and a
 live serve of the same source must set BOTH or their tiles diverge),

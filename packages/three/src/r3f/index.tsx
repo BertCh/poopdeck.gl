@@ -44,7 +44,7 @@ import {
   type SttPickInfo,
   type SttBoxPickInfo,
 } from '../lib/box-pick.js';
-import { pointPickToInfo } from '../lib/point-pick.js';
+import { isIdPickable, type SttIdPickable } from '../lib/id-pick.js';
 import {
   GpuPicker,
   type PickRenderer,
@@ -97,7 +97,6 @@ import {
 import {
   PointCloudLayer,
   type PointCloudLayerOptions,
-  type SttPointPickable,
 } from '../layers/point-cloud-layer.js';
 import {
   BoundingBoxLayer,
@@ -166,11 +165,13 @@ interface SttSceneCtx {
   /** Layers contributing pickable boxes (objects + ego) for click-to-inspect. */
   pickables: React.MutableRefObject<Set<SttPickable>>;
   /**
-   * Instanced point-cloud layers answering a GPU id-buffer pick — consulted when
-   * a CPU box pick misses (hover + click). Separate from {@link pickables}
-   * because the mechanism differs (async GPU readback vs sync ray-OBB).
+   * Instanced layers (points, columns, arcs, …) answering a GPU id-buffer pick —
+   * consulted when a CPU box pick misses (hover + click). Separate from
+   * {@link pickables} because the mechanism differs (async GPU readback vs sync
+   * ray-OBB). Any {@link isIdPickable} layer auto-registers here on mount, so a
+   * new kind needs no wiring in this file.
    */
-  pointPickables: React.MutableRefObject<Set<SttPointPickable>>;
+  idPickables: React.MutableRefObject<Set<SttIdPickable>>;
   /** All mounted layers — CameraRig frames to the union of their world AABBs. */
   layers: React.MutableRefObject<Set<SttLayer>>;
   /** Playback governor source registry (so the clock gates on buffer readiness). */
@@ -199,6 +200,23 @@ function useSttScene(): SttSceneCtx {
  * frustum footprint every frame is wasted work when the camera is idle).
  */
 const STREAM_UPDATE_MS = 100;
+
+/**
+ * The FULL-width render time window (ms) a layer's options imply, or `undefined`
+ * when the layer draws only the current bucket (no explicit window). Threaded
+ * into the streaming tileset's SELECTION window so a layer that renders a wide
+ * `timeWindow` (a trail / trips tail) selects every tile its render pass needs —
+ * otherwise selection defaults to `temporalBucketMs` alone and under-selects
+ * relative to what is drawn. Mirrors `resolveTimeWindow`'s vocabulary: the
+ * three-native half-width `windowHalf` (×2) wins over the deck/maplibre
+ * full-width `timeWindow` when both are set.
+ */
+function renderWindowFromOpts(opts: object): number | undefined {
+  const o = opts as { timeWindow?: unknown; windowHalf?: unknown };
+  if (typeof o.windowHalf === 'number') return o.windowHalf * 2;
+  if (typeof o.timeWindow === 'number') return o.timeWindow;
+  return undefined;
+}
 
 /**
  * Resolve a layer's `streaming` prop against the canvas-level default: an
@@ -346,8 +364,15 @@ function useEngineLayer<L extends SttLayer>(
   deps: React.DependencyList,
   gov: LayerGovernance,
 ): L {
-  const { projection, timeOrigin, getTime, layers, registry, timeRange } =
-    useSttScene();
+  const {
+    projection,
+    timeOrigin,
+    getTime,
+    layers,
+    idPickables,
+    registry,
+    timeRange,
+  } = useSttScene();
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -395,6 +420,19 @@ function useEngineLayer<L extends SttLayer>(
     };
   }, [layer, layers]);
 
+  // GPU id-buffer pick auto-registration: any layer that structurally satisfies
+  // SttIdPickable (has a `pick()` method — points, columns, arcs, and every
+  // fanout kind) joins the id-pick set with NO per-kind wiring here. Box pickables
+  // (getPickBoxes) use the separate `pickables` registry via each layer's `extra`.
+  React.useEffect(() => {
+    if (!isIdPickable(layer)) return;
+    const set = idPickables.current;
+    set.add(layer);
+    return () => {
+      set.delete(layer);
+    };
+  }, [layer, idPickables]);
+
   // Governor source: a complete BufferSource (the eager load is done by mount) so
   // the start/seek gate passes immediately and the transport's buffered bar /
   // Auto-speed / ETA come alive — instead of the empty-source 8 s freeze.
@@ -437,10 +475,27 @@ function useStreamingEngineLayer<L extends SttLayer>(
   make: () => L,
   source: StreamingTileSource,
   deps: React.DependencyList,
-  gov: { sourceId?: string; required?: boolean },
+  gov: {
+    sourceId?: string;
+    required?: boolean;
+    /**
+     * The layer's full-width render time window (ms), passed into every
+     * viewport pump as {@link StreamingViewport.timeWindow} so tile SELECTION
+     * covers the render window (see {@link renderWindowFromOpts}). `undefined`
+     * leaves the tileset on its `temporalBucketMs`/`timeWindowMs` default.
+     */
+    renderTimeWindowMs?: number;
+  },
 ): L {
-  const { projection, timeOrigin, getTime, layers, registry, timeRange } =
-    useSttScene();
+  const {
+    projection,
+    timeOrigin,
+    getTime,
+    layers,
+    idPickables,
+    registry,
+    timeRange,
+  } = useSttScene();
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const size = useThree((s) => s.size);
@@ -484,7 +539,16 @@ function useStreamingEngineLayer<L extends SttLayer>(
           { width: size.width, height: size.height },
           md ? { minZoom: md.minZoom, maxZoom: md.maxZoom } : {},
         );
-        source.update({ bounds: vp.bounds, zoom: vp.zoom, time: t });
+        // Couple selection to the layer's render window: pass it as the
+        // viewport's `timeWindow` so tile selection never under-covers what the
+        // render pass draws. `undefined` falls back to the tileset default
+        // (streaming `timeWindowMs` → archive `temporalBucketMs`).
+        source.update({
+          bounds: vp.bounds,
+          zoom: vp.zoom,
+          time: t,
+          timeWindow: gov.renderTimeWindowMs,
+        });
       }
       // Without a governor, keep prefetch alive via a play/pause heuristic (time
       // advancing ⇒ animating). With one, the governor drives animation state
@@ -526,6 +590,17 @@ function useStreamingEngineLayer<L extends SttLayer>(
       set.delete(layer);
     };
   }, [layer, layers]);
+
+  // GPU id-buffer pick auto-registration (mirrors the eager path): any
+  // SttIdPickable layer joins the id-pick set with no per-kind wiring here.
+  React.useEffect(() => {
+    if (!isIdPickable(layer)) return;
+    const set = idPickables.current;
+    set.add(layer);
+    return () => {
+      set.delete(layer);
+    };
+  }, [layer, idPickables]);
 
   // Governor: register the REAL tileset BufferSource once the tileset exists so
   // the buffered bar / Auto-speed / ETA reflect honest streaming coverage. Falls
@@ -592,6 +667,8 @@ function StreamingLayerMount<L extends SttLayer>(props: {
   sourceId?: string;
   sourceRequired?: boolean;
   defaultRequired?: boolean;
+  /** The layer's full-width render window (ms); couples selection to render. */
+  renderTimeWindowMs?: number;
   extra?: (layer: L) => void;
 }): React.ReactElement {
   const source = React.useMemo(
@@ -613,6 +690,7 @@ function StreamingLayerMount<L extends SttLayer>(props: {
     {
       sourceId: props.sourceId,
       required: props.sourceRequired ?? props.defaultRequired,
+      renderTimeWindowMs: props.renderTimeWindowMs,
     },
   );
   if (props.extra) props.extra(layer);
@@ -650,6 +728,7 @@ export function SttSurfelLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -669,29 +748,20 @@ export function SttPointCloudLayer(
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const { pointPickables } = useSttScene();
   const make = (): PointCloudLayer => new PointCloudLayer(opts);
-  // Register the cloud for GPU id-buffer picking (both modes). Mirrors the box
-  // registration in SttBoundingBoxLayer; the controller only runs the GPU pass
-  // when a box pick misses and an `onPick`/`onHover` consumer is present.
-  const extra = (layer: PointCloudLayer): void => {
-    React.useEffect(() => {
-      const set = pointPickables.current;
-      set.add(layer);
-      return () => {
-        set.delete(layer);
-      };
-    }, [layer]);
-  };
+  // GPU id-buffer picking is auto-registered by the shared layer mount for ANY
+  // SttIdPickable layer (see useEngineLayer / useStreamingEngineLayer) — no
+  // per-kind `extra` here. The controller runs the GPU pass only when a box pick
+  // misses and an `onPick`/`onHover` consumer is present.
   return resolved ? (
     <StreamingLayerMount
       make={make}
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
-      extra={extra}
     />
   ) : (
     <EagerLayerMount
@@ -700,7 +770,6 @@ export function SttPointCloudLayer(
       lodMode={lodMode}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
-      extra={extra}
     />
   );
 }
@@ -728,6 +797,7 @@ export function SttBoundingBoxLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
       extra={extra}
@@ -757,6 +827,7 @@ export function SttMapPolygonLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
       defaultRequired={false}
@@ -785,6 +856,7 @@ export function SttMapLineLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
       defaultRequired={false}
@@ -813,6 +885,7 @@ export function SttIsoLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -839,6 +912,7 @@ export function SttTripsLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -865,6 +939,7 @@ export function SttPathLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -891,6 +966,7 @@ export function SttOdLineLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -917,6 +993,7 @@ export function SttArcLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -943,6 +1020,7 @@ export function SttIconLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -969,6 +1047,7 @@ export function SttColumnLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -995,6 +1074,7 @@ export function SttPolygonLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -1021,6 +1101,7 @@ export function SttTripHeadsLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -1047,6 +1128,7 @@ export function SttQuadbinLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -1073,6 +1155,7 @@ export function SttH3Layer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -1099,6 +1182,7 @@ export function SttFlowmapLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -1125,6 +1209,7 @@ export function SttFlowCorridorLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
     />
@@ -1164,6 +1249,7 @@ export function SttEgoLayer(
       url={url}
       lodMode={lodMode}
       opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
       sourceId={opts.id}
       sourceRequired={sourceRequired}
       extra={extra}
@@ -1672,9 +1758,10 @@ export function SttTiles3D(props: SttTiles3DProps): null {
  * Pointer-driven picking against the registered pickables, in two mechanisms and
  * in order:
  *  1. CPU ray-OBB over the object/ego boxes ({@link pickBoxes}) — synchronous.
- *  2. On a box MISS (and only if any point clouds are registered): a GPU
+ *  2. On a box MISS (and only if any id-pickable layers are registered): a GPU
  *     id-buffer pass at the cursor ({@link GpuPicker}) resolved through each
- *     cloud's provenance buffer — async (a GPU readback).
+ *     layer's provenance buffer — async (a GPU readback). Every id-pickable kind
+ *     (points, columns, arcs, …) is consulted uniformly.
  *
  * The hit (or `null`) is reported to `onPick` on a click and, throttled to one
  * pick per animation frame, to `onHover` on a pointer-move. A gesture that moves
@@ -1684,19 +1771,19 @@ export function SttTiles3D(props: SttTiles3DProps): null {
  * controls.
  *
  * The click path is unchanged for box hits (still synchronous) and for empty
- * space when no clouds are registered (still a synchronous `null`); the GPU cloud
+ * space when no id-pickables are registered (still a synchronous `null`); the GPU
  * fall-through is purely additive.
  */
 function PickController(props: {
   onPick?: (info: SttPickInfo | null) => void;
   onHover?: (info: SttPickInfo | null) => void;
   pickables: React.MutableRefObject<Set<SttPickable>>;
-  pointPickables: React.MutableRefObject<Set<SttPointPickable>>;
+  idPickables: React.MutableRefObject<Set<SttIdPickable>>;
 }): null {
   const camera = useThree((s) => s.camera);
   const raycaster = useThree((s) => s.raycaster);
   const gl = useThree((s) => s.gl);
-  const { pickables, pointPickables } = props;
+  const { pickables, idPickables } = props;
   const hasPick = !!props.onPick;
   const hasHover = !!props.onHover;
   const onPickRef = React.useRef(props.onPick);
@@ -1754,19 +1841,21 @@ function PickController(props: {
       return pickBoxes([o.x, o.y, o.z], [d.x, d.y, d.z], boxes);
     };
 
-    // (2) Async GPU cloud pick — first hit across the registered clouds.
-    const cloudPickAt = async (
+    // (2) Async GPU id-buffer pick — first hit across the registered id-pickable
+    // layers (points, columns, arcs, …). Each returns a fully kind-tagged
+    // SttIdPickInfo, so there is no per-kind mapping here.
+    const idPickAt = async (
       clientX: number,
       clientY: number,
     ): Promise<SttPickInfo | null> => {
-      const clouds = pointPickables.current;
-      if (clouds.size === 0) return null;
+      const layers = idPickables.current;
+      if (layers.size === 0) return null;
       const p = project(clientX, clientY);
       if (!p) return null;
       const gpu = ensurePicker();
-      for (const cloud of clouds) {
-        const res = await cloud.pick(gpu, camera, p.localX, p.localY);
-        if (res) return pointPickToInfo(res);
+      for (const layer of layers) {
+        const res = await layer.pick(gpu, camera, p.localX, p.localY);
+        if (res) return res;
       }
       return null;
     };
@@ -1797,11 +1886,11 @@ function PickController(props: {
         onHoverRef.current(box);
         return;
       }
-      if (pointPickables.current.size === 0) {
+      if (idPickables.current.size === 0) {
         onHoverRef.current(null);
         return;
       }
-      void cloudPickAt(hoverX, hoverY).then((hit) => {
+      void idPickAt(hoverX, hoverY).then((hit) => {
         if (seq === hoverSeq) onHoverRef.current?.(hit);
       });
     };
@@ -1832,13 +1921,13 @@ function PickController(props: {
         onPickRef.current?.(box);
         return;
       }
-      // Box miss: fall through to the GPU cloud pass, else report a sync null
-      // (the unchanged empty-space behaviour when no clouds are registered).
-      if (pointPickables.current.size === 0) {
+      // Box miss: fall through to the GPU id-buffer pass, else report a sync null
+      // (the unchanged empty-space behaviour when no id-pickables are registered).
+      if (idPickables.current.size === 0) {
         onPickRef.current?.(null);
         return;
       }
-      void cloudPickAt(e.clientX, e.clientY).then((hit) =>
+      void idPickAt(e.clientX, e.clientY).then((hit) =>
         onPickRef.current?.(hit),
       );
     };
@@ -1862,7 +1951,7 @@ function PickController(props: {
       picker?.dispose();
       picker = null;
     };
-  }, [gl, camera, raycaster, pickables, pointPickables, hasPick, hasHover]);
+  }, [gl, camera, raycaster, pickables, idPickables, hasPick, hasHover]);
 
   return null;
 }
@@ -2110,7 +2199,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
   const globe = isGlobeProjection(projection) ? projection : null;
   const egoRef = React.useRef<EgoLayer | null>(null);
   const pickables = React.useRef<Set<SttPickable>>(new Set());
-  const pointPickables = React.useRef<Set<SttPointPickable>>(new Set());
+  const idPickables = React.useRef<Set<SttIdPickable>>(new Set());
   const layers = React.useRef<Set<SttLayer>>(new Set());
   // Stabilise the time range by value so the governor-registration effect doesn't
   // re-register every render on a fresh object identity.
@@ -2130,7 +2219,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
       getTime,
       egoRef,
       pickables,
-      pointPickables,
+      idPickables,
       layers,
       registry,
       timeRange: stableTimeRange,
@@ -2213,7 +2302,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
             onPick={onPick}
             onHover={onHover}
             pickables={pickables}
-            pointPickables={pointPickables}
+            idPickables={idPickables}
           />
           <React.Suspense fallback={fallback}>{children}</React.Suspense>
         </Ctx.Provider>

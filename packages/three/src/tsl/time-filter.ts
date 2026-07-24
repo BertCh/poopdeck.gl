@@ -8,16 +8,37 @@
  * Three Shading Language node graph that runs on the WebGPU/WebGL2 backend.
  *
  * Usage: a material binds its per-instance `startTime` / `endTime` / `vertexTime`
- * attribute nodes, picks a mode, and multiplies the returned alpha into its
- * `opacityNode`. The shared {@link TimeFilterUniforms} are updated once per frame
- * from the playback clock (relativised by the tile's `timeOffset`, f32-exact) via
+ * attribute nodes, picks a mode, and consumes TWO complementary nodes:
+ *
+ *   • {@link timeFilterAlphaNode} — the SOFT ramp — feeds `opacityNode` in the
+ *     FRAGMENT stage (fade-in / fade-out / wake ramp / trail head→tail fade, plus
+ *     it composes with SDF edge antialiasing).
+ *   • {@link timeFilterVisibleNode} — a hard `0 | 1` — is multiplied into the
+ *     primitive's per-instance / per-vertex SIZE / SCALE (or the vertex offset
+ *     that builds its quad / prism) in the VERTEX stage, so a primitive whose
+ *     feature is outside the HARD time window collapses to zero extent and dies at
+ *     primitive assembly (zero fragment cost). This replaces the old alpha-cutoff
+ *     fragment `discard` for the on/off cut — deck.gl #7509 documents that
+ *     fragment-discard time filtering keeps full raster cost and defeats early-Z.
+ *     `alphaTest` discard remains ONLY for SDF edge AA (the disc / atlas mask).
+ *
+ * The visible node is `0` ONLY on the HARD out-of-window region, which is a
+ * subset of where the alpha node is `0` — so `visible === 0 ⟹ alpha === 0`: a
+ * collapsed primitive is always one the alpha would have drawn at opacity 0
+ * anyway, and the on-screen result is unchanged. (The reverse does not hold: at
+ * a fade razor-edge alpha is exactly 0 while visible is 1 — that primitive is
+ * NOT collapsed, it just rasterises at opacity 0, exactly as today.)
+ *
+ * The shared {@link TimeFilterUniforms} are updated once per frame from the
+ * playback clock (relativised by the tile's `timeOffset`, f32-exact) via
  * {@link updateTimeFilterUniforms}.
  *
  * The CPU functions in `./time-filter-math.ts` are the unit-tested source of
- * truth for the math; keep the two in lockstep.
+ * truth for BOTH the alpha and the visibility math; keep the two in lockstep
+ * (the `*Visible` mirror lives there alongside the `*Alpha` mirror).
  */
 
-import { uniform, float, select, saturate, max, mix } from './nodes.js';
+import { uniform, float, select, saturate, max, mix, step } from './nodes.js';
 import type { TSLNode, UniformNode } from './nodes.js';
 import type { TimeFilterMode, TimeFilterParams } from './time-filter-math.js';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
@@ -137,6 +158,88 @@ export function timeFilterAlphaNode(
       return cumulativeAlphaNode(u, startTime);
     case 'trail':
       return trailAlphaNode(u, vertexTime);
+    case 'none':
+    default:
+      return float(1);
+  }
+}
+
+// ── Hard visibility nodes (vertex-stage collapse) ────────────────────────────
+//
+// Each returns a hard `0 | 1` float — the boolean core of a mode's in-window
+// test WITHOUT the fade ramp — for multiplying into a primitive's SIZE / SCALE
+// in the vertex stage. Built branch-free with `step()` (no `select()`), which is
+// both cheaper and varying-safe, and stays f32-exact 0/1. CPU mirror:
+// `timeFilterVisible` & friends in ./time-filter-math.ts.
+//
+// TSL `step(edge, x)` follows GLSL: `x >= edge ? 1 : 0`. The `>=` / `<=`
+// boundaries below match the CPU mirror (and the alpha functions' zero region)
+// exactly, so `visible === 0 ⟺ alpha === 0` on the boundary too.
+
+/** `window` visible — `1` while `[start,end]` overlaps `[cur ± windowHalf]`. */
+export function windowVisibleNode(
+  u: TimeFilterUniforms,
+  startTime: TSLNode,
+  endTime: TSLNode,
+): TSLNode {
+  const timeStart = u.currentTime.sub(u.windowHalf);
+  const timeEnd = u.currentTime.add(u.windowHalf);
+  // endTime >= timeStart AND startTime <= timeEnd.
+  return step(timeStart, endTime).mul(step(startTime, timeEnd));
+}
+
+/** `wake` visible — `1` while `age ∈ [0, wakeLength]` behind the playhead. */
+export function wakeVisibleNode(
+  u: TimeFilterUniforms,
+  startTime: TSLNode,
+): TSLNode {
+  const age = u.currentTime.sub(startTime);
+  // age >= 0 AND age <= wakeLength.
+  return step(float(0), age).mul(step(age, u.wakeLength));
+}
+
+/** `cumulative` visible — `1` once `startTime <= cur` (appear-and-persist). */
+export function cumulativeVisibleNode(
+  u: TimeFilterUniforms,
+  startTime: TSLNode,
+): TSLNode {
+  // startTime <= cur.
+  return step(startTime, u.currentTime);
+}
+
+/** `trail` visible (per-vertex) — `1` while `vertexTime ∈ [cur-trailLength, cur]`. */
+export function trailVisibleNode(
+  u: TimeFilterUniforms,
+  vertexTime: TSLNode,
+): TSLNode {
+  const trailStart = u.currentTime.sub(u.trailLength);
+  // vertexTime >= trailStart AND vertexTime <= cur.
+  return step(trailStart, vertexTime).mul(step(vertexTime, u.currentTime));
+}
+
+/**
+ * Build the hard-visibility node for the active mode — the vertex-collapse
+ * companion to {@link timeFilterAlphaNode}. Materials MULTIPLY this into their
+ * per-instance / per-vertex size / scale (vertex stage); the alpha node keeps
+ * feeding `opacityNode` for the soft band. `startTime`/`endTime`/`vertexTime`
+ * are per-instance attribute nodes (relative to `timeOffset`).
+ */
+export function timeFilterVisibleNode(
+  mode: TimeFilterMode,
+  u: TimeFilterUniforms,
+  startTime: TSLNode,
+  endTime: TSLNode,
+  vertexTime: TSLNode = startTime,
+): TSLNode {
+  switch (mode) {
+    case 'window':
+      return windowVisibleNode(u, startTime, endTime);
+    case 'wake':
+      return wakeVisibleNode(u, startTime);
+    case 'cumulative':
+      return cumulativeVisibleNode(u, startTime);
+    case 'trail':
+      return trailVisibleNode(u, vertexTime);
     case 'none':
     default:
       return float(1);

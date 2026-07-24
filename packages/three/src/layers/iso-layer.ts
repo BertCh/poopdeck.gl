@@ -21,6 +21,7 @@ import {
 } from 'three';
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { InstanceProvenance, encodePickId } from '@poopdeck.gl/core/picking';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
@@ -29,9 +30,18 @@ import {
 import { resolveCategoryColor, type RGBA } from '../lib/color.js';
 import {
   createIsoLineMaterial,
+  createIsoLineIdMaterial,
   updateIsoLineUniforms,
   type IsoLineMaterialBundle,
+  type IsoLineUniformValues,
 } from '../tsl/iso-line-material.js';
+import {
+  resolveIdPick,
+  featureTileKey,
+  type SttIdPickInfo,
+  type SttIdPickable,
+} from '../lib/id-pick.js';
+import type { GpuPicker } from '../lib/gpu-pick.js';
 
 export interface IsoLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
@@ -53,11 +63,23 @@ export interface IsoLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 200, 255, 220];
 
-export class IsoLayer extends BaseSttLayer {
+export class IsoLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Group();
   private lines: LineSegments;
   private bundle: IsoLineMaterialBundle;
+
+  // ── GPU id-buffer pick identity (merged contour m → (tileKey, featureIndex)) ──
+  // Iso is a MERGED `LineSegments` mesh, so — like polygon — the id is a per-vertex
+  // attribute (`idColors`, painted both endpoints of each of a contour's segments);
+  // provenance is per emitted contour.
+  private provenance = new InstanceProvenance();
+  private binaryByTileKey = new Map<string, BinaryFeatures>();
+  private idColors = new Float32Array(0);
+  // Opt-in GPU id-buffer pick pass (lazily built on first pick; browser-verify).
+  private idBundle: IsoLineMaterialBundle | null = null;
+  private idColorsPresent = false;
+  private currentTimeMs = 0;
 
   private readonly opts: Required<
     Omit<
@@ -93,11 +115,17 @@ export class IsoLayer extends BaseSttLayer {
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
+    this.currentTimeMs = ctx.timeOrigin;
     const proj = ctx.projection;
 
-    // Pass 1 — count segments.
+    // Fresh pick identity (adopted below; empty when there are no contours, so a
+    // stale pick after a reload resolves to null rather than an old contour).
+    const provenance = new InstanceProvenance();
+    const binaryByTileKey = new Map<string, BinaryFeatures>();
+
+    // Pass 1 — count segments + carry each layer's provenance key.
     let segCount = 0;
-    const lineLayers: BinaryFeatures[] = [];
+    const lineLayers: Array<{ b: BinaryFeatures; tileKey: string }> = [];
     for (const tile of tiles) {
       for (const tl of tile.layers) {
         const b = tl.features;
@@ -107,7 +135,7 @@ export class IsoLayer extends BaseSttLayer {
           !b.startIndices
         )
           continue;
-        lineLayers.push(b);
+        lineLayers.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
         for (let f = 0; f < b.featureCount; f++) {
           segCount += Math.max(
             0,
@@ -121,11 +149,17 @@ export class IsoLayer extends BaseSttLayer {
     const colors = new Float32Array(segCount * 2 * 4);
     const starts = new Float32Array(segCount * 2);
     const ends = new Float32Array(segCount * 2);
+    // Per-vertex GPU pick id colour (both endpoints of every segment of a contour
+    // share the contour's merged-index colour). Merged-mesh analogue of the
+    // instanced `buildIdColors`.
+    const idColors = new Float32Array(segCount * 2 * 3);
     let p = 0; // position cursor (×3)
     let c = 0; // color cursor (×4)
     let t = 0; // time cursor (×1)
+    let ic = 0; // id-colour cursor (×3)
 
-    for (const b of lineLayers) {
+    for (const { b, tileKey } of lineLayers) {
+      binaryByTileKey.set(tileKey, b);
       const dims = b.positionDimensions ?? 2;
       const cat = b.categoricalProps[this.opts.colorProperty];
       const elev = this.opts.elevationProperty
@@ -134,6 +168,12 @@ export class IsoLayer extends BaseSttLayer {
       const rebase = b.timeOffset - this.timeOrigin;
 
       for (let f = 0; f < b.featureCount; f++) {
+        const v0 = b.startIndices![f];
+        const v1 = b.startIndices![f + 1];
+        // A contour with < 2 vertices emits no segment → never takes a pick slot,
+        // so `provenance` and `idColors` stay aligned with the vertices written.
+        if (v1 - v0 < 2) continue;
+
         // Per-contour colour (straight, NOT premultiplied — alpha varies per frame).
         const label =
           cat && cat.indices[f] !== 0xffff
@@ -149,6 +189,15 @@ export class IsoLayer extends BaseSttLayer {
         const cb = rgba[2] / 255;
         const ca = (rgba[3] ?? 255) / 255;
 
+        // Take this contour's merged pick slot + encode it once — both endpoints of
+        // every segment below carry this colour. Pushed in emit order.
+        const mergedFeatureIndex = provenance.length;
+        provenance.push(tileKey, f);
+        const [ir, ig, ib] = encodePickId(mergedFeatureIndex);
+        const idR = ir / 255;
+        const idG = ig / 255;
+        const idB = ib / 255;
+
         // Per-contour time window (all vertices share it).
         const start = (b.startTimes ? b.startTimes[f] : 0) + rebase;
         const end = (b.endTimes ? b.endTimes[f] : 0) + rebase;
@@ -156,8 +205,6 @@ export class IsoLayer extends BaseSttLayer {
         // iso3d lifts the whole ring to its slab altitude; flat iso uses geom z.
         const baseZ = elev ? elev[f] * this.opts.elevationScale : null;
 
-        const v0 = b.startIndices![f];
-        const v1 = b.startIndices![f + 1];
         for (let v = v0; v < v1 - 1; v++) {
           const lon0 = b.positions[v * dims];
           const lat0 = b.positions[v * dims + 1];
@@ -192,9 +239,23 @@ export class IsoLayer extends BaseSttLayer {
           ends[t] = end;
           ends[t + 1] = end;
           t += 2;
+          idColors[ic] = idR;
+          idColors[ic + 1] = idG;
+          idColors[ic + 2] = idB;
+          idColors[ic + 3] = idR;
+          idColors[ic + 4] = idG;
+          idColors[ic + 5] = idB;
+          ic += 6;
         }
       }
     }
+
+    // Adopt the fresh pick identity; the per-vertex id colours are uploaded lazily
+    // onto the new geometry in ensurePickPass.
+    this.provenance = provenance;
+    this.binaryByTileKey = binaryByTileKey;
+    this.idColors = idColors;
+    this.idColorsPresent = false;
 
     this.lines.geometry.dispose();
     const geom = new BufferGeometry();
@@ -207,8 +268,10 @@ export class IsoLayer extends BaseSttLayer {
     this.lines.visible = segCount > 0; // no 0-vertex draw when there are no contours
   }
 
-  setTime(absoluteTimeMs: number): void {
-    updateIsoLineUniforms(this.bundle, {
+  /** The uniform values for the given playhead — shared by the contour render and
+   *  the id-pass so the pick pass gates on the SAME time window. */
+  private uniformValues(absoluteTimeMs: number): IsoLineUniformValues {
+    return {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params: {
         windowHalf: this.opts.windowHalf,
@@ -216,11 +279,92 @@ export class IsoLayer extends BaseSttLayer {
         fadeOut: this.opts.fadeOut,
       },
       opacity: this.opts.opacity,
+    };
+  }
+
+  setTime(absoluteTimeMs: number): void {
+    this.currentTimeMs = absoluteTimeMs;
+    updateIsoLineUniforms(this.bundle, this.uniformValues(absoluteTimeMs));
+  }
+
+  // ── Picking (GPU id-buffer catalog: iso variant — MERGED LineSegments mesh) ──
+
+  /**
+   * Resolve a decoded merged-CONTOUR index (from a GPU id-buffer readback) to a
+   * normalised {@link SttIdPickInfo} (`kind: 'iso'`), or `null` for a miss. The
+   * coordinate is the contour's FIRST source vertex (`startIndices[i]`, the
+   * standard indexed-geometry path — iso contours are LineStrings, always with
+   * `startIndices`). Pure — the unit-tested seam; call it directly.
+   */
+  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+    return resolveIdPick({
+      index,
+      provenance: this.provenance,
+      binaryByTileKey: this.binaryByTileKey,
+      kind: 'iso',
+      layerId: this.id,
+      screen,
     });
+  }
+
+  /** Lazily build the id material + set the per-vertex `sttIdColor` attribute. */
+  private ensurePickPass(): void {
+    if (!this.idBundle) {
+      this.idBundle = createIsoLineIdMaterial();
+    }
+    if (!this.idColorsPresent && this.idColors.length > 0) {
+      this.lines.geometry.setAttribute(
+        'sttIdColor',
+        new Float32BufferAttribute(this.idColors, 3),
+      );
+      this.idColorsPresent = true;
+    }
+  }
+
+  /**
+   * GPU iso pick — auto-registered into the r3f `PickController` (a CPU box miss
+   * falls through to this). Renders the merged contours with the flat id material
+   * into `picker`'s off-screen target, reads back the merged CONTOUR id at CSS
+   * pixel `(cssX, cssY)`, and resolves it through the provenance buffer. The
+   * `resolvePick` half is unit-tested; the render + readback needs a live GPU
+   * device and is browser-verify. The id material reuses the SAME window
+   * collapse gate, so only contours drawn THIS frame are pickable. The pick
+   * renders the parent `object` (Group) and swaps only the child mesh's material.
+   */
+  async pick(
+    picker: GpuPicker,
+    camera: unknown,
+    cssX: number,
+    cssY: number,
+  ): Promise<SttIdPickInfo | null> {
+    if (this.provenance.length === 0 || !this.lines.visible) return null;
+    this.ensurePickPass();
+    const idBundle = this.idBundle;
+    if (!idBundle) return null;
+    // Sync the id material's window gate to the live playhead so only contours
+    // visible THIS frame are pickable.
+    updateIsoLineUniforms(idBundle, this.uniformValues(this.currentTimeMs));
+
+    const lines = this.lines;
+    const renderMaterial = lines.material;
+    const index = await picker.pick(this.object, camera, cssX, cssY, {
+      featureCount: this.provenance.length,
+      onBeforeRender: () => {
+        lines.material = idBundle.material;
+      },
+      onAfterRender: () => {
+        lines.material = renderMaterial;
+      },
+    });
+    if (index == null) return null;
+    return this.resolvePick(index, [cssX, cssY]);
   }
 
   dispose(): void {
     this.lines.geometry.dispose();
     this.bundle.material.dispose();
+    this.idBundle?.material.dispose();
+    this.idBundle = null;
+    this.idColorsPresent = false;
   }
 }

@@ -158,15 +158,6 @@ const STORM4D_WARNING_COLORS: Record<string, [number, number, number, number]> =
   };
 
 /**
- * County outage extrusion: metres of prism per customer without power. The
- * worst Iowa counties in the 21 May wave peak at ~10–20 k customers out, so
- * 0.5 m/customer tops the tallest column near the volume's mid-levels
- * (~5–10 km rendered) without dwarfing the storm. Data-magnitude extrusion,
- * NOT geographic altitude — deliberately outside STORM4D_ELEVATION_SCALE.
- */
-const STORM4D_OUTAGE_METERS_PER_CUSTOMER = 0.5;
-
-/**
  * Cloud-top "anvil canopy" fills by `bt_band` (§9.1 labels, 10 K isobands of
  * GOES C13 brightness temperature). Colder = higher = brighter/bluer, all
  * very translucent so the stacked band walls read as haze the volume pokes
@@ -186,6 +177,23 @@ const STORM4D_CLOUDTOP_COLORS: Record<
   '200-210': [230, 242, 252, 58],
   '<200': [250, 252, 255, 66],
 };
+
+/**
+ * Cloud-top canopy render parameters: keep the translucent EXTRUDED isobands
+ * OUT of the depth buffer (`depthWriteEnabled: false`) so their overlapping
+ * prism walls — and the tile-seam splits of the continental BT field — blend
+ * as pure haze instead of z-fighting / double-blending. That translucent-
+ * extruded-polygon failure is the documented AnimatedPolygonLayer limitation
+ * (its module docstring: "prefer fully-opaque fills"), and it's the source of
+ * the canopy artefacts. Depth TEST stays on (default `depthCompare`), so
+ * already-drawn opaque geometry still occludes the haze; because the canopy no
+ * longer writes depth, the gate VOLUME drawn AFTER it reads cleanly THROUGH the
+ * anvil — the §9.1 "volume pokes through the haze" intent, now literal. Same
+ * idiom as GROUND_DECAL_PARAMETERS, minus the `depthCompare:'always'` (we WANT
+ * the canopy to sit behind foreground geometry). Module-scope for stable object
+ * identity across layer-list rebuilds.
+ */
+const STORM4D_CANOPY_PARAMETERS = { depthWriteEnabled: false };
 
 /**
  * Storm-report fills by LSR `kind` (§9.1). Tornado reports pop red against
@@ -1475,7 +1483,7 @@ export function buildDemoLayers({
     case 'storm4d': {
       // Composite STORM-4D render — one supercell as a true 4D object, up to
       // ten archives on one playhead (§9.2 of the storm-4d roadmap is the
-      // binding layer map). Painter order bottom→top: county outage prisms →
+      // binding layer map). Painter order bottom→top: county outage decal →
       // cloud-top anvil canopy → multi-level winds → the NEXRAD gate VOLUME
       // (primary/governor) → VTEC warning prisms → couplet rings → surface
       // stations → storm reports → GLM lightning → sounding ascent. Every
@@ -1486,18 +1494,35 @@ export function buildDemoLayers({
       // (STORM4D_ELEVATION_SCALE) across every altitude-bearing layer.
       // Overlay styling is fixed here (the flat Dataset type's radius/color
       // fields belong to the volume; see the weather case's lightning note).
+      //
+      // `refinementStrategy: 'no-overlap'` on EVERY storm4d tileset: these
+      // archives are full-duplication pyramids (every zoom level carries the
+      // complete feature set — 18.3M radar gates per level on the volume), so
+      // deck's best-available parent fallback fetched + decoded + drew up to
+      // 4 extra complete copies of the visible data per bucket for zero
+      // information gain. Measured at 4 fps / 2.7 s main-thread stalls before;
+      // exact-zoom loading is what the data shape wants.
       const overlayBase = {
         ...baseProps,
+        refinementStrategy: 'no-overlap' as const,
         onOverviewPreload: undefined,
         overviewPreload: false,
       };
       const gates = selectedDataset.overlayGatesPlayback ?? true;
       const layers: any[] = [];
 
-      // 1. County power outages — dark-red translucent prisms extruded by
-      // `customers_out` (EAGLE-I 15-min rollups on county geometry). A
-      // data-magnitude extrusion (m per customer), not altitude, so it keeps
-      // its own scale. Arrives BEHIND the storm — the damage wake.
+      // 1. County power outages — flat, EMPHASIZED map regions (EAGLE-I 15-min
+      // rollups on county geometry). Was dark-red prisms extruded by
+      // `customers_out`, but the tall walls OCCLUDED the atmospheric layers
+      // above them; the damage wake reads better as lit-up counties on the
+      // ground. Drawn as a GROUND DECAL (GROUND_DECAL_PARAMETERS: no depth
+      // write, always-pass depth) so the filled counties lie flat UNDER the 3D
+      // volume / canopy / winds without z-fighting the basemap or occluding
+      // anything drawn after them. The wake signal is now the spreading EXTENT
+      // — counties light up behind the storm as the outage footprint grows
+      // (the archive carries only numeric `customers_out`, and the polygon fill
+      // is categorical/constant, so there is no per-county magnitude ramp); a
+      // bright outline makes each affected county pop.
       if (selectedDataset.outagesUrl) {
         layers.push(
           new AnimatedPolygonLayer({
@@ -1506,12 +1531,14 @@ export function buildDemoLayers({
             ...sourceProps(`${selectedDataset.id}-outages`, gates),
             data: selectedDataset.outagesUrl,
             filled: true,
-            fillColor: [180, 50, 50, 120],
-            extruded: true,
-            elevation: 'customers_out',
-            elevationScale: STORM4D_OUTAGE_METERS_PER_CUSTOMER,
-            wireframe: false,
-            stroked: false,
+            fillColor: [205, 50, 50, 100],
+            extruded: false,
+            stroked: true,
+            getLineColor: [255, 100, 85, 215],
+            getLineWidth: 2,
+            lineWidthUnits: 'pixels',
+            lineWidthMinPixels: 1.2,
+            parameters: GROUND_DECAL_PARAMETERS,
           }),
         );
       }
@@ -1536,33 +1563,40 @@ export function buildDemoLayers({
             elevationScale: STORM4D_ELEVATION_SCALE,
             wireframe: false,
             stroked: false,
+            // Translucent extruded walls → haze, not z-fighting (see const).
+            parameters: STORM4D_CANOPY_PARAMETERS,
             fadeInDuration: 150000,
             fadeOutDuration: 150000,
           }),
         );
       }
 
-      // 3. Multi-level HRRR winds — particle trips at 850/700/500/250 mb,
-      // each path lifted to its pressure-level altitude (`level_alt_m`) and
-      // progressively revealed as a trailing thread so the storm-relative
-      // flow visibly threads the volume at four heights.
+      // 3. Multi-level HRRR winds — a quiet drift-DOT field (one moving point
+      // per active particle), each dot lifted to its pressure-level altitude
+      // (`level_alt_m` × the shared exaggeration) so the storm-relative flow
+      // still threads the volume at four heights (850/700/500/250 mb). Was
+      // progressively-revealed path threads; switched to the same
+      // AnimatedTripHeadsLayer drift-dot treatment the severe-weather-2024 wind
+      // field uses, so the winds read as a swarm riding the volume rather than
+      // a web of continental threads. Big residency win too: heads draw one
+      // instanced circle per ACTIVE particle instead of keeping ~45 sim-min of
+      // ribbon geometry live. Elevation is per-feature (a particle rides one
+      // pressure surface for its whole life) — see AnimatedTripHeadsLayer's
+      // elevationProperty, which mirrors the volume's `alt_m` lift.
       if (selectedDataset.wind3dUrl) {
         layers.push(
-          new AnimatedPathLayer({
+          new AnimatedTripHeadsLayer({
             ...overlayBase,
             id: `${selectedDataset.id}-wind3d`,
             ...sourceProps(`${selectedDataset.id}-wind3d`, gates),
             data: selectedDataset.wind3dUrl,
-            pathColor: [130, 190, 235, 110],
-            pathWidth: 1.2,
-            widthUnits: 'pixels',
-            revealTrail: true,
-            revealDuration: 2700000, // 45 sim-min thread behind each particle
-            reducedMotion,
+            headColor: [130, 190, 235, 150],
+            headRadiusPixels: 1.4,
+            headBillboard: true, // camera-facing at altitude in the pitched scene
+            antialiasing: true,
+            opacity: 0.6,
             elevationProperty: 'level_alt_m',
             elevationScale: STORM4D_ELEVATION_SCALE,
-            capRounded: false,
-            jointRounded: false,
             // One 2 h archive bucket resident keeps the whole particle field
             // complete (hrrr_advect pattern — see the weather wind overlay).
             timeWindow: 7200000,
@@ -1581,6 +1615,8 @@ export function buildDemoLayers({
       layers.push(
         new AnimatedPointLayer({
           ...baseProps,
+          // Full-duplication archive → exact-zoom loading (see overlayBase).
+          refinementStrategy: 'no-overlap',
           ...sourceProps(selectedDataset.id, true),
           fillColor:
             activeSummaryToggle?.weightProperty ??
@@ -1594,7 +1630,10 @@ export function buildDemoLayers({
           billboard: true,
           use3D: true,
           elevationProperty: 'alt_m',
-          elevationScale: STORM4D_ELEVATION_SCALE,
+          // Shared scene exaggeration, overridable per-dataset (the continental
+          // MRMS demo lifts a 19 km column against a 4,500 km continent).
+          elevationScale:
+            selectedDataset.elevationScale ?? STORM4D_ELEVATION_SCALE,
           radius:
             selectedDataset.radiusProperty ?? selectedDataset.radius ?? 320,
           radiusUnits: selectedDataset.radiusUnits ?? 'meters',

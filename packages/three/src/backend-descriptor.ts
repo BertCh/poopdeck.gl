@@ -93,7 +93,7 @@ export const threeBackend: BackendDescriptor = {
     metricSizing: true,
     gpuHeatmap: false,
     liveBundling: false,
-    timeAsHeight: false,
+    timeAsHeight: true,
     interleavedBasemap: false,
     userExtensions: false,
     cameraRoll: false,
@@ -112,14 +112,13 @@ export const threeBackend: BackendDescriptor = {
  *
  * The deck reference backend gained per-layer prop families (glide
  * interpolation, icon wake, GPU DataFilter, space-time height, stable
- * categorical colour, progressive path reveal). The three backend does NOT
- * implement any of them today: TSL/WebGPU has no DataFilterExtension analogue,
- * no CPU glide/wake kernel port, and no time-as-height (`timeAsHeight` is
- * already `false` above). Rather than silently no-op, each feature declares a
- * DELIBERATE typed fallback + reason here — the honest, machine-checkable
- * complement to deck's `supported: true`. The vocabulary is redeclared locally
- * because `@poopdeck.gl/three` deliberately does not depend on
- * `@poopdeck.gl/layers`; the conformance gate asserts exhaustiveness.
+ * categorical colour, progressive path reveal). The three-backend SoTA campaign
+ * (2026-07) ported them all: as of Wave 1 every family is `supported: true` on
+ * its full deck kind set — motionInterpolation, iconWake, timeHeightScale,
+ * stableColorMapping, pathReveal, and dataFilter (icon included). Each entry is
+ * the honest, machine-checkable complement to deck's declaration. The vocabulary
+ * is redeclared locally because `@poopdeck.gl/three` deliberately does not depend
+ * on `@poopdeck.gl/layers`; the conformance gate asserts exhaustiveness.
  * ────────────────────────────────────────────────────────────────────────── */
 
 /** The per-layer prop families a backend either implements or degrades. */
@@ -149,50 +148,59 @@ export type LayerFeatureSupport =
     };
 
 /**
- * three implements NONE of the campaign features yet — every entry is a
- * deliberate typed fallback, not a silent gap. `timeHeightScale` in particular
- * is consistent with `capabilities.timeAsHeight === false` above.
+ * Campaign-feature support (three-backend SoTA campaign, 2026-07). Entries that
+ * remain `supported: false` are deliberate typed fallbacks, not silent gaps;
+ * `timeHeightScale` in particular is consistent with `capabilities.timeAsHeight
+ * === false` above. `motionInterpolation` landed in Wave 1 (GPU keyframe glide);
+ * `dataFilter` is supported on the kinds listed (icon still pending).
  */
 export const threeLayerFeatures: Readonly<
   Record<LayerFeature, LayerFeatureSupport>
 > = {
   motionInterpolation: {
-    supported: false,
+    supported: true,
     kinds: ['point', 'icon'],
-    fallback: 'per-tile window sampling (markers pop between tiles, no glide)',
-    reason:
-      'CPU glide kernel (idProperty pooling + per-frame pose lerp) not ported to three',
+    prop: 'interpolate (+idProperty/maxInterpolationGap)',
+    summary:
+      'GPU keyframe glide — markers interpolate smoothly between tile time-samples from a single time uniform (data-texture keyframes, reducedMotion-gated); icon also glides heading',
   },
   iconWake: {
-    supported: false,
+    supported: true,
     kinds: ['icon'],
-    fallback: 'static icons (no trailing wake)',
-    reason: 'no per-instance wake-alpha shader hook in the three icon path',
+    prop: 'wakeLength (+wakeTailScale)',
+    summary:
+      'trailing comet wake on animated icons — per-instance wakeAlphaNode fades opacity and wakeSizeScaleNode tapers the quad toward the tail; reducedMotion-gated to a static marker',
   },
   dataFilter: {
-    supported: false,
-    kinds: ['arc', 'line', 'trips', 'column', 'polygon'],
-    fallback: 'unfiltered — every feature is drawn',
-    reason: 'no DataFilterExtension analogue in the three (TSL/WebGPU) backend',
+    supported: true,
+    // Wired end-to-end (layer props → buffer builder → `sttFilterValue`
+    // attribute → filter-enabled material → per-frame uniforms) on the full deck
+    // set. icon's static path is covered; icon+glide filtering is a documented
+    // no-op (glide keyframes carry no per-sample filter column).
+    kinds: ['arc', 'line', 'trips', 'column', 'polygon', 'icon'],
+    prop: 'filterProperty (+filterRange/filterSoftRange/filterEnabled)',
+    summary:
+      'per-feature range filter (deck DataFilterExtension analogue): the hard range cut collapses out-of-range primitives in the vertex stage, filterSoftRange fades the band',
   },
   timeHeightScale: {
-    supported: false,
+    supported: true,
     kinds: ['column', 'polygon'],
-    fallback: 'flat geometry (no space-time-cube lift)',
-    reason:
-      'time-as-height is unimplemented — see capabilities.timeAsHeight=false',
+    prop: 'timeHeightScale (+timeHeightOrigin)',
+    summary:
+      'space-time-cube lift — each feature is raised in +Z by (start − timeHeightOrigin) × timeHeightScale (deck window-mode parity); the flat⇄cube morph is a pure uniform change; see capabilities.timeAsHeight=true',
   },
   stableColorMapping: {
-    supported: false,
+    supported: true,
     kinds: ['arc', 'line', 'column', 'icon'],
-    fallback: 'per-tile first-seen palette (colours may differ across tiles)',
-    reason:
-      'no CategoryColorExtension palette / CPU colour-expand path ported to three',
+    prop: 'stableColorMapping (+colorMapping/colorPalette/categoryOrder)',
+    summary:
+      'categorical colours stay stable across tiles — a deterministic label→slot assignment (explicit mapping / global categoryOrder / FNV-1a hash, all load-order-independent) feeds a GPU palette texture, replacing the per-tile first-seen palette that flickered as tiles churned',
   },
   pathReveal: {
-    supported: false,
+    supported: true,
     kinds: ['path'],
-    fallback: 'whole path drawn (no progressive reveal)',
-    reason: 'progressive vertex-time reveal not ported to the three path layer',
+    prop: 'revealTrail (+revealDuration/fadeTrail/reducedMotion)',
+    summary:
+      'progressive path draw — the path inks itself in up to the playhead via the per-vertex trail gate fed synthesized arc-length reveal times; revealDuration sets persist vs comet, fadeTrail the head→tail fade; reducedMotion-gated to a static whole path',
   },
 };

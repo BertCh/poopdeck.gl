@@ -148,6 +148,15 @@ const AV_MAP_COLORS: Record<string, ColorRGBA> = {
   // steel-blue threads; intersection lanes read amber so junctions pop.
   lane_centerline: [90, 130, 165, 95],
   lane_centerline_intersection: [255, 170, 50, 160],
+  // Cosmos-Drive-Dreams (RDS-HQ) layers (cosmos_drive_dreams.py). Lanes /
+  // lanelines / wait lines / crosswalks reuse the shared keys above; these are
+  // the source's remaining layer names. Boundaries read as crisp pale edges,
+  // markings as soft paint, signals as small bright footprints.
+  road_boundary: [235, 235, 245, 200],
+  road_marking: [240, 240, 250, 120],
+  traffic_light: [80, 250, 123, 200],
+  traffic_sign: [255, 200, 60, 200],
+  pole: [170, 180, 195, 180],
 };
 
 /**
@@ -3060,7 +3069,7 @@ const rawDatasets: Dataset[] = [
     // earth.nullschool / Windy particle-flow look. `windHeadColor` is the
     // fallback for dots with no sampled value. See buildDemoLayers 'weather'.
     windHeadColor: [95, 160, 230, 100],
-    windHeadRadiusPixels: .6,
+    windHeadRadiusPixels: 0.6,
     windHeadOpacity: 0.6,
     // 500 mb air-temperature ramp over the drift dots. Domain is the °C range
     // for the late-May outbreak window (cold trough → warm ridge); cold→warm
@@ -3226,6 +3235,87 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // ─── storm-3d-conus: the NATIONAL companion to storm-4d-greenfield ───────
+    // Where Greenfield goes deep on ONE supercell from one radar (velocity
+    // couplet + full context stack), this scales the same "storm as a 4D
+    // object" idea to the WHOLE country using the pre-mosaicked MRMS 3D
+    // reflectivity grid (33 height levels, live on noaa-mrms-pds). MRMS is
+    // reflectivity-only (national dealiased velocity would need a ~160-site
+    // Level-II mosaic), so there is NO velocity toggle / couplet here — the
+    // story is the continental echo cloud you dive into. Built by
+    // scripts/data-generation/mrms_volume.py; the SAME stratified min-zoom LOD
+    // as the Greenfield volume keeps the continental framing cheap while every
+    // gate survives at the deepest zoom (lossless base tier).
+    id: 'storm-3d-conus',
+    name: 'Storm as a 4D Object — Continental (MRMS)',
+    description:
+      'The entire United States as a single time-animated 3D radar object: the 21 May 2024 severe-weather outbreak rendered from the NOAA MRMS 3D reflectivity mosaic — 33 vertical levels from 0.5 to 19 km stacked into a continental volumetric cloud. Orbit the whole country at once, then dive into any storm to read its vertical structure gate by gate; a GPU reflectivity threshold peels the cloud down to the cores. A stratified level-of-detail pyramid streams a sparse continental skeleton at the national framing and resolves to the full 1 km grid as you zoom in. GLM lightning flickers beneath. Source: NOAA MRMS / GOES-16 GLM.',
+    // Primary `url` = the national MRMS 3D volume (REQUIRED governor). Reuses
+    // the existing continental GLM archive, subset by the demo clock.
+    url: '/data/mrms-storm3d-volume/manifest.json',
+    lightningUrl: '/data/goes-glm-lightning/manifest.json',
+    type: 'storm4d',
+    sources: ['noaa'],
+    // The Greenfield tornado's ~35-min mature phase, continent-wide. MUST match
+    // the built archive's time_range (mrms_volume 20:00→20:35Z, 5-min frames).
+    timeRange: {
+      start: Date.UTC(2024, 4, 21, 20, 0, 0),
+      end: Date.UTC(2024, 4, 21, 20, 35, 0),
+    },
+    // ~one 5-min MRMS frame visible at a time; fades cross-dissolve frames.
+    timeWindow: 300000,
+    fadeInDuration: 120000,
+    fadeOutDuration: 120000,
+    // 35 min over ~35 s: the outbreak breathes in near real-ish time.
+    targetPlaybackSeconds: 35,
+    // Continental framing, pitched — the whole CONUS echo field at once.
+    initialViewState: {
+      longitude: -95,
+      latitude: 39,
+      zoom: 4.2,
+      pitch: 50,
+      bearing: 15,
+      maxPitch: 85,
+    },
+    // Vertical exaggeration is larger than Greenfield's 4× because a 19 km
+    // column is invisibly thin against a 4,500 km-wide continent — 15× lifts
+    // the tops into readable relief at the national framing (honored by the
+    // storm4d volume layer via selectedDataset.elevationScale).
+    elevationScale: 15,
+    // Reflectivity coloring (same NWS ramp + band contract as Greenfield); the
+    // GPU dBZ threshold composes with the time window (a live slider is the
+    // follow-up — the detail-over-space/time control).
+    colorProperty: 'dbz_band',
+    colorMapping: STORM4D_DBZ_COLORS,
+    colorMappingDefault: [120, 120, 130, 60],
+    filterProperty: 'dbz',
+    filterRange: [10, 95],
+    // National gate dots: ~1 km grid, so a small world-space billboard with a
+    // pixel floor reads as a continental cloud at z4 and resolves to gates on
+    // the dive.
+    radius: 700,
+    radiusUnits: 'meters',
+    radiusScale: 1,
+    radiusMinPixels: 1,
+    radiusMaxPixels: 5,
+    opacity: 0.85,
+    legend: {
+      title: 'Continental storm — 4D object',
+      items: [
+        { color: '#02fd02', label: 'echo 20–35 dBZ' },
+        { color: '#fd9500', label: 'heavy 45–55' },
+        { color: '#f800fd', label: 'extreme 65+' },
+        { color: '#deecff', label: 'lightning flash' },
+      ],
+      ramps: [
+        {
+          label: 'reflectivity 10 → 70+ dBZ (NWS)',
+          colors: ['#40b45a', '#02fd02', '#fdf802', '#fd0000', '#f800fd'],
+        },
+      ],
+    },
+  },
+  {
     id: 'av-synthetic',
     name: 'AV Cockpit — Synthetic Drive',
     description:
@@ -3285,6 +3375,71 @@ const rawDatasets: Dataset[] = [
         { color: '#aad64a', label: 'mid' },
         { color: '#f8c63c', label: 'building edge' },
         { color: '#fa8c30', label: 'rooftops' },
+      ],
+    },
+  },
+  {
+    id: 'cosmos-drive-dreams',
+    name: 'World Model Scenario Explorer',
+    description:
+      '300 NVIDIA Cosmos-Drive-Dreams driving scenarios laid side by side on one synthetic grid, every agent in every world animating at once on a shared clock. Click a world to fly in and watch the Cosmos-generated video of it play in sync with its own vector geometry. Explorer at /worlds.',
+    // Primary `url` = the ego trips — 300 short LineStrings, the lightest
+    // archive and the galaxy's visible heartbeat, so the clock gates on
+    // something honest that can never stall (the boxes/map are conditional or
+    // timeless). The grid is synthetic: every scenario's local metre frame is
+    // anchored to its own cell on an equatorial lattice, so the basemap is off.
+    url: '/data/cosmos-drive-dreams/ego/manifest.json',
+    avEgoUrl: '/data/cosmos-drive-dreams/ego/manifest.json',
+    avObjectsUrl: '/data/cosmos-drive-dreams/objects/manifest.json',
+    avMapPolyUrl: '/data/cosmos-drive-dreams/map_poly/manifest.json',
+    avMapLineUrl: '/data/cosmos-drive-dreams/map_line/manifest.json',
+    // Additive-octree LOD point overview of the lane network — the sparse dotted
+    // road the gallery draws at overview zoom instead of the full 105 MB
+    // map_line archive (buildWorldsLayers gates the crisp lines to zoom-in).
+    avMapPointsUrl: '/data/cosmos-drive-dreams/map_points/manifest.json',
+    worldsUrl: '/data/cosmos-drive-dreams/worlds.json',
+    mapColors: AV_MAP_COLORS,
+    avObjectColors: AV_OBJECT_COLORS,
+    colorMappingDefault: [150, 160, 175, 220],
+    lidarColorMapping: AV_HEIGHT_BAND_COLORS,
+    lidarColorMappingDefault: [120, 130, 150, 220],
+    type: 'worlds',
+    // The shared fake epoch every world is rebased onto (cosmos_drive_dreams.py
+    // T0_MS), spanning ONE generated window — 121 source frames at 30 FPS. Each
+    // world's geometry was built for exactly the frames its Cosmos video covers,
+    // so the loop maps 1:1 onto the video. worlds.json is authoritative; this is
+    // the pre-load placeholder.
+    timeRange: {
+      start: 1704067200000, // 2024-01-01T00:00:00Z
+      end: 1704067204000, // +4s (the 121-frame generated window, looping)
+    },
+    timeWindow: 1500,
+    targetPlaybackSeconds: 4, // real-time-ish: the window is ~4 s
+    // Whole-grid overview: 17×18 cells at 1 km pitch, centred mid-Atlantic on
+    // the equator (basemap hidden — these are scenario cells, not geography).
+    initialViewState: {
+      longitude: -30,
+      latitude: 0,
+      zoom: 11.6,
+      pitch: 45,
+      bearing: 0,
+    },
+    hideBasemap: true,
+    backdropColor: '#05070d',
+    avLocalFrame: true,
+    tripColor: [120, 230, 255, 255],
+    widthUnits: 'meters',
+    tripWidth: 2,
+    fadeTrail: true,
+    opacity: 0.95,
+    legend: {
+      title: 'Agent class',
+      items: [
+        { color: '#ff9e00', label: 'car' },
+        { color: '#ff6347', label: 'truck' },
+        { color: '#ff4500', label: 'bus' },
+        { color: '#0050e6', label: 'pedestrian' },
+        { color: '#ff3d63', label: 'rider' },
       ],
     },
   },
@@ -4821,7 +4976,17 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 // docs/roadmap/storm-4d-greenfield-2026-07.md §9). Un-gate ONLY after r2-sync
 // verifies every storm4d-* manifest 200 — a partial sync 404-stalls the
 // composite (all overlays gate playback by default).
-const LOCAL_ONLY_DATASETS = new Set<string>(['storm-4d-greenfield']);
+//
+// (2026-07-23) cosmos-drive-dreams: wired ahead of its archives. Its bundle is
+// CC BY 4.0 (NVIDIA), so it MAY be synced to R2 with attribution — un-gate only
+// after r2-sync verifies the five archive manifests (ego / objects / map_poly /
+// map_line / map_points), `worlds.json`, and the `videos/` directory (a partial
+// sync leaves the galaxy animating over dead video panels).
+const LOCAL_ONLY_DATASETS = new Set<string>([
+  'storm-4d-greenfield',
+  'storm-3d-conus',
+  'cosmos-drive-dreams',
+]);
 
 export const datasets: Dataset[] = [
   ...rawDatasets,
@@ -4879,6 +5044,13 @@ export const datasets: Dataset[] = [
     ...(d.avCamerasUrl && { avCamerasUrl: resolveDataUrl(d.avCamerasUrl) }),
     ...(d.avMapPolyUrl && { avMapPolyUrl: resolveDataUrl(d.avMapPolyUrl) }),
     ...(d.avMapLineUrl && { avMapLineUrl: resolveDataUrl(d.avMapLineUrl) }),
+    ...(d.avMapPointsUrl && {
+      avMapPointsUrl: resolveDataUrl(d.avMapPointsUrl),
+    }),
+    // The `worlds` scenario-index sidecar. Every asset INSIDE it (videos, hero
+    // LiDAR manifests) is bundle-relative and resolved by the page against this
+    // url's directory, so this one rewrite carries the whole bundle.
+    ...(d.worldsUrl && { worldsUrl: resolveDataUrl(d.worldsUrl) }),
   }));
 
 export function getDatasetById(id: string): Dataset | undefined {
@@ -4905,6 +5077,7 @@ export const SHIPPED_DATASET_IDS: string[] = [
   'goes-glm-lightning', // GOES GLM Lightning — flashes + density (late-May 2024)
   'severe-weather-2024', // Weather Suite — wind + precip + cells/tracks + lightning
   'storm-4d-greenfield', // Storm as a 4D Object — Greenfield EF4 volumetric composite
+  'storm-3d-conus', // Storm as a 4D Object — Continental MRMS 3D reflectivity volume
 ];
 
 export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS.map((id) =>

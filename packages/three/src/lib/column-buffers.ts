@@ -36,6 +36,7 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
@@ -44,6 +45,8 @@ import {
   type CategoricalColorSpec,
   type RampColorSpec,
 } from './color.js';
+import { featureCategorySlot, type StablePalette } from './palette.js';
+import { featureTileKey } from './id-pick.js';
 
 export type ColumnColorMode =
   | ({ type: 'categorical' } & CategoricalColorSpec)
@@ -68,6 +71,27 @@ export interface ColumnBufferOptions {
   baseElevationProperty?: string | null;
   /** Constant base-altitude lift (metres) added to every column foot. @default 0 */
   zLift?: number;
+  /**
+   * Numeric column feeding the GPU DataFilter (`sttFilterValue`, per column).
+   * When set, `filterValues` is emitted (0 where a tile lacks the column, deck's
+   * constant fallback). @default null (no filter attribute)
+   */
+  filterProperty?: string | null;
+  /**
+   * Emit the per-instance time-as-height LIFT direction (`sttLift`, vec3 =
+   * local up ÷ metersPerWorldUnit — WORLD units per metre of altitude). When
+   * set, the space-time-cube material raises each prism's foot by its feature
+   * start time from a single scale uniform. @default false (no lift attribute)
+   */
+  timeHeight?: boolean;
+  /**
+   * GPU stable-palette path (deck `CategoryColorExtension`): when set, emit a
+   * per-column `categoryIndices` slot buffer for the palette-texture lookup — the
+   * category LABEL is placed by `palette` (stable across tiles), NULL / missing →
+   * the palette's null slot. The CPU-expanded `colors` still ride along (the
+   * shader ignores them under the palette path). @default null
+   */
+  categoryIndex?: { property: string; palette: StablePalette } | null;
 }
 
 export interface ColumnBuffers {
@@ -86,8 +110,34 @@ export interface ColumnBuffers {
   starts: Float32Array;
   /** float end time, relative to timeOrigin. */
   ends: Float32Array;
+  /** float, per-column DataFilter value; 0-length when no `filterProperty`. */
+  filterValues: Float32Array;
+  /** float, per-column stable palette slot; 0-length when no `categoryIndex`. */
+  categoryIndices: Float32Array;
+  /**
+   * vec3 time-as-height lift direction per instance (local up ÷
+   * metersPerWorldUnit = world units per metre of altitude); 0-length when no
+   * `timeHeight`.
+   */
+  lift: Float32Array;
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
+  /**
+   * Per-merged-instance provenance (the GPU picking-catalog identity buffer).
+   * Merged column instance `i` — the same `i` a GPU id-buffer pick decodes —
+   * resolves via `provenance.resolve(i)` to its source `(tileKey, featureIndex)`.
+   * Populated in the EXACT order instances are written (1 column per Point
+   * feature), so index alignment with the geometry is guaranteed. Empty when
+   * `count === 0`. See `point-buffers.ts` (the template).
+   */
+  provenance: InstanceProvenance;
+  /**
+   * `tileKey` → the source layer's {@link BinaryFeatures}, so a resolved
+   * provenance entry can be joined back to columns via
+   * `getFeatureProperties(binary, featureIndex)`. Built from the SAME iteration
+   * (and the same {@link featureTileKey}) as {@link provenance}, so keys align.
+   */
+  binaryByTileKey: Map<string, BinaryFeatures>;
 }
 
 function featureColor(
@@ -109,20 +159,20 @@ function featureColor(
 }
 
 function collectPointLayers(tiles: Tile[]): {
-  layers: BinaryFeatures[];
+  parts: Array<{ b: BinaryFeatures; tileKey: string }>;
   total: number;
 } {
-  const layers: BinaryFeatures[] = [];
+  const parts: Array<{ b: BinaryFeatures; tileKey: string }> = [];
   let total = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
       if (!b.featureCount || b.geometryType !== GeometryType.Point) continue;
-      layers.push(b);
+      parts.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
       total += b.featureCount;
     }
   }
-  return { layers, total };
+  return { parts, total };
 }
 
 export function buildColumnBuffers(
@@ -131,7 +181,9 @@ export function buildColumnBuffers(
   timeOrigin: number,
   opts: ColumnBufferOptions,
 ): ColumnBuffers {
-  const { layers, total } = collectPointLayers(tiles);
+  const { parts, total } = collectPointLayers(tiles);
+  const provenance = new InstanceProvenance();
+  const binaryByTileKey = new Map<string, BinaryFeatures>();
   const empty = (): ColumnBuffers => ({
     count: 0,
     bases: new Float32Array(0),
@@ -141,8 +193,13 @@ export function buildColumnBuffers(
     colors: new Float32Array(0),
     starts: new Float32Array(0),
     ends: new Float32Array(0),
+    filterValues: new Float32Array(0),
+    categoryIndices: new Float32Array(0),
+    lift: new Float32Array(0),
     origin: [0, 0, 0],
     bbox: null,
+    provenance,
+    binaryByTileKey,
   });
   if (total === 0) return empty();
 
@@ -150,9 +207,12 @@ export function buildColumnBuffers(
   const defaultElevation = opts.defaultElevation ?? 1000;
   const elevScale = opts.elevationScale ?? 1;
   const zLift = opts.zLift ?? 0;
+  const wantFilter = !!opts.filterProperty;
+  const wantLift = !!opts.timeHeight;
+  const catIndex = opts.categoryIndex ?? null;
 
   // RTC origin = first feature's projected foot (absolute world).
-  const first = layers[0];
+  const first = parts[0].b;
   const fdims = first.positionDimensions ?? 2;
   const firstBaseZ = (() => {
     const baseProp = opts.baseElevationProperty
@@ -174,6 +234,13 @@ export function buildColumnBuffers(
   const colors = new Float32Array(total * 4);
   const starts = new Float32Array(total);
   const ends = new Float32Array(total);
+  const filterValues = wantFilter
+    ? new Float32Array(total)
+    : new Float32Array(0);
+  const categoryIndices = catIndex
+    ? new Float32Array(total)
+    : new Float32Array(0);
+  const lift = wantLift ? new Float32Array(total * 3) : new Float32Array(0);
   let minX = Infinity,
     minY = Infinity,
     minZ = Infinity;
@@ -182,7 +249,9 @@ export function buildColumnBuffers(
     maxZ = -Infinity;
 
   let o = 0; // instance index
-  for (const b of layers) {
+  for (const part of parts) {
+    const b = part.b;
+    binaryByTileKey.set(part.tileKey, b);
     const dims = b.positionDimensions ?? fdims;
     const elev = opts.elevationProperty
       ? b.numericProps[opts.elevationProperty]
@@ -190,8 +259,15 @@ export function buildColumnBuffers(
     const baseElev = opts.baseElevationProperty
       ? b.numericProps[opts.baseElevationProperty]
       : undefined;
+    const filterCol =
+      wantFilter && opts.filterProperty
+        ? b.numericProps[opts.filterProperty]
+        : undefined;
     const rebase = b.timeOffset - timeOrigin;
     for (let f = 0; f < b.featureCount; f++) {
+      // Provenance MUST be pushed in the same order instances are written
+      // (merged index = o), so a decoded GPU id aligns with this feature.
+      provenance.push(part.tileKey, f);
       const lon = b.positions[f * dims];
       const lat = b.positions[f * dims + 1];
       const baseZ =
@@ -223,6 +299,16 @@ export function buildColumnBuffers(
       basisZ[o * 3 + 1] = u[1] * hWorld;
       basisZ[o * 3 + 2] = u[2] * hWorld;
 
+      // Time-as-height lift direction: local up scaled to WORLD units per metre
+      // of altitude (÷ metersPerWorldUnit, same metric→world factor as the
+      // height above). The shader multiplies this by (start − heightOrigin) ×
+      // heightScale, so the whole prism rises with the feature's time.
+      if (wantLift) {
+        lift[o * 3] = u[0] * inv;
+        lift[o * 3 + 1] = u[1] * inv;
+        lift[o * 3 + 2] = u[2] * inv;
+      }
+
       const rgba = featureColor(b, f, opts.colorMode);
       colors[o * 4] = rgba[0] / 255;
       colors[o * 4 + 1] = rgba[1] / 255;
@@ -231,6 +317,14 @@ export function buildColumnBuffers(
 
       starts[o] = (b.startTimes ? b.startTimes[f] : 0) + rebase;
       ends[o] = (b.endTimes ? b.endTimes[f] : 0) + rebase;
+      if (wantFilter) filterValues[o] = filterCol ? filterCol[f] : 0;
+      if (catIndex)
+        categoryIndices[o] = featureCategorySlot(
+          b,
+          f,
+          catIndex.property,
+          catIndex.palette,
+        );
 
       // bbox over the foot and the top of the column (covers the extrusion).
       const bx = bases[o * 3],
@@ -263,8 +357,13 @@ export function buildColumnBuffers(
     colors,
     starts,
     ends,
+    filterValues,
+    categoryIndices,
+    lift,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    provenance,
+    binaryByTileKey,
   };
 }
 

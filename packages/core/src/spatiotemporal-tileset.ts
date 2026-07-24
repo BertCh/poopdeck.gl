@@ -460,6 +460,27 @@ export interface TileBatchHooks {
   viewportCenter?: { lon: number; lat: number };
 }
 
+/**
+ * Web-Mercator lon → slippy tile x at `zoom`, clamped into [0, 2^zoom − 1]
+ * (a viewport can extend past the antimeridian / poles; the clamp keeps the
+ * cover-scan range valid). Mirrors archive.ts's private lonToTileX.
+ */
+function lonToTileClamped(lon: number, zoom: number): number {
+  const n = 1 << zoom;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  return Math.max(0, Math.min(n - 1, x));
+}
+
+/** Web-Mercator lat → slippy tile y at `zoom`, clamped into [0, 2^zoom − 1]. */
+function latToTileClamped(lat: number, zoom: number): number {
+  const n = 1 << zoom;
+  const rad = (lat * Math.PI) / 180;
+  const y = Math.floor(
+    ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n,
+  );
+  return Math.max(0, Math.min(n - 1, y));
+}
+
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
   if (a === b) return true;
@@ -3647,6 +3668,35 @@ export class SpatiotemporalTileset {
     // primary zoom is uncovered. This avoids paying the parent's
     // consolidation cost once the children have finished streaming, while
     // still preserving the "show coarse data until detail arrives" promise.
+    //
+    // The child-cell scan is CLAMPED to the viewport's primary-zoom tile
+    // range: a parent spatially larger than the viewport (a z4 parent under
+    // a z8 view) always contains child cells outside the viewport, which are
+    // never selected and so can never enter `primaryCover` — without the
+    // clamp such a parent passes the "some child uncovered" test FOREVER and
+    // keeps rendering on top of the fully-streamed primary tiles. On a
+    // full-duplication archive (every zoom carries every feature, the
+    // no-thinning default) that is a permanent extra full copy of the data
+    // per parent level. Cells outside the viewport are invisible either way,
+    // so covering them is irrelevant for rendering; cells INSIDE the
+    // viewport keep the existing semantics, which also preserves the
+    // sparse-archive contract (`--min-features-per-tile` omits deep-zoom
+    // tiles entirely, so an in-viewport cell with no primary tile keeps its
+    // parent — that parent is the only holder of those features).
+    const vpBounds = this.currentViewport?.bounds;
+    const nPrimary = 1 << primaryZoom;
+    const vpMinX = vpBounds
+      ? lonToTileClamped(vpBounds.minLon, primaryZoom)
+      : 0;
+    const vpMaxX = vpBounds
+      ? lonToTileClamped(vpBounds.maxLon, primaryZoom)
+      : nPrimary - 1;
+    const vpMinY = vpBounds
+      ? latToTileClamped(vpBounds.maxLat, primaryZoom) // y is flipped
+      : 0;
+    const vpMaxY = vpBounds
+      ? latToTileClamped(vpBounds.minLat, primaryZoom)
+      : nPrimary - 1;
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
       if (!header?.isLoaded || !header.tile) continue;
@@ -3662,10 +3712,15 @@ export class SpatiotemporalTileset {
       const range = 1 << zDiff;
       const baseX = x << zDiff;
       const baseY = y << zDiff;
+      // Intersect the parent's child-cell range with the viewport range.
+      const x0 = Math.max(baseX, vpMinX);
+      const x1 = Math.min(baseX + range - 1, vpMaxX);
+      const y0 = Math.max(baseY, vpMinY);
+      const y1 = Math.min(baseY + range - 1, vpMaxY);
       let needed = false;
-      for (let dy = 0; dy < range && !needed; dy++) {
-        for (let dx = 0; dx < range; dx++) {
-          if (!primaryCover.has(`${baseX + dx}/${baseY + dy}/${t}`)) {
+      for (let cy = y0; cy <= y1 && !needed; cy++) {
+        for (let cx = x0; cx <= x1; cx++) {
+          if (!primaryCover.has(`${cx}/${cy}/${t}`)) {
             needed = true;
             break;
           }

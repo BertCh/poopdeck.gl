@@ -13,12 +13,16 @@
  * The billboard is built in `vertexNode`: the instance centre is taken to view
  * space (`modelViewMatrix · center`), the quad corner is added in the view XY
  * plane (so the splat always faces the camera and shrinks with distance — metric
- * world size), then projected. Off-time instances get `alpha = 0` and are
- * discarded by `alphaTest` (no depth write).
+ * world size), then projected. Off-window instances are collapsed in the VERTEX
+ * stage — {@link timeFilterVisibleNode} multiplies the billboard half-size to `0`
+ * so the quad has zero area and dies at assembly (no fragment cost, keeps
+ * early-Z; deck.gl #7509). `alphaTest` discard is kept ONLY for the soft disc
+ * edge; the soft time-fade band stays in the fragment `opacityNode`.
  */
 
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { DoubleSide, NormalBlending } from 'three';
+import type { Texture } from 'three';
 import {
   attribute,
   positionGeometry,
@@ -37,10 +41,12 @@ import {
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
+  timeFilterVisibleNode,
   wakeSizeScaleNode,
   updateTimeFilterUniforms,
 } from './time-filter.js';
 import type { TimeFilterMode, TimeFilterParams } from './time-filter-math.js';
+import { glidePositionNode, GlideUniforms } from './motion-glide.js';
 
 /**
  * Live point uniforms. `pointSize` is the billboard HALF-size: in world metres
@@ -75,6 +81,16 @@ export interface PointMaterialOptions {
    * @default 'meters'
    */
   sizeUnits?: PointSizeUnits;
+  /**
+   * Motion-glide (motionInterpolation). When set, the instance CENTRE is read
+   * from the per-track keyframe texture and interpolated in the vertex stage
+   * from the shared `currentTime` uniform (see {@link glidePositionNode}) —
+   * replacing the static `sttCenter` attribute — so a moving entity GLIDES
+   * between its samples instead of popping. Off (undefined) leaves the static
+   * point path BYTE-IDENTICAL. The layer bakes the texture + the per-instance
+   * `sttGlide*` locator attributes via `assembleKeyframes`.
+   */
+  glide?: { texture: Texture };
 }
 
 export interface PointMaterialBundle {
@@ -82,6 +98,8 @@ export interface PointMaterialBundle {
   time: TimeFilterUniforms;
   point: PointUniforms;
   mode: TimeFilterMode;
+  /** Glide uniforms (`invTexWidth`) when the material was built with `glide`. */
+  glide: GlideUniforms | null;
 }
 
 /**
@@ -126,7 +144,12 @@ export function createPointMaterial(
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
 
-  const center = attribute('sttCenter', 'vec3');
+  // Glide (motionInterpolation): the centre glides from the keyframe texture in
+  // the vertex stage; otherwise it's the static per-instance `sttCenter`.
+  const glideU = opts.glide ? new GlideUniforms() : null;
+  const center = glideU
+    ? glidePositionNode(opts.glide!.texture, time.currentTime, glideU)
+    : attribute('sttCenter', 'vec3');
   const color = attribute('sttColor', 'vec4');
   const start = attribute('sttStart', 'float');
   const end = attribute('sttEnd', 'float');
@@ -139,7 +162,11 @@ export function createPointMaterial(
   // Wake mode shrinks the tail toward `wakeTailScale`; other modes keep full size.
   const sizeFactor =
     opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
-  const half = point.pointSize.mul(sizeFactor);
+  // HARD vertex-stage collapse: out-of-window instances get half = 0, so the four
+  // billboard corners coincide at the centre (zero area → dies at assembly, no
+  // fragment cost). The complementary soft-band fade stays in the fragment alpha.
+  const visible = timeFilterVisibleNode(opts.mode, time, start, end);
+  const half = point.pointSize.mul(sizeFactor).mul(visible);
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
@@ -180,7 +207,7 @@ export function createPointMaterial(
   material.blending = NormalBlending;
   material.alphaTest = opts.alphaCutoff ?? 0.01;
 
-  return { material, time, point, mode: opts.mode };
+  return { material, time, point, mode: opts.mode, glide: glideU };
 }
 
 export interface PointUniformValues {
@@ -227,7 +254,12 @@ export function createPointIdMaterial(
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
 
-  const center = attribute('sttCenter', 'vec3');
+  // Glide the id quad identically to the colour quad so a pick lands on the same
+  // pixels the point drew this frame (time-correct picking under motion glide).
+  const glideU = opts.glide ? new GlideUniforms() : null;
+  const center = glideU
+    ? glidePositionNode(opts.glide!.texture, time.currentTime, glideU)
+    : attribute('sttCenter', 'vec3');
   const idColor = attribute('sttIdColor', 'vec3');
   const start = attribute('sttStart', 'float');
   const end = attribute('sttEnd', 'float');
@@ -236,7 +268,11 @@ export function createPointIdMaterial(
   const vertexAlpha = timeFilterAlphaNode(opts.mode, time, start, end);
   const sizeFactor =
     opts.mode === 'wake' ? wakeSizeScaleNode(time, vertexAlpha) : float(1);
-  const half = point.pointSize.mul(sizeFactor);
+  // Same hard vertex-stage collapse as the colour material, so the pick pass
+  // rasterises the SAME quads (a collapsed instance is unpickable, matching what
+  // the eye sees) — the id is still written at full intensity in the fragment.
+  const sizeVisible = timeFilterVisibleNode(opts.mode, time, start, end);
+  const half = point.pointSize.mul(sizeFactor).mul(sizeVisible);
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
@@ -272,5 +308,5 @@ export function createPointIdMaterial(
   material.blending = NormalBlending;
   material.alphaTest = 0.5;
 
-  return { material, time, point, mode: opts.mode };
+  return { material, time, point, mode: opts.mode, glide: glideU };
 }

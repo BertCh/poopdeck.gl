@@ -174,6 +174,43 @@ const AvGlyph = svg(
   </>,
 );
 
+// A grid of cells, one of them alive with a trajectory — many worlds side by
+// side, which is the scenario gallery's whole premise.
+const WorldsGlyph = svg(
+  <>
+    <rect
+      x="3"
+      y="3"
+      width="7.5"
+      height="7.5"
+      rx="1.2"
+      {...stroke}
+      opacity={0.45}
+    />
+    <rect
+      x="13.5"
+      y="3"
+      width="7.5"
+      height="7.5"
+      rx="1.2"
+      {...stroke}
+      opacity={0.45}
+    />
+    <rect
+      x="13.5"
+      y="13.5"
+      width="7.5"
+      height="7.5"
+      rx="1.2"
+      {...stroke}
+      opacity={0.45}
+    />
+    <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.2" {...stroke} />
+    <path {...stroke} strokeWidth={1.6} d="M4.8 19.5c1.2-2.6 2.6-3.6 4.4-4.2" />
+    <circle cx="9.4" cy="15.2" r="1.3" fill="currentColor" />
+  </>,
+);
+
 // A scatter of lit points riding a wave crest — the 3D point cloud.
 const PointCloudGlyph = svg(
   <>
@@ -247,6 +284,7 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
     icon: BundledFlowmapGlyph,
   },
   av: { label: 'AV cockpit', color: '#1F8FB0', icon: AvGlyph },
+  worlds: { label: 'Scenario gallery', color: '#5B4BC4', icon: WorldsGlyph },
 };
 
 /** `#RRGGBB` → `rgba(r,g,b,a)`; used for the soft chip fill. */

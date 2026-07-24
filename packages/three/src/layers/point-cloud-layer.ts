@@ -10,8 +10,22 @@
  * `InstancedBufferGeometry`; the GPU time-filter handles per-frame visibility.
  */
 
-import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
+import {
+  Mesh,
+  InstancedBufferAttribute,
+  InstancedBufferGeometry,
+  Box3,
+  Vector3,
+  Sphere,
+  DataTexture,
+  RGBAFormat,
+  FloatType,
+  NearestFilter,
+  ClampToEdgeWrapping,
+} from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import { TrackIndexMaintainer } from '@poopdeck.gl/core';
+import type { TrackFieldConfig } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
@@ -19,6 +33,11 @@ import {
 } from '../lib/time-window.js';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import { buildPointBuffers, type PointColorMode } from './point-buffers.js';
+import {
+  assembleKeyframes,
+  type KeyframeField,
+} from '../lib/track-keyframes.js';
+import { GLIDE_ATTR } from '../tsl/motion-glide.js';
 import {
   createPointMaterial,
   createPointIdMaterial,
@@ -28,12 +47,12 @@ import {
 } from '../tsl/point-material.js';
 import type { TimeFilterMode } from '../tsl/time-filter-math.js';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
+import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
 import {
-  InstanceProvenance,
-  buildIdColors,
-  type SttPickResult,
-} from '@poopdeck.gl/core/picking';
-import { resolvePointPick } from '../lib/point-pick.js';
+  resolveIdPick,
+  type SttIdPickInfo,
+  type SttIdPickable,
+} from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 import type { RGBA } from '../lib/color.js';
 
@@ -92,28 +111,61 @@ export interface PointCloudLayerOptions extends ThreeTimeWindowOptions {
   wakeLength?: number;
   wakeTailScale?: number;
   alphaCutoff?: number;
+
+  // ── motion-glide (motionInterpolation) ───────────────────────────────────────
+  /**
+   * Opt into the GPU "glide" render path. A point archive carries one row per
+   * entity PER SAMPLE, so the GPU time-WINDOW path shows every sample in the
+   * window at once — a moving entity POPS between its samples. With `interpolate`
+   * on (and a resolvable {@link idProperty}), the layer instead pools samples
+   * into per-entity tracks, fixed-rate-resamples each into a keyframe texture,
+   * and the shader glides ONE instance per entity between the two keyframes
+   * bracketing the playhead — zero per-frame CPU attribute writes. Gated:
+   * `interpolate && !reducedMotion && idProperty && mode === 'window'`. Any unmet
+   * (the default: off) leaves the GPU window/wake/cumulative path BYTE-IDENTICAL.
+   * @default false
+   */
+  interpolate?: boolean;
+  /**
+   * Per-entity id column NAME grouping samples into one glide track (e.g.
+   * aircraft `icao24`). Must be an EXACT per-entity id — a lossy id fuses
+   * distinct entities. No effect unless {@link interpolate} is on. @default null
+   */
+  idProperty?: string | null;
+  /**
+   * Largest gap (ms) glide interpolates across; a wider gap HOLDS the entity's
+   * last position instead of gliding a straight line it never travelled.
+   * @default Infinity
+   */
+  maxInterpolationGap?: number;
+  /**
+   * Honour the viewer's reduced-motion preference: `true` disables glide and
+   * DEGRADES to the discrete GPU window path. @default false
+   */
+  reducedMotion?: boolean;
+  /**
+   * Fixed-rate resample spacing (ms) for the keyframe texture (glide only).
+   * Smaller = more faithful, wider texture rows. @default 1000
+   */
+  glideResampleIntervalMs?: number;
+  /**
+   * Cap on a glide track's resampled frame count (= texture columns).
+   * @default 512
+   */
+  glideMaxFrames?: number;
 }
 
 const DEFAULT_FALLBACK: RGBA = [150, 160, 175, 220];
 
 /**
- * A layer that answers a GPU id-buffer pick for its instanced geometry — the
- * point-cloud analogue of the CPU {@link import('../lib/box-pick.js').SttPickable}
- * box registry. The pick controller registers these and, when a CPU box pick
- * misses, runs {@link SttPointPickable.pick} at the cursor. `PointCloudLayer`
- * satisfies it structurally; the interface lets the r3f layer keep a typed set
- * without importing the concrete class.
+ * @deprecated The point-cloud pick interface generalised into the kind-agnostic
+ * {@link SttIdPickable} (the GPU picking catalog — see `../lib/id-pick.ts`).
+ * Retained as an alias so external importers of `SttPointPickable` keep
+ * compiling; `PointCloudLayer` implements `SttIdPickable` directly.
  */
-export interface SttPointPickable {
-  pick(
-    picker: GpuPicker,
-    camera: unknown,
-    cssX: number,
-    cssY: number,
-  ): Promise<SttPickResult | null>;
-}
+export type SttPointPickable = SttIdPickable;
 
-export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
+export class PointCloudLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -125,6 +177,20 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
   private idBundle: PointMaterialBundle | null = null;
   private idColorsPresent = false;
   private currentTimeMs = 0;
+
+  // ── glide (motionInterpolation) state ────────────────────────────────────────
+  private readonly interpolate: boolean;
+  private readonly idProperty: string;
+  private readonly maxInterpolationGap: number;
+  private readonly reducedMotion: boolean;
+  private readonly glideResampleIntervalMs: number;
+  private readonly glideMaxFrames: number;
+  /** Incremental id→track pooler (re-pools ADDED tiles / re-sorts AFFECTED tracks). */
+  private maintainer: TrackIndexMaintainer | null = null;
+  /** True while the current geometry is the glide path (drives setTime + uniforms). */
+  private glideActive = false;
+  private glideTexture: DataTexture | null = null;
+
   private readonly opts: Required<
     Omit<
       PointCloudLayerOptions,
@@ -135,6 +201,13 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
       | 'timeWindow'
       | 'fadeInDuration'
       | 'fadeOutDuration'
+      // Glide props are stored in dedicated fields, not `opts`.
+      | 'interpolate'
+      | 'idProperty'
+      | 'maxInterpolationGap'
+      | 'reducedMotion'
+      | 'glideResampleIntervalMs'
+      | 'glideMaxFrames'
     >
   > &
     Pick<
@@ -147,6 +220,13 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     this.id = options.id ?? 'points';
     this.object.name = this.id;
     this.object.frustumCulled = false;
+    this.interpolate = options.interpolate ?? false;
+    this.idProperty =
+      typeof options.idProperty === 'string' ? options.idProperty : '';
+    this.maxInterpolationGap = options.maxInterpolationGap ?? Infinity;
+    this.reducedMotion = options.reducedMotion ?? false;
+    this.glideResampleIntervalMs = options.glideResampleIntervalMs ?? 1000;
+    this.glideMaxFrames = options.glideMaxFrames ?? 512;
     const tw = resolveTimeWindow(options, 250);
     this.opts = {
       mode: options.mode ?? 'window',
@@ -202,7 +282,44 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     };
   }
 
+  /**
+   * True when the GPU glide path is active — `interpolate` on, reduced-motion
+   * off, a resolvable `idProperty`, and window mode (glide replaces the window
+   * path; wake/cumulative keep the discrete per-sample GPU path). Any unmet
+   * condition (the default) leaves the static point path byte-identical.
+   */
+  private interpolationActive(): boolean {
+    return (
+      this.interpolate &&
+      !this.reducedMotion &&
+      this.idProperty.length > 0 &&
+      this.opts.mode === 'window'
+    );
+  }
+
+  /** TrackFieldConfig fed to the pooler: id + (categorical) colour only; points
+   *  carry no per-keyframe heading/dims/speed in glide. */
+  private glideTrackConfig(): TrackFieldConfig {
+    return {
+      trackIdProperty: this.idProperty,
+      colorProperty: this.opts.colorProperty,
+      labelProperty: '',
+      headingProperty: '',
+      lengthProperty: '',
+      widthProperty: '',
+      heightProperty: '',
+      speedProperty: '',
+      colorMapping: this.opts.colorMapping,
+      colorMappingDefault: this.opts.colorMappingDefault,
+    };
+  }
+
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+    if (this.interpolationActive()) {
+      this.setTilesGlide(tiles, ctx);
+      return;
+    }
+    this.glideActive = false;
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     const buf = buildPointBuffers(tiles, ctx.projection, ctx.timeOrigin, {
@@ -264,6 +381,125 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     this.pushUniforms(this.timeOrigin);
   }
 
+  /**
+   * Glide `setTiles`: pool the resident tiles' samples into per-entity tracks
+   * (incrementally — the {@link TrackIndexMaintainer} re-pools only ADDED tiles
+   * and re-sorts only AFFECTED tracks across churn), resample each into the
+   * shared keyframe texture, and build ONE instanced billboard whose centres
+   * glide on the GPU. Per-frame advance is a pure uniform write (`setTime`).
+   */
+  private setTilesGlide(tiles: Tile[], ctx: SttLayerContext): void {
+    this.glideActive = true;
+    this.timeOrigin = ctx.timeOrigin;
+    this.currentTimeMs = ctx.timeOrigin;
+    // Glide carries no merged-buffer provenance (per-track picking deferred): a
+    // stale pick after a reload resolves to null rather than an old feature.
+    this.provenance = new InstanceProvenance();
+    this.binaryByTileKey = new Map();
+
+    if (!this.maintainer) this.maintainer = new TrackIndexMaintainer();
+    const result = this.maintainer.sync(tiles, this.glideTrackConfig());
+    const field = assembleKeyframes(
+      result.tracks.values(),
+      ctx.projection,
+      ctx.timeOrigin,
+      {
+        resampleIntervalMs: this.glideResampleIntervalMs,
+        maxFrames: this.glideMaxFrames,
+        maxGapMs: this.maxInterpolationGap,
+      },
+    );
+
+    this.disposeGpu();
+    if (field.count === 0) {
+      this.object.geometry = makeBillboardQuadGeometry();
+      this.object.position.set(0, 0, 0);
+      this.object.visible = false;
+      return;
+    }
+    this.object.visible = true;
+
+    const texture = this.makeGlideTexture(field);
+    this.glideTexture = texture;
+    this.bundle = createPointMaterial({
+      mode: 'window',
+      splat: this.opts.splat,
+      alphaCutoff: this.opts.alphaCutoff,
+      sizeUnits: this.opts.sizeUnits,
+      glide: { texture },
+    });
+    if (this.bundle.glide) {
+      this.bundle.glide.invTexWidth.value = 1 / field.texWidth;
+    }
+
+    this.object.geometry = this.makeGlideGeometry(field);
+    this.object.material = this.bundle.material;
+    this.object.position.set(field.origin[0], field.origin[1], field.origin[2]);
+    this.pushUniforms(this.timeOrigin);
+  }
+
+  /** RGBA-float keyframe texture (NEAREST — the shader does the two-column mix). */
+  private makeGlideTexture(field: KeyframeField): DataTexture {
+    const tex = new DataTexture(
+      field.texData,
+      field.texWidth,
+      field.texHeight,
+      RGBAFormat,
+      FloatType,
+    );
+    tex.minFilter = NearestFilter;
+    tex.magFilter = NearestFilter;
+    tex.wrapS = ClampToEdgeWrapping;
+    tex.wrapT = ClampToEdgeWrapping;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /** One instanced billboard: colour/time span + the `sttGlide*` row locators. */
+  private makeGlideGeometry(field: KeyframeField): InstancedBufferGeometry {
+    const geometry = makeBillboardQuadGeometry();
+    geometry.instanceCount = field.count;
+    geometry.setAttribute(
+      'sttColor',
+      new InstancedBufferAttribute(field.colors, 4),
+    );
+    geometry.setAttribute(
+      'sttStart',
+      new InstancedBufferAttribute(field.starts, 1),
+    );
+    geometry.setAttribute(
+      'sttEnd',
+      new InstancedBufferAttribute(field.ends, 1),
+    );
+    geometry.setAttribute(
+      GLIDE_ATTR.t0,
+      new InstancedBufferAttribute(field.t0, 1),
+    );
+    geometry.setAttribute(
+      GLIDE_ATTR.invDt,
+      new InstancedBufferAttribute(field.invDt, 1),
+    );
+    geometry.setAttribute(
+      GLIDE_ATTR.frameMax,
+      new InstancedBufferAttribute(field.frameMax, 1),
+    );
+    geometry.setAttribute(
+      GLIDE_ATTR.rowV,
+      new InstancedBufferAttribute(field.rowV, 1),
+    );
+    if (field.bbox) {
+      geometry.boundingBox = new Box3(
+        new Vector3(...field.bbox.min),
+        new Vector3(...field.bbox.max),
+      );
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(
+        new Sphere(),
+      );
+    }
+    return geometry;
+  }
+
   setTime(absoluteTimeMs: number): void {
     this.currentTimeMs = absoluteTimeMs;
     this.pushUniforms(absoluteTimeMs);
@@ -280,7 +516,10 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     return {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params: {
-        windowHalf: this.opts.windowHalf,
+        // Glide emits ONE instance per entity spanning its whole active track;
+        // visibility is exactly `[start,end]`, so windowHalf collapses to 0 (the
+        // fadeIn/fadeOut ramps still give the appear/disappear feel).
+        windowHalf: this.glideActive ? 0 : this.opts.windowHalf,
         fadeIn: this.opts.fadeIn,
         fadeOut: this.opts.fadeOut,
         wakeLength: this.opts.wakeLength,
@@ -298,23 +537,25 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     updatePointUniforms(this.bundle, this.uniformValues(absoluteTimeMs));
   }
 
-  // ── Picking (§5.3 merged-buffer pick identity) ─────────────────────────────
+  // ── Picking (GPU id-buffer catalog: point specialisation) ──────────────────
   //
-  // Two halves: `resolvePick` (pure, unit-tested — merged index → SttPickResult
-  // via the provenance buffer) and `pick` (opt-in GPU id-pass + readback, which
-  // needs a live WebGPU device and is browser-verify only).
+  // Two halves: `resolvePick` (pure, unit-tested — merged index → SttIdPickInfo
+  // via the provenance buffer, the shared `resolveIdPick` seam) and `pick` (the
+  // opt-in GPU id-pass + readback, which needs a live WebGPU device and is
+  // browser-verify only).
 
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback)
-   * to a normalized {@link SttPickResult}, or `null` for a miss. Pure — the
-   * unit-tested seam that closes §5.3; call it directly if you already have a
-   * decoded index from your own pick pass.
+   * to a normalised, kind-tagged {@link SttIdPickInfo} (`kind: 'point'`), or
+   * `null` for a miss. Pure — call it directly if you already have a decoded
+   * index from your own pick pass.
    */
-  resolvePick(index: number, screen?: [number, number]): SttPickResult | null {
-    return resolvePointPick({
+  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+    return resolveIdPick({
       index,
       provenance: this.provenance,
       binaryByTileKey: this.binaryByTileKey,
+      kind: 'point',
       layerId: this.id,
       screen,
     });
@@ -367,7 +608,7 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttPickResult | null> {
+  ): Promise<SttIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.object.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;
@@ -401,6 +642,8 @@ export class PointCloudLayer extends BaseSttLayer implements SttPointPickable {
     this.idBundle?.material.dispose();
     this.idBundle = null;
     this.idColorsPresent = false;
+    this.glideTexture?.dispose();
+    this.glideTexture = null;
   }
 
   dispose(): void {

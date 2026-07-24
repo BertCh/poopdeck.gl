@@ -58,6 +58,12 @@ export {
   trailAlpha,
   wakeSizeScale,
   timeFilterAlpha,
+  // Hard 0/1 visibility (vertex-stage collapse) — CPU mirror of the TSL nodes.
+  windowVisible,
+  wakeVisible,
+  cumulativeVisible,
+  trailVisible,
+  timeFilterVisible,
   type TimeFilterMode,
   type TimeFilterParams,
 } from './tsl/time-filter-math.js';
@@ -78,9 +84,67 @@ export {
   cumulativeAlphaNode,
   trailAlphaNode,
   updateTimeFilterUniforms,
+  // Hard 0/1 visibility nodes — out-of-window primitives collapse to zero
+  // extent in the vertex stage (early-Z preserved) instead of fragment-discard.
+  timeFilterVisibleNode,
+  windowVisibleNode,
+  wakeVisibleNode,
+  cumulativeVisibleNode,
+  trailVisibleNode,
   type TSLNode,
   type UniformNode,
 } from './tsl/time-filter.js';
+
+// ─── Data filter (deck DataFilterExtension analogue: range cut + soft band) ────
+export {
+  resolveDataFilter,
+  dataFilterVisible,
+  dataFilterAlpha,
+  type DataFilterRange,
+  type DataFilterOptions,
+  type ResolvedDataFilter,
+} from './tsl/data-filter-math.js';
+export {
+  DataFilterUniforms,
+  dataFilterVisibleNode,
+  dataFilterAlphaNode,
+  updateDataFilterUniforms,
+} from './tsl/data-filter.js';
+
+// ─── Motion glide (GPU keyframe interpolation for point/icon markers) ─────────
+export {
+  resampleTrack,
+  assembleKeyframes,
+  glideSampleCpu,
+  type KeyframeAssemblyOptions,
+  type KeyframeField,
+  type ResampledTrack,
+} from './lib/track-keyframes.js';
+export {
+  GLIDE_ATTR,
+  GlideUniforms,
+  glideSampleNode,
+  glidePositionNode,
+} from './tsl/motion-glide.js';
+
+// ─── Stable categorical colour (deck CategoryColorExtension analogue) ─────────
+export {
+  buildStablePalette,
+  stableCategoryHash,
+  featureCategorySlot,
+  assignCategoryIndices,
+  paletteTextureData,
+  DEFAULT_CATEGORY_PALETTE,
+  NULL_CATEGORY_INDEX,
+  type StablePaletteOptions,
+  type StablePalette,
+} from './lib/palette.js';
+export {
+  PALETTE_ATTR,
+  PaletteUniforms,
+  paletteColorNode,
+  makePaletteTexture,
+} from './tsl/palette.js';
 
 // ─── Engine core ──────────────────────────────────────────────────────────────
 export {
@@ -236,6 +300,7 @@ export {
 // ─── Density iso-lines (animated contours) ────────────────────────────────────
 export {
   createIsoLineMaterial,
+  createIsoLineIdMaterial,
   updateIsoLineUniforms,
   type IsoLineMaterialOptions,
   type IsoLineMaterialBundle,
@@ -255,6 +320,7 @@ export type { PointSizeUnits } from './tsl/point-material.js';
 // ─── Wide lines (screen-pixel ribbons: Path / OD-Line / Trips / Corridor) ──────
 export {
   createWideLineMaterial,
+  createWideLineIdMaterial,
   updateWideLineUniforms,
   WideLineUniforms,
   type WideLineMode,
@@ -312,6 +378,7 @@ export {
 // ─── Arcs (curved/great-circle OD) ─────────────────────────────────────────────
 export {
   createArcMaterial,
+  createArcIdMaterial,
   updateArcUniforms,
   makeArcStripGeometry,
   ArcUniforms,
@@ -331,12 +398,14 @@ export {
 // ─── Icons (directional billboard markers) ─────────────────────────────────────
 export {
   createIconMaterial,
+  createIconIdMaterial,
   updateIconUniforms,
   IconUniforms,
   type IconMode,
   type IconMaterialOptions,
   type IconMaterialBundle,
   type IconUniformValues,
+  type IconIdMaterialOptions,
 } from './tsl/icon-material.js';
 export { IconLayer, type IconLayerOptions } from './layers/icon-layer.js';
 export {
@@ -350,6 +419,7 @@ export {
 // ─── Columns (extruded 3D bars) ────────────────────────────────────────────────
 export {
   createColumnMaterial,
+  createColumnIdMaterial,
   updateColumnUniforms,
   ColumnUniforms,
   type ColumnMaterialOptions,
@@ -371,6 +441,7 @@ export {
 // ─── Polygons (animated fill + extrude; StaticPolygonLayer extends this) ────────
 export {
   createPolygonMaterial,
+  createPolygonIdMaterial,
   updatePolygonUniforms,
   type PolygonTimeMode,
   type PolygonMaterialOptions,
@@ -520,12 +591,25 @@ export {
   type PickBox,
   type SttPickable,
 } from './lib/box-pick.js';
-// Merged-buffer point picking (§5.3): pure index → SttPickResult resolution, and
-// the adapter that maps that result into the pick controller's SttPointPickInfo.
+// GPU id-buffer picking catalog: the kind-agnostic contract every instanced
+// layer implements to become pickable (SttIdPickable + SttIdPickInfo), the pure
+// merged-index → SttIdPickInfo resolution seam (resolveIdPick), the provenance
+// tile-key helpers, and the auto-registration test (isIdPickable).
+export {
+  resolveIdPick,
+  isIdPickable,
+  featureTileKey,
+  parseIdTileKey,
+  type SttIdPickInfo,
+  type SttIdPickable,
+  type SttIdPickKind,
+  type ResolveIdPickParams,
+} from './lib/id-pick.js';
+// Lower-level point index → SttPickResult resolution (predates the catalog;
+// resolveIdPick is the general path new kinds use).
 export {
   resolvePointPick,
   parsePointTileKey,
-  pointPickToInfo,
   type ResolvePointPickParams,
 } from './lib/point-pick.js';
 

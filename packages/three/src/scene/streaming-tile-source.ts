@@ -79,6 +79,48 @@ export interface StreamingTileSourceOptions {
   maxCacheByteSize?: number;
   enablePrefetch?: boolean;
   /**
+   * Debounce (ms) before a viewport change triggers tile selection (the
+   * deck.gl `TileLayer` pattern). Forwarded to the tileset. @default 0
+   */
+  debounceTime?: number;
+  /** How far ahead to prefetch, in animation-time ms (tileset default 30000). */
+  prefetchAhead?: number;
+  /** Number of temporal-window steps to prefetch ahead (tileset default 4). */
+  prefetchSteps?: number;
+  /**
+   * Tile-tier dispatch mode. `'auto'` (the tileset default) uses the summary
+   * tier inside {@link summaryZoomRange} and raw tiles above it; `'summary'` /
+   * `'raw'` force one tier. Inert on archives without a summary tier.
+   */
+  tier?: 'auto' | 'summary' | 'raw';
+  /**
+   * Inclusive zoom range covered by the archive's summary tier. Normally left
+   * unset — {@link StreamingTileSource} derives it from the archive metadata's
+   * `summaryTier` — but an explicit value overrides that (e.g. to narrow the
+   * band a host wants aggregated cells for).
+   */
+  summaryZoomRange?: { minZoom: number; maxZoom: number };
+  /**
+   * Scrub-time LOD degradation policy (the core "motion tier"). Absent/empty is
+   * the kill switch — {@link StreamingTileSource.setInteractive} then stores the
+   * bit only and selection is byte-identical. With an axis enabled, selection
+   * degrades to a cheaper preview while the governor holds the interactive bit
+   * (via {@link TilesetBufferSource.setInteractive}) and restores on release.
+   */
+  scrubLod?: {
+    spatial?: boolean;
+    spatialZoomDrop?: number;
+    temporal?: boolean;
+  };
+  /**
+   * Overview (storyboard) preview tier. When truthy, the tileset's
+   * `preloadOverviewTier()` is kicked right after init: the coarsest tiles
+   * across the full dataset time range are budget-gated, pinned, and rendered
+   * via the parent-zoom fallback so a scrub always has SOMETHING to show. An
+   * object tunes the budget / deepest overview zoom. @default false
+   */
+  overviewPreload?: boolean | { budgetBytes?: number; maxZoom?: number };
+  /**
    * Fired (async, after the tileset's `getVisibleTiles` changes) with the fresh
    * resident set. The layer re-calls `layer.setTiles(tiles, ctx)`. Receives the
    * SAME `Tile[]` instance order `getVisibleTiles` returns.
@@ -142,6 +184,7 @@ export interface DrivableTileset {
   ): number;
   getVisibleTiles(): Tile[];
   setAnimationState?(isAnimating: boolean, speed?: number): void;
+  setInteractive?(interactive: boolean): void;
   clear?(): void;
 }
 
@@ -164,6 +207,19 @@ export class StreamingTileSource {
   private readonly maxCacheSize?: number;
   private readonly maxCacheByteSize?: number;
   private readonly enablePrefetch?: boolean;
+  private readonly debounceTime?: number;
+  private readonly prefetchAhead?: number;
+  private readonly prefetchSteps?: number;
+  private readonly tier?: 'auto' | 'summary' | 'raw';
+  private readonly optSummaryZoomRange?: { minZoom: number; maxZoom: number };
+  private readonly scrubLod?: {
+    spatial?: boolean;
+    spatialZoomDrop?: number;
+    temporal?: boolean;
+  };
+  private readonly overviewPreload?:
+    | boolean
+    | { budgetBytes?: number; maxZoom?: number };
   private onTilesChanged?: (tiles: Tile[]) => void;
 
   /** Last resident set published to `onTilesChanged` (for diffing). */
@@ -179,6 +235,13 @@ export class StreamingTileSource {
     this.maxCacheSize = opts.maxCacheSize;
     this.maxCacheByteSize = opts.maxCacheByteSize;
     this.enablePrefetch = opts.enablePrefetch;
+    this.debounceTime = opts.debounceTime;
+    this.prefetchAhead = opts.prefetchAhead;
+    this.prefetchSteps = opts.prefetchSteps;
+    this.tier = opts.tier;
+    this.optSummaryZoomRange = opts.summaryZoomRange;
+    this.scrubLod = opts.scrubLod;
+    this.overviewPreload = opts.overviewPreload;
     this.onTilesChanged = opts.onTilesChanged;
   }
 
@@ -215,7 +278,19 @@ export class StreamingTileSource {
     this.archive = archive;
     this.metadata = metadata;
 
-    this.tileset = new SpatiotemporalTileset({
+    // Summary-tier auto dispatch (parity with the deck path): derive the
+    // aggregated-cell zoom band from the archive metadata unless the host set
+    // one explicitly. The matching `getAvailableSummaryTiles` callback is wired
+    // by `makeTilesetCallbacks(archive, metadata)` — both are capability-gated,
+    // so an archive without a summary tier is byte-identical to before.
+    const summaryTier = metadata.summaryTier;
+    const summaryZoomRange =
+      this.optSummaryZoomRange ??
+      (summaryTier
+        ? { minZoom: summaryTier.minZoom, maxZoom: summaryTier.maxZoom }
+        : undefined);
+
+    const tileset = new SpatiotemporalTileset({
       minZoom: metadata.minZoom,
       maxZoom: metadata.maxZoom,
       temporalBucketMs: metadata.temporalBucketMs,
@@ -225,14 +300,37 @@ export class StreamingTileSource {
       maxCacheSize: this.maxCacheSize,
       maxCacheByteSize: this.maxCacheByteSize,
       enablePrefetch: this.enablePrefetch,
+      debounceTime: this.debounceTime,
+      prefetchAhead: this.prefetchAhead,
+      prefetchSteps: this.prefetchSteps,
+      tier: this.tier,
+      summaryZoomRange,
+      // Scrub-LOD motion tier (kill-switched off unless an axis is enabled).
+      scrubLod: this.scrubLod,
       // Archive-backed fetch callbacks (getAvailableTiles / getTileData /
-      // getTileDataBatch / getTileByteSize / getThroughput) — shared with the
-      // deck path via the core adapter.
-      ...makeTilesetCallbacks(archive),
+      // getTileDataBatch / getTileByteSize / getThroughput / summary tiles) —
+      // shared with the deck path via the core adapter.
+      ...makeTilesetCallbacks(archive, metadata),
       // A wired onTileLoad means tiles arrive after the synchronous update()
       // returns — re-publish the resident set so the layer picks them up.
       onTileLoad: () => this.publishIfChanged(),
     } as ConstructorParameters<typeof SpatiotemporalTileset>[0]);
+    this.tileset = tileset;
+
+    // Storyboard tier (WS-C4, parity with the deck path): kick the budget-gated
+    // overview preload WITHOUT blocking init — the pinned coarse tiles ride the
+    // lowest request tier behind viewport work and give a scrub a parent-zoom
+    // fallback to render. The gate may reject the dataset (giant coarse tiles).
+    if (this.overviewPreload) {
+      const overviewOpts =
+        typeof this.overviewPreload === 'object'
+          ? this.overviewPreload
+          : undefined;
+      void tileset.preloadOverviewTier(overviewOpts).then(() => {
+        // A finished preload can pin new resident tiles — surface them.
+        if (!this.disposed) this.publishIfChanged();
+      });
+    }
   }
 
   /** Resolved archive metadata, once loaded. */
@@ -279,6 +377,18 @@ export class StreamingTileSource {
   /** Forward playback animation state to the tileset (keeps prefetch alive while gated). */
   setAnimationState(isAnimating: boolean, speed = 0): void {
     this.tileset?.setAnimationState?.(isAnimating, speed);
+  }
+
+  /**
+   * Forward the interactive/motion bit to the tileset (scrub-LOD P0). No-op
+   * unless a {@link StreamingTileSourceOptions.scrubLod} axis is enabled — the
+   * tileset stores the bit and changes nothing otherwise (the kill switch).
+   * Normally driven by the PlaybackGovernor through
+   * {@link TilesetBufferSource.setInteractive}; also exposed here for hosts
+   * without a governor.
+   */
+  setInteractive(interactive: boolean): void {
+    this.tileset?.setInteractive?.(interactive);
   }
 
   /** Current resident set (loaded tiles for the latest viewport). */
@@ -503,6 +613,7 @@ export interface RunwayTileset {
   estimateTimeToReadyMs(range: { start: number; end: number }): number | null;
   flushPrefetch(): void;
   setAnimationState?(isAnimating: boolean, speed?: number): void;
+  setInteractive?(interactive: boolean): void;
   setPrefetchRunAheadLimit?(simMs: number | null): void;
   setBandwidthWeight?(weight: number): void;
 }
@@ -558,6 +669,16 @@ export class TilesetBufferSource implements BufferSource {
 
   setAnimationState(isAnimating: boolean, speed?: number): void {
     this.tileset.setAnimationState?.(isAnimating, speed);
+  }
+
+  // Scrub-LOD interactive bit (scrub-LOD P0). The PlaybackGovernor broadcasts
+  // `true` on beginScrub / `false` on endScrub through this optional hook, so a
+  // streaming tileset can serve a cheaper motion tier while the user drags the
+  // timeline. Without this forward the governor's optional-chained call silently
+  // no-ops for every three-renderer source. Inert unless a `scrubLod` axis is
+  // enabled on the tileset (the kill switch).
+  setInteractive(interactive: boolean): void {
+    this.tileset.setInteractive?.(interactive);
   }
 
   // Run-ahead fairness + dynamic fair-share weight (multi-source Phase 2).

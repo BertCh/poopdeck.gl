@@ -16,8 +16,16 @@
  * material uniform so the `greatCircle` shape can recover absolute ECEF for slerp.
  */
 
-import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
-import type { Tile } from '@poopdeck.gl/core';
+import {
+  Mesh,
+  InstancedBufferAttribute,
+  Box3,
+  Vector3,
+  Sphere,
+  DataTexture,
+} from 'three';
+import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
+import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
@@ -30,11 +38,23 @@ import {
 } from '../lib/arc-buffers.js';
 import {
   createArcMaterial,
+  createArcIdMaterial,
   makeArcStripGeometry,
   updateArcUniforms,
   type ArcMaterialBundle,
   type ArcShape,
+  type ArcUniformValues,
 } from '../tsl/arc-material.js';
+import type { DataFilterRange } from '../tsl/data-filter.js';
+import { buildStablePalette, type StablePalette } from '../lib/palette.js';
+import type { RGBA } from '../lib/color.js';
+import { makePaletteTexture } from '../tsl/palette.js';
+import {
+  resolveIdPick,
+  type SttIdPickInfo,
+  type SttIdPickable,
+} from '../lib/id-pick.js';
+import type { GpuPicker } from '../lib/gpu-pick.js';
 
 export interface ArcLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
@@ -59,17 +79,62 @@ export interface ArcLayerOptions extends ThreeTimeWindowOptions {
   elevationProperty?: string | null;
   elevationScale?: number;
   zLift?: number;
+  // ── DataFilter (deck DataFilterExtension) ──────────────────────────────────
+  /**
+   * Numeric column feeding the GPU column filter (`sttFilterValue`, per arc).
+   * When set, the material installs the filter and each arc is gated by
+   * {@link filterRange} / {@link filterSoftRange}. @default null (no filter)
+   */
+  filterProperty?: string | null;
+  /** Inclusive `[min,max]` hard range; `null` idles the filter. @default null */
+  filterRange?: DataFilterRange | null;
+  /** `[min,max]` inside {@link filterRange} fading instead of hard-clipping. @default null */
+  filterSoftRange?: DataFilterRange | null;
+  /** Enable/disable the column filter. @default true */
+  filterEnabled?: boolean;
+  // ── Stable categorical colour (deck CategoryColorExtension) ────────────────
+  /**
+   * Opt into the GPU stable-palette path when `sourceColor` OR `targetColor` is
+   * categorical (source wins if both are — the extension drives ONE unified arc
+   * colour, matching deck's arc constraint). The category then renders the SAME
+   * colour in every tile and recolouring is a palette-texture swap. Off (default)
+   * or all-constant/ramp colours leave the per-endpoint gradient path
+   * BYTE-IDENTICAL. @default false
+   */
+  stableColorMapping?: boolean;
+  /**
+   * Positional palette (deck `colorPalette`) for the auto / hash / order paths of
+   * {@link stableColorMapping}; ignored when the driving endpoint's `mapping` is
+   * non-empty. Defaults to the shared categorical palette.
+   */
+  colorPalette?: RGBA[];
+  /**
+   * Optional global category ordering for {@link stableColorMapping} (a label
+   * takes its position here instead of a hash). Ignored when the driving
+   * endpoint's `mapping` is non-empty.
+   */
+  categoryOrder?: string[];
   // time window params (full-width `timeWindow` + `fadeIn/OutDuration`, plus the
   // lower-level `windowHalf`/`fadeIn`/`fadeOut` aliases) via ThreeTimeWindowOptions.
 }
 
-export class ArcLayer extends BaseSttLayer {
+export class ArcLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: ArcMaterialBundle | null = null;
+  private paletteTexture: DataTexture | null = null;
   private viewport: [number, number] = [1280, 720];
   protected readonly opts: ArcLayerOptions;
+
+  // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
+  private provenance = new InstanceProvenance();
+  private binaryByTileKey = new Map<string, BinaryFeatures>();
+  private idBundle: ArcMaterialBundle | null = null;
+  private idColorsPresent = false;
+  private currentTimeMs = 0;
+  /** RTC origin of the current buffers (greatCircle id pass needs it too). */
+  private origin: [number, number, number] = [0, 0, 0];
 
   constructor(options: ArcLayerOptions = {}) {
     super();
@@ -94,17 +159,50 @@ export class ArcLayer extends BaseSttLayer {
       elevationProperty: this.opts.elevationProperty ?? null,
       elevationScale: this.opts.elevationScale ?? 1,
       zLift: this.opts.zLift ?? 0,
+      filterProperty: this.opts.filterProperty ?? null,
     };
+  }
+
+  /**
+   * Resolve the GPU stable-palette path (driving categorical property + palette)
+   * when `stableColorMapping` is on and an endpoint colour is categorical; else
+   * null. Source wins if both endpoints are categorical (deck's single-colour arc
+   * constraint). CPU-only — the texture is built after `disposeGpu` in `setTiles`.
+   */
+  private resolveCategoryPalette(): {
+    property: string;
+    palette: StablePalette;
+  } | null {
+    if (this.opts.stableColorMapping !== true) return null;
+    const mode =
+      this.opts.sourceColor?.type === 'categorical'
+        ? this.opts.sourceColor
+        : this.opts.targetColor?.type === 'categorical'
+          ? this.opts.targetColor
+          : null;
+    if (!mode) return null;
+    const palette = buildStablePalette({
+      colorMapping: mode.mapping,
+      colorMappingDefault: mode.fallback,
+      palette: this.opts.colorPalette,
+      categoryOrder: this.opts.categoryOrder,
+    });
+    return { property: mode.property, palette };
   }
 
   setTiles(tiles: Tile[], ctx: SttLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
-    const buf = buildArcBuffers(
-      tiles,
-      ctx.projection,
-      ctx.timeOrigin,
-      this.bufferOptions(),
-    );
+    this.currentTimeMs = ctx.timeOrigin;
+    const cat = this.resolveCategoryPalette();
+    const buf = buildArcBuffers(tiles, ctx.projection, ctx.timeOrigin, {
+      ...this.bufferOptions(),
+      categoryIndex: cat,
+    });
+    // Adopt the fresh pick-identity buffers (empty when count === 0, so a stale
+    // pick after a reload resolves to null rather than an old feature).
+    this.provenance = buf.provenance;
+    this.binaryByTileKey = buf.binaryByTileKey;
+    this.origin = buf.origin;
 
     this.disposeGpu();
     if (buf.count === 0) {
@@ -142,6 +240,20 @@ export class ArcLayer extends BaseSttLayer {
       'sttHeight',
       new InstancedBufferAttribute(buf.heights, 1),
     );
+    // DataFilter: bind the per-arc filter value when a filterProperty emitted one.
+    if (buf.filterValues.length > 0) {
+      geometry.setAttribute(
+        'sttFilterValue',
+        new InstancedBufferAttribute(buf.filterValues, 1),
+      );
+    }
+    // Stable palette: bind the per-arc category slot when it emitted one.
+    if (buf.categoryIndices.length > 0) {
+      geometry.setAttribute(
+        'sttCategoryIndex',
+        new InstancedBufferAttribute(buf.categoryIndices, 1),
+      );
+    }
     if (buf.bbox) {
       geometry.boundingBox = new Box3(
         new Vector3(...buf.bbox.min),
@@ -152,12 +264,24 @@ export class ArcLayer extends BaseSttLayer {
       );
     }
 
+    // Stable palette: build the texture AFTER disposeGpu (frees the previous one).
+    const paletteTexture =
+      cat && buf.categoryIndices.length > 0
+        ? makePaletteTexture(cat.palette)
+        : null;
+    this.paletteTexture = paletteTexture;
+
     this.bundle = createArcMaterial({
       shape: this.opts.shape ?? 'parabolic',
       additive: this.opts.additive,
       depthWrite: this.opts.depthWrite,
       alphaCutoff: this.opts.alphaCutoff,
+      dataFilter: !!this.opts.filterProperty,
+      colorPalette: paletteTexture ? { texture: paletteTexture } : undefined,
     });
+    if (this.bundle.palette && cat) {
+      this.bundle.palette.invWidth.value = 1 / cat.palette.colors.length;
+    }
     this.object.geometry = geometry;
     this.object.material = this.bundle.material;
     // origin lives in the uniform too (greatCircle slerp recovers absolute ECEF).
@@ -170,24 +294,124 @@ export class ArcLayer extends BaseSttLayer {
   }
 
   setTime(absoluteTimeMs: number): void {
+    this.currentTimeMs = absoluteTimeMs;
     this.pushUniforms(absoluteTimeMs);
   }
 
-  private pushUniforms(absoluteTimeMs: number): void {
-    if (!this.bundle) return;
-    updateArcUniforms(this.bundle, {
+  /** The uniform values for the given playhead — shared by the colour render and
+   *  the id-pass so the pick pass gates on the SAME window / filter / width. */
+  private uniformValues(absoluteTimeMs: number): ArcUniformValues {
+    return {
       relativeCurrentTime: this.relativeTime(absoluteTimeMs),
       params: resolveTimeWindow(this.opts, 0),
       widthPx: this.opts.widthPx ?? 2,
       opacity: this.opts.opacity ?? 1,
       viewport: this.viewport,
+      dataFilter: {
+        filterEnabled: this.opts.filterEnabled,
+        filterRange: this.opts.filterRange ?? null,
+        filterSoftRange: this.opts.filterSoftRange ?? null,
+      },
+    };
+  }
+
+  private pushUniforms(absoluteTimeMs: number): void {
+    if (!this.bundle) return;
+    updateArcUniforms(this.bundle, this.uniformValues(absoluteTimeMs));
+  }
+
+  // ── Picking (GPU id-buffer catalog: arc variant) ───────────────────────────
+
+  /**
+   * Resolve a merged instance index (as decoded from a GPU id-buffer readback)
+   * to a normalised {@link SttIdPickInfo} (`kind: 'arc'`), or `null` for a miss.
+   * The coordinate is the arc's SOURCE endpoint (first vertex). Pure — the
+   * unit-tested seam; call it directly with a decoded index.
+   */
+  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+    return resolveIdPick({
+      index,
+      provenance: this.provenance,
+      binaryByTileKey: this.binaryByTileKey,
+      kind: 'arc',
+      layerId: this.id,
+      screen,
     });
+  }
+
+  /** Lazily build the id material + per-instance `sttIdColor` attribute. */
+  private ensurePickPass(): void {
+    if (!this.idBundle) {
+      this.idBundle = createArcIdMaterial({
+        shape: this.opts.shape ?? 'parabolic',
+        dataFilter: !!this.opts.filterProperty,
+        alphaCutoff: this.opts.alphaCutoff,
+      });
+      // greatCircle slerp recovers absolute ECEF by adding the RTC origin back.
+      this.idBundle.arc.origin.value.set(
+        this.origin[0],
+        this.origin[1],
+        this.origin[2],
+      );
+    }
+    if (!this.idColorsPresent && this.provenance.length > 0) {
+      const idColors = buildIdColors(this.provenance.length);
+      this.object.geometry.setAttribute(
+        'sttIdColor',
+        new InstancedBufferAttribute(idColors, 3),
+      );
+      this.idColorsPresent = true;
+    }
+  }
+
+  /**
+   * GPU arc pick — auto-registered into the r3f `PickController` (a CPU box miss
+   * falls through to this). Renders this layer's ribbons with the flat id
+   * material into `picker`'s off-screen target, reads back the merged-instance id
+   * at CSS pixel `(cssX, cssY)`, and resolves it through the provenance buffer.
+   * The `resolvePick` half is unit-tested; the render + readback needs a live GPU
+   * device and is browser-verify. The id material reuses the SAME vertex
+   * width-collapse gate (time-window + column-filter), so only arcs drawn THIS
+   * frame are pickable.
+   */
+  async pick(
+    picker: GpuPicker,
+    camera: unknown,
+    cssX: number,
+    cssY: number,
+  ): Promise<SttIdPickInfo | null> {
+    if (this.provenance.length === 0 || !this.object.visible) return null;
+    this.ensurePickPass();
+    const idBundle = this.idBundle;
+    if (!idBundle) return null;
+    // Sync the id material's gates + width/viewport to the live playhead so only
+    // arcs visible THIS frame are pickable, at their true screen ribbon.
+    updateArcUniforms(idBundle, this.uniformValues(this.currentTimeMs));
+
+    const mesh = this.object;
+    const renderMaterial = mesh.material;
+    const index = await picker.pick(mesh, camera, cssX, cssY, {
+      featureCount: this.provenance.length,
+      onBeforeRender: () => {
+        mesh.material = idBundle.material;
+      },
+      onAfterRender: () => {
+        mesh.material = renderMaterial;
+      },
+    });
+    if (index == null) return null;
+    return this.resolvePick(index, [cssX, cssY]);
   }
 
   private disposeGpu(): void {
     if (this.object.geometry) this.object.geometry.dispose();
     this.bundle?.material.dispose();
     this.bundle = null;
+    this.idBundle?.material.dispose();
+    this.idBundle = null;
+    this.idColorsPresent = false;
+    this.paletteTexture?.dispose();
+    this.paletteTexture = null;
   }
 
   dispose(): void {

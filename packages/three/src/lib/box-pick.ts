@@ -19,7 +19,7 @@
  * ENU metric world). This matches `geometry/box-edges.ts`.
  */
 
-import type { TileId } from '@poopdeck.gl/core';
+import type { SttIdPickInfo } from './id-pick.js';
 
 export type Vec3 = readonly [number, number, number];
 
@@ -53,32 +53,28 @@ export interface SttBoxPickInfo extends SttPickInfoBase {
 }
 
 /**
- * A hit on a GPU-instanced point-cloud feature (id-buffer readback → provenance
- * resolve). Mapped from a core `SttPickResult` by `pointPickToInfo` in
- * `./point-pick.ts`, so the same `onPick` / `onHover` callback receives both box
- * and point hits, discriminated by `kind`.
+ * A hit on a GPU-instanced point-cloud feature.
+ *
+ * @deprecated The point-cloud-only pick info was generalised into the
+ * kind-tagged {@link SttIdPickInfo} (the GPU picking catalog — see
+ * `./id-pick.ts`); this is now just its `'point'` narrowing, retained so a
+ * consumer that declared `SttPointPickInfo` and reads `.index` / `.object` /
+ * `.coordinate` / `.tileId` keeps compiling. New code should narrow on
+ * `SttIdPickInfo` (which also carries `tileKey` / `featureIndex`).
  */
-export interface SttPointPickInfo extends SttPickInfoBase {
-  kind: 'point';
-  /** Feature index within its `(tile, layer)` `BinaryFeatures`. */
-  index: number;
-  /** Decoded feature properties, or null when unresolved. */
-  object: Record<string, unknown> | null;
-  /** Geographic `[lng, lat]` of the picked feature. */
-  coordinate?: [number, number];
-  /** The picked tile, when the provenance key parses. */
-  tileId?: TileId;
-}
+export type SttPointPickInfo = SttIdPickInfo & { kind: 'point' };
 
 /**
  * Any hit surfaced by the pick controller: a CPU box hit ({@link SttBoxPickInfo})
- * or a GPU point-cloud hit ({@link SttPointPickInfo}), discriminated by `kind`.
+ * or a GPU id-buffer hit on any instanced kind ({@link SttIdPickInfo} — point,
+ * column, arc, …), discriminated by `kind`.
  *
  * Widened from the old box-only shape — a consumer that narrows on `kind` (the
- * idiomatic pattern) keeps working unchanged; the `'point'` arm is purely
- * additive (GPU cloud picking).
+ * idiomatic pattern) keeps working unchanged; the id-buffer arms are purely
+ * additive. Box kinds (`'object' | 'ego'`) are disjoint from the id kinds, so
+ * the discriminated union is unambiguous.
  */
-export type SttPickInfo = SttBoxPickInfo | SttPointPickInfo;
+export type SttPickInfo = SttBoxPickInfo | SttIdPickInfo;
 
 /** A yaw-aligned oriented box to hit-test, plus the metadata to surface on a hit. */
 export interface PickBox {

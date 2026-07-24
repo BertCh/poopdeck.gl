@@ -35,12 +35,15 @@
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
   type RGBA,
   type CategoricalColorSpec,
 } from './color.js';
+import { featureCategorySlot, type StablePalette } from './palette.js';
+import { featureTileKey } from './id-pick.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -95,6 +98,22 @@ export interface IconBufferOptions {
   /** Altitude column (metres), per feature. @default null (use geometry z) */
   elevationProperty?: string | null;
   elevationScale?: number;
+
+  /**
+   * Numeric column feeding the GPU DataFilter (`sttFilterValue`, per icon
+   * instance). When set, `filterValues` is emitted (0 where a tile lacks the
+   * column, deck's constant fallback). @default null (no filter attribute)
+   */
+  filterProperty?: string | null;
+
+  /**
+   * GPU stable-palette path (deck `CategoryColorExtension`): when set, emit a
+   * per-icon `categoryIndices` slot buffer for the palette-texture lookup — the
+   * category LABEL is placed by `palette` (stable across tiles), NULL / missing →
+   * the palette's null slot. The CPU-expanded `colors` (tint) still ride along
+   * (the shader ignores them under the palette path). @default null
+   */
+  categoryIndex?: { property: string; palette: StablePalette } | null;
 }
 
 export interface IconBuffers {
@@ -108,8 +127,28 @@ export interface IconBuffers {
   colors: Float32Array; // vec4 0..1
   starts: Float32Array; // float relative to timeOrigin
   ends: Float32Array; // float relative to timeOrigin
+  /** float, per-icon DataFilter value; 0-length when no `filterProperty`. */
+  filterValues: Float32Array;
+  /** float, per-icon stable palette slot; 0-length when no `categoryIndex`. */
+  categoryIndices: Float32Array;
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
+  /**
+   * Per-merged-instance provenance (the GPU picking-catalog identity buffer).
+   * Merged icon instance `i` — the same `i` a GPU id-buffer pick decodes —
+   * resolves via `provenance.resolve(i)` to its source `(tileKey, featureIndex)`.
+   * Populated in the EXACT order instances are written (1 marker per Point
+   * feature), so index alignment with the geometry is guaranteed. Empty when
+   * `count === 0`. See `point-buffers.ts` (the template).
+   */
+  provenance: InstanceProvenance;
+  /**
+   * `tileKey` → the source layer's {@link BinaryFeatures}, so a resolved
+   * provenance entry can be joined back to columns via
+   * `getFeatureProperties(binary, featureIndex)`. Built from the SAME iteration
+   * (and the same {@link featureTileKey}) as {@link provenance}, so keys align.
+   */
+  binaryByTileKey: Map<string, BinaryFeatures>;
 }
 
 function featureColor(b: BinaryFeatures, f: number, mode: IconColorMode): RGBA {
@@ -123,20 +162,20 @@ function featureColor(b: BinaryFeatures, f: number, mode: IconColorMode): RGBA {
 }
 
 function collectPointLayers(tiles: Tile[]): {
-  layers: BinaryFeatures[];
+  parts: Array<{ b: BinaryFeatures; tileKey: string }>;
   total: number;
 } {
-  const layers: BinaryFeatures[] = [];
+  const parts: Array<{ b: BinaryFeatures; tileKey: string }> = [];
   let total = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
       if (!b.featureCount || b.geometryType !== GeometryType.Point) continue;
-      layers.push(b);
+      parts.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
       total += b.featureCount;
     }
   }
-  return { layers, total };
+  return { parts, total };
 }
 
 export function buildIconBuffers(
@@ -145,7 +184,9 @@ export function buildIconBuffers(
   timeOrigin: number,
   opts: IconBufferOptions,
 ): IconBuffers {
-  const { layers, total } = collectPointLayers(tiles);
+  const { parts, total } = collectPointLayers(tiles);
+  const provenance = new InstanceProvenance();
+  const binaryByTileKey = new Map<string, BinaryFeatures>();
   const empty = (): IconBuffers => ({
     count: 0,
     centers: new Float32Array(0),
@@ -156,8 +197,12 @@ export function buildIconBuffers(
     colors: new Float32Array(0),
     starts: new Float32Array(0),
     ends: new Float32Array(0),
+    filterValues: new Float32Array(0),
+    categoryIndices: new Float32Array(0),
     origin: [0, 0, 0],
     bbox: null,
+    provenance,
+    binaryByTileKey,
   });
   if (total === 0) return empty();
 
@@ -195,7 +240,7 @@ export function buildIconBuffers(
   const sizeConstant = opts.sizeConstant ?? 12;
 
   // RTC origin = first feature of the first layer, projected (absolute world).
-  const first = layers[0];
+  const first = parts[0].b;
   const fdims = first.positionDimensions ?? 2;
   const firstElev = opts.elevationProperty
     ? first.numericProps[opts.elevationProperty]
@@ -220,6 +265,14 @@ export function buildIconBuffers(
   const colors = new Float32Array(total * 4);
   const starts = new Float32Array(total);
   const ends = new Float32Array(total);
+  const wantFilter = !!opts.filterProperty;
+  const filterValues = wantFilter
+    ? new Float32Array(total)
+    : new Float32Array(0);
+  const catIndex = opts.categoryIndex ?? null;
+  const categoryIndices = catIndex
+    ? new Float32Array(total)
+    : new Float32Array(0);
   let minX = Infinity,
     minY = Infinity,
     minZ = Infinity;
@@ -228,7 +281,9 @@ export function buildIconBuffers(
     maxZ = -Infinity;
 
   let o = 0;
-  for (const b of layers) {
+  for (const part of parts) {
+    const b = part.b;
+    binaryByTileKey.set(part.tileKey, b);
     const count = b.featureCount;
     const dims = b.positionDimensions ?? fdims;
     const elev = opts.elevationProperty
@@ -240,9 +295,16 @@ export function buildIconBuffers(
     const sizeCol = opts.sizeProperty
       ? b.numericProps[opts.sizeProperty]
       : undefined;
+    const filterCol =
+      wantFilter && opts.filterProperty
+        ? b.numericProps[opts.filterProperty]
+        : undefined;
     const rebase = b.timeOffset - timeOrigin;
 
     for (let i = 0; i < count; i++) {
+      // Provenance MUST be pushed in the same order instances are written (merged
+      // index j = o + i), so a decoded GPU id aligns with this feature.
+      provenance.push(part.tileKey, i);
       const lon = b.positions[i * dims];
       const lat = b.positions[i * dims + 1];
       const alt = elev
@@ -284,6 +346,14 @@ export function buildIconBuffers(
 
       starts[j] = (b.startTimes ? b.startTimes[i] : 0) + rebase;
       ends[j] = (b.endTimes ? b.endTimes[i] : 0) + rebase;
+      if (wantFilter) filterValues[j] = filterCol ? filterCol[i] : 0;
+      if (catIndex)
+        categoryIndices[j] = featureCategorySlot(
+          b,
+          i,
+          catIndex.property,
+          catIndex.palette,
+        );
     }
     o += count;
   }
@@ -298,8 +368,12 @@ export function buildIconBuffers(
     colors,
     starts,
     ends,
+    filterValues,
+    categoryIndices,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    provenance,
+    binaryByTileKey,
   };
 }
 

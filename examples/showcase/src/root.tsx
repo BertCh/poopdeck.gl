@@ -116,6 +116,11 @@ export function ErrorBoundary() {
         <p className="text-xs font-mono text-slate-500 mb-5 break-words">
           {message}
         </p>
+        {import.meta.env.DEV && error instanceof Error && error.stack && (
+          <pre className="text-left text-[10px] leading-snug font-mono text-slate-600 mb-5 max-h-48 overflow-auto whitespace-pre-wrap">
+            {error.stack}
+          </pre>
+        )}
         <div className="flex items-center justify-center gap-3">
           <button
             onClick={() => window.location.reload()}

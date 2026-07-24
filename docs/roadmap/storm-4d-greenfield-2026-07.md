@@ -310,3 +310,44 @@ no fabricated altitude).
 `rampProperty` / `rampDomain` / `rampColorRamp` on `AnimatedPointLayer` reusing core
 `expandRampColors` (`packages/core/src/render/style.ts`); tests; rebuild layers dist.
 FE v1 ships categorical bands regardless (ramp is follow-up polish, not a dependency).
+
+### 9.4 Perf amendment — §9.1 buckets/zooms revised (2026-07-23)
+
+The composite ran at ~4 fps (measured: Playwright+CDP probe, 2.7 s main-thread
+stalls, ~4,000 tile decodes in the opening seconds, 280+ point sublayers, and a
+React "Maximum update depth exceeded" crash ~5 s into playback as the event
+avalanche flushed). Two §9.1 choices were responsible; both are STORAGE
+knobs — no feature, timestamp, or column changed (no thinning):
+
+1. **1-minute buckets on tiny archives.** At the demo's ~288× playback the
+   playhead crossed five 1-min buckets per real second, churning selection /
+   fetch / decode / sublayer builds on every one of ten tilesets. Worse,
+   `--end-time-field` replicates a feature into every bucket its [start, end]
+   overlaps, so each ~30-min warning polygon was stored ~30×. Rebuilt:
+   warnings + reports `1m → 1h`, stations `1m → 30m`, sounding `1m → 2h`
+   (whole flight = one bucket). Tile counts: warnings 4,205 → 113, reports
+   1,968 → 80, stations 32,256 → 190, sounding 807 → 4.
+2. **Full zoom pyramids under a fixed-framing demo.** Overlay pyramids clamped
+   `z3–9 → z3–6` (cloudtop `z3–8 → z3–6`, 16,750 → 2,960 tiles, 81 → 42 MB);
+   detail is unchanged — the base level is lossless (no-thinning default) and
+   the camera never needs deeper spatial partitioning at this framing.
+
+Renderer counterparts (general fixes, landed with this amendment):
+- `SpatioTemporalLayer` grew a `refinementStrategy` prop; every storm4d layer
+  passes `'no-overlap'` because these archives are FULL-DUPLICATION pyramids
+  (every zoom carries every feature — 18.3M gates per level on the volume), so
+  deck's best-available parent fallback fetched + decoded + drew up to 4 extra
+  complete copies of the visible data per bucket.
+- `SpatiotemporalTileset.getVisibleTiles` pass-2 parent-cover scan is now
+  clamped to the viewport's primary-zoom tile range: a parent larger than the
+  viewport could never be "covered" by its (never-loaded) out-of-viewport
+  children and rendered forever on top of the streamed primary tiles.
+
+The volume archive itself is UNCHANGED (bucket 5m, z4–9): with `'no-overlap'`
+the extra zoom levels cost nothing at runtime. OPTIONAL before the R2 sync:
+rebuild it `--min-zoom 6` to drop the z4+z5 duplicate levels (~230 MB of the
+556 MB) — requires re-deriving the parquet from the cached Level II files
+(`nexrad_volume.py --skip-fetch`, ~10 min).
+
+Old archives kept beside the new as `storm4d-*.old/` (gitignored) until the
+user's browser verify; delete after.

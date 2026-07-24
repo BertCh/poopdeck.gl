@@ -1,10 +1,50 @@
 # three.js backend SoTA campaign — 2026-07
 
-**Status: PENDING RATIFY (plan only — nothing implemented).** Drafted 2026-07-22 from a
-four-agent deep-research pass: (1) working-tree gap audit of `packages/three` vs
-`packages/layers`, (2) three.js geospatial-ecosystem survey, (3) TSL/WebGPURenderer deep
-dive, (4) large-scale spatiotemporal rendering techniques. This doc is the synthesis of
-record; the full reports live in the session transcript.
+**Status: IN EXECUTION (2026-07-23).** Drafted 2026-07-22 from a four-agent deep-research
+pass: (1) working-tree gap audit of `packages/three` vs `packages/layers`, (2) three.js
+geospatial-ecosystem survey, (3) TSL/WebGPURenderer deep dive, (4) large-scale
+spatiotemporal rendering techniques. This doc is the synthesis of record; the full reports
+live in the session transcript.
+
+**Progress log.**
+- **2026-07-23 — Wave 0 DONE** (agents, all integrated-green: three 340→ tests, core 535,
+  layers 800): streaming-knob parity (`StreamingTileSource` now forwards debounce/prefetch/
+  overviewPreload/summaryZoomRange/scrubLod; summary-tier auto-dispatch via an additive
+  `makeTilesetCallbacks(archive, metadata)`; `setInteractive` scrub-LOD plumb; r3f pump
+  couples the render `timeWindow` into tile selection). Descriptor/doc-truth (icon added to
+  dataFilter degrade list, timeWindow-trap appendix marked resolved; `pickMechanism` drift
+  was already fixed upstream by `eab4bd7`). three peer floor `>=0.171`→`>=0.183`.
+- **2026-07-23 — Wave 1 substrate DONE** (§5 Wave 1 #1): fragment-`discard` time filtering
+  replaced with **vertex-stage collapse** across 8 materials (point/icon/column/arc/
+  wide-line/flow-corridor/polygon/iso-line; surfel already did it; flow-arrow has no time
+  filter). New `timeFilterVisibleNode` + per-mode visible nodes, CPU mirror in lockstep;
+  safe invariant is one-directional (`visible=0 ⟹ alpha=0`), fade look preserved.
+- **2026-07-23 — Wave 1 COMPLETE: all six feature families `supported: true`**
+  (three 483 tests green, dist rebuilt; core 535 / layers 800 green — deck unaffected;
+  36 files, +3174/−185; 6 new src modules + 13 new test files). By family:
+  `motionInterpolation` {point,icon} (GPU data-texture keyframes via `lib/track-keyframes.ts`
+  + `tsl/motion-glide.ts`, `reducedMotion`-gated; ⚠ glide-picking returns null — deferred);
+  `dataFilter` {arc,line,trips,column,polygon} (`tsl/data-filter.ts` + `sttFilterValue` attr;
+  **icon pending** — the one kind still degrading); `timeHeightScale` {column,polygon}
+  (`sttLift` per-instance/vertex; `capabilities.timeAsHeight` flipped `true` in lockstep);
+  `iconWake` {icon} (reuses shared wake nodes); `pathReveal` {path} (reuses the pre-existing
+  trail gate + synthesized arc-length reveal times); `stableColorMapping` {arc,line,column,icon}
+  (`lib/palette.ts` deterministic label→slot + `tsl/palette.ts` GPU palette texture). Every
+  family opt-in and byte-identical when off; animated ones (glide/wake/reveal) `reducedMotion`-gated.
+  Also closed the last dataFilter gap — **icon** now filterable (static path; icon+glide filter a
+  documented no-op) → dataFilter on all six deck kinds.
+- **2026-07-23 — Wave 2 (additive slice): GPU picking catalog COMPLETE** (three 557 tests green,
+  build clean, layers 800 unaffected; campaign total 40 files, +5337/−501, 7 new src modules +
+  19 new test suites). Generalized GPU id-picking from point-only to a kind-agnostic mechanism
+  (`lib/id-pick.ts`): layers **auto-register** via a structural `isIdPickable` test (a `pick()`
+  method), so `r3f/index.tsx` needs no per-kind change; `PickController` runs one id-pass over all
+  registrants. Pickable now: point, column, arc, line, od-line, trips, path, icon, polygon, iso —
+  each id-material reuses the SAME vertex-stage gates as its colour material, so **picking is
+  time/filter-correct** (glide-pick deferred → null, consistent). Merged-mesh (polygon/iso) via
+  per-vertex id-colour keyed to per-feature provenance; `resolveIdPick` needed no extension.
+  **Held (trigger-gated, §8):** pooled/incremental residency + upload throttling — want a
+  measurement spike + steer, not a blind rewrite. **Remaining additive:** frame-budget
+  `compileAsync` pipeline pre-warm (small, browser-verified benefit). See §5 for the wave plan.
 
 **Relations.** [renderer-architecture.md](./renderer-architecture.md) holds the locked
 decisions this plan builds ON (render-kernel thesis / no shared chassis, ECEF globe, RTC,

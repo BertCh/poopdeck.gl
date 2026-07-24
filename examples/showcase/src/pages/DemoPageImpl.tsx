@@ -18,21 +18,14 @@ import { getDemoMeta } from '../content/demoMeta';
 import DemoViewer from '../components/demo/DemoViewer';
 import DemoHoverPreview from '../components/demo/DemoHoverPreview';
 import type { DemoCamera } from '../components/demo/previewBasemap';
-import MaplibreRenderer from '../components/MaplibreRenderer';
+import MaplibreRenderer, {
+  MAPLIBRE_RENDERABLE_TYPES,
+} from '../components/MaplibreRenderer';
 import SttThreeGeoViewer, {
   datasetSupportsThree,
 } from '../components/demo/SttThreeGeoViewer';
 import { useDemoPlayback } from '../components/demo/useDemoPlayback';
 import { usePlaybackHotkeys, PlaybackControls } from '@poopdeck.gl/react';
-
-/** Dataset types the `@poopdeck.gl/maplibre` adapter can mount (see makeSttLayer). */
-const MAPLIBRE_TYPES = new Set([
-  'point',
-  'path',
-  'trips',
-  'polygon',
-  'heatmap',
-]);
 
 /**
  * `PlaybackControls` is authored in the site's light editorial theme (dark ink
@@ -76,7 +69,8 @@ const DemoPage: React.FC = () => {
     location.pathname.startsWith('/maplibre/') ? 'maplibre' : 'deck',
   );
   const maplibreCapable =
-    selectedDataset != null && MAPLIBRE_TYPES.has(selectedDataset.type);
+    selectedDataset != null &&
+    MAPLIBRE_RENDERABLE_TYPES.has(selectedDataset.type);
   const threeCapable =
     selectedDataset != null && datasetSupportsThree(selectedDataset);
 

@@ -30,6 +30,7 @@
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { synthesizeVertexTimes } from '@poopdeck.gl/core/trips';
+import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
@@ -38,6 +39,7 @@ import {
   type CategoricalColorSpec,
   type RampColorSpec,
 } from './color.js';
+import { featureTileKey } from './id-pick.js';
 
 // Moved to the framework-free kernel (`core/trips`) when Cesium became its
 // third consumer; re-exported so existing three importers keep resolving.
@@ -55,6 +57,13 @@ export interface TripsBufferOptions {
   elevationScale?: number;
   /** Constant height lift (metres) — keeps ground decals off the basemap. @default 0 */
   zLift?: number;
+  /**
+   * Numeric column feeding the GPU DataFilter (`sttFilterValue`, per segment —
+   * a trip's value repeated to each of its segments). When set, `filterValues`
+   * is emitted (0 where a tile lacks the column, deck's constant fallback).
+   * @default null (no filter attribute)
+   */
+  filterProperty?: string | null;
 }
 
 export interface TripsBuffers {
@@ -67,8 +76,24 @@ export interface TripsBuffers {
   ends: Float32Array; // float, relative to timeOrigin (feature end)
   timeA: Float32Array; // float, relative — per-vertex trail time at endpoint A
   timeB: Float32Array; // float, relative — per-vertex trail time at endpoint B
+  /** float, per-segment DataFilter value; 0-length when no `filterProperty`. */
+  filterValues: Float32Array;
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
+  /**
+   * Per-merged-instance provenance (the GPU picking-catalog identity buffer).
+   * Merged segment instance `i` resolves via `provenance.resolve(i)` to its
+   * source `(tileKey, featureIndex)`; a trip's several segment instances all point
+   * at the same trip `featureIndex`, so a pick on any segment resolves to the
+   * whole trip. Populated in draw order. Empty when `count === 0`.
+   */
+  provenance: InstanceProvenance;
+  /**
+   * `tileKey` → the source layer's {@link BinaryFeatures}, joined back to trips via
+   * `getFeatureProperties(binary, featureIndex)`. Built from the SAME iteration
+   * (and the same {@link featureTileKey}) as {@link provenance}.
+   */
+  binaryByTileKey: Map<string, BinaryFeatures>;
 }
 
 function featureColor(
@@ -90,10 +115,10 @@ function featureColor(
 }
 
 function collectLineLayers(tiles: Tile[]): {
-  layers: BinaryFeatures[];
+  parts: Array<{ b: BinaryFeatures; tileKey: string }>;
   segCount: number;
 } {
-  const layers: BinaryFeatures[] = [];
+  const parts: Array<{ b: BinaryFeatures; tileKey: string }> = [];
   let segCount = 0;
   for (const tile of tiles) {
     for (const tl of tile.layers) {
@@ -104,13 +129,13 @@ function collectLineLayers(tiles: Tile[]): {
         !b.startIndices
       )
         continue;
-      layers.push(b);
+      parts.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
       for (let f = 0; f < b.featureCount; f++) {
         segCount += Math.max(0, b.startIndices[f + 1] - b.startIndices[f] - 1);
       }
     }
   }
-  return { layers, segCount };
+  return { parts, segCount };
 }
 
 /**
@@ -124,7 +149,9 @@ export function buildTripsBuffers(
   timeOrigin: number,
   opts: TripsBufferOptions,
 ): TripsBuffers {
-  const { layers, segCount } = collectLineLayers(tiles);
+  const { parts, segCount } = collectLineLayers(tiles);
+  const provenance = new InstanceProvenance();
+  const binaryByTileKey = new Map<string, BinaryFeatures>();
   const empty = (): TripsBuffers => ({
     count: 0,
     posA: new Float32Array(0),
@@ -135,16 +162,20 @@ export function buildTripsBuffers(
     ends: new Float32Array(0),
     timeA: new Float32Array(0),
     timeB: new Float32Array(0),
+    filterValues: new Float32Array(0),
     origin: [0, 0, 0],
     bbox: null,
+    provenance,
+    binaryByTileKey,
   });
   if (segCount === 0) return empty();
 
   const zLift = opts.zLift ?? 0;
   const elevScale = opts.elevationScale ?? 1;
+  const wantFilter = !!opts.filterProperty;
 
   // RTC origin = first vertex of the first feature, projected (absolute world).
-  const first = layers[0];
+  const first = parts[0].b;
   const fdims = first.positionDimensions ?? 2;
   const origin = projection.project(
     first.positions[0],
@@ -160,6 +191,9 @@ export function buildTripsBuffers(
   const ends = new Float32Array(segCount);
   const timeA = new Float32Array(segCount);
   const timeB = new Float32Array(segCount);
+  const filterValues = wantFilter
+    ? new Float32Array(segCount)
+    : new Float32Array(0);
   let minX = Infinity,
     minY = Infinity,
     minZ = Infinity;
@@ -168,11 +202,17 @@ export function buildTripsBuffers(
     maxZ = -Infinity;
 
   let s = 0; // segment index
-  for (const b of layers) {
+  for (const part of parts) {
+    const b = part.b;
+    binaryByTileKey.set(part.tileKey, b);
     const dims = b.positionDimensions ?? fdims;
     const elev = opts.elevationProperty
       ? b.numericProps[opts.elevationProperty]
       : undefined;
+    const filterCol =
+      wantFilter && opts.filterProperty
+        ? b.numericProps[opts.filterProperty]
+        : undefined;
     const rebase = b.timeOffset - timeOrigin;
     const startIndices = b.startIndices!;
     const totalVerts = startIndices[b.featureCount];
@@ -193,10 +233,14 @@ export function buildTripsBuffers(
         ca = (rgba[3] ?? 255) / 255;
       const start = (b.startTimes ? b.startTimes[f] : 0) + rebase;
       const end = (b.endTimes ? b.endTimes[f] : 0) + rebase;
+      const fval = wantFilter && filterCol ? filterCol[f] : 0;
       const baseZ = elev ? elev[f] * elevScale : null;
       const v0 = startIndices[f];
       const v1 = startIndices[f + 1];
       for (let v = v0; v < v1 - 1; v++) {
+        // One provenance entry per SEGMENT instance (merged index = s), all of a
+        // trip's segments pointing at the same trip `featureIndex` f. Draw order.
+        provenance.push(part.tileKey, f);
         const z0 =
           (baseZ ?? (dims > 2 ? b.positions[v * dims + 2] : 0)) + zLift;
         const z1 =
@@ -236,6 +280,7 @@ export function buildTripsBuffers(
         // Per-vertex trail times of the two endpoints (rebased to global playhead).
         timeA[s] = vertexTimes[v] + rebase;
         timeB[s] = vertexTimes[v + 1] + rebase;
+        if (wantFilter) filterValues[s] = fval;
         for (const [x, y, zz] of [
           [ax, ay, az],
           [bx, by, bz],
@@ -262,7 +307,10 @@ export function buildTripsBuffers(
     ends,
     timeA,
     timeB,
+    filterValues,
     origin,
     bbox: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    provenance,
+    binaryByTileKey,
   };
 }

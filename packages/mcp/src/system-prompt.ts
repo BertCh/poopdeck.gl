@@ -64,10 +64,11 @@ function formatOne(d: DatasetSummary): string {
   // `featureCount` is `undefined` when the manifest doesn't know it (see
   // manifest.ts — a 0 alongside non-empty packs means "unknown", not zero). A
   // literal 0 is likewise not worth surfacing, so only print a positive count —
-  // never "~0 features".
+  // never "~0 features". Exact when it's the distinct source count; the "~"
+  // prefix is kept only for the index-weighted fallback (an inflated estimate).
   const features =
     d.featureCount !== undefined && d.featureCount > 0
-      ? `, ~${d.featureCount.toLocaleString('en-US')} features`
+      ? `, ${d.featureCountIsDistinct ? '' : '~'}${d.featureCount.toLocaleString('en-US')} features`
       : '';
   return `- \`${d.name}\`: ${formatTimeRange(d)}, bbox ${formatBounds(d)}, ${zoom}${features}${summary}`;
 }

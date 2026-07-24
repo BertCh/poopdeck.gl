@@ -122,6 +122,9 @@ importers:
       github-slugger:
         specifier: ^2.0.0
         version: 2.0.0
+      h3-js:
+        specifier: ^4.1.0
+        version: 4.4.0
       mapbox-gl:
         specifier: ^3.16.0
         version: 3.24.0

@@ -21,16 +21,21 @@
  *
  * Time mode is **window** (whole-feature on/off + fade, deck's window mode) —
  * arcs are OD flows, shown while `[sttStart, sttEnd]` overlaps the playhead
- * window. Colour gradients per-vertex from `sttColorSource`→`sttColorTarget`.
+ * window. The HARD cut is a VERTEX-stage collapse: an out-of-window arc gets
+ * width ×0 (zero-area degenerate strip, dies at assembly — no fragment cost,
+ * keeps early-Z; deck.gl #7509), so no alpha-cutoff discard culls the raster.
+ * Colour gradients per-vertex from `sttColorSource`→`sttColorTarget`.
  *
- * WGSL: the window alpha is a `select()`, computed in the FRAGMENT stage from
- * VARIED raw inputs (`sttStart`/`sttEnd`) — never wrapped in a `varying()` (the
- * codebase's recurring WGSL crash). `mix()` colour gradients ARE varying-safe.
+ * WGSL: the SOFT window alpha is a `select()`, computed in the FRAGMENT stage
+ * from VARIED raw inputs (`sttStart`/`sttEnd`) — never wrapped in a `varying()`
+ * (the codebase's recurring WGSL crash). The vertex-stage visibility gate is
+ * branch-free (`step()`). `mix()` colour gradients ARE varying-safe.
  */
 
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { InstancedBufferGeometry, Float32BufferAttribute } from 'three';
 import { DoubleSide, NormalBlending, AdditiveBlending } from 'three';
+import type { Texture } from 'three';
 import {
   attribute,
   positionGeometry,
@@ -43,6 +48,7 @@ import {
   mix,
   max,
   sqrt,
+  select,
   modelViewMatrix,
   cameraProjectionMatrix,
   type TSLNode,
@@ -51,9 +57,18 @@ import {
 import {
   TimeFilterUniforms,
   windowAlphaNode,
+  windowVisibleNode,
   updateTimeFilterUniforms,
 } from './time-filter.js';
 import type { TimeFilterParams } from './time-filter-math.js';
+import {
+  DataFilterUniforms,
+  dataFilterVisibleNode,
+  dataFilterAlphaNode,
+  updateDataFilterUniforms,
+  type DataFilterOptions,
+} from './data-filter.js';
+import { PaletteUniforms, paletteColorNode } from './palette.js';
 
 export type ArcShape = 'parabolic' | 'greatCircle';
 
@@ -66,6 +81,24 @@ export interface ArcMaterialOptions {
   depthWrite?: boolean;
   /** Discard fragments below this final alpha. @default 0.02 */
   alphaCutoff?: number;
+  /**
+   * Install the GPU column filter (deck `DataFilterExtension`): binds a
+   * per-instance `sttFilterValue` attribute and gates each arc by
+   * `filterRange`/`filterSoftRange` (hard range → width collapse, soft band →
+   * fade). @default false
+   */
+  dataFilter?: boolean;
+  /**
+   * GPU stable categorical colour (deck `CategoryColorExtension`): when set, BOTH
+   * arc endpoints are coloured by a palette-texture sample indexed by the
+   * per-instance `sttCategoryIndex` slot (a single unified colour, matching deck's
+   * arc constraint — the extension drives one colour, not a source/target
+   * gradient), so a category renders the same colour in every tile and recolouring
+   * is a uniform/texture swap. Off (undefined) leaves the per-endpoint
+   * `sttColorSource`→`sttColorTarget` gradient path BYTE-IDENTICAL.
+   * @default undefined
+   */
+  colorPalette?: { texture: Texture };
 }
 
 /**
@@ -129,6 +162,10 @@ export interface ArcMaterialBundle {
   time: TimeFilterUniforms;
   arc: ArcUniforms;
   shape: ArcShape;
+  /** Present only when built with `dataFilter: true`; drives the column filter. */
+  filter?: DataFilterUniforms;
+  /** Present only when built with `colorPalette`; carries the palette-texture width. */
+  palette?: PaletteUniforms;
 }
 
 /**
@@ -197,10 +234,16 @@ export function createArcMaterial(
   const shape: ArcShape = opts.shape ?? 'parabolic';
   const time = new TimeFilterUniforms();
   const arc = new ArcUniforms();
+  const dataFilter = opts.dataFilter ?? false;
+  const filter = dataFilter ? new DataFilterUniforms() : undefined;
+  const paletteU = opts.colorPalette ? new PaletteUniforms() : undefined;
 
   const src = attribute('sttPosSource', 'vec3');
   const tgt = attribute('sttPosTarget', 'vec3');
   const height = attribute('sttHeight', 'float');
+  const start = attribute('sttStart', 'float');
+  const end = attribute('sttEnd', 'float');
+  const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
   const t = positionGeometry.x; // 0 (source) .. 1 (target)
   const side = positionGeometry.y; // -1 .. +1
 
@@ -227,8 +270,26 @@ export function createArcMaterial(
   // screen-space (pixel) tangent of the curve, then its left normal.
   const dir = ndcNext.sub(ndcHere).mul(arc.viewport).normalize();
   const perp = vec2(dir.y.negate(), dir.x);
+  // HARD vertex-stage collapse: an arc whose `[start,end]` window doesn't overlap
+  // the playhead gets width ×0, so the ribbon's two sides coincide on the
+  // centreline → a zero-area degenerate strip that dies at assembly (no fragment
+  // cost, keeps early-Z; deck.gl #7509). The soft window fade stays in the
+  // fragment `opacityNode`.
+  // Combined hard gate: the arc collapses when EITHER the time window OR the
+  // column filter (if installed) excludes it — both zero the ribbon width.
+  const widthGate =
+    filter && filterValue
+      ? windowVisibleNode(time, start, end).mul(
+          dataFilterVisibleNode(filter, filterValue),
+        )
+      : windowVisibleNode(time, start, end);
   // pixel half-offset (side·widthPx/2) → NDC (×2/viewport) → clip (×w).
-  const off = perp.mul(side).mul(arc.widthPx).div(arc.viewport).mul(clipHere.w);
+  const off = perp
+    .mul(side)
+    .mul(arc.widthPx)
+    .mul(widthGate)
+    .div(arc.viewport)
+    .mul(clipHere.w);
 
   const material = new MeshBasicNodeMaterial();
   material.vertexNode = vec4(
@@ -238,16 +299,34 @@ export function createArcMaterial(
     clipHere.w,
   );
 
-  // ── FRAGMENT: gradient colour + window alpha ────────────────────────────────
-  const colSrc = attribute('sttColorSource', 'vec4');
-  const colTgt = attribute('sttColorTarget', 'vec4');
-  const vColor = varying(mix(colSrc, colTgt, t)); // gradient (mix is varying-safe)
-  const vStart = varying(attribute('sttStart', 'float'));
-  const vEnd = varying(attribute('sttEnd', 'float'));
+  // ── FRAGMENT: gradient colour (or unified palette colour) + window alpha ─────
+  // Palette path: a single per-instance category colour drives the WHOLE arc (deck
+  // arc single-colour constraint — no source→target gradient). The per-endpoint
+  // colour attributes are not read at all, so they are not declared (mirrors the
+  // glide path dropping `sttCenter`). Off ⇒ the gradient path is byte-identical.
+  const vColor = paletteU
+    ? varying(paletteColorNode(opts.colorPalette!.texture, paletteU))
+    : varying(
+        mix(
+          attribute('sttColorSource', 'vec4'),
+          attribute('sttColorTarget', 'vec4'),
+          t,
+        ),
+      ); // gradient (mix is varying-safe)
+  const vStart = varying(start);
+  const vEnd = varying(end);
   const alpha = windowAlphaNode(time, vStart, vEnd);
 
   material.colorNode = vColor.xyz;
-  material.opacityNode = vColor.a.mul(arc.opacity).mul(alpha);
+  let opacityNode = vColor.a.mul(arc.opacity).mul(alpha);
+  if (filter && filterValue) {
+    // Soft fade from the column filter (varying the raw value; the alpha node is
+    // a mix()/step() graph, never a select(), so it is varying-safe).
+    opacityNode = opacityNode.mul(
+      dataFilterAlphaNode(filter, varying(filterValue)),
+    );
+  }
+  material.opacityNode = opacityNode;
   material.transparent = true;
   material.depthTest = true;
   material.depthWrite = opts.depthWrite ?? false;
@@ -255,7 +334,7 @@ export function createArcMaterial(
   material.blending = opts.additive ? AdditiveBlending : NormalBlending;
   material.alphaTest = opts.alphaCutoff ?? 0.02;
 
-  return { material, time, arc, shape };
+  return { material, time, arc, shape, filter, palette: paletteU };
 }
 
 export interface ArcUniformValues {
@@ -268,6 +347,8 @@ export interface ArcUniformValues {
   viewport?: [number, number];
   /** RTC world origin (greatCircle shape only). */
   origin?: [number, number, number];
+  /** Column-filter props (no-op unless built with `dataFilter: true`). */
+  dataFilter?: DataFilterOptions;
 }
 
 /** Push the playhead + width/viewport/origin into the uniforms. Once per frame. */
@@ -281,4 +362,111 @@ export function updateArcUniforms(
   if (v.viewport) bundle.arc.viewport.value.set(v.viewport[0], v.viewport[1]);
   if (v.origin)
     bundle.arc.origin.value.set(v.origin[0], v.origin[1], v.origin[2]);
+  if (bundle.filter) updateDataFilterUniforms(bundle.filter, v.dataFilter);
+}
+
+// ── GPU id-buffer pick material (GPU picking catalog: arc variant) ───────────────
+//
+// BROWSER-VERIFY ONLY (needs a live WebGPU device). Tessellates the SAME ribbon
+// as the colour material (identical `vertexNode`: curve at `t`, screen-space
+// widthPx expansion), REUSING the identical vertex-stage width-collapse gate —
+// {@link windowVisibleNode} AND {@link dataFilterVisibleNode} — so an
+// out-of-window / out-of-range arc collapses to a zero-area degenerate strip and
+// is never pickable, exactly matching the eye. The ribbon is painted the flat
+// per-instance id colour (`sttIdColor`, from `buildIdColors(mergedCount)`) at full
+// intensity; off-time / off-range fragments are discarded (opacity 0 + alphaTest)
+// and depth is written so the nearest arc wins the pick. Bind
+// {@link updateArcUniforms} to sync time / width / viewport / origin before the
+// pass. Shape-compatible with {@link ArcMaterialBundle}.
+
+/**
+ * Build the arc id material. `opts` mirror the colour material's gate options
+ * (`shape`, `dataFilter`, `alphaCutoff`); the colour-only options (`additive`,
+ * `depthWrite`, `colorPalette`) are ignored (the id is a flat per-instance
+ * colour, opaque with depth-write so the front-most arc wins).
+ */
+export function createArcIdMaterial(
+  opts: ArcMaterialOptions = {},
+): ArcMaterialBundle {
+  const shape: ArcShape = opts.shape ?? 'parabolic';
+  const time = new TimeFilterUniforms();
+  const arc = new ArcUniforms();
+  const dataFilter = opts.dataFilter ?? false;
+  const filter = dataFilter ? new DataFilterUniforms() : undefined;
+
+  const src = attribute('sttPosSource', 'vec3');
+  const tgt = attribute('sttPosTarget', 'vec3');
+  const height = attribute('sttHeight', 'float');
+  const start = attribute('sttStart', 'float');
+  const end = attribute('sttEnd', 'float');
+  const idColor = attribute('sttIdColor', 'vec3');
+  const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
+  const t = positionGeometry.x; // 0 (source) .. 1 (target)
+  const side = positionGeometry.y; // -1 .. +1
+
+  const posAt = (param: TSLNode): TSLNode =>
+    shape === 'greatCircle'
+      ? greatCirclePos(src, tgt, height, param, arc.origin)
+      : parabolicPos(src, tgt, height, param);
+
+  // VERTEX: identical tessellation + screen-space width to the colour material.
+  const mvp = cameraProjectionMatrix.mul(modelViewMatrix);
+  const dt = float(1 / ARC_SEGMENTS);
+  const tTanA = t.min(float(1).sub(dt));
+  const tTanB = tTanA.add(dt);
+  const clipHere = mvp.mul(vec4(posAt(t), 1));
+  const clipTanA = mvp.mul(vec4(posAt(tTanA), 1));
+  const clipTanB = mvp.mul(vec4(posAt(tTanB), 1));
+  const ndcHere = clipTanA.xy.div(clipTanA.w);
+  const ndcNext = clipTanB.xy.div(clipTanB.w);
+  const dir = ndcNext.sub(ndcHere).mul(arc.viewport).normalize();
+  const perp = vec2(dir.y.negate(), dir.x);
+  // SAME hard width-collapse gate as the colour material (window ∧ column filter).
+  const widthGate =
+    filter && filterValue
+      ? windowVisibleNode(time, start, end).mul(
+          dataFilterVisibleNode(filter, filterValue),
+        )
+      : windowVisibleNode(time, start, end);
+  const off = perp
+    .mul(side)
+    .mul(arc.widthPx)
+    .mul(widthGate)
+    .div(arc.viewport)
+    .mul(clipHere.w);
+
+  const material = new MeshBasicNodeMaterial();
+  material.vertexNode = vec4(
+    clipHere.x.add(off.x),
+    clipHere.y.add(off.y),
+    clipHere.z,
+    clipHere.w,
+  );
+
+  // FRAGMENT: flat per-instance id colour, opaque wherever the ribbon is drawn AND
+  // on-time AND in-range. The soft window / column-filter alphas are recomputed
+  // here from VARIED raw inputs (never a varying-wrapped select) and thresholded
+  // to a hard 0/1 alpha.
+  material.colorNode = varying(idColor);
+  const cutoff = opts.alphaCutoff ?? 0.02;
+  let onGate = windowAlphaNode(time, varying(start), varying(end)).greaterThan(
+    float(cutoff),
+  );
+  if (filter && filterValue) {
+    onGate = onGate.and(
+      dataFilterAlphaNode(filter, varying(filterValue)).greaterThan(
+        float(cutoff),
+      ),
+    );
+  }
+  material.opacityNode = select(onGate, float(1), float(0));
+
+  material.transparent = false;
+  material.depthTest = true;
+  material.depthWrite = true;
+  material.side = DoubleSide;
+  material.blending = NormalBlending;
+  material.alphaTest = 0.5;
+
+  return { material, time, arc, shape, filter };
 }

@@ -10,27 +10,24 @@
  *    `resolvePointPick` / `parsePointTileKey` join a merged index back to a
  *    feature's props, coordinate, and tileId.
  *  - HOVER/CLICK — the tail that turns a GPU id-buffer readback into an
- *    `SttPointPickInfo`. We exercise the WHOLE pure chain: merged buffers →
+ *    `SttIdPickInfo`. We exercise the WHOLE pure chain: merged buffers →
  *    `buildIdColors` (the exact per-instance id the id material paints) →
- *    `decodeId` (what `GpuPicker` reads back from a texel) → `resolvePointPick`
- *    → `pointPickToInfo`. The GPU render + `readRenderTargetPixelsAsync` readback
- *    itself needs a live device and is BROWSER-VERIFY per this package's test
- *    policy (see `vitest.config.ts`); here we substitute the readback with the
- *    same `buildIdColors`/`decodeId` math the shader uses.
+ *    `decodeId` (what `GpuPicker` reads back from a texel) → the generalised
+ *    `resolveIdPick` (kind `'point'`). The GPU render +
+ *    `readRenderTargetPixelsAsync` readback itself needs a live device and is
+ *    BROWSER-VERIFY per this package's test policy (see `vitest.config.ts`);
+ *    here we substitute the readback with the same `buildIdColors`/`decodeId`
+ *    math the shader uses.
  */
 
 import { describe, it, expect } from 'vitest';
 import type { BinaryFeatures, TileId } from '@poopdeck.gl/core';
 import { buildPointBuffers, pointTileKey } from '../src/layers/point-buffers';
-import {
-  resolvePointPick,
-  parsePointTileKey,
-  pointPickToInfo,
-} from '../src/lib/point-pick';
+import { resolvePointPick, parsePointTileKey } from '../src/lib/point-pick';
+import { resolveIdPick } from '../src/lib/id-pick';
 import { buildIdColors, decodeId } from '../src/lib/gpu-pick';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import type { RGBA } from '../src/lib/color';
-import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import { makePointTile } from './_support/features';
 
 const anchor = { longitude: -73.98, latitude: 40.75 };
@@ -246,80 +243,46 @@ describe('parsePointTileKey', () => {
   });
 });
 
-describe('pointPickToInfo', () => {
-  const base: SttPickResult = {
-    object: { intensity: 30, id: 202 },
-    index: 2,
-    layerId: 'points',
-    coordinate: [anchor.longitude + 0.004, anchor.latitude + 0.003],
-    tileId: idB,
-    screen: [12, 34],
-  };
-
-  it('maps a resolved SttPickResult into a kind:"point" SttPointPickInfo', () => {
-    const info = pointPickToInfo(base);
-    expect(info.kind).toBe('point');
-    expect(info.layerId).toBe('points');
-    expect(info.index).toBe(2);
-    expect(info.object).toEqual({ intensity: 30, id: 202 });
-    expect(info.coordinate).toEqual([
-      anchor.longitude + 0.004,
-      anchor.latitude + 0.003,
-    ]);
-    expect(info.tileId).toEqual(idB);
-  });
-
-  it('omits coordinate/tileId when the result lacks them', () => {
-    const info = pointPickToInfo({
-      object: null,
-      index: -1,
-      layerId: 'points',
-    });
-    expect(info.kind).toBe('point');
-    expect(info.object).toBeNull();
-    expect(info.index).toBe(-1);
-    expect('coordinate' in info).toBe(false);
-    expect('tileId' in info).toBe(false);
-  });
-});
-
-describe('end-to-end id readback → SttPointPickInfo (pure chain)', () => {
-  it('resolves every merged instance through encode → decode → resolve → map', () => {
+describe('end-to-end id readback → SttIdPickInfo (pure chain, kind:"point")', () => {
+  it('resolves every merged instance through encode → decode → resolveIdPick', () => {
     const buf = buildPointBuffers([tileA, tileB], proj, 0, OPTS);
     expect(buf.count).toBe(5);
     const idColors = buildIdColors(buf.provenance.length);
 
     // Merged 0 → tile A feature 0 (ground).
-    let hit = pointPickToInfo(
-      resolvePointPick({
-        index: decodeMergedTexel(idColors, 0),
-        provenance: buf.provenance,
-        binaryByTileKey: buf.binaryByTileKey,
-        layerId: 'points',
-      })!,
-    );
-    expect(hit.kind).toBe('point');
-    expect(hit.index).toBe(0);
-    expect(hit.tileId).toEqual(idA);
-    expect(hit.object!.cls).toBe('ground');
-    expect(hit.coordinate![0]).toBeCloseTo(anchor.longitude, 9);
+    const hit0 = resolveIdPick({
+      index: decodeMergedTexel(idColors, 0),
+      provenance: buf.provenance,
+      binaryByTileKey: buf.binaryByTileKey,
+      kind: 'point',
+      layerId: 'points',
+    })!;
+    expect(hit0.kind).toBe('point');
+    expect(hit0.featureIndex).toBe(0);
+    expect(hit0.index).toBe(0); // back-compat alias of featureIndex
+    expect(hit0.tileKey).toBe(pointTileKey(idA, 'lidar'));
+    expect(hit0.tileId).toEqual(idA);
+    expect(hit0.object!.cls).toBe('ground');
+    expect(hit0.coordinate![0]).toBeCloseTo(anchor.longitude, 9);
 
     // Merged 4 → tile B feature 2 (last point). Its id colour must decode back to 4.
     expect(decodeMergedTexel(idColors, 4)).toBe(4);
-    const result = resolvePointPick({
+    const hit4 = resolveIdPick({
       index: decodeMergedTexel(idColors, 4),
       provenance: buf.provenance,
       binaryByTileKey: buf.binaryByTileKey,
+      kind: 'point',
       layerId: 'points',
       screen: [7, 8],
     })!;
-    hit = pointPickToInfo(result);
-    expect(hit.index).toBe(2); // FEATURE index within its (tile, layer)
-    expect(hit.tileId).toEqual(idB);
-    expect(hit.object!.id).toBe(202);
-    expect(hit.object!.intensity).toBeCloseTo(30, 5);
-    expect(hit.coordinate![0]).toBeCloseTo(anchor.longitude + 0.004, 9);
-    expect(hit.coordinate![1]).toBeCloseTo(anchor.latitude + 0.003, 9);
+    expect(hit4.featureIndex).toBe(2); // FEATURE index within its (tile, layer)
+    expect(hit4.tileKey).toBe(pointTileKey(idB, 'lidar'));
+    expect(hit4.tileId).toEqual(idB);
+    expect(hit4.object!.id).toBe(202);
+    expect(hit4.object!.intensity).toBeCloseTo(30, 5);
+    expect(hit4.coordinate![0]).toBeCloseTo(anchor.longitude + 0.004, 9);
+    expect(hit4.coordinate![1]).toBeCloseTo(anchor.latitude + 0.003, 9);
+    expect(hit4.screen).toEqual([7, 8]);
   });
 
   it('reports a background / out-of-range readback as a miss (null resolution)', () => {
@@ -327,13 +290,14 @@ describe('end-to-end id readback → SttPointPickInfo (pure chain)', () => {
     // A sentinel background texel decodes to MAX_PICK_ID ≫ featureCount.
     const bgIndex = decodeId([255, 255, 255]);
     expect(bgIndex).toBeGreaterThan(buf.provenance.length);
-    const miss = resolvePointPick({
+    const miss = resolveIdPick({
       index: bgIndex,
       provenance: buf.provenance,
       binaryByTileKey: buf.binaryByTileKey,
+      kind: 'point',
       layerId: 'points',
     });
-    expect(miss).toBeNull(); // → the controller reports `null`, never calls pointPickToInfo
+    expect(miss).toBeNull(); // → the controller reports `null`
   });
 
   it('keeps merged index 0 a valid feature (black texel is NOT a background sentinel)', () => {
@@ -341,10 +305,11 @@ describe('end-to-end id readback → SttPointPickInfo (pure chain)', () => {
     // Feature 0 encodes to black (0,0,0); the sentinel-clear picker path (not
     // black) is what distinguishes it from an empty pixel, so index 0 resolves.
     expect(decodeMergedTexel(buildIdColors(buf.provenance.length), 0)).toBe(0);
-    const hit = resolvePointPick({
+    const hit = resolveIdPick({
       index: 0,
       provenance: buf.provenance,
       binaryByTileKey: buf.binaryByTileKey,
+      kind: 'point',
       layerId: 'points',
     });
     expect(hit).not.toBeNull();

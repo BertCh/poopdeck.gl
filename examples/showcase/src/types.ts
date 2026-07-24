@@ -120,7 +120,22 @@ export type DatasetType =
    * `lightningUrl`); and the radiosonde ascent trail (from `soundingUrl`).
    * Built by nexrad_volume.py + the storm4d fetch scripts.
    */
-  | 'storm4d';
+  | 'storm4d'
+  /**
+   * WORLD-MODEL SCENARIO GALLERY (`/worlds`) — hundreds of short driving
+   * scenarios laid out side by side on a synthetic grid, every one animating
+   * at once on a single shared looping clock. FOUR cross-scenario archives:
+   * the ego trips (`avEgoUrl`, the primary `url` + the one REQUIRED governor
+   * source), the oriented agent boxes (`avObjectsUrl`, mounted only when the
+   * camera is close enough to read them), and the HD-map line/polygon
+   * substrate (`avMapLineUrl` / `avMapPolyUrl`, timeless full-range archives).
+   * A `worldsUrl` sidecar carries the per-scenario index (grid origin, caption,
+   * agent counts, generated-video paths, hero LiDAR manifest); heroes stream
+   * their own LiDAR archive when selected. Rendered by the bespoke
+   * `/worlds` page (never by `DemoViewer`), which is why this type has no
+   * `buildDemoLayers` case. Built by `cosmos_drive_dreams.py`.
+   */
+  | 'worlds';
 
 export interface DatasetLegendItem {
   color: string;
@@ -1081,8 +1096,27 @@ export interface Dataset {
    */
   avMapPolyUrl?: string;
   avMapLineUrl?: string;
+  /**
+   * Additive-octree LOD POINT overview of the HD-map lines (the `/worlds`
+   * gallery): a decimated dotted road network whose points each carry a single
+   * `home_zoom`, rendered via `AnimatedPointLayer` with `lodMode:'additive'` so
+   * the multi-scenario overview loads a sparse coarse tier instead of the full
+   * `avMapLineUrl` archive at every zoom. The crisp lines take over on zoom-in.
+   * Built by `cosmos_drive_dreams.py`'s `map_points` archive. Routed through
+   * `resolveDataUrl`.
+   */
+  avMapPointsUrl?: string;
   /** `map_layer` (categorical) → RGBA for both map streams (fills low-alpha, lines crisp). */
   mapColors?: Record<string, ColorRGBA>;
+  /**
+   * `worlds` type only: the scenario-index sidecar (`worlds.json`) written by
+   * `cosmos_drive_dreams.py`. Carries the grid geometry, the shared clock, and
+   * one record per scenario (origin lon/lat, caption, agent counts, generated
+   * weather-variant video paths, hero LiDAR manifest). The `/worlds` page fetches
+   * it and resolves every asset path inside it RELATIVE to this url's directory,
+   * so the bundle stays self-describing. Routed through `resolveDataUrl`.
+   */
+  worldsUrl?: string;
   /**
    * Opt this AV scene into a toggleable Google Photorealistic 3D Tiles overlay
    * (deck.gl `Tile3DLayer` from `@deck.gl/geo-layers`, pointed at Google's

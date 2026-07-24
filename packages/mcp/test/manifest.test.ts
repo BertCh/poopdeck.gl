@@ -112,6 +112,28 @@ describe('scanDatasets', () => {
     expect(d.featureCount).toBe(0);
   });
 
+  it('prefers the distinct feature count over the index-weighted total', async () => {
+    // feature_count is index-weighted (double-counts tile-spanning features);
+    // distinct_feature_count is the true source total and must win.
+    const root = await fixtureRoot({
+      quakes: makeManifestJson({
+        metadata: { feature_count: 5_000_000, distinct_feature_count: 1_234_567 },
+      }),
+    });
+    const [d] = await scanDatasets(root);
+    expect(d.featureCount).toBe(1_234_567);
+    expect(d.featureCountIsDistinct).toBe(true);
+  });
+
+  it('falls back to the index-weighted feature count and flags it as non-distinct', async () => {
+    const root = await fixtureRoot({
+      legacy: makeManifestJson({ metadata: { feature_count: 42 } }),
+    });
+    const [d] = await scanDatasets(root);
+    expect(d.featureCount).toBe(42);
+    expect(d.featureCountIsDistinct).toBe(false);
+  });
+
   it('skips a directory with corrupt JSON rather than failing the whole scan', async () => {
     const root = await fixtureRoot({ good: makeManifestJson() });
     const { writeFile, mkdir } = await import('node:fs/promises');

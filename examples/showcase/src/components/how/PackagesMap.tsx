@@ -327,19 +327,19 @@ const LAYER_MATRIX: MatrixRow[] = [
   { kind: 'path', cells: ['y', 'y', '-', 'y'] },
   { kind: 'polygon', cells: ['y', 'y', 'y', '-'] },
   { kind: 'line', cells: ['y', 'y', 'y', 'y'] },
-  { kind: 'arc', cells: ['y', 'y', '↳ line', 'y'] },
-  { kind: 'icon', cells: ['y', 'y', '-', '-'] },
-  { kind: 'column', cells: ['y', 'y', '-', '-'] },
+  { kind: 'arc', cells: ['y', 'y', 'y', 'y'] },
+  { kind: 'icon', cells: ['y', 'y', 'y', '-'] },
+  { kind: 'column', cells: ['y', 'y', 'y', '-'] },
   { kind: 'trips', cells: ['y', 'y', 'y', 'y'] },
-  { kind: 'tripHeads', cells: ['y', 'y', '-', 'y'] },
+  { kind: 'tripHeads', cells: ['y', 'y', 'y', 'y'] },
   { kind: 'boundingBox', cells: ['y', 'y', '-', '-'] },
   { kind: 'surfel', cells: ['y', 'y', '-', '↳ point'] },
   { kind: 'heatmap', cells: ['y', '↳ point', 'y', '-'] },
-  { kind: 'h3Summary', cells: ['y', 'y', '-', '-'] },
-  { kind: 'quadbinSummary', cells: ['y', 'y', '-', '-'] },
-  { kind: 'flowmap', cells: ['y', 'y', '-', '↳ line'] },
-  { kind: 'flowCorridor', cells: ['y', 'y', '-', '↳ line'] },
-  { kind: 'flowStroke', cells: ['y', '↳ flowCorridor', '-', '↳ line'] },
+  { kind: 'h3Summary', cells: ['y', 'y', 'y', '-'] },
+  { kind: 'quadbinSummary', cells: ['y', 'y', 'y', '-'] },
+  { kind: 'flowmap', cells: ['y', 'y', 'y', '↳ line'] },
+  { kind: 'flowCorridor', cells: ['y', 'y', 'y', '↳ line'] },
+  { kind: 'flowStroke', cells: ['y', '↳ flowCorridor', 'y', '↳ line'] },
   { kind: 'isoLines', cells: ['↳ path', 'y', '-', '↳ path'] },
   { kind: 'ego', cells: ['-', 'y', '-', '-'] },
 ];
@@ -347,8 +347,8 @@ const LAYER_MATRIX: MatrixRow[] = [
 const MODE_MATRIX: MatrixRow[] = [
   { kind: 'window', cells: ['y', 'y', 'y', 'y'] },
   { kind: 'trail', cells: ['y', 'y', 'y', 'y'] },
-  { kind: 'wake', cells: ['y', 'y', '-', 'y'] },
-  { kind: 'cumulative', cells: ['y', 'y', '-', 'y'] },
+  { kind: 'wake', cells: ['y', 'y', 'y', 'y'] },
+  { kind: 'cumulative', cells: ['y', 'y', 'y', 'y'] },
 ];
 
 const BACKENDS = ['deck', 'three', 'maplibre', 'cesium'];
@@ -455,8 +455,10 @@ const CapabilityMatrix: React.FC = () => (
           style={{ color: 'var(--ink-400)' }}
         >
           deck.gl is the reference backend; Three (WebGPU/TSL) tracks it closest
-          and adds the ego/cockpit kinds; MapLibre covers the basemap-native
-          core; Cesium focuses on the movement catalog on a WGS84 globe.
+          and adds the ego/cockpit kinds; MapLibre now renders nearly the whole
+          catalog as native custom layers — points through summary tiers and
+          flow families — on the basemap; Cesium focuses on the movement catalog
+          on a WGS84 globe.
         </p>
       </div>
     </div>
