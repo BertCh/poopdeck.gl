@@ -4982,11 +4982,13 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 // after r2-sync verifies the five archive manifests (ego / objects / map_poly /
 // map_line / map_points), `worlds.json`, and the `videos/` directory (a partial
 // sync leaves the galaxy animating over dead video panels).
-const LOCAL_ONLY_DATASETS = new Set<string>([
-  'storm-4d-greenfield',
-  'storm-3d-conus',
-  'cosmos-drive-dreams',
-]);
+//
+// (2026-07-24) storm-4d-greenfield, storm-3d-conus, and cosmos-drive-dreams are
+// now fully synced and UN-GATED: r2-sync landed every referenced stem (the nine
+// storm4d-*, mrms-storm3d-volume, goes-glm-lightning, and the cosmos bundle incl.
+// worlds.json + all 266 videos) and each manifest verified 200 on
+// tiles.poopdeck.gl. The gate set stays (empty) for the next pre-sync dataset.
+const LOCAL_ONLY_DATASETS = new Set<string>([]);
 
 export const datasets: Dataset[] = [
   ...rawDatasets,
