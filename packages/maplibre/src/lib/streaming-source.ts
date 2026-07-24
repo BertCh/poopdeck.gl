@@ -6,7 +6,7 @@
  * the same .stt runs N archives against one URL: N directory fetches, N tile
  * caches holding the same bytes, and N `BufferSource`s that distort governor
  * fairness (the same runway counted N times). This source is the D6a refactor
- * from docs/roadmap/maplibre-parity-campaign-2026-07.md: layers register as
+ * from docs/roadmap/renderer-architecture.md: layers register as
  * *consumers* of one shared tileset and receive the resident set replace-all,
  * exactly like the three renderer's `StreamingTileSource` (the template for
  * this file).

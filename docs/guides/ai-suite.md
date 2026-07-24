@@ -178,5 +178,6 @@ Field defaults, enforced by the _server/operator_, not the model:
 - [Choosing a layer & backend](../intro/choosing.md) and the
   [SpatioTemporalLayer](../api/spatiotemporal-layer.md) doc — what `view_map`
   composes.
-- Design record (rationale, SoTA survey, phased plan):
-  [`ai-suite-skills-mcp-2026-07.md`](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/ai-suite-skills-mcp-2026-07.md).
+- Design record (the MCP-vs-Skills verdict, the security model, the as-built
+  inventory):
+  [`ai-suite.md`](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/ai-suite.md).

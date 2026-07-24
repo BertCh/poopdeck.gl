@@ -847,6 +847,23 @@ export interface Dataset {
    * position. Rendered as a small climbing trail (delight layer).
    */
   soundingUrl?: string;
+  /**
+   * How the primary `url` archive renders the storm itself:
+   *
+   * * `'points'` (default) — the NEXRAD gate VOLUME (`storm4d-volume`):
+   *   one 3D billboard point per radar gate, stacked by beam altitude.
+   * * `'isolines'` — the CAPPI CONTOUR SHEETS (`storm4d-isolines`, built by
+   *   `nexrad_isolines.py`): the same volumes gridded to constant-altitude
+   *   slices and contoured at fixed dBZ levels, so the storm reads as a
+   *   stack of nested iso-line rings terracing up through the troposphere.
+   *   Rendered with `AnimatedPathLayer` lifted by the per-feature `alt_m`
+   *   CAPPI height (× the shared `STORM4D_ELEVATION_SCALE`), colored by the
+   *   categorical `dbz_level` (or `alt_band` in the height render mode).
+   *
+   * Everything else about the composite — the nine context overlays, the
+   * camera, the governor wiring — is identical between the two.
+   */
+  stormVolumeMode?: 'points' | 'isolines';
 
   // ─── AV cockpit composite styling (type: 'av') ─────────────────────────
   /**

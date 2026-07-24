@@ -399,10 +399,11 @@ the value into the _time-as-height_ "squash" cube with a single uniform.
 > geometry whose value pulses) — never both. The builder omits `vertex_time`
 > whenever a matrix is present (`crates/stt-build/src/columnar.rs`).
 
-`vertex_value_matrix` is the payload substrate the forthcoming preprocessing
-framework (cube / aggregation / trend recipes; design doc
-`docs/roadmap/preprocessing-framework.md`) builds on: a build-time analytic that
-produces a per-cell, per-bucket scalar field lands in exactly this column.
+`vertex_value_matrix` is the payload substrate any build-time analytic would
+sit on: a pass that produces a per-cell, per-bucket scalar field lands in
+exactly this column. (A full preprocessing framework — cube / aggregation /
+trend recipes — was designed and deliberately counted out; see the counted-out
+register in `docs/roadmap/stt-packed-format-decisions.md`.)
 
 #### Numeric attribute quantization
 

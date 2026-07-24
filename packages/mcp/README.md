@@ -4,7 +4,7 @@
 Open and self-hostable: plain TypeScript, MIT, and runs entirely against a
 local directory of packed STT datasets — no account, no network dependency
 beyond the datasets themselves. Design record:
-[`docs/roadmap/ai-suite-skills-mcp-2026-07.md`](../../docs/roadmap/ai-suite-skills-mcp-2026-07.md).
+[`docs/roadmap/ai-suite.md`](../../docs/roadmap/ai-suite.md).
 
 ## Install
 
@@ -214,7 +214,7 @@ read-only, discovery-only setup.
 ## Design & scope
 
 Implements the agentic surface of
-[`docs/roadmap/ai-suite-skills-mcp-2026-07.md`](../../docs/roadmap/ai-suite-skills-mcp-2026-07.md):
+[`docs/roadmap/ai-suite.md`](../../docs/roadmap/ai-suite.md):
 the MCP server (this package) and the skills suite (the `poopdeck-ai` plugin).
 STT layer classes for `view_map` specs come from `@poopdeck.gl/layers`;
 register them in a `@deck.gl/json` `JSONConfiguration` to render.

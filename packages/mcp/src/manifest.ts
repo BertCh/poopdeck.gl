@@ -5,7 +5,7 @@
 /**
  * Packed-format `manifest.json` parsing + data-root scanning for the MCP
  * `list_datasets`/`describe_dataset` tools (design record:
- * `docs/roadmap/ai-suite-skills-mcp-2026-07.md`).
+ * `docs/roadmap/ai-suite.md`).
  *
  * Deliberately does NOT depend on `@poopdeck.gl/core`'s `STTArchive` (which is
  * a fetch-oriented reader meant for HTTP range requests against packs/

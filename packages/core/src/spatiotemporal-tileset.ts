@@ -506,7 +506,7 @@ export type TileTier = 'raw' | 'summary' | 'auto';
 
 /**
  * Scrub-time LOD degradation — the "motion tier" served while the user drags
- * the timeline (docs/roadmap/scrub-lod-2026-07.md §5–6). Both axes default
+ * the timeline (docs/roadmap/playback-and-loading.md §5–6). Both axes default
  * OFF (the kill switch): with this option absent, {@link
  * SpatiotemporalTileset.setInteractive} stores the interactive bit and
  * changes nothing else, so today's behavior is byte-identical.
@@ -1519,7 +1519,7 @@ export class SpatiotemporalTileset {
       end: time + timeWindow / 2,
     };
 
-    // Scrub-LOD motion tier (docs/roadmap/scrub-lod-2026-07.md): while the
+    // Scrub-LOD motion tier (docs/roadmap/playback-and-loading.md): while the
     // interactive bit is held AND an axis is enabled, SELECTION degrades —
     // a coarser requested zoom (P1) and/or the temporal-LOD pyramid tier
     // (P2). Both resolve to the pass-through values when off, and both are

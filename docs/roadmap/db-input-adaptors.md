@@ -9,13 +9,14 @@ elsewhere:** routes/caching/metadata/error semantics in
 [../spec/stt-serve-protocol.md](../spec/stt-serve-protocol.md); the flag
 surface in [../api/cli-reference.md](../api/cli-reference.md)._
 
-**Status.** Landed on `main` and published (0.3.0 on crates.io + npm,
-2026-07-05): both DB readers, the `stt-serve` binary, the full
+**Status.** Landed on `main` and published to crates.io + npm since 0.3.0
+(2026-07-05): both DB readers, the `stt-serve` binary, the full
 generation-parity layer (shared `build_options.rs`, `encode_single_tile_counted`,
 per-vertex column bridge, cross-source parity suite), and the 2026-07-05 deep
 review (z-guard, DECIMAL props, kind-pinning, serve `--source-srid`, sargable
 SQL — all tests green). Merges the former PostGIS/DuckDB integration docs plus
-the absorbed encoder-seam-lessons and static-vs-DB sibling docs.
+the absorbed encoder-seam-lessons and static-vs-DB sibling docs, and the
+counted-out SedonaDB third-backend proposal (§8).
 
 ---
 
@@ -328,10 +329,14 @@ remains is deliberately unscheduled:
   2026-07-01: the dynamic `/metadata.json` descriptor and the packed manifest
   serve different consumers. Revive when a client genuinely needs one reader
   across both static and live sources.
-- **TLS for the PostGIS reader** — counted out: NoTls/localhost is the
-  documented posture (the error text says so); the deadpool/tokio-postgres
-  stack takes `postgres-native-tls` cleanly whenever a non-localhost
-  deployment actually appears.
+- **TLS for the PostGIS _ingest_ reader** — still counted out: NoTls/localhost
+  is the documented posture and the error text says so ("failed to connect to
+  PostgreSQL (NoTls; localhost / non-TLS only)"), and ingest is a one-shot
+  operator-run command, not an exposed service. The trigger already fired on
+  the _serve_ side and was taken: `stt-serve` honours `sslmode=require` behind
+  the opt-in `serve-postgres-tls` facade feature (native-tls connector; default
+  and `sslmode=disable` keep the NoTls path, so local dev is unchanged). Revive
+  for ingest when someone builds from a managed/remote Postgres.
 - **Serve-side cache: in-process LRU + `--immutable-source` ETag** — counted
   out: an app cache needs a staleness policy the server can't infer (the
   source is a LIVE table — cached tiles silently go stale on writes); the
@@ -340,12 +345,17 @@ remains is deliberately unscheduled:
   e.g. the first static `.duckdb`/read-only snapshot with public traffic.
 - **Zoom-dependent short TTLs** (60 s low zoom / 5 s high — the Sourcepole
   pattern) — revive if a genuinely live dataset ships publicly.
-- **`encode_single_cell` per-unit core for the summary tier / preprocessing
-  operators** (lesson 7 applied to analytics, enabling dynamic aggregated
-  serve) — counted out: sequenced behind the
-  [preprocessing-framework](./preprocessing-framework.md) Plan-IR, which would
-  reshape exactly this seam; building it now means building it twice. Revive
-  with that framework's Phase 1–2, or a concrete dynamic-analytics-serve ask.
+- **`encode_single_cell` per-unit core for the summary tier** (lesson 7 applied
+  to analytics, enabling dynamic aggregated serve) — counted out: the seam
+  lesson says factor the smallest reusable unit _when there are two callers_,
+  and summary aggregation has exactly one
+  (`summary::build_summary_tier`, called once from the `stt-build` binary).
+  Factoring for a hypothetical second caller is how you get an abstraction
+  shaped for nobody. **Revive on the second caller appearing** — concretely,
+  either a request to serve `--summary-tier` tiles dynamically (today
+  `stt-serve` rejects that flag loudly at startup, §3) or an incremental /
+  append rebuild that needs to re-aggregate one cell without re-reading the
+  whole feature set.
 - **Retire the offline encoder globals entirely** — counted out: the offline
   CLI's global setters are fine for a one-shot process (one archive = one
   config); plumbing `EncoderConfig` through the config-agnostic
@@ -357,6 +367,27 @@ remains is deliberately unscheduled:
   measured _faster_ than the file baseline (0.66×), so no performance debt
   forces the change. Stays parked unless profiling ever shows row decode as
   the ingest bottleneck.
+- **A third DB backend — Apache SedonaDB (embedded Rust/DataFusion), ingest +
+  serve** — counted out 2026-07-24. A full design pass produced **zero lines of
+  code**, and two engines already cover every demo and every documented use:
+  PostGIS is the live mutating server table, DuckDB is the zero-server
+  in-process one that scans Parquet/CSV directly. A third engine buys no
+  capability we can name and adds a permanent parity surface — lesson 5 says
+  any spec interpreted in N places drifts, and that cost is paid forever.
+  Facts worth keeping if it revives: the `sedona` 0.3.0 crates **are** on
+  crates.io, so an optional facade feature is publishable (that gate is
+  cleared); the real friction is a dependency skew — sedona 0.3.0 pins
+  arrow `^57` against the workspace's arrow 59, and arrow-57 vs arrow-59
+  `RecordBatch`/`ArrayRef` are distinct, incompatible types — which is
+  containable exactly the way the DuckDB reader already contains its vendored
+  arrow: keep every arrow-57 type inside one module and bridge geometry out as
+  WKB bytes (`ST_AsBinary` → `parse_wkb_geometry`, which is geozero and
+  arrow-version-agnostic). **Revive on a concrete ask for something only
+  SedonaDB reads** — GDAL/OGR vector formats, LAS/LAZ point clouds, or
+  object-store SQL over `s3://`/`gs://` via DataFusion — never on "support a
+  third engine" as a goal in itself. For cluster users the bridge already
+  exists and needs no code: Sedona-on-Spark
+  `df.write.format("geoparquet")` → `stt-build --input`.
 
 Dropped outright (not parked): everything premised on `--streaming-arrow` (the
 flag was removed with the 2026-07 transcode-removal batch — moot), and
@@ -372,7 +403,7 @@ decision stands at WKB ingest / Arrow-IPC tiles).
 | `crates/stt-build/src/db_input_common.rs`                         | Row-decode rules shared by both DB readers (decimal conversion, vertex-coercion accounting, time-format dispatch) — every rule lives once                           |
 | `crates/stt-build/src/build_options.rs`                           | Shared flag→config parsing (`EncoderSettings`, duration/LOD/quantize/vector-group parsers, budget + attribute-filter builders) used by BOTH the CLI and `stt-serve` |
 | `crates/stt-build/src/tiler.rs` `encode_single_tile_counted`      | The reusable single-tile encoder (shared build_tile/encode_tile path; returns the placed-feature count)                                                             |
-| `crates/spatiotemporal-tiles/src/bin/stt-serve/`                  | axum dynamic tile server (moved from the former `crates/stt-serve`): PostGIS (deadpool) + DuckDB (r2d2) backends with full generation parity                        |
+| `crates/spatiotemporal-tiles/src/bin/stt-serve.rs`                | axum dynamic tile server (moved from the former `crates/stt-serve`): PostGIS (deadpool) + DuckDB (r2d2) backends with full generation parity                        |
 | `crates/stt-build/tests/source_parity.rs` + `tests/common/mod.rs` | file ≡ DuckDB ≡ PostgreSQL parity suite (DuckDB in CI, bundled, no spatial extension; Postgres gated on `STT_TEST_PG_DSN`)                                          |
 | `crates/stt-build/examples/duckdb_load_ibtracs.rs`                | build the benchmark `hurricane.duckdb` + baseline Parquet from IBTrACS CSV (bundled engine)                                                                         |
 | `scripts/postgis/*`, `scripts/duckdb/*`                           | setup / load / bench-ingest / bench-serve (DuckDB reuses the backend-agnostic PostGIS serve helpers)                                                                |

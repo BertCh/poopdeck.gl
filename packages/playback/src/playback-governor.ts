@@ -76,7 +76,7 @@ export interface BufferSource {
   /**
    * Optional (the core tileset has it): the interactive/motion bit — true
    * from {@link PlaybackGovernor.beginScrub} until {@link
-   * PlaybackGovernor.endScrub} (scrub-LOD P0, docs/roadmap/scrub-lod-2026-07.md).
+   * PlaybackGovernor.endScrub} (scrub-LOD P0, docs/roadmap/playback-and-loading.md).
    * A loader MAY serve a cheaper preview tier while it is held (coarser
    * spatial zoom and/or a coarser temporal-LOD bucket) and MUST restore its
    * settle tier when it clears. Preview-only by contract: readiness

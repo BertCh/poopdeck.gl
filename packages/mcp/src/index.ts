@@ -5,7 +5,7 @@
 /**
  * `@poopdeck.gl/mcp` — an open, self-hostable MCP (Model Context Protocol)
  * server for spatiotemporal tiles (design record:
- * `docs/roadmap/ai-suite-skills-mcp-2026-07.md`). Most consumers want the
+ * `docs/roadmap/ai-suite.md`). Most consumers want the
  * `stt-mcp` CLI (see the README); this entry point is for embedding the
  * server programmatically (custom transports, tests) or reusing the
  * dataset-catalog helpers directly.

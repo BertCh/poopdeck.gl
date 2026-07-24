@@ -1,5 +1,5 @@
 /**
- * Scrub-time LOD degradation (docs/roadmap/scrub-lod-2026-07.md P0–P2):
+ * Scrub-time LOD degradation (docs/roadmap/playback-and-loading.md P0–P2):
  * the tileset's `setInteractive` motion bit and the selection-only degrade
  * it drives when a `scrubLod` axis is enabled.
  *

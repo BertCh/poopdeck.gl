@@ -4,7 +4,7 @@
 
 /**
  * The PUBLISHED documentation corpus, surfaced to agents talking to the MCP
- * server (design record: `docs/roadmap/ai-suite-skills-mcp-2026-07.md`). The
+ * server (design record: `docs/roadmap/ai-suite.md`). The
  * corpus is exactly `docs/README.md`, every `*.md` DIRECTLY under
  * `docs/{intro,architecture,spec,api,guides}`, plus the machine-readable
  * `docs/spec/*.json` schemas — the prose set the showcase site renders

@@ -1,16 +1,17 @@
-# Playback & loading — clock↔data coupling and multi-source coordination
+# Playback & loading — clock↔data coupling, multi-source coordination, motion tier
 
 > **Status: SHIPPED + COMMITTED.** Single-source clock↔buffer coupling shipped
-> 2026-06-09; multi-source coordination 2026-06-19 (`86bbb0f`). A consolidated
-> decision record — the _why_, not current behavior; shipped behavior + API live
-> in [`stt-player`](../api/stt-player.md),
+> 2026-06-09; multi-source coordination 2026-06-19 (`86bbb0f`); run-ahead
+> fairness + playhead-relative eviction 2026-07-22; scrub-LOD wiring 2026-07-05.
+> A consolidated decision record — the _why_, not current behavior; shipped
+> behavior + API live in [`stt-player`](../api/stt-player.md),
 > [`playback-governor`](../api/playback-governor.md) (incl. the multi-source
-> `addSource`/`removeSource` gate + `SharedRequestScheduler`), and
-> [`time-controller`](../api/time-controller.md). Merges the former
-> `player-buffering.md` + `multi-source-coordination.md`. Inbound link:
-> `docs/api/playback-governor.md` → this file (keep this path). Companion:
-> [`scrub-lod-2026-07.md`](./scrub-lod-2026-07.md) — motion-tier LOD built on
-> this doc's clock↔buffer coupling.
+> `addSource`/`removeSource` gate + `SharedRequestScheduler`),
+> [`time-controller`](../api/time-controller.md), and
+> [`spatiotemporal-tileset`](../api/spatiotemporal-tileset.md) (`scrubLod`).
+> Merges the former `player-buffering.md`, `multi-source-coordination.md`, and
+> `scrub-lod-2026-07.md`. Inbound link: `docs/api/playback-governor.md` → this
+> file (keep this path).
 
 ## 1. The problem
 
@@ -78,8 +79,7 @@ the runway drains, applies resume hysteresis so stall/resume never oscillates,
 and turns seeks/scrubs into preview-vs-commit operations with a post-seek gate.
 The buffer model + readiness API (`getBufferedRunway`, `estimateCost`,
 `estimateTimeToReadyMs`, dual-EWMA throughput) live in `packages/core`; the gate
-
-- auto-speed in `@poopdeck.gl/playback`.
+and auto-speed in `@poopdeck.gl/playback`.
 
 **Frontier hold + degraded creep** (2026-06-10 follow-up): the first governor
 detected stalls only from network events, so between events the playhead could
@@ -207,7 +207,147 @@ required source left). Kill switch: `multiSourceFairness: false` (default
 true). Both `BufferSource` hooks are optional — loaders without them are
 simply not steered.
 
-## 7. Follow-ups — triaged 2026-07-01
+### 6.2 Playhead-relative eviction + the pressure ladder (2026-07-22)
+
+Fairness capped what leaders _fetch_; this decides what the cache _keeps_. The
+loader's over-limit pass used plain LRU, and **the bug that prevents**: under
+memory pressure the runway just prefetched ahead of the playhead is the most
+valuable content in the cache, and plain LRU reclaims exactly that (prefetched =
+least-recently _touched_); the priority path then re-fetches the same bytes
+seconds later — the multi-dataset "flashing tiles" thrash. Media players trim
+relative to the playhead instead (back-buffer first, distant speculation next,
+the imminent window last), so the over-limit pass now builds an ordered plan over
+four tiers, evicting only until back under the size/byte limits:
+
+| Tier | Contents                                        | Order                 |
+| :--- | :---------------------------------------------- | :-------------------- |
+| A    | not in the coverage index (stale viewport/zoom) | LRU, oldest first     |
+| B    | coverage, `behind > max(timeWindow, bucketMs)`  | furthest behind first |
+| C    | coverage, `ahead > max(timeWindow, 2×bucketMs)` | furthest ahead first  |
+| D    | the near-playhead protected window              | LRU (last resort)     |
+
+Distances are signed along the committed playback direction. Never candidates:
+tiles in the current viewport, pinned overview (storyboard) tiles, and **in-flight
+headers** — _the bug that prevents_: an in-flight header deleted out from under
+its batch stays referenced by `deliverTile()` and resurrects as an orphan outside
+the registry, inflating `currentCacheBytes`/`loadedTileCount` forever. With no
+coverage index or no playhead (consumers that never touch the buffer APIs) the
+plan degrades to the original LRU, byte-identical to before.
+
+**Pressure ladder.** Reaching tier C/D means the limits forced the pass into the
+protected runway, so instead of letting fetch→evict→refetch continue, the
+speculative prefetch horizon degrades: `prefetchPressureScale ×= 0.7` on any
+tier-C/D eviction, floored at `0.25`; it recovers `+0.1` only after `5000 ms` of
+wall-clock with no runway eviction, rate-limited to one step per `1000 ms`.
+_The bug that prevents_: recovery stepped per prefetch _plan_ rather than per
+wall-clock interval would race the scale back to 1 in ~2 s under a fast playhead
+(plans run many times per second) and oscillate fetch→evict indefinitely under
+sustained pressure. The scale applies after every horizon cap, so the un-pressured
+path stays byte-identical to the pre-ladder behavior — no floor may raise the
+horizon. `cacheStats.runwayEvictions` counts tier-C/D evictions only: it is the
+observable thrash signal, not a general eviction count.
+
+### 6.3 Which sources gate — `overlayGatesPlayback` defaults TRUE
+
+A composite demo's overlay archives register as **required** governor sources by
+default (`dataset.overlayGatesPlayback ?? true`) on all three renderer paths
+(deck `buildDemoLayers.ts`, `MaplibreRenderer.tsx`, `SttThreeGeoViewer.tsx`).
+Default-true is the conservative reading of §4: an overlay the viewer can see is
+data the clock should wait for, and defaulting it optional silently reintroduces
+the original bug (the playhead racing ahead of data the frame shows). Setting
+`overlayGatesPlayback: false` is the deliberate opt-in to continue-and-degrade
+(§4 option (c)) for decorative overlays — timeless static substrates are excluded
+from governor registration entirely rather than flagged.
+
+## 7. Scrub-time LOD — a motion tier that no application enables
+
+**The idea.** Every mature interactive system keeps two representations: a cheap
+**motion tier** served while the user moves and the expensive **settle tier**
+served once they stop (NLE proxies, I-frame tracks, scaled parent tiles, VTK's
+interactive-vs-still passes). STT had every primitive — `beginScrub`/`scrubTo`/
+`endScrub` with a 200 ms `seekSettleMs` debounce, `'best-available'` parent
+fallback up to `PARENT_FALLBACK_LEVELS = 4`, a pinned z0..z1 overview tier, a
+built-but-unwired `--temporal-lod` pyramid, an EDF scheduler already ranked by
+temporal distance to the playhead. **What was missing was policy and wiring, not
+machinery**: the "we are scrubbing" bit died inside the governor, LOD was purely
+camera-zoom, and a fast drag issued up to ~10 fresh viewport×window selections/sec
+that each flushed the last — the system waited, at full detail, for a target it
+kept invalidating.
+
+**What shipped (2026-07-05, wire-only, no build-format change):** the governor
+exposes `isScrubbing` + `'scrubstart'`/`'scrubend'` → `BufferSource.setInteractive`
+→ tileset `scrubLod`, with a **spatial** axis (`spatialZoomDrop N` through the
+existing `zoomOverride` path, clamped to `[0, PARENT_FALLBACK_LEVELS]` so the
+coarse target is usually a parent the fallback path already fetched — often zero
+new fetches) and a **temporal** axis (`pickTemporalLodForZoom` +
+`getTileIdsInBoundsForTemporalLod`, bucket `B ≈ visibleSpan / timelinePixelWidth`
+per the bounded-resolution rule: you cannot resolve a finer time step than the
+scrubber has pixels). Absent/empty `scrubLod` is the kill switch — `setInteractive`
+becomes stored state and behavior is byte-identical.
+
+**The correctness contract (G7 — held by the shipped code):** the coarse scrub
+tier is **preview-only and never gates**. The scrub hold already suppresses all
+gates while the thumb is down, so the coarse tier only renders in a window where
+nothing gates anyway; on `endScrub → commitSeek` the governor flushes and re-gates
+at the **fine** tier exactly as before — orthogonal to the buffering state machine,
+the property that let it ship kill-switched. Anti-pop discipline, inherited from
+Cesium: keep the coarse tier resident _under_ the fine tier until the fine tile
+lands, because "disappearing detail is worse than late-arriving detail."
+
+**The negative result that keeps it off (G5).** The temporal axis has no
+guaranteed payoff, because the coarse-time aggregator only re-buckets — it does
+**not** reduce feature count. `crates/stt-build/src/tiler.rs`, still true today:
+"The scaffold _re-bucketes only_ — feature-level simplification (collapse 1000
+points per cell into 50 means) is left as a follow-up." A coarse-time tile can
+therefore hold every feature in the cell: coarser in time, **not guaranteed
+cheaper to fetch or decode**. A tier that isn't cheaper cannot make scrubbing
+faster.
+
+**The blunt read (verified 2026-07-24).** `scrubLod` has **zero call sites in the
+showcase across all three renderers** — nothing under `examples/*/src` passes it,
+and `setInteractive` is called only inside the packages. The wire is complete and
+tested end-to-end (`packages/core/test/scrub-lod.test.ts`,
+`packages/three/test/streaming-tile-source.test.ts`, forwarded by the maplibre and
+three sources) and enabled nowhere. **So it is not a feature — it is a tested
+capability with no consumer,** and this record calls it counted out rather than
+"open," with two triggers:
+
+- **Spatial axis** — revive when a heavy demo (NYC taxi ~10 M vertices, AV cockpit
+  LiDAR/surfels, BIXI flowmaps) measurably fails the criteria below in the browser.
+  It is enable-able today at near-zero fetch cost; nobody has measured it, which is
+  why there is no call site.
+- **Temporal axis** — stays counted out until a baked _reducing_ tier exists
+  (extend `generate_lod_level` to keep M4 min/max/first/last per (cell, coarse
+  bucket) for scalar/line data or voxel/LTTB decimation for point clouds, with
+  independently-decodable coarse tiles, plus `stt-validate` checks: coarse ⊆ base,
+  extrema preserved, byte-cost ≪ base). Without that, G5 says enabling it buys
+  nothing.
+
+If neither trigger fires by the next format revision, delete the wiring rather
+than carry a dark feature.
+
+**How to decide it (the criteria, unmet).** Reuse the QoE harness (`getQoeStats`,
+`__sttProbe.playback`) plus scrub counters so "responsive" is a number, not a
+vibe: **scrub time-to-first-pixel** (`scrubTo` → rendered frame reflecting the new
+instant; target < one 60 Hz frame from a resident coarse tile); **fresh-frame
+fraction** (% of drag frames showing data for the current instant, any tier, vs
+stale/blank); **bytes-during-scrub** (should _drop_ vs the base-tier churn
+baseline — the efficiency proof); **settle-to-full-detail latency** (`endScrub` →
+fine tier resident); **pop/oscillation count** (LOD-tier switches per scrub;
+hysteresis should keep it ~1–2); **no single-dataset regression** (`scrubLod` off
+is byte- and behavior-identical — the rollback drill).
+
+Resolved while wiring it, and still the defaults: spatial-first (temporal inert
+until enabled _and_ the archive was built with `--temporal-lod`); binary
+`isScrubbing` rather than velocity-scaled degrade; policy lives as
+`ScrubLodOptions` on the tileset (`packages/core`) rather than as a pure function
+in the playback package; default OFF. Counted out with it: scrub-velocity
+prefetch (ATLAS-style), a predictive LOD budget controller (Funkhouser–Séquin:
+estimate cost _before_ drawing — pure feedback control "will tend to overshoot and
+oscillate, especially on an abrupt change in detail"), and cross-fade/hysteresis
+tuning — all P4 polish on a feature with no consumer, so none of it is scheduled.
+
+## 8. Follow-ups — triaged 2026-07-01
 
 **The one open item — multi-source browser-verify (user-run):** (1) a
 multi-source composite (radar / AV cockpit) plays with all REQUIRED sources
@@ -217,21 +357,32 @@ network the buffered strip shows the gating source held, recovery smooth (no
 catch-up lurch); (4) rollback drill — `configureSharedScheduler({enabled:false})`
 reverts loading to the per-instance path with no gate behavior change.
 
-Counted out: **maplibre governor wiring** (stays app-wired; trigger = maplibre
-becoming a supported _player_ surface, not just a renderer) · **player-level
-"exposure"/trail-length knob** (a feature ask touching runway-horizon math —
-build only against a concrete UX request) · **StrictMode remount re-registration**
-(mitigated via the one-shot `tilesetRef` handover in `use-playback.ts`; residual
-ordering is transient, checked in the browser-verify above). Done: **layer
-teardown on stream-toggle-off** (`AvDeck.tsx` unregisters governed streams,
-idempotent — a toggled-off required LiDAR can't strand the clock) and the
-**runway=0 gating-track nub** (3px clamped minimum in `PlaybackControls.tsx`,
-fixed 2026-07-01).
+Counted out: **player-level "exposure"/trail-length knob** (a feature ask touching
+runway-horizon math — build only against a concrete UX request) · **StrictMode
+remount re-registration** (mitigated via the one-shot `tilesetRef` handover in
+`packages/react/src/hooks/use-playback.ts`; residual ordering is transient,
+checked in the browser-verify above).
 
-## 8. Sources
+Trigger FIRED — **maplibre governor wiring** was counted out with the trigger
+"maplibre becomes a supported _player_ surface, not just a renderer." The maplibre
+custom-layer parity work made it one, so it is now wired the same way as deck:
+`MaplibreRenderer.tsx` registers every mounted layer's tileset as a governor
+source (primary `required: true`, overlays per `overlayGatesPlayback ?? true`) and
+unregisters on teardown.
+
+Done: **layer teardown on stream-toggle-off** (`AvDeck.tsx` unregisters governed
+streams, idempotent — a toggled-off required LiDAR can't strand the clock) and the
+**runway=0 gating-track nub** (3 px clamped minimum in
+`packages/react/src/components/PlaybackControls.tsx`, fixed 2026-07-01) — without
+it the one source actually HOLDING the clock is the only one with no marker.
+
+## 9. Sources
 
 MSE/W3C: public-html-media 2014Jul/0032, MSE 2, media-source#160, Media WG minutes
 2019-09-19. ABR/fairness: BOLA (arXiv 1601.06748) + ToN PDF, QoE-Fair DASH (ACM TOMM
 2020), Future Internet 14(5)152, ASTESJ v06i01p21, US10104413B2 (WFQ). Schedulers:
 loaders.gl RequestScheduler, Cesium Request + RequestScheduler src. Clock sync:
-GStreamer clocks + latency, DASH-IF Timing Model.
+GStreamer clocks + latency, DASH-IF Timing Model. Motion tier: HLS RFC 8216
+`EXT-X-I-FRAMES-ONLY`, Cesium selection algorithm ("Ancestor Meets SSE"/"Kicking"),
+M4 (Jugel et al., PVLDB 2014), LTTB (Steinarsson 2013), Funkhouser & Séquin
+(SIGGRAPH 93), VTK `SetDesiredUpdateRate`, ATLAS (VAST 2008).

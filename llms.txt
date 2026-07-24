@@ -38,7 +38,7 @@
 - [AI Suite guide](docs/guides/ai-suite.md): what the suite is (MCP + Agent Skills), install the `poopdeck-ai` plugin, the skills, worked flows, and the security model.
 - [MCP server reference](docs/api/stt-mcp.md): `@poopdeck.gl/mcp` (`stt-mcp`) — dataset discovery, analysis, `@deck.gl/json` map composition, gated build/validate; tools, resources, `--allow-cli`.
 - [Plugin](poopdeck-ai/README.md): the `poopdeck-ai` Claude Code plugin bundling the MCP server + Agent Skills.
-- [Skills + MCP design](docs/roadmap/ai-suite-skills-mcp-2026-07.md): the state-of-the-art analysis and the suite architecture.
+- [Skills + MCP design record](docs/roadmap/ai-suite.md): the MCP-vs-Skills complementarity verdict, the security model, and the as-built tool/skill inventory.
 
 ## Optional
 - [Data generation](docs/guides/data-generation.md): the reference `stt-generate` datasets.

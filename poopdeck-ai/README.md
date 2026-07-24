@@ -14,7 +14,7 @@ plugin so a single install wires both.
 The arrangement follows Cloudflare's `wrangler` skill, which routes between its
 MCP server and its CLI: here the `stt-*` Rust CLIs are the CLI, the MCP server is
 the live surface, and the skills route between them. Design record:
-[`../docs/roadmap/ai-suite-skills-mcp-2026-07.md`](../docs/roadmap/ai-suite-skills-mcp-2026-07.md).
+[`../docs/roadmap/ai-suite.md`](../docs/roadmap/ai-suite.md).
 
 ## Install
 

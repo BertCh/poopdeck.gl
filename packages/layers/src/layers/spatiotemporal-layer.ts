@@ -194,7 +194,7 @@ export interface _SpatioTemporalLayerProps {
   tier?: 'auto' | 'summary' | 'raw';
 
   /**
-   * Scrub-time LOD degradation (docs/roadmap/scrub-lod-2026-07.md): while
+   * Scrub-time LOD degradation (docs/roadmap/playback-and-loading.md): while
    * the user drags the timeline (the PlaybackGovernor's beginScrub…endScrub
    * bracket, broadcast to the tileset via `setInteractive`), tile SELECTION
    * may degrade to a cheaper "motion tier":
@@ -401,7 +401,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   tier: 'auto',
 
   // Scrub-time LOD degradation: off (the kill switch) until browser-verified
-  // on the heavy demos — see docs/roadmap/scrub-lod-2026-07.md §8.5.
+  // on the heavy demos — see docs/roadmap/playback-and-loading.md §8.5.
   scrubLod: { type: 'object', value: null, optional: true, compare: true },
 
   // Parent-fallback fetch policy; 'no-overlap' for full-duplication archives

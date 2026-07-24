@@ -6,7 +6,7 @@
  * `createSttMcpServer()` — builds the `@poopdeck.gl/mcp` `McpServer`: the
  * DISCOVERY tools always registered, and the EXECUTION tools registered only
  * when `config.allowCli` is set (design record:
- * `docs/roadmap/ai-suite-skills-mcp-2026-07.md`). A few consolidated tools
+ * `docs/roadmap/ai-suite.md`). A few consolidated tools
  * with rich Zod schemas rather than one tool per manifest field.
  */
 import {
