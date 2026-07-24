@@ -1,4 +1,5 @@
 import React from 'react';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Inside a tile" figure: the layer frame (aligned Arrow IPC streams) and the
@@ -229,10 +230,9 @@ const TileAnatomy: React.FC = () => (
         <span className="eyebrow" style={{ fontSize: 9 }}>
           coordinates
         </span>
-        <svg
+        <FigureSvg
           viewBox="0 0 180 90"
           className="w-full mt-2"
-          role="img"
           aria-label="Diagram: a point snapping to one world-anchored integer grid shared by every tile."
         >
           {Array.from({ length: 9 }, (_, i) => (
@@ -265,7 +265,7 @@ const TileAnatomy: React.FC = () => (
             markerEnd="none"
           />
           <circle cx="90" cy="46" r="3" fill="var(--accent)" />
-        </svg>
+        </FigureSvg>
         <p
           className="font-mono text-[10px] mt-2"
           style={{ color: 'var(--ink-700)' }}
@@ -302,10 +302,9 @@ const TileAnatomy: React.FC = () => (
         <span className="eyebrow" style={{ fontSize: 9 }}>
           vertex times
         </span>
-        <svg
+        <FigureSvg
           viewBox="0 0 180 90"
           className="w-full mt-2"
-          role="img"
           aria-label="Diagram: vertex timestamps stored as small step counts from a per-tile origin."
         >
           <line
@@ -357,7 +356,7 @@ const TileAnatomy: React.FC = () => (
           >
             step = 250 ms
           </text>
-        </svg>
+        </FigureSvg>
         <p
           className="font-mono text-[10px] mt-2"
           style={{ color: 'var(--ink-700)' }}
@@ -390,10 +389,9 @@ const TileAnatomy: React.FC = () => (
         <span className="eyebrow" style={{ fontSize: 9 }}>
           attributes
         </span>
-        <svg
+        <FigureSvg
           viewBox="0 0 180 90"
           className="w-full mt-2"
-          role="img"
           aria-label="Diagram: a float value range mapped onto 65536 integer levels."
         >
           <rect
@@ -446,7 +444,7 @@ const TileAnatomy: React.FC = () => (
             65 536 levels across the range
           </text>
           <circle cx="104" cy="31" r="3.5" fill="var(--accent)" />
-        </svg>
+        </FigureSvg>
         <p
           className="font-mono text-[10px] mt-2"
           style={{ color: 'var(--ink-700)' }}

@@ -1,6 +1,7 @@
 import React from 'react';
 import SpaceTimeCurve from './SpaceTimeCurve';
 import { CubeInLineExplorer } from '../demo/CubeInLine';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Inside the archive" figures: the three-file layout, the cold-start
@@ -541,10 +542,9 @@ const PackDiagram: React.FC = () => (
   <Card>
     <SubHead>Packs — dedup by content, fetch by range</SubHead>
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 244"
         className="w-full min-w-[720px]"
-        role="img"
         aria-label="Diagram: directory entries point into a pack of zstd blobs; two identical time buckets share one blob, and adjacent blobs are fetched with a single coalesced HTTP range request."
       >
         <text x="60" y="26" fontSize="11" fill="var(--ink-500)">
@@ -676,7 +676,7 @@ const PackDiagram: React.FC = () => (
         >
           one coalesced HTTP range request (gaps ≤ 2 MiB are fused)
         </text>
-      </svg>
+      </FigureSvg>
     </div>
   </Card>
 );

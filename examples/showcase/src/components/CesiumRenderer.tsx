@@ -1,6 +1,6 @@
 // Cesium renderer for the showcase — mounts a CesiumJS globe and streams an
 // STT dataset through @poopdeck.gl/cesium's layer catalog (point / path /
-// trips / trip-heads / arc via buildCesiumLayer). Reachable at
+// trips / tripHeads / arc via buildCesiumLayer). Reachable at
 // /cesium/:datasetId.
 //
 // Perf design (parity with the deck backend, which draws a flat MapView):

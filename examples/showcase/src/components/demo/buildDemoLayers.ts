@@ -241,6 +241,20 @@ const STORM4D_CLOUDTOP_COLORS: Record<
 const STORM4D_CANOPY_PARAMETERS = { depthWriteEnabled: false };
 
 /**
+ * Vertical thickness (RAW metres, before STORM4D_ELEVATION_SCALE) of each
+ * cloud-top isoband shell — `AnimatedPolygonLayer.elevationThickness`, so the
+ * band spans `[top_alt_m − this, top_alt_m]` instead of rising from the ground.
+ *
+ * Sized against the band SPACING, not the scene: `goes_cloudtop.py`'s
+ * piecewise BT→height curve puts the warm bands ~1,540 m apart and the three
+ * coldest (215/205/195 K band-mids) only ~500 m apart, so anything at or above
+ * ~500 m would fuse the anvil core into one block. 300 m keeps every shell
+ * separate while still catching enough light on its walls to read as a plate
+ * rather than a decal (×4 exaggeration ⇒ ~1.2 km on screen).
+ */
+const STORM4D_CANOPY_SHELL_M = 300;
+
+/**
  * Storm-report fills by LSR `kind` (§9.1). Tornado reports pop red against
  * the dark map; hail ice-blue, wind gusts amber, damage orange, flood blue.
  */
@@ -637,7 +651,7 @@ export function buildDemoLayers({
           }),
         }),
       ];
-    case 'point-cloud':
+    case 'pointCloud':
       // Colour comes from the tile's interleaved `point_rgba` vector column
       // (the layer's `colorVectorColumn` default), bound zero-copy and taking
       // precedence over every other colour path — so no fillColor/colorMapping
@@ -673,7 +687,7 @@ export function buildDemoLayers({
           jointRounded: selectedDataset.jointRounded ?? false,
         }),
       ];
-    case 'trip-heads':
+    case 'tripHeads':
       // A smooth moving point at each active trip's head via AnimatedTripHeadsLayer
       // (stock ScatterplotLayer + CPU per-frame position interpolation) — fp64,
       // no jitter, no custom GLSL.
@@ -1015,7 +1029,7 @@ export function buildDemoLayers({
       }
       return polygonLayers;
     }
-    case 'summary': {
+    case 'h3Summary': {
       // If the dataset declares a toggle (e.g. pickup vs dropoff), the
       // active option overrides the base summary styling props. Otherwise
       // fall back to the dataset's single-weight settings.
@@ -1161,7 +1175,7 @@ export function buildDemoLayers({
           fadeInDuration: selectedDataset.fadeInDuration ?? 300,
         }),
       ];
-    case 'quadbin-summary': {
+    case 'quadbinSummary': {
       // CARTO Quadbin square-cell analog of the H3 summary tier. Mirrors the
       // `summary` case: the layer clamps to the tier's zoom band and reads the
       // aggregated `count` (or a toggle weight) per cell. Quadbin cells carry
@@ -1588,10 +1602,18 @@ export function buildDemoLayers({
         );
       }
 
-      // 2. GOES C13 cloud-top "anvil canopy" — BT isobands extruded to their
+      // 2. GOES C13 cloud-top "anvil canopy" — BT isobands FLOATING at their
       // standard-atmosphere height (`top_alt_m`), very translucent so the
       // volume reads through the haze. Successive 5-min scans cross-dissolve
       // (the generator pads `end_timestamp`; the fades ramp the overlap).
+      //
+      // `elevationThickness` is what keeps the canopy aloft: a plain extrusion
+      // is a PRISM rising out of the ground, so every isoband hung a curtain
+      // from the basemap up to its 2–12 km top and the anvil read as a solid
+      // wall of glass wrapped around the storm. The bands describe a SURFACE
+      // (the height where the cloud top radiates), so each one now floats as a
+      // thin shell hugging its own top — nested plates terracing up through the
+      // troposphere, with the gate volume visible between them.
       if (selectedDataset.cloudTopUrl) {
         layers.push(
           new AnimatedPolygonLayer({
@@ -1605,10 +1627,11 @@ export function buildDemoLayers({
             colorMappingDefault: [140, 160, 190, 24],
             extruded: true,
             elevation: 'top_alt_m',
+            elevationThickness: STORM4D_CANOPY_SHELL_M,
             elevationScale: STORM4D_ELEVATION_SCALE,
             wireframe: false,
             stroked: false,
-            // Translucent extruded walls → haze, not z-fighting (see const).
+            // Translucent shell walls → haze, not z-fighting (see const).
             parameters: STORM4D_CANOPY_PARAMETERS,
             fadeInDuration: 150000,
             fadeOutDuration: 150000,

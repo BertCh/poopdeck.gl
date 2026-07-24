@@ -9,7 +9,7 @@
  * playback-governor `registry`, composed declaratively as r3f layer components
  * inside `<SttCanvas>`. This mirrors how `AvThreeViewer` mirrors `buildDemoLayers`'
  * `case 'av'` — here we mirror the GEO cases (`point` / `path` / `trips` / `arc` /
- * `column` / `summary` / `quadbin-summary` / `flowmap` / `polygon`).
+ * `column` / `h3Summary` / `quadbinSummary` / `flowmap` / `polygon`).
  *
  * ── Two projection paths (chosen per dataset) ───────────────────────────────
  *   • FLAT demos → `MercatorProjection`: a web-mercator world where 1:1 camera-sync
@@ -47,6 +47,7 @@ import {
   type BasemapLike,
   type GeoAnchor,
   type Projection,
+  threeBackend,
   type RGBA,
   type SttSourceRegistry,
 } from '@poopdeck.gl/three';
@@ -65,7 +66,8 @@ import {
   SttFlowCorridorLayer,
   SttPolygonLayer,
 } from '@poopdeck.gl/three/r3f';
-import type { Dataset, DatasetType } from '../../types';
+import { renderableDatasetTypes } from '../../lib/backendSupport';
+import type { Dataset } from '../../types';
 import { useReducedMotion } from '../../lib/reducedMotion';
 import Legend from '../Legend';
 
@@ -81,22 +83,17 @@ const BASEMAP_STYLE =
   'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 /**
- * Dataset types the Three geo path can render today (a subset of `buildDemoLayers`
- * that has a `@poopdeck.gl/three/r3f` layer). `heatmap` (no Three layer), `radar`
- * (deck composite) and `av` (own {@link AvThreeViewer}) are excluded.
+ * Dataset types the Three geo path can render today — READ from the
+ * `threeBackend` descriptor rather than hand-listed, so a kind three gains or
+ * loses moves this set without a showcase edit. `heatmap` and `pointCloud` drop
+ * out on their own (three declares both unsupported, degrading to `point`),
+ * which is what keeps them off the toggle: this viewer has no branch for
+ * either. The one composite wired here is `flowmap-bundled` (it needs the
+ * `flowmap` kind and degrades to the unbundled corridor); `av` has its own
+ * {@link AvThreeViewer}, and `radar` / `weather` / `storm4d` stay on deck.
  */
-const THREE_GEO_TYPES = new Set<DatasetType>([
-  'point',
-  'trip-heads',
-  'path',
-  'trips',
-  'arc',
-  'column',
-  'summary',
-  'quadbin-summary',
-  'flowmap',
+const THREE_GEO_TYPES = renderableDatasetTypes(threeBackend, [
   'flowmap-bundled',
-  'polygon',
 ]);
 
 /**
@@ -191,7 +188,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
         />
       );
     }
-    case 'trip-heads':
+    case 'tripHeads':
       return (
         <SttTripHeadsLayer
           id={ds.id}
@@ -308,8 +305,8 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
           opacity={ds.opacity ?? 0.9}
         />
       );
-    case 'summary':
-    case 'quadbin-summary': {
+    case 'h3Summary':
+    case 'quadbinSummary': {
       // Use the first weight-toggle option (the default view) if the demo declares
       // one, else its single-weight settings.
       const toggle = ds.summaryToggleWeights?.[0];
@@ -328,7 +325,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
         coverage: ds.summaryCoverage ?? 0.92,
         opacity: 0.85,
       };
-      return ds.type === 'summary' ? (
+      return ds.type === 'h3Summary' ? (
         <SttH3Layer {...common} />
       ) : (
         <SttQuadbinLayer {...common} />

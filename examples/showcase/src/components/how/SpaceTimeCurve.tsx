@@ -1,5 +1,6 @@
 import React from 'react';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * The space-time cube figure: a tile blob's address has three axes — (x, y)
@@ -531,11 +532,10 @@ const Cube: React.FC<{
   const [, ty1] = iso(-0.5, N - 0.5, T - 0.7);
 
   return (
-    <svg
+    <FigureSvg
       viewBox="0 0 260 284"
       width="272"
       height="297"
-      role="img"
       aria-label={`Diagram: the ${order} walk threading a 4 by 4 by 4 space-time cube of tile blobs, with the ${INTERACTIONS[gesture].label} gesture lighting up the tiles it reads.`}
     >
       {gridLines}
@@ -637,7 +637,7 @@ const Cube: React.FC<{
       >
         the map plane (x, y)
       </text>
-    </svg>
+    </FigureSvg>
   );
 };
 
@@ -654,10 +654,9 @@ const ByteStrip: React.FC<{
   const PITCH = 13;
   const W = CELLS * PITCH + 2;
   return (
-    <svg
+    <FigureSvg
       viewBox={`0 0 ${W} 36`}
       className="w-full min-w-[540px]"
-      role="img"
       aria-label={`Diagram: the same 64 blobs laid out as one byte string in ${order} order; the ${INTERACTIONS[gesture].label} gesture's reads so far group into ${runs.length} contiguous ${runs.length === 1 ? 'run' : 'runs'}.`}
     >
       {cells.map((c, i) => {
@@ -708,7 +707,7 @@ const ByteStrip: React.FC<{
       >
         end of pack
       </text>
-    </svg>
+    </FigureSvg>
   );
 };
 

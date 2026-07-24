@@ -67,6 +67,8 @@ export interface FakePolygonTileOptions {
   ringIndices?: number[];
   /** Coordinate-quantization step `[sx, sy]` in degrees, as a quantized archive reports. */
   coordQuantStep?: [number, number];
+  /** Per-FEATURE numeric columns (elevation, filter values, …), by column name. */
+  numericProps?: Record<string, number[]>;
 }
 
 export function makePolygonTile(opts: FakePolygonTileOptions): Tile {
@@ -102,7 +104,12 @@ export function makePolygonTile(opts: FakePolygonTileOptions): Tile {
     startTimes: new Float32Array(opts.startTimes),
     endTimes: new Float32Array(opts.endTimes),
     timeOffset: opts.timeOffset,
-    numericProps: {},
+    numericProps: Object.fromEntries(
+      Object.entries(opts.numericProps ?? {}).map(([k, v]) => [
+        k,
+        new Float32Array(v),
+      ]),
+    ),
     categoricalProps: {},
   };
 

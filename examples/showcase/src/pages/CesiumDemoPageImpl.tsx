@@ -1,8 +1,8 @@
 // Cesium demo page (/cesium/:datasetId) — renders an STT dataset on a
 // CesiumJS WGS84 globe via @poopdeck.gl/cesium, driven by the shared playback
-// clock. Covers the backend's movement catalog (point / path / trips /
-// trip-heads / arc — see CESIUM_SUPPORTED_TYPES); other dataset types
-// redirect home until their Cesium layer exists.
+// clock. Covers whatever the cesiumBackend descriptor declares (see
+// CESIUM_SUPPORTED_TYPES, which reads it); other dataset types redirect home
+// until their Cesium layer exists.
 //
 // The transport is the shared default player (@poopdeck.gl/react's
 // PlaybackControls + keyboard map) over the globe — the same one every other
@@ -25,7 +25,7 @@ export default function CesiumDemoPage() {
   // (Space / arrows / speed). Inert while dataset?.timeRange is undefined.
   usePlaybackHotkeys(playback, dataset?.timeRange);
 
-  if (!dataset || !CESIUM_SUPPORTED_TYPES.includes(dataset.type)) {
+  if (!dataset || !CESIUM_SUPPORTED_TYPES.has(dataset.type)) {
     return <Navigate to="/" replace />;
   }
 

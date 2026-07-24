@@ -17,6 +17,7 @@ import {
   panHit,
   simulateQuery,
 } from '../../lib/spaceCurve';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Laying the space-time cube down in a line" — for a *real* dataset.
@@ -177,11 +178,10 @@ const Strip: React.FC<{
   const pitch = 960 / cols;
   const H = 46;
   return (
-    <svg
+    <FigureSvg
       viewBox="0 0 960 66"
       className="w-full"
       style={{ display: 'block' }}
-      role="img"
       aria-label="The cube laid down in one line, columns weighted by data density; highlighted columns are the ones the query needs."
     >
       {Array.from({ length: cols }, (_, i) => {
@@ -225,7 +225,7 @@ const Strip: React.FC<{
       <text x="960" y="65" fontSize="9" textAnchor="end" fill="var(--ink-400)">
         end of pack
       </text>
-    </svg>
+    </FigureSvg>
   );
 };
 
@@ -266,12 +266,11 @@ const Heatmap: React.FC<{
   const W = gridW + MARG + 8;
   const H = gridH + MARG + 16;
   return (
-    <svg
+    <FigureSvg
       viewBox={`0 0 ${W} ${H}`}
       width={W}
       height={H}
       style={{ maxWidth: '100%', height: 'auto', display: 'block' }}
-      role="img"
       aria-label={`Density of ${profile.label} across space (Hilbert order, horizontal) and time (vertical).`}
     >
       {/* space marginal (top) */}
@@ -339,7 +338,7 @@ const Heatmap: React.FC<{
       >
         time ↓
       </text>
-    </svg>
+    </FigureSvg>
   );
 };
 

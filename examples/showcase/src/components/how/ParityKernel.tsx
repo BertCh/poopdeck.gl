@@ -1,4 +1,5 @@
 import React from 'react';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "One formula, every engine" figure — the clearest evidence of the
@@ -110,10 +111,9 @@ const ParityKernel: React.FC = () => (
     </h4>
 
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 460 270"
         className="w-full min-w-[420px] mt-2"
-        role="img"
         aria-label="Diagram: the time-filter alpha kernel lives in one framework-free core module; a shader codegen emits its single expression AST into deck.gl GLSL, MapLibre GLSL, Three.js TSL, and Cesium GLSL, and shared parity tests pin all four numerically equal."
       >
         <defs>
@@ -228,7 +228,7 @@ const ParityKernel: React.FC = () => (
           core/test/shader-codegen.test.ts — evalExpr == oracle over 2000 random
           envs
         </text>
-      </svg>
+      </FigureSvg>
     </div>
 
     <p

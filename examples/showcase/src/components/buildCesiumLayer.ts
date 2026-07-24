@@ -1,7 +1,7 @@
 // Dataset → @poopdeck.gl/cesium layer factory — the Cesium mirror of
 // buildDemoLayers' type dispatch, kept to the kinds the Cesium backend
-// actually supports (see packages/cesium/src/backend-descriptor.ts):
-// point / path / trips / trip-heads / arc. Styling fields map 1:1 onto the
+// actually supports, which it declares in `cesiumBackend` (see
+// packages/cesium/src/backend-descriptor.ts). Styling fields map 1:1 onto the
 // same Dataset vocabulary deck reads (colorProperty/colorMapping, pathColor,
 // tripColor/tripGradient/trailLength, headColor, arcSourceColor/arcHeight) so
 // a dataset looks the same family of colours on either backend.
@@ -17,11 +17,13 @@ import {
   CesiumTripsLayer,
   CesiumTripHeadsLayer,
   CesiumArcLayer,
+  cesiumBackend,
   type FeatureColorMode,
 } from '@poopdeck.gl/cesium';
 import type { Tile } from '@poopdeck.gl/core';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
-import type { ColorRGBA, Dataset, DatasetType } from '../types';
+import { renderableDatasetTypes } from '../lib/backendSupport';
+import type { ColorRGBA, Dataset } from '../types';
 
 /** The SttRenderNode slice CesiumRenderer drives. */
 export interface CesiumDemoLayer {
@@ -31,14 +33,13 @@ export interface CesiumDemoLayer {
   dispose(): void;
 }
 
-/** Dataset types the Cesium demo route can render today. */
-export const CESIUM_SUPPORTED_TYPES: readonly DatasetType[] = [
-  'point',
-  'path',
-  'trips',
-  'trip-heads',
-  'arc',
-];
+/**
+ * Dataset types the Cesium demo route can render today — READ from the
+ * `cesiumBackend` descriptor, so retiring or adding a Cesium layer class moves
+ * this set without a showcase edit. No showcase-local composite is wired here
+ * (the Cesium route mounts exactly one archive), hence no `locals`.
+ */
+export const CESIUM_SUPPORTED_TYPES = renderableDatasetTypes(cesiumBackend);
 
 const rgba = (c: ColorRGBA | undefined, fallback: ColorRGBA): ColorRGBA =>
   c ?? fallback;
@@ -130,7 +131,7 @@ export function buildCesiumLayer(
       });
     }
 
-    case 'trip-heads':
+    case 'tripHeads':
       return new CesiumTripHeadsLayer(scene, {
         id,
         color: {
@@ -166,7 +167,7 @@ export function buildCesiumLayer(
  * auto-widen to `2 × trailLength`.
  */
 export function cesiumLoaderTimeWindow(dataset: Dataset): number {
-  if (dataset.type === 'trips' || dataset.type === 'trip-heads') {
+  if (dataset.type === 'trips' || dataset.type === 'tripHeads') {
     return Math.max(dataset.timeWindow, 2 * (dataset.trailLength ?? 60_000));
   }
   return dataset.timeWindow;

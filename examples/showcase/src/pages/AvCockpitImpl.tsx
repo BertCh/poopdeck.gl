@@ -17,7 +17,7 @@
  * Missing streams simply hide their panel; a missing/blank bundle shows a
  * loading or "scene not generated yet" state instead of crashing.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { usePlayback } from '@poopdeck.gl/react';
 import { datasets, getDatasetById } from '../datasets';
@@ -213,6 +213,9 @@ const AvCockpit: React.FC = () => {
   // with --colorize / --surfel); picking a mode swaps the active dataset to that
   // bundle. The route suffix (`/drive/<id>-splat`) still seeds the default so old
   // deep-links land on the same visual; an explicit `?mode=` overrides it.
+  // One radio GROUP name per mounted cockpit — native radios group by name,
+  // so a hardcoded one would fuse two mounted cockpits into one group.
+  const renderModeGroup = useId();
   const modeParam = searchParams.get('mode') as LidarRenderMode | null;
   const lidarRenderMode: LidarRenderMode =
     modeParam && renderModes.includes(modeParam) ? modeParam : routeMode;
@@ -869,21 +872,28 @@ const AvCockpit: React.FC = () => {
                   {renderModes.map((m) => {
                     const active = m === lidarRenderMode;
                     return (
-                      <button
+                      // A REAL radio, not a button with role="radio": the
+                      // native input carries the checked state and arrow-key
+                      // traversal of the group, which the button faked with
+                      // aria-checked and never wired to a key handler.
+                      <label
                         key={m}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        onClick={() => setLidarRenderMode(m)}
                         title={`Render the LIDAR cloud as ${RENDER_MODE_LABELS[m].toLowerCase()}`}
-                        className={`px-2.5 py-1 text-xs transition-colors ${
+                        className={`px-2.5 py-1 text-xs transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-cyan-300/70 ${
                           active
                             ? 'bg-cyan-400/20 text-cyan-100'
                             : 'text-slate-300 hover:bg-white/5'
                         }`}
                       >
+                        <input
+                          type="radio"
+                          name={renderModeGroup}
+                          className="sr-only"
+                          checked={active}
+                          onChange={() => setLidarRenderMode(m)}
+                        />
                         {RENDER_MODE_LABELS[m]}
-                      </button>
+                      </label>
                     );
                   })}
                 </div>

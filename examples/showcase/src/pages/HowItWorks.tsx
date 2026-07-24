@@ -194,24 +194,15 @@ const HowItWorks: React.FC = () => {
 
         <nav aria-label="On this page" className="mt-6 flex flex-wrap gap-1.5">
           {SECTIONS.map((s) => (
+            // Accent on hover as CSS, not onMouseOver/onMouseOut writing
+            // `style`: these section chips are the keyboard route through the
+            // page, and the JS version highlighted nothing on Tab.
             <a
               key={s.id}
               href={`#${s.id}`}
               onClick={jump(s.id)}
-              className="rounded-full px-3 py-1 text-[11px] font-medium transition-colors"
-              style={{
-                border: '1px solid var(--hairline)',
-                color: 'var(--ink-500)',
-                background: 'var(--surface)',
-              }}
-              onMouseOver={(e) => {
-                e.currentTarget.style.color = 'var(--accent)';
-                e.currentTarget.style.borderColor = 'var(--accent)';
-              }}
-              onMouseOut={(e) => {
-                e.currentTarget.style.color = 'var(--ink-500)';
-                e.currentTarget.style.borderColor = 'var(--hairline)';
-              }}
+              className="rounded-full px-3 py-1 text-[11px] font-medium transition-colors border [color:var(--ink-500)] [border-color:var(--hairline)] hover:[color:var(--accent)] hover:[border-color:var(--accent)] focus-visible:[color:var(--accent)] focus-visible:[border-color:var(--accent)]"
+              style={{ background: 'var(--surface)' }}
             >
               {s.n} · {s.toc}
             </a>

@@ -336,6 +336,42 @@ property (memory guard), so re-builds of the same input emit identical hints.
 The block is additive — readers that don't know it are unaffected. Wire shape:
 [`manifest.schema.json`](../spec/manifest.schema.json).
 
+### STAC Item (discovery)
+
+| Flag     | Default | Description                                                                                       |
+| -------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `--stac` | off     | Also write a [STAC](https://stacspec.org/) Item to `<out-dir>/stac.json`, beside `manifest.json`. |
+
+STAC catalogs assets; it does not constrain their format, so an STT dataset
+needs no standards negotiation to be discoverable by an existing catalog,
+STAC browser or `pystac` reader — they read the Item, then follow the asset
+href into the normal reader flow.
+
+Everything is derived from the finished manifest, so the Item is reproducible
+from a published dataset and never disagrees with it:
+
+| Item field                                       | Source                                                |
+| ------------------------------------------------ | ----------------------------------------------------- |
+| `id`                                             | `metadata.name`, falling back to the output dir       |
+| `bbox`, `geometry` (closed 5-point polygon ring) | `metadata.bounds`                                     |
+| `properties.start_datetime` / `end_datetime`     | `metadata.time_range` (RFC 3339, UTC, ms)             |
+| `properties.stt:*`                               | zoom range, tile/feature counts, layers, capabilities |
+| `assets.stt.href`                                | `./manifest.json` — **relative**                      |
+
+`properties.datetime` is present and `null` (the STAC encoding for a range
+rather than an instant), and `links` is an empty array a publisher fills in
+with `self`/`parent` when the Item is placed in a catalog. The asset href is
+relative so the Item stays correct wherever the directory is published; STAC
+resolves it against the Item's own location.
+
+```bash
+stt-build -i earthquakes.parquet -o earthquakes.stt \
+  --time-field time --time-format unix-ms \
+  --name earthquakes --stac
+```
+
+Full profile rationale: [packed-format spec §10.3](../spec/stt-packed-format.md#103-stac-profile).
+
 ### Metadata
 
 | Flag                         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -689,6 +725,32 @@ aggregated tier → `--summary-tier`).
 | `-o, --output <FILE>` | Write the report to a file instead of stdout                                                                                                                                                                                       |
 | `--strict`            | Exit non-zero **after printing** if any Warning-or-worse finding exists — the CI-gate analog of `diff --fail-on-growth`. Info findings never trip it.                                                                              |
 
+### `stt-optimize export`
+
+Exports a built tileset back out as GeoParquet — the whole archive, or a
+bbox / time-range subset. One export is always ONE zoom level: the same
+feature is re-tiled at every level with a different simplification tolerance,
+so mixing levels would emit the same feature several times at several
+fidelities.
+
+```bash
+stt-optimize export --archive my-dataset/ -o my-dataset.parquet
+stt-optimize export --archive my-dataset/ -o nyc.parquet \
+  --bbox -74.3,40.4,-73.6,41.0 --start 2024-01-01T00:00:00Z --zoom 12
+```
+
+| Flag                           | Description                                                                                                                                                             |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-a, --archive <DIR>`          | Packed dataset directory or its `manifest.json`                                                                                                                         |
+| `-o, --output <FILE>`          | Output `.parquet` path. With several layers and no `--layer`, this is the stem: each layer lands in `<stem>.<layer>.parquet`.                                           |
+| `--zoom <Z>`                   | Zoom level to export (default: the deepest one present)                                                                                                                 |
+| `--layer <NAME>`               | Layer to export (default: every layer, one file each)                                                                                                                   |
+| `--bbox <MINX,MINY,MAXX,MAXY>` | Keep only features intersecting this box                                                                                                                                |
+| `--start <TIME>`               | Keep only features whose time span reaches this instant or later (ISO-8601 or Unix ms)                                                                                  |
+| `--end <TIME>`                 | Keep only features whose time span starts at this instant or earlier (ISO-8601 or Unix ms)                                                                              |
+| `--geometry-encoding <ENC>`    | Geometry column typing: `wkb` (default, GeoParquet 1.1 — what every deployed reader understands) or `native` (adds Parquet's `GEOMETRY` logical type on the same bytes) |
+| `--format <FMT>`               | Run report: `text` (default) or `json`                                                                                                                                  |
+
 ### `stt-optimize order-audit`
 
 Audits a built tileset's **blob ordering**: over the native-tier directory (no
@@ -853,10 +915,12 @@ live serve of the same source must set BOTH or their tiles diverge),
 `--min-zoom-field`/`--max-zoom-field`, the
 per-tile budgets `--maximum-tile-bytes`/`--maximum-tile-features`/
 `--drop-densest-as-needed`, `--exclude`/`--include`/`--exclude-all`,
-`--min-features-per-tile`) and the **encoder-global** flags (`--quantize-coords`,
+`--min-features-per-tile`) and the **encoder** flags (`--quantize-coords`,
 `--quantize-attr`, `--quantize-attrs-auto`, `--vector-group`,
-`--point-elevation-column`, `--vertex-time-precision`) — installed identically to
-the offline build via the shared `build_options` module. `--summary-tier` and
+`--point-elevation-column`, `--vertex-time-precision`) — resolved identically to
+the offline build via the shared `build_options` module, into an explicit
+per-dataset encoder config (never process-wide state, so two datasets served
+from one process cannot inherit each other's settings). `--summary-tier` and
 `--adaptive-temporal` are **not** servable per single-tile request (rejected at
 startup — pre-bake them with `stt-build`).
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "The parts list" figure: the Rust crates that write archives and the npm
@@ -99,10 +100,9 @@ const RustPanel: React.FC = () => (
       </>
     }
   >
-    <svg
+    <FigureSvg
       viewBox="0 0 440 250"
       className="w-full min-w-[400px]"
-      role="img"
       aria-label="Diagram: the spatiotemporal-tiles facade crate ships four CLI binaries and sits on the stt-build and stt-optimize libraries, which both sit on stt-core, the format implementation."
     >
       <defs>
@@ -202,7 +202,7 @@ const RustPanel: React.FC = () => (
         title="stt-core"
         sub="the format — packs · directory · Arrow tiles · projection"
       />
-    </svg>
+    </FigureSvg>
   </Card>
 );
 
@@ -226,10 +226,9 @@ const TsPanel: React.FC = () => (
     title="Runtime — the npm packages (@poopdeck.gl)"
     foot="One decoder, one clock: every renderer consumes the same decoded tiles from core. layers, three and react import the playback engine directly; MapLibre and Cesium take no dependency on it and drive from any clock through a small structural interface."
   >
-    <svg
+    <FigureSvg
       viewBox="0 0 440 262"
       className="w-full min-w-[400px]"
-      role="img"
       aria-label="Diagram: five renderer and UI packages sit on @poopdeck.gl/core; layers, three and react additionally sit on the zero-dependency @poopdeck.gl/playback."
     >
       {TS_TOP.map((p) => (
@@ -309,7 +308,7 @@ const TsPanel: React.FC = () => (
       <text x="196" y="251" fontSize="9.5" fill="var(--ink-500)">
         clock (depends on playback)
       </text>
-    </svg>
+    </FigureSvg>
   </Card>
 );
 

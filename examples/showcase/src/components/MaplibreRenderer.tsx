@@ -32,6 +32,7 @@ import {
   STTQuadbinSummaryLayer,
   STTFlowmapLayer,
   STTLayerGroup,
+  maplibreBackend,
   type STTBaseLayer,
   type STTBaseLayerOptions,
   type RGBA8,
@@ -42,6 +43,7 @@ import {
 import { cellToBoundary } from 'h3-js';
 import type { TimeController } from '@poopdeck.gl/playback';
 import type { SourceRegistry } from '@poopdeck.gl/react';
+import { renderableDatasetTypes } from '../lib/backendSupport';
 import type { Dataset, DatasetType } from '../types';
 
 // CARTO's free dark style. We accept any style URL via prop, but this is the
@@ -52,31 +54,31 @@ const DEFAULT_BASEMAP_STYLE =
 
 /**
  * Dataset types the maplibre adapter can mount (see {@link buildSttLayers}).
- * Exported so `DemoPageImpl` can gate the renderer toggle on the same set the
- * factory actually handles — the two must never drift.
+ * READ from the `maplibreBackend` descriptor, so a kind the adapter gains or
+ * loses moves this set on its own; `DemoPageImpl` gates the renderer toggle on
+ * it, and the two can no longer disagree about what will actually draw.
  *
- * NOT here (intentionally): `point-cloud` (needs a 3D lit-point layer the
- * maplibre backend doesn't carry), the heavy composites `av` / `storm4d` /
- * `weather` (LIDAR splats / surfels / extruded prisms / per-vertex trip
- * gradients with no native analogue yet), and `worlds` (a bespoke page that
- * never routes through this renderer).
+ * The composites listed here are the showcase's own multi-archive stacks (a
+ * descriptor knows nothing about them), and each is still checked against the
+ * descriptor: `lightning` needs heatmap + point, `radar` needs polygon + point
+ * + trips, `flowmap-bundled` needs flowmap (bundling is the `liveBundling`
+ * capability, which maplibre lacks — it draws the straight flowmap, see the
+ * dispatch below). `av` / `storm4d` / `weather` are not wired here (LIDAR
+ * splats, extruded prisms and per-vertex trip gradients have no native
+ * analogue), and `worlds` is a bespoke page that never routes through this
+ * renderer.
+ *
+ * KNOWN DESCRIPTOR GAP: `path` is absent because `maplibreBackend` declares
+ * `path` unsupported with no fallback, even though `STTLineLayer` renders
+ * polylines and the `case 'path'` below mounts it — the descriptor's own
+ * pathReveal claim is filed under `line`. That is a capability-matrix bug in
+ * @poopdeck.gl/maplibre, not something to override from here.
  */
 export const MAPLIBRE_RENDERABLE_TYPES: ReadonlySet<DatasetType> =
-  new Set<DatasetType>([
-    'point',
-    'path',
-    'trips',
-    'polygon',
-    'heatmap',
-    'trip-heads',
-    'arc',
-    'column',
-    'summary',
-    'quadbin-summary',
-    'flowmap',
-    'flowmap-bundled',
+  renderableDatasetTypes(maplibreBackend, [
     'lightning',
     'radar',
+    'flowmap-bundled',
   ]);
 
 /** Bright, slightly-blue flash color for lightning (deck's LIGHTNING_FLASH_COLOR). */
@@ -396,7 +398,7 @@ function buildSttLayers(
       );
     }
 
-    case 'trip-heads': {
+    case 'tripHeads': {
       // A smooth moving dot at each active trip's head. deck spells the size as
       // headRadiusPixels (pixels) OR headRadius + min/max clamps (meters); this
       // backend takes ONE radius prop + a unit selector.
@@ -456,7 +458,7 @@ function buildSttLayers(
         }),
       );
 
-    case 'summary':
+    case 'h3Summary':
       return one(
         new STTH3SummaryLayer({
           ...base,
@@ -471,7 +473,7 @@ function buildSttLayers(
         }),
       );
 
-    case 'quadbin-summary':
+    case 'quadbinSummary':
       // Square-cell (CARTO Quadbin) analog of `summary`; same option surface.
       return one(
         new STTQuadbinSummaryLayer({

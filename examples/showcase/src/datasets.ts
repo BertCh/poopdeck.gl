@@ -911,7 +911,7 @@ const rawDatasets: Dataset[] = [
       'H3 hex-bin density of 1.36M NYC taxi pickups and dropoffs (Jan 1-2, 2015). ' +
       'Toggle pickup vs dropoff.',
     url: '/data/nyc-taxi-od-summary/manifest.json',
-    type: 'summary',
+    type: 'h3Summary',
     timeRange: {
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
       end: 1420213385000, // 2015-01-02 15:43:05 UTC
@@ -1126,7 +1126,7 @@ const rawDatasets: Dataset[] = [
       '~23K synthetic NYC pickup/dropoff points aggregated into CARTO Quadbin ' +
       'square cells, extruded by count. QuadbinSummaryLayer.',
     url: '/data/nyc-od-quadbin/manifest.json',
-    type: 'quadbin-summary',
+    type: 'quadbinSummary',
     timeRange: {
       start: 1705276800000,
       end: 1705366051000,
@@ -1569,7 +1569,7 @@ const rawDatasets: Dataset[] = [
     // stock ScatterplotLayer + CPU per-frame head interpolation). One build,
     // no separate points dataset, exactly like nyc-taxi-points.
     url: '/data/bixi-points/manifest.json',
-    type: 'trip-heads',
+    type: 'tripHeads',
     // Real archive span from the `bixi --paths` build: Thu 2024-08-15,
     // 49,974 OSRM-routed rides (all with per-vertex timing). End runs past
     // midnight UTC to the last ride's dropoff.
@@ -1730,7 +1730,7 @@ const rawDatasets: Dataset[] = [
     // (feed refreshes daily at gtfs.ovapi.nl/nl/gtfs-nl.zip; a stale --date
     // simply matches fewer services, so re-download + re-date together.)
     url: '/data/gtfs-nl/manifest.json',
-    type: 'trip-heads',
+    type: 'tripHeads',
     // Real archive span: Fri 2026-07-03 service day (Europe/Amsterdam). Starts
     // at the first scheduled departure (00:19 local); GTFS >24:00:00 times run
     // the night network deep into Saturday morning (last arrival ~10:23 local).
@@ -1775,7 +1775,7 @@ const rawDatasets: Dataset[] = [
     // The Swiss feed publishes no shapes.txt — all trips use stop-to-stop
     // geometry.)
     url: '/data/gtfs-ch/manifest.json',
-    type: 'trip-heads',
+    type: 'tripHeads',
     // Real archive span: Mon 2026-03-02 service day (Europe/Zurich). Starts at
     // local midnight; GTFS >24:00:00 times run night services deep into
     // Tuesday morning (last arrival ~10:05 local).
@@ -2278,7 +2278,7 @@ const rawDatasets: Dataset[] = [
     // file. Rendered by AnimatedTripHeadsLayer (stock ScatterplotLayer + CPU
     // per-frame head interpolation).
     url: '/data/nyc-taxi-paths/manifest.json',
-    type: 'trip-heads',
+    type: 'tripHeads',
     timeRange: {
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
       end: 1420213385000, // 2015-01-02 13:43:05 UTC
@@ -2622,7 +2622,7 @@ const rawDatasets: Dataset[] = [
     url: '/data/nyc-taxi-paths/manifest.json',
     // Head-dot via AnimatedTripHeadsLayer (vanilla ScatterplotLayer + CPU head
     // interpolation).
-    type: 'trip-heads',
+    type: 'tripHeads',
     timeRange: {
       start: 1420070400000,
       end: 1420213385000,
@@ -4832,7 +4832,7 @@ const rawDatasets: Dataset[] = [
       'H3 hex-bin density of New York City OpenStreetMap changesets, 2007→2025. ' +
       'Toggle total edits vs sessions. © OpenStreetMap contributors (ODbL).',
     url: '/data/osm-nyc-changesets/manifest.json',
-    type: 'summary',
+    type: 'h3Summary',
     timeRange: {
       start: Date.parse('2007-01-01T00:00:00Z'),
       end: Date.parse('2026-01-01T00:00:00Z'),

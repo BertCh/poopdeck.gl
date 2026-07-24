@@ -477,6 +477,20 @@ export const docSections: DocSection[] = [
         blurb:
           'The measure → interpret → decide loop: analyze, --auto, inspect, doctor, diff, style hints.',
       },
+      {
+        slug: 'guides/export',
+        file: 'guides/export.md',
+        title: 'Exporting Back to GeoParquet',
+        blurb:
+          'stt-optimize export: get data back out of a built archive, whole or filtered by bbox and time.',
+      },
+      {
+        slug: 'guides/wasm',
+        file: 'guides/wasm.md',
+        title: 'The WASM Decoder',
+        blurb:
+          'Read packed archives from any WASM host: build it, the API surface, and what it does not do yet.',
+      },
     ],
   },
   {

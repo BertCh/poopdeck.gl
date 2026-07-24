@@ -40,6 +40,16 @@
  * masking walls on tile-cut edges and on ring closures — the latter also kills
  * the wall deck otherwise stitched from the end of a polygon's exterior to the
  * start of its first hole. `seamWalls: true` restores deck's raw behaviour.
+ *
+ * EXTRUSION FLOOR: the same shader line that walls seams (`pos.z += elevations
+ * * elevationScale`) also anchors every extrusion to the ground, because STT
+ * polygon geometry is 2D. A band whose elevation column describes a SURFACE in
+ * the air — the storm-4d cloud-top canopy, 2–12 km up — therefore drew the
+ * whole prism under it. `baseElevation` / `elevationThickness` give the
+ * extrusion a floor: prepareTile synthesises a 3-wide position buffer (z =
+ * floor × elevationScale, pre-scaled) and rewrites elevation to the thickness
+ * above it, so the walls span exactly [floor, top]. Off by default — the
+ * ground-anchored path keeps the zero-copy geometry.
  */
 
 import { SolidPolygonLayer } from '@deck.gl/layers';
@@ -161,6 +171,43 @@ export interface _AnimatedPolygonLayerProps {
    * @default 1
    */
   elevationScale?: number;
+
+  /**
+   * FLOOR of the extrusion, in the same metres as {@link elevation} — the
+   * polygon FLOATS between this altitude and `elevation` instead of rising
+   * out of the ground. Constant number, or a property-column name for a
+   * per-feature floor.
+   *
+   * deck's `SolidPolygonLayer` extrudes from the polygon's own vertex z
+   * (`pos.z += elevations * elevationScale`), and STT polygon geometry is 2D
+   * (z = 0) — so an extruded band representing a sheet 12 km up hangs a
+   * full-height curtain all the way down to the basemap. Setting a floor
+   * synthesises the vertex z once per tile (pre-multiplied by
+   * `elevationScale`, which the shader applies only to the thickness above
+   * it), turning the prism into a slab at altitude.
+   *
+   * Only takes effect when `extruded` is true. When `stroked` is also on, the
+   * outline rides the FLOOR plane with the fill.
+   * @default 0 (ground)
+   */
+  baseElevation?: number | string;
+
+  /**
+   * Constant-thickness SHELL — the shorthand for data that carries only a TOP
+   * surface (a cloud-top height, a sea-surface height, a canopy): extrude
+   * DOWNWARD from {@link elevation} by this many metres, i.e. the floor is
+   * `elevation - elevationThickness` per feature. Wins over
+   * {@link baseElevation} when both are set; `0` leaves an infinitely thin
+   * floating sheet (top face only, no walls).
+   *
+   * The difference from `baseElevation`: a constant `baseElevation` gives
+   * every polygon the SAME floor (nested bands read as one terraced mesa),
+   * while a thickness hugs each polygon's own top (nested bands read as
+   * separate floating shelves you can see between). Only takes effect when
+   * `extruded` is true.
+   * @default null (off — extrude from `baseElevation`)
+   */
+  elevationThickness?: number | null;
 
   /**
    * Draw the edges of extruded polygons as a wireframe (sides + top outline)
@@ -381,6 +428,15 @@ interface PreparedTile {
   };
   timeOffset: number;
   dims: number;
+  /**
+   * Constant `getElevation` for the sublayer, or null when the tile carries a
+   * per-vertex `getElevation` buffer (or no elevation at all, leaving deck's
+   * own default). Resolved during prepare because the FLOATING-extrusion path
+   * (see {@link _AnimatedPolygonLayerProps.baseElevation}) rewrites elevation
+   * to a THICKNESS above the synthesised floor, which may collapse a
+   * column-driven top to a constant.
+   */
+  elevationConstant: number | null;
   /** Resolved palette for the GPU categorical-color path, or null. */
   gpuPalette: Color[] | null;
   /**
@@ -493,6 +549,15 @@ export class AnimatedPolygonLayer<
     },
     extruded: false,
     elevationScale: { type: 'number', value: 1, min: 0 },
+    // Permissive descriptor: constant metres OR a column name (same domain as
+    // `elevation`). 0 keeps the ground-anchored render byte-identical.
+    baseElevation: { type: 'object', value: 0, compare: true },
+    elevationThickness: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
     wireframe: false,
     seamWalls: false,
     // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
@@ -603,6 +668,31 @@ export class AnimatedPolygonLayer<
       this.props.getElevation,
       this.props.elevation,
     );
+  }
+
+  /**
+   * Resolve the FLOATING-extrusion request (see `baseElevation` /
+   * `elevationThickness`), or null when the polygons rise from the ground —
+   * the default, in which case the prepare path stays byte-identical and the
+   * tile geometry rides to the GPU zero-copy.
+   *
+   * `thickness` wins over `base` when both are set (documented precedence).
+   */
+  private floorSpec():
+    | { thickness: number }
+    | { base: number | string }
+    | null {
+    if (!this.props.extruded) return null;
+    const thickness = this.props.elevationThickness;
+    if (typeof thickness === 'number' && Number.isFinite(thickness)) {
+      // Clamped: a negative thickness would put the floor ABOVE the top and
+      // invert every wall.
+      return { thickness: Math.max(0, thickness) };
+    }
+    const base = this.props.baseElevation;
+    if (typeof base === 'string' && base) return { base };
+    if (typeof base === 'number' && base !== 0) return { base };
+    return null;
   }
 
   /**
@@ -815,7 +905,21 @@ export class AnimatedPolygonLayer<
     // The side-wall mask is baked into the tile's attributes, so both switches
     // that decide whether it exists must invalidate the prepared tile.
     const wallSig = `w${this.props.extruded ? 1 : 0}${this.props.seamWalls ? 1 : 0}`;
-    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${filterSig}|${wallSig}|${
+    // Floating extrusion bakes the FLOOR into the tile's vertex z, and bakes it
+    // PRE-SCALED (the shader multiplies only the thickness above it) — so
+    // elevationScale, normally a live uniform, has to invalidate the prepared
+    // tile too. Only while floating: the ground-anchored path keeps its
+    // uniform-only scale.
+    // A CONSTANT elevation is baked into that floor too (top − thickness), so
+    // it joins the key here; without a floor it stays a sublayer prop and rides
+    // the layerPropsKey as before.
+    const floor = this.floorSpec();
+    const floorSig = floor
+      ? `z${'thickness' in floor ? `t${floor.thickness}` : `b${floor.base}`}` +
+        `s${this.props.elevationScale}` +
+        `e${typeof elevationValue === 'number' ? elevationValue : ''}`
+      : '';
+    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${filterSig}|${wallSig}|${floorSig}|${
       fillColorProp
         ? this.props.colorMapping
           ? `m${colorMappingDigest(this.props.colorMapping)}`
@@ -933,6 +1037,105 @@ export class AnimatedPolygonLayer<
         };
       }
     }
+    // Constant elevation for the sublayer prop (null ⇒ the per-vertex buffer
+    // above, or deck's own default when neither is present). The floating
+    // branch below may rewrite it.
+    let elevationConstant =
+      typeof elevationValue === 'number' ? elevationValue : null;
+    let outDims = dims;
+
+    // FLOATING EXTRUSION ---------------------------------------------------
+    // SolidPolygonLayer's shader is `pos.z += elevations * elevationScale`:
+    // the polygon's own vertex z is the extrusion FLOOR and `elevations` is
+    // only the thickness stacked above it. STT polygon geometry is 2D (z = 0),
+    // so an extruded band whose elevation column says "12 km up" draws a
+    // curtain from the basemap all the way to 12 km — the whole prism, not the
+    // sheet the data describes. When a floor is requested we synthesise a
+    // 3-wide position buffer ONCE per tile (XY copied from the tile geometry,
+    // z = floor × elevationScale — pre-scaled, because the shader scales only
+    // the thickness) and rewrite elevation to `top − floor`, so the walls span
+    // exactly [floor, top] and the polygon reads as a slab at altitude.
+    //
+    // Costs 1.5× the position buffer per tile, once, and only for layers that
+    // opt in; everything else keeps the zero-copy geometry path.
+    if (floor) {
+      const topPerVertex =
+        (attributes.getElevation?.value as Float32Array | undefined) ?? null;
+      const constTop = typeof elevationValue === 'number' ? elevationValue : 0;
+      // An elevation COLUMN this tile doesn't carry leaves no altitude to hang
+      // the shell from — `constTop` is a placeholder 0, not a real top.
+      const hasTop =
+        topPerVertex !== null || typeof elevationValue === 'number';
+
+      // Per-vertex floor, or a constant when nothing varies per feature.
+      let floorPerVertex: Float32Array | null = null;
+      let constFloor = 0;
+      if ('thickness' in floor) {
+        if (topPerVertex) {
+          floorPerVertex = new Float32Array(vertexCount);
+          for (let i = 0; i < vertexCount; i++) {
+            floorPerVertex[i] = topPerVertex[i] - floor.thickness;
+          }
+        } else if (hasTop) {
+          // Clamped: a shell thicker than its own constant top would otherwise
+          // hang below the basemap.
+          constFloor = Math.max(0, constTop - floor.thickness);
+        }
+        // No top at all ⇒ floor stays on the ground (a flat slab is a better
+        // degradation than a shell buried under the map).
+      } else if (typeof floor.base === 'string') {
+        const values = binary.numericProps[floor.base];
+        if (values) {
+          floorPerVertex = expandPerVertex(
+            values,
+            startIndices,
+            featureCount,
+            vertexCount,
+          );
+        }
+        // Column absent from this tile ⇒ constFloor stays 0 (ground) — the
+        // same "missing column idles the feature" rule the other columns use.
+      } else {
+        constFloor = floor.base;
+      }
+
+      const src = binary.positions;
+      const scale = this.props.elevationScale;
+      const lifted = new Float64Array(vertexCount * 3);
+      for (let i = 0, s = 0, d = 0; i < vertexCount; i++, s += dims, d += 3) {
+        lifted[d] = src[s];
+        lifted[d + 1] = src[s + 1];
+        // Geometry-native z (3D polygon tiles, not emitted today) rides along
+        // as an absolute metre offset on top of the requested floor.
+        lifted[d + 2] =
+          (floorPerVertex ? floorPerVertex[i] : constFloor) * scale +
+          (dims > 2 ? src[s + 2] : 0);
+      }
+      attributes.getPolygon = { value: lifted, size: 3 };
+      outDims = 3;
+
+      // Elevation now means THICKNESS above the floor, never a total altitude.
+      if ('thickness' in floor) {
+        // Uniform by construction — drop the per-vertex buffer entirely.
+        delete attributes.getElevation;
+        // With a CONSTANT top the floor may have been clamped to the ground,
+        // which thins the slab to whatever room was left under it.
+        elevationConstant =
+          !topPerVertex && hasTop ? constTop - constFloor : floor.thickness;
+      } else if (topPerVertex) {
+        const delta = new Float32Array(vertexCount);
+        for (let i = 0; i < vertexCount; i++) {
+          delta[i] = Math.max(
+            0,
+            topPerVertex[i] - (floorPerVertex ? floorPerVertex[i] : constFloor),
+          );
+        }
+        attributes.getElevation = { value: delta, size: 1 };
+        elevationConstant = null;
+      } else {
+        elevationConstant = Math.max(0, constTop - constFloor);
+      }
+    }
 
     // Side-wall mask. deck's own `instanceVertexValid` updater only knows
     // FEATURE boundaries here (the binary path has no hole indices), and knows
@@ -1023,7 +1226,8 @@ export class AnimatedPolygonLayer<
         attributes,
       },
       timeOffset: binary.timeOffset,
-      dims,
+      dims: outDims,
+      elevationConstant,
       gpuPalette,
       hasPreBakedTriangles,
       outlineWidths,
@@ -1049,7 +1253,6 @@ export class AnimatedPolygonLayer<
     // was dead code once the default merged.
     const timeWindow = this.props.timeWindow;
     const fillColorValue = this.fillColorValue();
-    const elevationValue = this.elevationValue();
     const constFillColor = (
       Array.isArray(fillColorValue)
         ? fillColorValue
@@ -1099,8 +1302,10 @@ export class AnimatedPolygonLayer<
       // this). Without it the edges lock at deck's black default — surfacing
       // getLineColor here makes `wireframe:true` colorable even without stroked.
       getLineColor: this.lineColorValue(),
-      ...(this.props.extruded && typeof elevationValue === 'number'
-        ? { getElevation: elevationValue }
+      // Constant elevation resolved during prepare — the floating path rewrites
+      // it to the slab THICKNESS above the synthesised floor (see PreparedTile).
+      ...(this.props.extruded && prepared.elevationConstant !== null
+        ? { getElevation: prepared.elevationConstant }
         : {}),
 
       // Constant extension list (cache-storm rationale — see

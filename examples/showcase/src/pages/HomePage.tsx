@@ -130,16 +130,12 @@ const HomePage: React.FC = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 sm:gap-x-8 gap-y-5 sm:gap-y-6 mt-4 max-w-4xl">
           {featured.map((d) => (
             <Link key={d.id} to={`/demos/${d.id}`} className="group block">
-              <h3
-                className="text-sm font-medium transition-colors"
-                style={{ color: 'var(--ink-900)' }}
-                onMouseOver={(e) =>
-                  (e.currentTarget.style.color = 'var(--accent)')
-                }
-                onMouseOut={(e) =>
-                  (e.currentTarget.style.color = 'var(--ink-900)')
-                }
-              >
+              {/* The accent lived on the <h3> via onMouseOver/onMouseOut — a
+                  heading is not interactive, so hovering the rest of the card
+                  did nothing and a keyboard user tabbing to the Link (which
+                  already carries `group`) got no highlight at all. group-hover
+                  / group-focus-visible move it to the real control. */}
+              <h3 className="text-sm font-medium transition-colors [color:var(--ink-900)] group-hover:[color:var(--accent)] group-focus-visible:[color:var(--accent)]">
                 {d.name}
               </h3>
               <p

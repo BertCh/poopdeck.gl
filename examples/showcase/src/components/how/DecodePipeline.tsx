@@ -1,4 +1,5 @@
 import React from 'react';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Off-thread decode + two-tier cache" figure: what happens to a fetched pack
@@ -160,10 +161,9 @@ const DecodePipeline: React.FC = () => (
     </h4>
 
     <div className="mt-3 overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 1000 470"
         className="w-full min-w-[820px]"
-        role="img"
         aria-label="Diagram: the UI thread hands a fetched pack slice to a pool of Web Workers that zstd-decompress, parse Arrow IPC and extract column buffers, transferring them back zero-copy. A two-tier cache — an in-memory compressed LRU and an on-disk OPFS store of decompressed payloads keyed by the directory fingerprint — short-circuits the network and the decode."
       >
         <defs>
@@ -423,7 +423,7 @@ const DecodePipeline: React.FC = () => (
         >
           scroll a tile off-view ⇒ its in-flight decode is cancelled mid-pool
         </text>
-      </svg>
+      </FigureSvg>
     </div>
 
     <div className="mt-2 flex flex-wrap items-center gap-1.5">

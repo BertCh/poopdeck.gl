@@ -50,22 +50,19 @@ const SiteHeader: React.FC = () => {
         aria-label="Site"
       >
         {NAV_ITEMS.map((item) => (
+          // The accent-on-hover used to be JS (onMouseOver/onMouseOut writing
+          // `style.color`), which meant a keyboard user tabbing the nav got no
+          // highlight at all — and the handler had to re-read `aria-current` to
+          // undo itself. As CSS it covers hover AND :focus-visible, and the
+          // active route's accent survives because the class only sets the
+          // muted ink, which the `style` prop overrides.
           <NavLink
             key={item.to}
             to={item.to}
-            className="text-xs sm:text-[13px] font-medium transition-colors shrink-0"
-            style={({ isActive }) => ({
-              color: isActive ? 'var(--accent)' : 'var(--ink-500)',
-            })}
-            onMouseOver={(e) => (e.currentTarget.style.color = 'var(--accent)')}
-            onMouseOut={(e) => {
-              // NavLink re-applies the style fn on render; restore the muted
-              // ink only when the link isn't the active route.
-              const active = e.currentTarget.getAttribute('aria-current');
-              e.currentTarget.style.color = active
-                ? 'var(--accent)'
-                : 'var(--ink-500)';
-            }}
+            className="text-xs sm:text-[13px] font-medium transition-colors shrink-0 [color:var(--ink-500)] hover:[color:var(--accent)] focus-visible:[color:var(--accent)]"
+            style={({ isActive }) =>
+              isActive ? { color: 'var(--accent)' } : {}
+            }
           >
             {item.label}
           </NavLink>
@@ -74,10 +71,7 @@ const SiteHeader: React.FC = () => {
           href={GITHUB_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs sm:text-[13px] font-medium transition-colors inline-flex items-center gap-1 shrink-0"
-          style={{ color: 'var(--ink-500)' }}
-          onMouseOver={(e) => (e.currentTarget.style.color = 'var(--accent)')}
-          onMouseOut={(e) => (e.currentTarget.style.color = 'var(--ink-500)')}
+          className="text-xs sm:text-[13px] font-medium transition-colors inline-flex items-center gap-1 shrink-0 [color:var(--ink-500)] hover:[color:var(--accent)] focus-visible:[color:var(--accent)]"
         >
           GitHub
           <svg

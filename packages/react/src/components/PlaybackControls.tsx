@@ -592,9 +592,13 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       <div>
         {density && <DensityStrip density={density} />}
 
-        {/* Progress bar */}
+        {/* Progress bar. The range input inside is `opacity-0` over this
+            custom-drawn track, which also hides the browser's own focus ring —
+            a keyboard user could Tab onto the scrubber and see NOTHING. Ring
+            the track instead, and only on :focus-visible so a pointer scrub
+            stays clean. */}
         <div
-          className="relative h-1.5 rounded-full cursor-pointer"
+          className="relative h-1.5 rounded-full cursor-pointer has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:[outline-color:var(--accent)]"
           style={{ background: 'var(--hairline)' }}
           onPointerMove={handleBarPointerMove}
           onPointerLeave={handleBarPointerLeave}
@@ -803,10 +807,12 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
           </button>
         </div>
 
-        {/* Speed presets */}
-        <div
-          className="flex items-center gap-1"
-          role="group"
+        {/* Speed presets. A real <fieldset> rather than a div with
+            role="group": the buttons ARE form controls, and the native element
+            carries the grouping semantics without an ARIA override (the browser
+            border/padding are reset off). */}
+        <fieldset
+          className="flex items-center gap-1 m-0 p-0 border-0 min-w-0"
           aria-label="Playback speed"
         >
           <span
@@ -854,7 +860,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
           >
             {autoSpeed ? `Auto ${currentSpeedMultiplier.toFixed(1)}x` : 'Auto'}
           </button>
-        </div>
+        </fieldset>
 
         {/* Fine slider — max matches the presets and Auto's clamp (§3.6). */}
         <div className="flex-1 flex items-center gap-2 min-w-0 hidden md:flex">

@@ -39,42 +39,53 @@ const LidarDensityRow: React.FC<{
   densities: AvLidarDensity[];
   activeId: string;
   onSelect: (id: string) => void;
-}> = ({ densities, activeId, onSelect }) => (
-  <div className="ml-6 mt-1 mb-0.5">
-    <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
-      Density
+}> = ({ densities, activeId, onSelect }) => {
+  // One radio GROUP name per mounted row — native radios group by name, so a
+  // hardcoded one would fuse two mounted panels into a single group.
+  const groupName = React.useId();
+  return (
+    <div className="ml-6 mt-1 mb-0.5">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+        Density
+      </div>
+      <div
+        className="flex flex-wrap gap-1"
+        role="radiogroup"
+        aria-label="LIDAR density"
+      >
+        {densities.map((d) => {
+          const active = d.id === activeId;
+          return (
+            // A REAL radio, not a button with role="radio": the native input
+            // carries the checked state and arrow-key traversal of the group,
+            // which the button faked with aria-checked and never wired.
+            <label
+              key={d.id}
+              title={`${d.points.toLocaleString()} points`}
+              className={`rounded border px-1.5 py-0.5 text-[11px] transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-cyan-300/70 ${
+                active
+                  ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                  : 'border-white/10 bg-black/40 text-slate-400 hover:bg-white/5'
+              }`}
+            >
+              <input
+                type="radio"
+                name={groupName}
+                className="sr-only"
+                checked={active}
+                onChange={() => onSelect(d.id)}
+              />
+              {d.label}
+              <span className="ml-1 text-[9px] text-slate-500">
+                {fmtPts(d.points)}
+              </span>
+            </label>
+          );
+        })}
+      </div>
     </div>
-    <div
-      className="flex flex-wrap gap-1"
-      role="radiogroup"
-      aria-label="LIDAR density"
-    >
-      {densities.map((d) => {
-        const active = d.id === activeId;
-        return (
-          <button
-            key={d.id}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onSelect(d.id)}
-            title={`${d.points.toLocaleString()} points`}
-            className={`rounded border px-1.5 py-0.5 text-[11px] transition-colors ${
-              active
-                ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
-                : 'border-white/10 bg-black/40 text-slate-400 hover:bg-white/5'
-            }`}
-          >
-            {d.label}
-            <span className="ml-1 text-[9px] text-slate-500">
-              {fmtPts(d.points)}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  </div>
-);
+  );
+};
 
 export interface StreamPanelProps {
   scene: AvScene;

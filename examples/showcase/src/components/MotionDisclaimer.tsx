@@ -94,10 +94,11 @@ const MotionDisclaimer: React.FC = () => {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss this notice"
-        className="shrink-0 leading-none px-1 transition-opacity"
-        style={{ color: 'var(--ink-400)', fontSize: '14px' }}
-        onMouseOver={(e) => (e.currentTarget.style.color = 'var(--ink-700)')}
-        onMouseOut={(e) => (e.currentTarget.style.color = 'var(--ink-400)')}
+        // Hover darkening as CSS, not onMouseOver/onMouseOut writing
+        // `style.color`: the JS version left a keyboard user with no feedback
+        // at all on the one control that dismisses this notice.
+        className="shrink-0 leading-none px-1 transition-opacity [color:var(--ink-400)] hover:[color:var(--ink-700)] focus-visible:[color:var(--ink-700)]"
+        style={{ fontSize: '14px' }}
       >
         ✕
       </button>

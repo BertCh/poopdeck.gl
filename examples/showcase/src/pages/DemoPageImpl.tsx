@@ -11,7 +11,7 @@
  * legend/cube chips. This inverts the old "map inset inside page chrome"
  * frame into "UI inside the map".
  */
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import { useParams, useLocation, Navigate, Link } from 'react-router';
 import { getDatasetById } from '../datasets';
 import { getDemoMeta } from '../content/demoMeta';
@@ -68,6 +68,9 @@ const DemoPage: React.FC = () => {
   const [renderer, setRenderer] = useState<'deck' | 'maplibre' | 'three'>(
     location.pathname.startsWith('/maplibre/') ? 'maplibre' : 'deck',
   );
+  // One radio GROUP name per mounted page — native radios are grouped by name,
+  // and a hardcoded one would join two mounted demos into a single group.
+  const rendererGroup = useId();
   const maplibreCapable =
     selectedDataset != null &&
     MAPLIBRE_RENDERABLE_TYPES.has(selectedDataset.type);
@@ -173,20 +176,27 @@ const DemoPage: React.FC = () => {
                 active: boolean;
               }[]
             ).map((r) => (
-              <button
+              // A REAL radio, not a button with role="radio": the native input
+              // brings arrow-key traversal of the group and the checked state
+              // for free, which the button version had to fake and never wired.
+              // The input is visually hidden, so the ring lives on the label.
+              <label
                 key={r.id}
-                type="button"
-                role="radio"
-                aria-checked={r.active}
-                onClick={() => setRenderer(r.id)}
-                className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+                className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-cyan-300/70 ${
                   r.active
                     ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
                     : 'border-white/15 text-slate-300 hover:bg-white/5'
                 }`}
               >
+                <input
+                  type="radio"
+                  name={rendererGroup}
+                  className="sr-only"
+                  checked={r.active}
+                  onChange={() => setRenderer(r.id)}
+                />
                 {r.label}
-              </button>
+              </label>
             ))}
           </div>
         )}

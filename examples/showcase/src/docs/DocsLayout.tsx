@@ -118,8 +118,13 @@ const DocsLayout: React.FC = () => {
       {/* Mobile drawer */}
       {drawerOpen && (
         <>
-          <div
-            className="lg:hidden fixed inset-0 z-30"
+          {/* A real <button>, not a click-handling <div>: the scrim is the only
+              way to dismiss the drawer besides the toggle, and as a div it was
+              unreachable by keyboard and invisible to assistive tech. */}
+          <button
+            type="button"
+            aria-label="Close docs menu"
+            className="lg:hidden fixed inset-0 z-30 cursor-default"
             style={{ background: 'rgba(21, 23, 28, 0.3)' }}
             onClick={() => setDrawerOpen(false)}
           />

@@ -1,4 +1,5 @@
 import React from 'react';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Streamed like video" figures: the buffered-runway model the playback
@@ -38,10 +39,9 @@ const RunwayFigure: React.FC = () => (
       The governor buffers sim-time like a video player buffers seconds
     </SubHead>
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 130"
         className="w-full min-w-[680px]"
-        role="img"
         aria-label="Diagram: a playback bar with played time behind the playhead, a buffered runway of fully loaded sim-time ahead of it, and unfetched time beyond; thresholds mark the stall watermark and the start gate."
       >
         {/* track */}
@@ -158,7 +158,7 @@ const RunwayFigure: React.FC = () => (
         >
           start gate · 2 s × speed (resume needs 2×)
         </text>
-      </svg>
+      </FigureSvg>
     </div>
     <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
       {['starting', 'playing', 'buffering', 'playing'].map((s, i) => (
@@ -286,10 +286,9 @@ const GovStatesFigure: React.FC = () => (
       The governor is a small state machine — it degrades before it freezes
     </SubHead>
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 300"
         className="w-full min-w-[720px]"
-        role="img"
         aria-label="Diagram: the playback governor's states — idle to starting to playing, playing stalling into buffering and resuming, playing branching to seeking on a scrub, and a degraded-creep mode entered when a gate can't pass within the escape-hatch window."
       >
         <defs>
@@ -537,7 +536,7 @@ const GovStatesFigure: React.FC = () => (
         >
           frontier catches up
         </text>
-      </svg>
+      </FigureSvg>
     </div>
 
     <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -625,10 +624,9 @@ const GateFigure: React.FC = () => (
       Per frame, the GPU alpha-gates every feature — buffers never rebuild
     </SubHead>
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 240"
         className="w-full min-w-[680px]"
-        role="img"
         aria-label="Diagram: feature lifespans as horizontal bars; a vertical band around the current time lights up only the overlapping portions, fading at the band's edges."
       >
         <defs>
@@ -725,7 +723,7 @@ const GateFigure: React.FC = () => (
           each bar = one feature's [start_time, end_time] — stored once as GPU
           vertex attributes
         </text>
-      </svg>
+      </FigureSvg>
     </div>
     <p
       className="mt-2 text-[11px] leading-relaxed"
@@ -787,14 +785,13 @@ const GateModesFigure: React.FC = () => (
     <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3">
       {GATE_MODES.map((m) => (
         <div key={m.name}>
-          <svg
+          <FigureSvg
             viewBox="0 0 200 80"
             className="w-full rounded-md"
             style={{
               background: 'var(--surface-sunken)',
               border: '1px solid var(--hairline)',
             }}
-            role="img"
             aria-label={`Alpha curve for the ${m.name} time-filter mode.`}
           >
             <line
@@ -821,7 +818,7 @@ const GateModesFigure: React.FC = () => (
               strokeWidth="1.75"
               strokeLinejoin="round"
             />
-          </svg>
+          </FigureSvg>
           <p
             className="font-mono text-[11px] font-semibold mt-1.5"
             style={{ color: 'var(--ink-900)' }}

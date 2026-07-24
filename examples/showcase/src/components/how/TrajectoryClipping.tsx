@@ -1,4 +1,5 @@
 import React from 'react';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Deeper:" cut for the Space×time section — how a moving trip stays continuous
@@ -146,10 +147,9 @@ const TrajectoryClipping: React.FC = () => (
     </p>
 
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 300"
         className="w-full min-w-[720px]"
-        role="img"
         aria-label="Diagram: two neighbouring tiles share a vertical seam. A diagonal trajectory of four real vertices, each with a timestamp from 00:00 to 00:48, crosses from the left tile into the right tile. At the seam the clip inserts a border vertex whose position is interpolated onto the edge and whose timestamp is linearly interpolated to about 00:19. The left tile keeps the sub-path from 00:00 to 00:19; the right tile keeps 00:19 to 00:48; both are complete polylines."
       >
         <text
@@ -349,7 +349,7 @@ const TrajectoryClipping: React.FC = () => (
           clipped once, at build — each tile carries a complete polyline, so no
           cross-tile fetch is needed to draw a partial trip
         </text>
-      </svg>
+      </FigureSvg>
     </div>
 
     {/* legend */}
@@ -367,11 +367,10 @@ const TrajectoryClipping: React.FC = () => (
         border: '1px solid rgba(240,193,75,0.9)',
       }}
     >
-      <svg
+      <FigureSvg
         viewBox="0 0 150 84"
         width="120"
         height="68"
-        role="img"
         aria-label="Edge case: a segment whose longitude jumps more than 180 degrees straddles the dateline. Drawn the long way it smears across the map; split at the plus-or-minus 180 degree edges it does not."
         className="shrink-0 mt-0.5"
       >
@@ -472,7 +471,7 @@ const TrajectoryClipping: React.FC = () => (
         />
         <circle cx="14" cy="42" r="2.6" fill="#8a5a0a" />
         <circle cx="138" cy="42" r="2.6" fill="#8a5a0a" />
-      </svg>
+      </FigureSvg>
       <p className="text-[11px] leading-relaxed" style={{ color: '#8a5a0a' }}>
         Edge case: a segment whose longitude jumps more than 180° straddles the
         dateline. Left whole, the clamped tile walk draws it the long way and

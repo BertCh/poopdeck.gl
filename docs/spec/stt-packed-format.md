@@ -916,7 +916,10 @@ per-vertex-timestamped LineStrings.
 format. An STT dataset is self-describing enough to be advertised as a STAC
 Item with no extra metadata: `metadata.bounds` → `bbox`/`geometry`,
 `metadata.time_range` → `start_datetime`/`end_datetime`, and the manifest as
-an asset with an `stt` role:
+an asset with an `stt` role.
+
+`stt-build --stac` emits exactly this Item to `stac.json`, beside the manifest
+(`stt_build::stac`). It is **normative** for that emitter:
 
 ```json
 {
@@ -938,12 +941,23 @@ an asset with an `stt` role:
   },
   "properties": {
     "datetime": null,
-    "start_datetime": "1979-02-15T00:00:00Z",
-    "end_datetime": "2022-10-04T00:00:00Z"
+    "start_datetime": "1979-02-15T00:00:00.000Z",
+    "end_datetime": "2022-10-04T00:00:00.000Z",
+    "description": "Global drifter trajectories",
+    "stt:format_version": 2,
+    "stt:min_zoom": 0,
+    "stt:max_zoom": 4,
+    "stt:tile_count": 1234,
+    "stt:feature_count": 98765,
+    "stt:distinct_feature_count": 54321,
+    "stt:layers": ["default"],
+    "stt:temporal_bucket_ms": 86400000,
+    "providers": [{ "name": "NOAA GDP", "roles": ["producer"] }]
   },
+  "links": [],
   "assets": {
     "stt": {
-      "href": "https://example.com/data/drifters/manifest.json",
+      "href": "./manifest.json",
       "type": "application/json",
       "roles": ["data", "stt"],
       "title": "STT packed dataset (manifest)"
@@ -952,9 +966,39 @@ an asset with an `stt` role:
 }
 ```
 
+Field derivation, all of it mechanical from the manifest:
+
+| Item field                                   | Manifest source                                                                                      |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `id`                                         | `metadata.name`; falls back to the dataset directory name                                            |
+| `bbox`, `geometry`                           | `metadata.bounds` (closed 5-point CCW exterior ring)                                                 |
+| `properties.start_datetime` / `end_datetime` | `metadata.time_range` (RFC 3339, UTC, millisecond precision)                                         |
+| `properties.description`                     | `metadata.description` (omitted when empty)                                                          |
+| `properties.providers`                       | `metadata.attribution` (omitted when empty)                                                          |
+| `properties.stt:*`                           | `formatVersion`, zoom range, counts, `layers`, `temporalBucketMs`, and `capabilities` when non-empty |
+| `assets.stt.href`                            | fixed `./manifest.json`                                                                              |
+
+Notes on the required shape (a validator rejects an Item that gets these
+wrong):
+
+- `properties.datetime` MUST be **present and `null`** — not omitted — when the
+  Item carries an interval, and `start_datetime`/`end_datetime` MUST both
+  accompany it. An STT dataset is always an interval.
+- `links` is REQUIRED even with nothing to link; an empty array is valid. A
+  publisher placing the Item in a catalog adds `self`/`parent`.
+- The asset href is **relative**. STAC resolves it against the Item's own
+  location, and the Item ships inside the dataset directory, so the pair
+  survives being published at any base URL. An absolute URL would have to be
+  guessed at build time.
+- `stt:feature_count` is tile-weighted (a feature in N tiles counts N times);
+  `stt:distinct_feature_count` is the user-facing total, and is absent for
+  archives built before that field existed. A catalog showing "N features"
+  wants the distinct one.
+
 A reader discovers the dataset via STAC, then follows `assets.stt.href` into
 the §6 reader flow. Since `manifest.json` already embeds the full dataset
-metadata, the Item is generable mechanically from the manifest alone.
+metadata, the Item is generable mechanically from the manifest alone — so it
+can also be regenerated for an already-published dataset.
 
 ### 10.4 GeoZarr
 

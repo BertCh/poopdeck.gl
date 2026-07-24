@@ -1,4 +1,5 @@
 import React from 'react';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * "Deeper:" cut for the Space×time section — the temporal look-back rule.
@@ -185,10 +186,9 @@ const CoverLookback: React.FC = () => (
     </p>
 
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 258"
         className="w-full min-w-[720px]"
-        role="img"
         aria-label="Diagram: a row of hourly time buckets from 06:00 to 12:00 with a playhead at 10:00. Interval features are stored once in their start bucket; a trip starting 08:20 is still alive at 10:00 though its bytes live in the 08:00 blob, so the reader looks back from the playhead bucket to the 08:00 bucket, bounded by cover_t_min. Buckets it can skip are greyed."
       >
         {/* look-back bracket */}
@@ -326,7 +326,7 @@ const CoverLookback: React.FC = () => (
         >
           playhead · T = 10:00
         </text>
-      </svg>
+      </FigureSvg>
     </div>
 
     {/* legend */}
@@ -344,11 +344,10 @@ const CoverLookback: React.FC = () => (
         border: '1px solid rgba(240,193,75,0.9)',
       }}
     >
-      <svg
+      <FigureSvg
         viewBox="0 0 120 40"
         width="96"
         height="32"
-        role="img"
         aria-label="Naive alternative: one feature duplicated into all three buckets it overlaps."
         className="shrink-0 mt-0.5"
       >
@@ -385,7 +384,7 @@ const CoverLookback: React.FC = () => (
         >
           ×3 copies
         </text>
-      </svg>
+      </FigureSvg>
       <p className="text-[11px] leading-relaxed" style={{ color: '#8a5a0a' }}>
         The naive alternative duplicates each feature into <em>every</em> bucket
         it overlaps, so a long-lived trip, storm or vessel track is written N

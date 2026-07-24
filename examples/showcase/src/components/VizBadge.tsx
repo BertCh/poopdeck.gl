@@ -254,10 +254,17 @@ export interface VizDef {
  * dark enough to stay legible on the warm-paper chrome; siblings differ by
  * glyph (trips line vs. head dots; H3 hex vs. Quadbin square). `trips` keeps the
  * brand teal — it's the hero technique.
+ *
+ * PARTIAL by construction: `DatasetType` is now core's whole 23-kind
+ * `LayerKind` vocabulary plus the showcase compositions, and the showcase ships
+ * demos for a dozen of them — a total Record would force a dozen dead glyphs
+ * for kinds no card uses. The coverage that matters is proved instead against
+ * the REAL catalog in `test/dataset-types.test.ts`: every shipped dataset's
+ * type must have an entry here, which the total Record never actually checked.
  */
-export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
+export const VIZ_REGISTRY: Partial<Record<DatasetType, VizDef>> = {
   point: { label: 'Points', color: '#C8432F', icon: PointGlyph },
-  'point-cloud': {
+  pointCloud: {
     label: 'Point cloud',
     color: '#146B5C',
     icon: PointCloudGlyph,
@@ -265,7 +272,7 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   radar: { label: 'Radar', color: '#3FA7C4', icon: PolygonGlyph },
   path: { label: 'Paths', color: '#2A8A60', icon: PathGlyph },
   trips: { label: 'Trips', color: '#0A7790', icon: TripsGlyph },
-  'trip-heads': { label: 'Heads', color: '#2A6FB0', icon: TripHeadsGlyph },
+  tripHeads: { label: 'Heads', color: '#2A6FB0', icon: TripHeadsGlyph },
   heatmap: { label: 'Heatmap', color: '#C2671B', icon: HeatmapGlyph },
   lightning: { label: 'Lightning', color: '#5566D6', icon: LightningGlyph },
   weather: { label: 'Weather suite', color: '#3A6EA5', icon: WeatherGlyph },
@@ -273,10 +280,10 @@ export const VIZ_REGISTRY: Record<DatasetType, VizDef> = {
   // suite) and differs by hue — same precedent as radar/polygon.
   storm4d: { label: 'Storm 4D', color: '#28527A', icon: WeatherGlyph },
   polygon: { label: 'Polygons', color: '#7A4DB3', icon: PolygonGlyph },
-  summary: { label: 'H3 summary', color: '#A93C76', icon: SummaryGlyph },
+  h3Summary: { label: 'H3 summary', color: '#A93C76', icon: SummaryGlyph },
   arc: { label: 'Arcs', color: '#3F54B6', icon: ArcGlyph },
   column: { label: 'Columns', color: '#94701A', icon: ColumnGlyph },
-  'quadbin-summary': { label: 'Quadbin', color: '#6B7C26', icon: QuadbinGlyph },
+  quadbinSummary: { label: 'Quadbin', color: '#6B7C26', icon: QuadbinGlyph },
   flowmap: { label: 'Flowmap', color: '#C72C68', icon: FlowmapGlyph },
   'flowmap-bundled': {
     label: 'Bundled flowmap',

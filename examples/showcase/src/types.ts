@@ -1,82 +1,99 @@
 import { resolvePlaybackParams } from '@poopdeck.gl/playback';
+import type { LayerKind } from '@poopdeck.gl/core/capabilities';
 
-export type DatasetType =
-  | 'point'
+/**
+ * Showcase-LOCAL dataset types: editorial COMPOSITIONS (several archives on one
+ * playhead) plus one render VARIANT, none of which is a layer kind any backend
+ * could declare — they are demos, not renderers. Everything else a dataset can
+ * be is a core {@link LayerKind}, imported above rather than respelled here.
+ *
+ * This union used to be a second, hand-written copy of the whole layer
+ * vocabulary, and it had already drifted from the frozen one in
+ * `@poopdeck.gl/core/capabilities`: `trip-heads` vs `tripHeads`, `point-cloud`
+ * vs `pointCloud`, `summary` vs `h3Summary`, `quadbin-summary` vs
+ * `quadbinSummary`. Four spellings that made every cross-reference between the
+ * showcase and a backend descriptor a manual translation. Keeping ONLY the
+ * genuinely-local names here means a rename in core is now a `tsc` break in the
+ * showcase too, which is the whole point of the frozen vocabulary.
+ *
+ * Notes the deleted union carried about the core kinds it respelled, kept
+ * because they record how to BUILD an archive of that kind:
+ *   - `pointCloud` — Phong-lit 3D cloud (`AnimatedPointCloudLayer`), one lit
+ *     point per feature animating on/off with the window. Build with
+ *     `stt-build --point-elevation-column z` (true 3D geometry) and
+ *     `--vector-group point_rgba=r,g,b,a:u8` (per-point colour bound zero-copy,
+ *     which takes precedence over `color`/`colorMapping`).
+ *   - `tripHeads` — one interpolated dot at the head of each active trip
+ *     (`AnimatedTripHeadsLayer`, CPU per-frame position on a stock
+ *     ScatterplotLayer). Same archive shape as `trips`, no rebuild needed.
+ *   - `h3Summary` — server-aggregated H3 summary tier (`H3SummaryLayer`); only
+ *     useful for archives built with `stt-build --summary-tier h3`.
+ *   - `quadbinSummary` — the square-cell (CARTO Quadbin) analog
+ *     (`QuadbinSummaryLayer`), from `stt-build --summary-tier quadbin`.
+ *   - `arc` — origin→destination flow arcs (`AnimatedArcLayer`); each feature
+ *     is a 2-vertex LineString (first vertex = source, last = target). Build
+ *     with `stt-generate nyc-rideshare --od`.
+ *   - `column` — extruded 3D columns at point features (`AnimatedColumnLayer`),
+ *     height from a numeric `elevationProperty`. Reuses any point archive.
+ */
+export const SHOWCASE_LOCAL_TYPES = [
+  'lightning',
+  'flowmap-bundled',
+  'radar',
+  'av',
+  'weather',
+  'storm4d',
+  'worlds',
+] as const;
+
+/** A composition/variant the showcase owns; see {@link SHOWCASE_LOCAL_TYPES}. */
+export type ShowcaseLocalType = (typeof SHOWCASE_LOCAL_TYPES)[number];
+
+/**
+ * What a demo card's `type` may be: a core cross-backend {@link LayerKind}, or
+ * one of the showcase's own compositions. `test/dataset-types.test.ts` fails if
+ * a shipped dataset is neither.
+ */
+export type DatasetType = LayerKind | ShowcaseLocalType;
+
+/**
+ * The core {@link LayerKind}s each showcase-local type MOUNTS. This is the
+ * translation the three backend gates need: a backend descriptor speaks
+ * `LayerKind`, so `radar` is renderable exactly when the backend renders
+ * polygons, points and trips. Every entry is the honest stack the corresponding
+ * `buildDemoLayers` / `buildSttLayers` case actually builds — an omission here
+ * makes a backend look MORE capable than it is, so it is the one table worth
+ * reading against the code when a composite changes.
+ */
+export const COMPOSITE_LAYER_KINDS = {
   /**
-   * Phong-lit 3D point cloud (`AnimatedPointCloudLayer`). Each feature is a lit
-   * point that animates on/off as the time window sweeps. Build the archive with
-   * `stt-build --point-elevation-column z` (true 3D geometry) and
-   * `--vector-group point_rgba=r,g,b,a:u8` (per-point colour bound zero-copy,
-   * which takes precedence over `color`/`colorMapping`).
+   * GLM lightning from ONE flash-point archive, drawn as TWO stacked layers: a
+   * live strike-DENSITY field (`AnimatedHeatmapLayer`) as the glowing backdrop,
+   * plus individual FLASHES (`AnimatedPointLayer`) on top, each appearing bright
+   * then fading + shrinking over `wakeLength` sim-ms so instantaneous strikes
+   * read as a shimmering flicker on the compressed clock. Build the archive with
+   * `python glm_lightning.py` (GOES-16 GLM L2 LCFA).
    */
-  | 'point-cloud'
-  | 'path'
-  | 'trips'
-  /**
-   * Moving head-dot trip rendering — one interpolated dot at the head of each
-   * active trip, drawn by `AnimatedTripHeadsLayer` (CPU per-frame position on a
-   * stock ScatterplotLayer). Same archive shape as `trips` (no rebuild needed).
-   */
-  | 'trip-heads'
-  | 'heatmap'
-  /**
-   * GLM lightning render from ONE flash-point archive, drawn as TWO stacked
-   * layers: a live strike-DENSITY field (`AnimatedHeatmapLayer`) as the glowing
-   * backdrop, plus individual FLASHES (`AnimatedPointLayer`) on top, each
-   * appearing bright then fading + shrinking over `wakeLength` sim-ms so
-   * instantaneous strikes read as a shimmering flicker on the compressed clock.
-   * Build the archive with `python glm_lightning.py` (GOES-16 GLM L2 LCFA).
-   */
-  | 'lightning'
-  | 'polygon'
-  /**
-   * Server-aggregated summary tier (H3 hex bins). Renders summary tiles via
-   * `H3SummaryLayer`. Only useful for archives built with
-   * `stt-build --summary-tier h3`.
-   */
-  | 'summary'
-  /**
-   * Origin→destination flow arcs (`AnimatedArcLayer`). Each feature is a
-   * 2-vertex LineString — first vertex = source, last = target. Arcs bow over
-   * the map and animate in/out by time window. Build with
-   * `stt-generate nyc-rideshare --od`.
-   */
-  | 'arc'
-  /**
-   * Extruded 3D columns at point features (`AnimatedColumnLayer`); column
-   * height comes from a numeric `elevationProperty`. Reuses any point archive.
-   */
-  | 'column'
-  /**
-   * Server-aggregated CARTO Quadbin summary tier (`QuadbinSummaryLayer`) — the
-   * square-cell analog of `summary`. Only useful for archives built with
-   * `stt-build --summary-tier quadbin`.
-   */
-  | 'quadbin-summary'
-  /**
-   * flowmap.gl-style animated origin→destination flowmap (`FlowmapLayer`). One
-   * weighted arc per OD station-pair whose width tracks trip volume at the
-   * playhead (read from a per-bucket `vertexValueMatrix`), plus node circles
-   * sized by incident flow. Build with `stt-generate bixi`.
-   */
-  | 'flowmap'
+  lightning: ['heatmap', 'point'],
   /**
    * GPU force-directed edge-bundled flowmap (`BundledFlowmapLayer`). Same OD
-   * `vertexValueMatrix` tiles as `flowmap`, but compatible flows are relaxed
-   * into smooth bundled rivers on the GPU (Holten FDEB, cosmos.gl-style
-   * ping-pong textures) and rendered fully GPU-resident. Drop-in superset of
-   * `flowmap`; honors the same `flow*` styling props.
+   * `vertexValueMatrix` tiles as the core `flowmap` kind, but compatible flows
+   * are relaxed into smooth bundled rivers on the GPU (Holten FDEB, cosmos.gl-
+   * style ping-pong textures). A drop-in superset of `flowmap` honoring the same
+   * `flow*` props — which is why it maps to the `flowmap` kind and NOT to a kind
+   * of its own: bundling is the `liveBundling` CAPABILITY, and a backend without
+   * it (maplibre) draws the straight flowmap instead of refusing the demo.
    */
-  | 'flowmap-bundled'
+  'flowmap-bundled': ['flowmap'],
   /**
    * Composite storm-radar render (NEXRAD). Overlays THREE STT archives from one
    * dataset entry: filled reflectivity contour bands (`AnimatedPolygonLayer`,
    * categorical `dbz_band`) as the animated precipitation field — the dataset's
    * primary `url`; storm-cell centroids (`AnimatedPointLayer`) from
-   * `radarCellsUrl`; and animated cell tracks (`AnimatedTripsLayer`,
-   * per-vertex intensity) from `radarTracksUrl`. Build with `stt-generate storms`.
+   * `radarCellsUrl`; and animated cell tracks (`AnimatedTripsLayer`, per-vertex
+   * intensity) from `radarTracksUrl`. Build with `stt-generate storms`.
    */
-  | 'radar'
+  radar: ['polygon', 'point', 'trips'],
   /**
    * Composite AV-telemetry "cockpit" render (streetscape.gl / avs.auto style).
    * Overlays up to THREE STT archives from one AV scene bundle: an accumulated
@@ -87,8 +104,13 @@ export type DatasetType =
    * cockpit additionally reads `avSceneUrl` (the `scene.json` manifest) plus the
    * `avTelemetryUrl` / `avCamerasUrl` sidecars for chrome, gauges, and the camera
    * inset. Built by the `av_synthetic.py` / `nuscenes_extract.py` adapters.
+   *
+   * `pointCloud` is listed even though the deck path draws the cloud with
+   * `AnimatedPointLayer`: the three backend has a real lit-cloud requirement
+   * here (`AvThreeViewer`), and declaring the weaker `point` would advertise the
+   * cockpit on backends that cannot carry it.
    */
-  | 'av'
+  av: ['pointCloud', 'trips', 'boundingBox'],
   /**
    * Composite WEATHER-SUITE render on one playhead. Stacks (bottom→top): HRRR
    * wind streamlines (`AnimatedTripsLayer`, from `windUrl`); the MRMS precip
@@ -100,7 +122,7 @@ export type DatasetType =
    * density field + flashes (from `lightningUrl`). Built by glm_lightning.py +
    * mrms_weather.py + hrrr_advect.py + wpc_fronts.py.
    */
-  | 'weather'
+  weather: ['polygon', 'trips', 'path', 'point', 'heatmap'],
   /**
    * Composite STORM-4D render — one supercell as a true 4D object on one
    * playhead (the depth-first sibling of the continental `weather` suite).
@@ -120,7 +142,7 @@ export type DatasetType =
    * `lightningUrl`); and the radiosonde ascent trail (from `soundingUrl`).
    * Built by nexrad_volume.py + the storm4d fetch scripts.
    */
-  | 'storm4d'
+  storm4d: ['polygon', 'point', 'trips', 'path', 'heatmap'],
   /**
    * WORLD-MODEL SCENARIO GALLERY (`/worlds`) — hundreds of short driving
    * scenarios laid out side by side on a synthetic grid, every one animating
@@ -131,11 +153,24 @@ export type DatasetType =
    * substrate (`avMapLineUrl` / `avMapPolyUrl`, timeless full-range archives).
    * A `worldsUrl` sidecar carries the per-scenario index (grid origin, caption,
    * agent counts, generated-video paths, hero LiDAR manifest); heroes stream
-   * their own LiDAR archive when selected. Rendered by the bespoke
-   * `/worlds` page (never by `DemoViewer`), which is why this type has no
+   * their own LiDAR archive when selected. Rendered by the bespoke `/worlds`
+   * page (never by `DemoViewer`), which is why this type has no
    * `buildDemoLayers` case. Built by `cosmos_drive_dreams.py`.
    */
-  | 'worlds';
+  worlds: ['trips', 'boundingBox', 'path', 'polygon'],
+} as const satisfies Record<ShowcaseLocalType, readonly LayerKind[]>;
+
+/**
+ * The core {@link LayerKind}s a backend must support to render `type`. A core
+ * kind needs itself; a showcase-local type needs its whole composite stack.
+ * Feed this to a published `BackendDescriptor` (see `lib/backendSupport.ts`)
+ * instead of hand-listing what each backend can draw.
+ */
+export function datasetTypeKinds(type: DatasetType): readonly LayerKind[] {
+  return type in COMPOSITE_LAYER_KINDS
+    ? COMPOSITE_LAYER_KINDS[type as ShowcaseLocalType]
+    : [type as LayerKind];
+}
 
 export interface DatasetLegendItem {
   color: string;
@@ -440,7 +475,7 @@ export interface Dataset {
    */
   filterRange?: [number, number];
 
-  // ─── type: 'point-cloud' ───────────────────────────────────────────────
+  // ─── type: 'pointCloud' ────────────────────────────────────────────────
   /** Radius of every point in `pointSizeUnits`. Defaults to the layer's 10. */
   pointSize?: number;
 
@@ -473,7 +508,7 @@ export interface Dataset {
    */
   heatmapLayers?: HeatmapLayerSpec[];
 
-  // ─── trip-heads styling (type: 'trip-heads') ───────────────────────────
+  // ─── trip-head styling (type: 'tripHeads') ─────────────────────────────
   // Rendered by AnimatedTripHeadsLayer — a smooth moving dot at the head of
   // each active trip (CPU-interpolated position on a stock ScatterplotLayer).
   /** Head-dot color, RGBA 0-255. */
@@ -1191,7 +1226,7 @@ export interface Dataset {
     maxPitch?: number;
   };
 
-  // ─── summary-tier styling (type: 'summary') ────────────────────────────
+  // ─── summary-tier styling (type: 'h3Summary') ──────────────────────────
   /**
    * Numeric column the summary-tier color ramp + extrusion are driven by.
    * Defaults to `'count'` (the implicit per-cell count column).

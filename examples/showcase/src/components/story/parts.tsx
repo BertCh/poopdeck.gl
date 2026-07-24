@@ -6,6 +6,7 @@ import type {
   AssetCredit,
 } from '../../content/drifterStory';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import FigureSvg from '../FigureSvg.tsx';
 
 // ── Small typographic helpers ───────────────────────────────────────────────
 export const Eyebrow: React.FC<{
@@ -260,10 +261,9 @@ export const DrifterDiagram: React.FC = () => {
     </text>
   );
   return (
-    <svg
+    <FigureSvg
       viewBox="-128 0 600 470"
       width="100%"
-      role="img"
       aria-label="Anatomy of an SVP drifter"
       style={{ maxWidth: 560 }}
     >
@@ -432,6 +432,6 @@ export const DrifterDiagram: React.FC = () => {
       {label(92, 357, 'it grips the water, so', 'end')}
       {label(92, 373, 'the buoy follows the', 'end')}
       {label(92, 389, 'current, not the wind', 'end')}
-    </svg>
+    </FigureSvg>
   );
 };

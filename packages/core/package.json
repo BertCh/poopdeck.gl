@@ -66,6 +66,7 @@
   "scripts": {
     "build": "tsc && pnpm run build:worker",
     "build:worker": "esbuild src/tile-decoder.worker.ts --bundle --format=esm --platform=browser --target=esnext --sourcemap --outfile=dist/tile-decoder.worker.js",
+    "dev": "pnpm run build:worker && tsc --watch --preserveWatchOutput",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",

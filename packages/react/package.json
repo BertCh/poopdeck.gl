@@ -34,6 +34,7 @@
   "scripts": {
     "build": "tsc && pnpm run build:css",
     "build:css": "tailwindcss -i src/styles.css -o dist/styles.css --minify",
+    "dev": "pnpm run build:css && tsc --watch --preserveWatchOutput",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",

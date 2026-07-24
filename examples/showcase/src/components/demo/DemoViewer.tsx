@@ -634,13 +634,15 @@ const SummaryToggle: React.FC<{
   onChange: (next: string) => void;
 }> = ({ options, value, onChange }) => {
   return (
-    <div
-      className="inline-flex items-center rounded overflow-hidden"
+    // A <fieldset> rather than a div with role="group": the segmented toggle is
+    // a set of form controls, so the native grouping element carries the
+    // semantics (browser border/padding reset off, ours kept).
+    <fieldset
+      className="inline-flex items-center rounded overflow-hidden m-0 p-0 min-w-0"
       style={{
         background: 'rgba(36, 39, 48, 0.95)',
         border: '1px solid #3A414C',
       }}
-      role="group"
       aria-label="Summary weight"
     >
       {options.map((opt, i) => {
@@ -671,6 +673,6 @@ const SummaryToggle: React.FC<{
           </button>
         );
       })}
-    </div>
+    </fieldset>
   );
 };

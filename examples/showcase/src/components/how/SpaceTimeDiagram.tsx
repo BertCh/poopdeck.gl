@@ -1,5 +1,6 @@
 import React from 'react';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import FigureSvg from '../FigureSvg.tsx';
 
 /**
  * The core-idea diagram: tiles are cut in space (Web-Mercator z/x/y) AND in
@@ -244,10 +245,9 @@ export const TemporalLodFigure: React.FC = () => (
       Deeper: the time axis has zoom levels too
     </h4>
     <div className="overflow-x-auto">
-      <svg
+      <FigureSvg
         viewBox="0 0 920 210"
         className="w-full min-w-[680px]"
-        role="img"
         aria-label="Diagram: the same instant covered by three temporal tiers — 30-day buckets at low zoom, 1-day buckets at mid zoom, 1-hour buckets at high zoom — with one shared playhead."
       >
         {LOD_TIERS.map((tier, row) => {
@@ -315,7 +315,7 @@ export const TemporalLodFigure: React.FC = () => (
         <text x={LOD_X0} y="206" fontSize="10" fill="var(--ink-400)">
           the same instant, three tiers — one tile of data at every altitude
         </text>
-      </svg>
+      </FigureSvg>
     </div>
     <p
       className="mt-2 text-[11px] leading-relaxed"
@@ -362,10 +362,9 @@ const SpaceTimeDiagram: React.FC = () => {
   return (
     <div>
       <div className="overflow-x-auto">
-        <svg
+        <FigureSvg
           viewBox="0 0 920 300"
           className="w-full min-w-[720px]"
-          role="img"
           aria-label="Diagram: the tile pyramid subdivides space; each tile is further cut into time buckets, and the playhead selects which buckets stream in."
         >
           {/* ── Left: the spatial pyramid ─────────────────────────────── */}
@@ -528,7 +527,7 @@ const SpaceTimeDiagram: React.FC = () => {
             The viewer streams only viewport ∩ zoom ∩ time window — never the
             whole archive.
           </text>
-        </svg>
+        </FigureSvg>
       </div>
 
       {/* scrubber */}
