@@ -369,7 +369,7 @@ repeat N:
   ivarint  Δcover_t_min        # cover_t_min - time_start (signed)
 ```
 
-**Run-length encoding (the headline win).** A _run_ is a maximal stretch of
+**Run-length encoding.** A _run_ is a maximal stretch of
 consecutive entries (in directory order) that reference the **same physical
 blob** — same `(pack_id, offset, length, uncompressed_size, crc32c)`. Because
 the writer deduplicates byte-identical blobs (§5), a spatial cell whose content
@@ -971,11 +971,11 @@ formats are complementary halves of a spatiotemporal stack.
 is the closest existing analog — a tiling system designed for spatiotemporal
 analytics, with an explicit temporal axis. It is proprietary (Foursquare
 Studio's internal format) and H3-cell-based rather than vector-geometry-based.
-STT is positioned as **the open alternative**: a published spec
-(this document + [`manifest.schema.json`](./manifest.schema.json)), two
-reference implementations (Rust writer/reader, TypeScript reader), exact
-vector geometry rather than hex aggregates — with an optional H3 summary tier
-where pre-aggregation is the right tool.
+STT differs in being open and vector-based: a published spec (this document +
+[`manifest.schema.json`](./manifest.schema.json)), two reference implementations
+(Rust writer/reader, TypeScript reader), and exact vector geometry rather than
+hex aggregates — with an optional H3 summary tier where pre-aggregation is the
+right tool.
 
 ### 10.6 GeoArrow
 

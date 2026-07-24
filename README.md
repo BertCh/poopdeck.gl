@@ -14,48 +14,42 @@
 
 ## What is STT?
 
-STT is a **cloud-native tile format** for spatiotemporal data. A dataset is a
-tiny `manifest.json` plus many immutable, content-addressed **pack** objects, so
-it deploys to any static host or CDN and every object edge-caches natively — no
-tile server, no Worker. It combines a spatial tile pyramid with a temporal axis
-— each tile is addressed by `(zoom, x, y, time-bucket)` — so a deck.gl client
-streams only the tiles in the current viewport _and_ time window, and animates
-over time.
+STT is a tile format for spatiotemporal data. A dataset is a small
+`manifest.json` plus many immutable, content-addressed **pack** objects, so it
+deploys to any static host or CDN — no tile server, no Worker. It adds a temporal
+axis to a spatial tile pyramid: each tile is addressed by
+`(zoom, x, y, time-bucket)`, so a client streams only the tiles in the current
+viewport _and_ time window, and animates over time.
 
-Tile payloads are **Apache Arrow IPC** with **GeoArrow**-encoded geometry — a
-standard, columnar, GPU-friendly representation that interops directly with
-`@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
+Tile payloads are Apache Arrow IPC with GeoArrow-encoded geometry, which
+interops directly with `@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
+
+**Scope:** temporally-tiled _vector_ data — trajectories, events, and
+time-varying features. Time-varying rasters and datacubes are out of scope; use
+[GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
 
 **See it live:** the showcase app (`examples/showcase`, deployed on Cloudflare)
 carries dozens of real-dataset demos, the rendered docs at `/docs`, an AV LIDAR
 cockpit at `/drive`, and a scrollytelling data story at `/story/drifters`.
 
-**Scope:** STT is for temporally-tiled **vector** data — trajectories, events,
-and time-varying features. Time-varying rasters and datacubes are out of scope;
-use [GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
-
 ### Key features
 
-- 📦 **Packed, content-addressed** — a dataset is `manifest.json` + many
-  immutable `packs/*.sttp` (≤64 MiB each by default) + a directory object.
-  Deploy to R2 / S3 / GCS / nginx; no tile server needed.
-- 🌐 **Edge-cacheable by construction** — immutable packs cache forever on a
-  plain CDN; only the tiny manifest is mutable. Cacheability is a property of
-  the _format_, not the deploy.
-- 🌐 **HTTP Range Requests** — tiles are fetched with per-pack range requests,
-  coalesced within each pack.
-- 🗜️ **Apache Arrow payloads** — GeoArrow geometry + columnar properties,
-  per-blob zstd-compressed (no shared dictionary), with a CRC32C integrity tag
-  per tile.
-- 🕒 **Temporal tiling** — features are bucketed into fixed time intervals for
-  predictable, animation-friendly loading. Optional coarser-bucket pyramid
-  (`--temporal-lod`) for multi-scale animation.
-- 🎯 **Locality-aware layout** — directory entries are Hilbert-sorted, and tile
-  blobs are packed in locality-preserving order (`--blob-ordering auto` picks
-  3D-Hilbert or spatial-major per dataset) so a viewport touches few packs.
-- 🧭 **H3 summary tier** — optional pre-aggregated low-zoom tier for
-  100M+ scale point datasets.
-- 🔧 **Stack** — Rust (`arrow`, `geo`, `geozero`) builder + TypeScript
+- **Packed, content-addressed** — `manifest.json` + immutable `packs/*.sttp`
+  (≤64 MiB each by default) + a directory object. Deploy to R2 / S3 / GCS /
+  nginx. Immutable packs cache forever on a plain CDN; only the manifest is
+  mutable.
+- **HTTP Range reads** — tiles are fetched by range request, coalesced within
+  each pack.
+- **Apache Arrow payloads** — GeoArrow geometry + columnar properties, per-blob
+  zstd-compressed (no shared dictionary), CRC32C integrity tag per tile.
+- **Temporal tiling** — features are bucketed into fixed time intervals, with an
+  optional coarser-bucket pyramid (`--temporal-lod`) for multi-scale animation.
+- **Locality-aware layout** — directory entries are Hilbert-sorted and tile blobs
+  are packed in locality-preserving order (`--blob-ordering auto` picks
+  3D-Hilbert or spatial-major per dataset), so a viewport touches few packs.
+- **H3 summary tier** — optional pre-aggregated low-zoom tier for 100M+ point
+  datasets.
+- **Stack** — Rust (`arrow`, `geo`, `geozero`) builder; TypeScript
   (`apache-arrow`, deck.gl, MapLibre) reader and layers.
 
 ---
@@ -165,11 +159,11 @@ data/<dataset>/
 ```
 
 The reader fetches `manifest.json`, then the directory object, then each tile via
-a Range request against the right pack — a cold load is 1 manifest + 1 directory
-
-- N pack ranges; warm is all served from edge cache. Full spec:
-  [`docs/spec/stt-packed-format.md`](./docs/spec/stt-packed-format.md) (machine-
-  checkable manifest schema: [`manifest.schema.json`](./docs/spec/manifest.schema.json)).
+a Range request against the right pack. A cold load is one manifest, one
+directory, and N pack ranges; a warm load is served entirely from edge cache.
+Full spec: [`docs/spec/stt-packed-format.md`](./docs/spec/stt-packed-format.md)
+(machine-checkable manifest schema:
+[`manifest.schema.json`](./docs/spec/manifest.schema.json)).
 
 Each tile blob is a small _layer frame_ (`[u16 count]` then per-layer
 `[name][Arrow IPC]`); every layer is one Arrow `RecordBatch` whose `geometry`
@@ -182,14 +176,17 @@ implementation across the Rust writer and the TypeScript reader.
 
 ```
 spatiotemporal-tiles/
-├── crates/                 # Rust
+├── crates/                 # Rust workspace — 5 crates
 │   ├── stt-core/           # Archive + Arrow tile format library
-│   ├── stt-build/          # CLI: GeoParquet -> packed dataset
-│   ├── stt-generate/       # Bundled showcase-dataset generators
+│   ├── stt-build/          # Library: GeoParquet / PostGIS / DuckDB -> packed dataset
+│   ├── stt-generate/       # Bundled showcase-dataset generators (+ the stt-generate CLI)
 │   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
-│   ├── stt-validate/       # Content-address + CRC32C + decode check (packed dirs or .sttb bundles)
-│   ├── stt-bundle/         # Pack/unpack single-file .sttb interchange bundles
-│   └── stt-serve/          # Dynamic per-request STT tile server over PostGIS/DuckDB
+│   └── spatiotemporal-tiles/  # Umbrella crate: re-exports the libraries above and
+│       └── src/bin/           #   ships every other CLI: stt-build, stt-optimize,
+│                              #   stt-validate (content-address + CRC32C + decode check over
+│                              #   packed dirs or .sttb bundles), stt-bundle (pack/unpack
+│                              #   single-file .sttb interchange bundles), stt-serve (dynamic
+│                              #   per-request STT tile server over PostGIS/DuckDB)
 ├── packages/               # TypeScript
 │   ├── core/               # Archive reader, decoder pool, OPFS cache + the
 │   │                       #   framework-free RENDER KERNEL every backend shares:

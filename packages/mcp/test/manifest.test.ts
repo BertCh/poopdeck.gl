@@ -117,7 +117,10 @@ describe('scanDatasets', () => {
     // distinct_feature_count is the true source total and must win.
     const root = await fixtureRoot({
       quakes: makeManifestJson({
-        metadata: { feature_count: 5_000_000, distinct_feature_count: 1_234_567 },
+        metadata: {
+          feature_count: 5_000_000,
+          distinct_feature_count: 1_234_567,
+        },
       }),
     });
     const [d] = await scanDatasets(root);

@@ -10,7 +10,7 @@ description: >-
   wants a minimal working setup before wiring layers or building datasets.
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # Installing poopdeck.gl & scaffolding a project

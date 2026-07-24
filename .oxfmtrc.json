@@ -15,6 +15,7 @@
   "insertFinalNewline": true,
   "sortPackageJson": false,
   "ignorePatterns": [
+    "docs/spec/backend-capabilities.md",
     "**/dist/**",
     "**/build/**",
     "**/.react-router/**",

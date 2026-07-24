@@ -14,21 +14,42 @@ determinism closed via arrow ≥59), fully-closed audits deleted, and overlappin
 records merged. The mapping from retired files is in the ledger at the bottom;
 git history preserves everything verbatim.
 
+**Today the directory holds 21 records** (this README aside): those 14 survivors
+plus seven written since — the AI suite, kind-parity, maplibre-parity, the
+three-backend SoTA campaign, storm-4D, cosmos/`/worlds`, and SedonaDB. Every one
+is indexed in a section below; a doc that is not listed here is not findable, so
+new records get an entry in the same pass that creates them.
+
+[`evaluations/`](./evaluations/) sits apart from that count: archived,
+reference-only third-party model reviews of the format and the deck.gl
+integration from December 2025, written against a tree that predates the
+`packages/layers` rename, packed-v2, and the render-kernel abstraction. Prior
+art, not a record — see its own README before citing anything in it.
+
 ## The open register (single source — stop restating these per-doc)
 
-1. **The user-run rollout/verify ops gate** — demo-fleet republish to packed v2
-   → R2 sync (prune-grace ready) → in-browser verify. One combined pass closes
-   the open tails of the format record, av-cockpit, playback (multi-source
-   4-part verify), scrub-LOD QoE, the three/deck-parity visual checks, and the
-   GTFS-NL / NWM demos (verify + R2 push).
+1. **The user-run rollout/verify ops gate** — the R2 half is now mostly
+   discharged: the weather suite synced 2026-07-22 and `3cf6f2c` synced the
+   storm-4d / storm-3d / cosmos stems and emptied `LOCAL_ONLY_DATASETS`, so the
+   public deploy serves every registered non-Waymo demo. What still remains is
+   (a) the **in-browser verify pass**, which is what actually closes the open
+   tails of the format record, av-cockpit, playback (multi-source 4-part),
+   scrub-LOD QoE, the deck / three / maplibre visual checks, kind-parity
+   aesthetics, and storm-4d / `/worlds`; (b) the **demo-fleet republish to
+   packed v2** (prune-grace ready); and (c) two registered-but-unsynced stems —
+   `rainfall-2019` (the rain-flood composite's rain field) and `gtfs-ch` still
+   404 on tiles.poopdeck.gl and are not gated, so the live catalog links them.
 2. **GitHub Actions is dead** — blocks renderer Decision 6 (GPU-conformance
    CI, which gates the Phase-1 shader rewire), verification of the rewritten
    CI/release gates, and the ecosystem audit's one live §1 item.
 3. **three backend SoTA campaign** — the 2026-07-22 four-agent research synthesis
    absorbed the old "three integration tail" (3d-tiles-renderer integration,
    `SttThreeGeoViewer` wiring, basemap) into a full parity + engine campaign
-   ([three-backend-sota-campaign-2026-07.md](./three-backend-sota-campaign-2026-07.md),
-   PENDING RATIFY).
+   ([three-backend-sota-campaign-2026-07.md](./three-backend-sota-campaign-2026-07.md)).
+   **In execution:** Waves 0 + 1 and the Wave-2 picking catalog landed in
+   `9f52804`; open are Wave 3 (the 3DTilesRendererJS globe/basemap track — the
+   old tail proper), the held residency + upload-throttle work (trigger-gated on
+   a measurement spike, not a blind rewrite), and the `compileAsync` pre-warm.
 4. **Format tail** — serve-v2, lazy-props client materialization, temporal-LOD
    beyond scrub P0–P2
    ([stt-packed-format-decisions.md](./stt-packed-format-decisions.md) §10);
@@ -50,31 +71,20 @@ git history preserves everything verbatim.
 
 ## Forward-looking (not built)
 
-- [**kind-parity-campaign-2026-07.md**](./kind-parity-campaign-2026-07.md) —
-  the geometry-kind & layer parity campaign (2026-07-21): four-agent survey
-  baseline (polygons weakest end-to-end, moving-marker interpolation gap,
-  orphan layers, `view_map` points-fallback) → four tracks (polygon parity,
-  motion parity, adopt-or-cut, AI-surface reach) executed as wave-by-wave
-  agent workflows with a target capability matrix. Plan only; Wave-2+ fleet
-  republish folds into register item 1.
-- [**maplibre-parity-campaign-2026-07.md**](./maplibre-parity-campaign-2026-07.md)
-  — the MapLibre/Mapbox native-backend parity campaign (2026-07-22): three-agent
-  research pass (custom-layer APIs across maplibre v3→v6 and mapbox v3 from
-  source; deck 9.3 interleaved internals + ecosystem patterns; whole-repo backend
-  audit) → six waves reversing the "5-of-23 subset is intentional" posture.
-  **IN EXECUTION** — M0+M1 landed (host dispatch v3–v6, native globe via the
-  injected prelude, lifecycle hardening, shared tileset); M2 landed (all four
-  time modes, DataFilter, metric sizing, the D10 elevation reconciliation —
-  breaking, see the package CHANGELOG — and id-FBO picking on four kinds).
-  M3–M5 open; user browser verify open.
-- [**three-backend-sota-campaign-2026-07.md**](./three-backend-sota-campaign-2026-07.md)
-  — the three.js backend SoTA campaign (2026-07-22): four-agent research pass
-  (deck-vs-three gap audit; geo-ecosystem survey; TSL/WebGPU deep dive; large-scale
-  rendering techniques) → four tracks (feature/interaction parity, engine SoTA,
-  platform/ecosystem adoption, reach/verification) in five waves. Headline gaps: 0/6
-  feature families, points-only picking, replace-all residency, fragment-discard time
-  filtering, scene-wide f32 time origin. Absorbs register item 3. Plan only, PENDING
-  RATIFY.
+- [**sedona-integration-2026-07.md**](./sedona-integration-2026-07.md) — adding
+  **Apache SedonaDB** (the embedded Rust/DataFusion engine, not the classic
+  distributed JVM Sedona) as a third `stt-build` input source and `stt-serve`
+  backend beside PostGIS and DuckDB. It is an architectural twin of the DuckDB
+  adaptor, so it reuses the `ParsedFeature` seam wholesale and extends
+  [db-input-adaptors.md](./db-input-adaptors.md) rather than reopening it.
+  Records the pinned facts (sedona 0.3.0 is on crates.io, so an optional feature
+  _can_ ship in the published facade — that gate is cleared), the one hard
+  constraint (sedona's arrow 57 against the workspace's arrow 59, contained by
+  keeping every arrow type inside `sedona_input.rs` and bridging through
+  `ST_AsBinary`/WKB), the strict-CRS set-then-transform rule, the
+  async→`block_on` seam, and a four-phase plan (spike → ingest → serve →
+  close-out).
+  Proposed 2026-07-23, scope ratified, **not started**.
 - [**space-time-lod-2026-07.md**](./space-time-lod-2026-07.md) — the space×time
   LOD master plan (2026-07-10): dual codebase audit + verified external SOTA →
   six phases (measure → resolution-true simplification → declared reduced
@@ -83,8 +93,9 @@ git history preserves everything verbatim.
   temporal-LOD tail of item 4. Plan only, nothing implemented.
 - [**dataset-candidates-2026-07.md**](./dataset-candidates-2026-07.md) — the
   standing demo-datasets register: license-verified shortlist with per-section
-  status (GTFS-NL and NWM rivers **SHIPPED** locally, with absorbed build
-  notes; HRRR wind / GLM lightning / asteroids etc. still analysis-only),
+  status (GTFS-NL and NWM rivers **SHIPPED** and now live on R2, with absorbed
+  build notes; the GTFS-CH sibling is built but unsynced; HRRR wind / GLM
+  lightning / asteroids etc. still analysis-only),
   the blocked list (OpenSky, GFW, Gaia…), and the operational time-bombs.
 - [**preprocessing-framework.md**](./preprocessing-framework.md) — bake
   analytics into tiles at build time via a Plan-IR operator DAG + declarative
@@ -117,6 +128,54 @@ git history preserves everything verbatim.
   three integration). User-facing:
   [`render-kernel.md`](../api/render-kernel.md),
   [`backend-capabilities.md`](../spec/backend-capabilities.md).
+- [**maplibre-parity-campaign-2026-07.md**](./maplibre-parity-campaign-2026-07.md)
+  — the MapLibre/Mapbox native-backend parity campaign (2026-07-22), **COMPLETE**
+  (M0–M5, `3a56756`…`4acc537`): a three-agent research pass (custom-layer APIs
+  across maplibre v3→v6 and mapbox v3 from source; deck 9.3 interleaved
+  internals + ecosystem patterns; whole-repo backend audit) reversed the
+  "5-of-23 subset is intentional" posture into **fifteen** native layer kinds,
+  all four time modes, DataFilter, latitude-correct metric sizing (with the
+  BREAKING D10 reconciliation — `altitudeScale` is now a dimensionless
+  exaggeration), id-FBO picking on every kind but heatmap, native globe on v5+
+  hosts via the injected projection prelude, a shared tileset, the
+  `STTLayerGroup` composite host, and Mapbox v3 mercator + Standard-style slots
+  — all as custom layers with zero deck/luma dependency. Keeps the declared
+  fallbacks (`liveBundling` permanent, mapbox globe deferred, `text → icon`,
+  `pointCloud → point`) and the delivered-vs-plan close-out (§8). Showcase
+  wiring landed in `9f52804`; only the user's browser verify (aesthetic +
+  globe + fps) remains.
+- [**three-backend-sota-campaign-2026-07.md**](./three-backend-sota-campaign-2026-07.md)
+  — the three.js backend SoTA campaign (2026-07-22), **in execution**: four-agent
+  research pass (deck-vs-three gap audit; geo-ecosystem survey; TSL/WebGPU deep
+  dive; large-scale rendering techniques) → four tracks in five waves, against
+  headline gaps of 0/6 feature families, points-only picking, replace-all
+  residency, fragment-discard time filtering. Landed in `9f52804`: Wave 0
+  streaming-knob parity (debounce / prefetch / overviewPreload /
+  summaryZoomRange / scrubLod forwarded, summary-tier auto-dispatch), Wave 1's
+  vertex-stage time collapse across eight materials and all six feature families
+  flipped `supported: true` (motion glide, dataFilter incl. icon,
+  `timeHeightScale`, `iconWake`, `pathReveal`, stable colour mapping — each
+  opt-in and byte-identical when off), and the Wave-2 picking catalog: ten kinds
+  GPU-pickable through a structural `isIdPickable` auto-register, every
+  id-material reusing its colour material's gates so picking stays
+  time/filter-correct (glide-pick returns null, deferred). Absorbs register
+  item 3; see it for what is open.
+- [**kind-parity-campaign-2026-07.md**](./kind-parity-campaign-2026-07.md) —
+  the geometry-kind & layer parity campaign (2026-07-21): four-agent survey
+  baseline (polygons weakest end-to-end, moving-marker interpolation gap,
+  orphan layers, `view_map` points-fallback) → four tracks (polygon parity,
+  motion parity, adopt-or-cut, AI-surface reach) executed wave-by-wave against
+  a target capability matrix. Waves 1–3 ran 2026-07-21/22: antimeridian-aware
+  polygon clipping (`b8718ce`), the CPU motion-glide engine and its incremental
+  `TrackIndexMaintainer` perf fix, DataFilter + `colorMapping` across all six
+  feature families (icon included, closing the §5 matrix), path-reveal
+  capability, and a widened `view_map` inference (`fd1a50f`). The doc carries
+  the per-wave results, the ratified adopt-or-cut table, the A3 seam-overdraw
+  design record, and the adversarial-review bug log. Open last-mile: A3
+  implementation (ratify the design first), the C3 path-reveal demo (needs a
+  window-fix rebuild), the earthquakes DataFilter slider UI, a B4 icon flagship
+  demo, and the user's aesthetic verify. Its header banner still reads "PLAN
+  ONLY" — the results sections below it are the truth.
 - [**scrub-lod-2026-07.md**](./scrub-lod-2026-07.md) — motion-tier LOD while
   scrubbing: P0–P2 shipped 2026-07-05 (`setInteractive` → `scrubLod`, DEFAULT
   OFF, kill-switched; temporal axis wired but inert); the five-domain SoTA
@@ -125,6 +184,26 @@ git history preserves everything verbatim.
   — profiler + advisor + doctor ("measure, don't model"); P0–P2.5 shipped;
   the measure-first evidence (expert plans overturned twice; wins are
   dataset-shaped 1.07×–21×). User docs: [Tuning your tiles](../guides/tuning-tiles.md).
+- [**ai-suite-skills-mcp-2026-07.md**](./ai-suite-skills-mcp-2026-07.md) — the
+  AI-assisted-suite record (2026-07-07): SoTA reads on Agent Skills and MCP, the
+  complementarity split that shaped the product (MCP = connectivity, Skills =
+  procedural know-how, shipped as one plugin), the comparables survey behind the
+  "the `stt-*` CLIs are our wrangler" posture, the security model (arg-array
+  `spawn`, output caps, timeouts, path containment, subprocess opt-in), and the
+  phased plan. As built, `@poopdeck.gl/mcp` (`stt-mcp`) registers **thirteen**
+  tools — discovery (`list_datasets`, `describe_dataset`), analysis
+  (`dataset_report`, `recommend_build`, `diff_datasets`), docs (`search_docs`,
+  `get_doc` — this record had deferred them), interactive (`view_map`,
+  `set_time`, `play_pause`), and three `--allow-cli`-only execution tools
+  (`build_dataset`, `validate_dataset`, `generate_dataset`, the only
+  network-touching one) — over stdio + stateless Streamable HTTP, beside the
+  `poopdeck-ai` plugin, `llms.txt`, and ten skills. The CARTO tier it grew out
+  of was expunged the same day (see its header); layer classes for `view_map`
+  specs come from `@poopdeck.gl/layers`. Open: publishing `@poopdeck.gl/mcp` to
+  npm (the one unpublished package, so `.mcp.json` still can't `npx` it), remote
+  Streamable-HTTP + OAuth hosting, per-skill evals, a registry `server.json`,
+  and the deferred `compose_layer`. User docs:
+  [AI-assisted workflows](../guides/ai-suite.md).
 - [**db-input-adaptors.md**](./db-input-adaptors.md) — PostGIS/DuckDB as
   stt-build inputs + the stt-serve backends, landed on main; now also carries
   the encoder-seam lessons and the static-vs-DB architectural verdict
@@ -134,7 +213,26 @@ git history preserves everything verbatim.
   `rain-flood-2019` weather-drives-water composite (CMORPH isoband rain +
   NWM river overlay): design, data pipeline, and build recipe. Built + wired
   locally; replaces the standalone `nwm-rivers-flood-2019-03` demo; R2 push
-  of the `rainfall-2019` archive open.
+  of the `rainfall-2019` archive open (still 404 — register item 1).
+- [**storm-4d-greenfield-2026-07.md**](./storm-4d-greenfield-2026-07.md) — the
+  "storm as a 4D object" campaign (2026-07-22): the Greenfield, Iowa EF4 of
+  2024-05-21 as one volumetric scene — NEXRAD Level II gates stacked by
+  elevation with dealiased velocity, the mesocyclone couplet, warning prisms
+  rising on VTEC clocks, damage reports and county outages arriving behind the
+  storm, cloud-top isobands lifted to brightness-temperature height, stations
+  and multi-level winds — the depth-first sibling of `severe-weather-2024` on
+  the same clock. Carries the §9 execution contract binding on every build
+  agent, the no-thinning reading of the demo's filters (dBZ floor + 150 km crop
+  are semantic and declared; gate decimation is a Waymo-class reduced tier over
+  a citable raw base), the Py-ART-not-Rust generator rationale, the
+  request-only DOW verdict (narrative, not a layer), and the two renderer fixes
+  full-duplication pyramids forced (`refinementStrategy: 'no-overlap'`, the
+  parent-cover viewport clamp). All nine `storm4d-*` archives are built, synced
+  and un-gated (`3cf6f2c`) — the demo is live. Open: the Wave-C stretch tail
+  (KOAX second viewpoint, OpenSky aircraft blocked on research-account
+  approval, a three-backend variant, a Rust port of the volume generator), the
+  optional `--min-zoom 6` volume rebuild, and the user's browser verify. Its
+  header still reads "in execution".
 
 ## Shipped decision records (rationale only)
 
@@ -154,10 +252,16 @@ git history preserves everything verbatim.
   streaming constraint and the measurement that reshaped the demo (variants are
   scattered, so the corpus gives a weather mosaic across worlds, not a carousel
   per world), plus the three layer-side constraints (no box DataFilter,
-  hide-only filtering, `filterSize: 1`). Open: browser verify → R2 sync → un-gate.
+  hide-only filtering, `filterSize: 1`). Synced and un-gated 2026-07-24
+  (`3cf6f2c`, which also taught `scripts/r2-sync.sh` a `[worlds]` sidecar pass —
+  the packed passes never covered `worlds.json` or the 266 videos, so the
+  gallery would have animated over dead panels); the demo is live. Open: the
+  user's in-browser pass.
 - [**shipping-2026-07.md**](./shipping-2026-07.md) — distribution record,
-  SHIPPED 2026-07-05 (crates.io facade + 8 npm packages, lockstep at 0.4.0):
-  naming rationale, feature/install matrix, version/tag + MSRV, auth lifecycle,
+  SHIPPED 2026-07-05 (crates.io facade + 7 published npm packages —
+  `@poopdeck.gl/mcp` is the eighth in the tree and is still unpublished —
+  versions in lockstep): naming rationale, feature/install matrix,
+  version/tag + MSRV, auth lifecycle,
   non-goals with triggers. CI release gates exist as config but are unverified
   (Actions dead).
 - [**naming-types-consistency-2026-06.md**](./naming-types-consistency-2026-06.md)

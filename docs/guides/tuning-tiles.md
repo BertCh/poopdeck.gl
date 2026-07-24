@@ -1,9 +1,9 @@
 # Tuning Your Tiles
 
-Every real size or speed win in this project came from **measuring** a
-dataset, not from a formula — and the wins are dataset-shaped (anywhere from
-1.07× to 21×). `stt-optimize` packages that measure → interpret → decide
-loop as CLI verbs, so you never have to hand-tune from folklore:
+Size and speed wins here are dataset-shaped — measured ones in this project range
+from 1.07× to 21× — so they come from measuring a dataset rather than applying a
+formula. `stt-optimize` packages that measure → interpret → decide loop as CLI
+verbs:
 
 ```
  source parquet ──▶ analyze / recommend --explain ──▶ stt-build --auto [encode]
@@ -48,13 +48,12 @@ Advisor evidence:
         time-major blob order keeps consecutive time buckets in the same packs
 ```
 
-Two rules to internalize:
+Two rules govern the output:
 
-- Suggestions marked `[LOSSY - opt-in]` (quantization, budgets) **never**
-  join the suggested command and are never auto-applied. You opt in per
-  flag, per dataset.
-- Where it matters, projections are _measured_ — the advisor trial-encodes
-  your sample rather than extrapolating from a formula.
+- Suggestions marked `[LOSSY - opt-in]` (quantization, budgets) never join the
+  suggested command and are never auto-applied. You opt in per flag, per dataset.
+- Where it matters, projections are measured — the advisor trial-encodes your
+  sample rather than extrapolating from a formula.
 
 ## 2. Build: `--auto` vs `--auto encode`
 
@@ -69,12 +68,11 @@ temporal bucket. `--auto encode` additionally applies the advisors'
 Everything else is suggestion-only, logged loudly at build time as
 `suggested, not applied: <flag> — <why>`.
 
-The line STT never crosses: **nothing that drops or degrades data is ever
-auto-applied**. Quantization is opt-in per flag; the per-tile budgets
-(`--maximum-tile-bytes`, `--maximum-tile-features`) stay opt-in forever —
-by default a tile carries every feature that belongs in it. An explicitly
-passed flag always beats any auto value. Details:
-[Auto-tuning](../api/cli-reference.md#auto-tuning).
+Nothing that drops or degrades data is ever auto-applied. Quantization is opt-in
+per flag, and the per-tile budgets (`--maximum-tile-bytes`,
+`--maximum-tile-features`) stay opt-in — by default a tile carries every feature
+that belongs in it. An explicitly passed flag always beats any auto value.
+Details: [Auto-tuning](../api/cli-reference.md#auto-tuning).
 
 ## 3. After the build: inspect, doctor, diff
 
@@ -84,8 +82,8 @@ passed flag always beats any auto value. Details:
 stt-optimize inspect --archive my-dataset/ --sample 200
 ```
 
-reports per-zoom directory stats, dedup and compression ratios, and —
-the part worth reading closely — **per-column compressed cost**:
+reports per-zoom directory stats, dedup and compression ratios, and
+per-column compressed cost:
 
 ```
 💾 Per-column cost (standalone IPC+zstd-19; shares, not absolute wire)
@@ -151,9 +149,9 @@ CI size gate: exit non-zero if the rebuild grew more than 5%.
 
 ## 4. Bake render defaults: `--style-hints`
 
-Tuning isn't only about bytes — the first render of a fresh dataset usually
-needs a color-ramp domain, a playback speed, and a layer choice. Those are
-measurable too. Build with:
+Tuning is not only about bytes: the first render of a fresh dataset usually needs
+a color-ramp domain, a playback speed, and a layer choice. Those are measurable
+too. Build with:
 
 ```bash
 stt-build -i data.parquet -o my-dataset --time-field timestamp \
@@ -172,10 +170,9 @@ const speed = meta.styleHints?.properties.find((p) => p.name === 'speed');
 const domain = speed?.suggestedDomain ?? [0, 30]; // baked [min, ~p97]
 ```
 
-Hints are **defaults, always overridable** — layer props, scene specs, and
-user config all win over them. They exist so a third-party build renders
-sensibly on the first try instead of after a measure-percentile-hand-edit
-loop. Flag details:
+Hints are defaults: layer props, scene specs, and user config all win over them.
+They exist so a third-party build renders sensibly on the first try. Flag
+details:
 [Style hints](../api/cli-reference.md#style-hints-build-time-render-defaults).
 
 ## 5. A worked pass, start to finish
@@ -210,8 +207,8 @@ stt-optimize doctor --archive ais-tiles-v2/ --strict
 stt-optimize diff --before ais-tiles/ --after ais-tiles-v2/ --fail-on-growth 5
 ```
 
-The numbers above are illustrative — that's the point. Run the loop on
-_your_ dataset; the flags that pay are the ones your measurements name.
+The numbers above are illustrative. Run the loop on your own dataset; the flags
+that pay are the ones your measurements name.
 
 ## Where to go next
 

@@ -9,7 +9,7 @@ description: >-
   the view_map MCP tool, which composes the spec for you.
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # Wiring a deck.gl layer for STT data
@@ -22,11 +22,10 @@ layer by what the data _is_ and how you want it to read.
 > **installing-poopdeck** — `@poopdeck.gl/layers` needs the deck.gl 9.3.x peer set
 > installed alongside it.
 
-> **Reading the doc paths below.** Citations like `docs/api/spatiotemporal-layer.md`
-> are repo-relative (`<path>` = the part after `docs/`). No repo on disk? Use the
-> MCP `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
-> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**. The layer
-> table, shared props, and pin below are inlined.
+> **Doc paths** are repo-relative. With no repo on disk, use the MCP
+> `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
+> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**.
+> Everything load-bearing below is inlined.
 
 **Version pin (must not guess):** `@poopdeck.gl/layers` peer-depends on deck.gl and
 luma.gl on the **`9.3.x`** line (`>=9.3.0 <10.0.0`) across the repo. Install
@@ -60,7 +59,8 @@ accessToken}` object in code.
 - `currentTime` — Unix ms; the playhead. **Must be inside the dataset's `timeRange`
   or nothing draws.**
 - `timeWindow` — ms of data shown around `currentTime` (default `86_400_000` = 1 day).
-- `timeRange` — clamp the visible span; `timeController` — bind a shared clock.
+- `timeRange` — clamp the visible span; `timeController` — bind a shared clock
+  (drive it with `SttPlayer` / `usePlayback`, never by hand — **adding-playback**).
 - `tier` — `'auto'` (default) | `'summary'` (force the coarse H3/Quadbin tier) |
   `'raw'` (force full-resolution features).
 - `scrubLod` — `{ spatial?, spatialZoomDrop?, temporal? }` to drop detail while

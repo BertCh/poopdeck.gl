@@ -5,13 +5,17 @@
  * tarballs into scratch projects, and `import()` every `exports` subpath
  * under plain Node ESM resolution.
  *
- * Two scratch installs:
+ * Two scratch installs plus a tarball-shape check:
  *   (a) full   — all tarballs + every peer; imports every exports key of
  *                every package. Catches extensionless-ESM emit, missing dist
  *                files, and exports-map entries that point at nothing.
  *   (b) deck-free — core + playback + react tarballs with react/react-dom
  *                only (NO @deck.gl/*); imports the react barrel. Regression
  *                test for HoverPreview leaking deck.gl into the base import.
+ *   (c) mcp shape — @poopdeck.gl/mcp is a CLI + docs bundle, not just a
+ *                library; (a) cannot see either. Asserts the `stt-mcp` bin is
+ *                present and executable in the tarball, and that the
+ *                build-time docs corpus actually shipped.
  *
  * Run from the repo root after `pnpm turbo run build`: node scripts/smoke-pack.mjs
  */
@@ -36,6 +40,7 @@ const PACKAGES = [
   'three',
   'cesium',
   'react',
+  'mcp',
 ];
 
 // Peers at the workspace's dev-pinned majors. Keep in sync with pnpm.overrides.
@@ -126,6 +131,107 @@ function importAllExports(dir, pkgNames) {
   return failures;
 }
 
+// @poopdeck.gl/mcp ships more than a library, and neither extra survives an
+// import test: the package loads fine while `npx @poopdeck.gl/mcp` has no CLI
+// (missing/non-executable bin) and get_doc / search_docs / stt://docs serve an
+// empty corpus (missing docs/). The corpus is NOT in git — packages/mcp/
+// scripts/copy-docs.mjs materialises it at build time — so a tarball packed
+// from a half-built tree loses it silently. Both are asserted on the tarball.
+//
+// Corpus rule mirrors copy-docs.mjs (and `isCorpusRelPath` in packages/mcp/
+// src/docs.ts): docs/README.md plus every DIRECT child of docs/{intro,
+// architecture,spec,api,guides} whose extension that dir admits — `.md`
+// everywhere, plus `.json` under docs/spec/ for the four normative
+// machine-readable contracts (manifest.schema.json, scene.schema.json,
+// render-spec.json, tile-matrix-set.json). docs/roadmap is excluded.
+// The JSON half matters: it shipped broken once, and a `.md`-only expectation
+// here would let a tarball built by an older copy-docs pass with the schemas
+// silently missing.
+const MCP_DOC_DIRS = ['intro', 'architecture', 'spec', 'api', 'guides'];
+/** Dirs whose direct `*.json` children publish too (mirrors `JSON_DOC_DIRS`). */
+const MCP_JSON_DOC_DIRS = ['spec'];
+/** Union of every admitted extension — what counts as a doc when hunting strays. */
+const MCP_DOC_EXTENSIONS = ['.md', '.json'];
+
+/** Extensions bundled for a published dir — mirrors `allowedExtensions()`. */
+function mcpDocExtensions(dir) {
+  return MCP_JSON_DOC_DIRS.includes(dir) ? ['.md', '.json'] : ['.md'];
+}
+
+function expectedMcpDocs() {
+  const want = ['docs/README.md'];
+  for (const dir of MCP_DOC_DIRS) {
+    const exts = mcpDocExtensions(dir);
+    for (const name of readdirSync(join(ROOT, 'docs', dir))) {
+      // `name.length > ext.length` so a bare ".md"/".json" dotfile is not a doc.
+      if (exts.some((ext) => name.length > ext.length && name.endsWith(ext))) {
+        want.push(`docs/${dir}/${name}`);
+      }
+    }
+  }
+  return want;
+}
+
+/** Map of `package/`-relative path → mode string for a packed tarball. */
+function tarballEntries(tarball) {
+  const entries = new Map();
+  for (const line of sh(`tar -tzvf ${JSON.stringify(tarball)}`).split('\n')) {
+    const m = /^(\S+)\s.*?\spackage\/(.+)$/.exec(line);
+    if (m && !m[2].endsWith('/')) entries.set(m[2], m[1]);
+  }
+  return entries;
+}
+
+function checkMcpTarball(tarball) {
+  const failures = [];
+  const entries = tarballEntries(tarball);
+  const pj = JSON.parse(
+    readFileSync(join(ROOT, 'packages', 'mcp', 'package.json'), 'utf8'),
+  );
+
+  const bins = Object.entries(pj.bin ?? {});
+  if (bins.length === 0) {
+    failures.push('bin');
+    console.error('  FAIL no `bin` entry in @poopdeck.gl/mcp package.json');
+  }
+  for (const [binName, rel] of bins) {
+    const path = rel.replace(/^\.\//, '');
+    const mode = entries.get(path);
+    if (!mode) {
+      failures.push(`bin ${binName}`);
+      console.error(`  FAIL bin ${binName} — ${path} not in tarball`);
+    } else if (mode[3] !== 'x') {
+      failures.push(`bin ${binName}`);
+      console.error(`  FAIL bin ${binName} — ${path} not executable (${mode})`);
+    } else {
+      console.log(`  ok   bin ${binName} → ${path} (${mode})`);
+    }
+  }
+
+  const want = expectedMcpDocs();
+  const missing = want.filter((d) => !entries.has(d));
+  // Stale sweeps the SAME extension set in the other direction, so a `.json`
+  // left behind by a rename (or one copied into a dir that only admits `.md`)
+  // fails just as loudly as a missing one.
+  const stale = [...entries.keys()].filter(
+    (p) =>
+      p.startsWith('docs/') &&
+      MCP_DOC_EXTENSIONS.some((ext) => p.endsWith(ext)) &&
+      !want.includes(p),
+  );
+  if (missing.length || stale.length) {
+    failures.push('bundled docs');
+    console.error(
+      `  FAIL bundled docs — ${missing.length} missing, ${stale.length} stale of ${want.length} (rebuild @poopdeck.gl/mcp)`,
+    );
+    for (const d of missing.slice(0, 5)) console.error(`       missing ${d}`);
+    for (const d of stale.slice(0, 5)) console.error(`       stale   ${d}`);
+  } else {
+    console.log(`  ok   bundled docs corpus (${want.length} files)`);
+  }
+  return failures;
+}
+
 const work = mkdtempSync(
   join(process.env.RUNNER_TEMP ?? tmpdir(), 'stt-smoke-'),
 );
@@ -166,9 +272,19 @@ try {
   );
 }
 
-if (fullFailures.length || deckFreeFailed) {
+console.log('\n[c] mcp publish shape — stt-mcp bin + bundled docs corpus');
+const mcpTarball = tarballs.find((t) => /[/-]mcp-\d/.test(t));
+let mcpFailures = [];
+if (!mcpTarball) {
+  mcpFailures = ['tarball'];
+  console.error('  FAIL @poopdeck.gl/mcp tarball not produced');
+} else {
+  mcpFailures = checkMcpTarball(mcpTarball);
+}
+
+if (fullFailures.length || deckFreeFailed || mcpFailures.length) {
   console.error(
-    `\nsmoke-pack FAILED (${fullFailures.length} subpath failures${deckFreeFailed ? ' + deck-free regression' : ''})`,
+    `\nsmoke-pack FAILED (${fullFailures.length} subpath failures${deckFreeFailed ? ' + deck-free regression' : ''}${mcpFailures.length ? ` + ${mcpFailures.length} mcp publish-shape failures` : ''})`,
   );
   process.exit(1);
 }

@@ -1,10 +1,8 @@
 # Core Concepts
 
-This guide introduces the fundamental concepts behind Spatiotemporal Tiles (STT).
-
 ## What is a Spatiotemporal Tile?
 
-A **Spatiotemporal Tile** is a unit of data that organizes geospatial features not just by space (X, Y coordinates at a Zoom level) but also by **Time**. Unlike traditional vector tiles (MVT) which are static snapshots, an STT tile is addressed by `(zoom, x, y, time bucket)` and contains the features that exist within that space-time volume.
+A spatiotemporal tile organizes geospatial features by time as well as by space. Where a traditional vector tile (MVT) is a static snapshot addressed by `(zoom, x, y)`, an STT tile is addressed by `(zoom, x, y, time bucket)` and holds the features that exist within that space-time volume.
 
 Each tile represents:
 
@@ -34,7 +32,7 @@ Traditional approaches to animating massive datasets (millions of points) usuall
 2.  **GeoJSON per frame:** Huge network overhead, redundant data.
 3.  **Filtering static tiles:** CPU intensive on the client to filter millions of points every frame.
 
-STT solves this by pre-indexing data temporally. The client only downloads data relevant to the current viewport, time window, and animation speed — and the GPU does the per-frame time filtering, so nothing is re-uploaded as the clock advances.
+STT pre-indexes the data temporally instead. The client downloads only what the current viewport, time window, and animation speed need, and the GPU does the per-frame time filtering, so nothing is re-uploaded as the clock advances.
 
 ## The packed container
 
@@ -146,11 +144,11 @@ available when you know your access pattern.
 
 ### Optimistic Rendering
 
-The STT client implementation (`@poopdeck.gl/core`) is designed for smooth animation. It employs **Optimistic Rendering**:
+The client (`@poopdeck.gl/core`) renders optimistically:
 
-- It immediately displays whatever data is available in the cache.
-- It fetches higher-resolution or adjacent temporal data in the background.
-- It never blocks the animation loop waiting for network requests.
+- it displays whatever data is already in the cache;
+- it fetches higher-resolution and adjacent temporal data in the background;
+- it never blocks the animation loop on a network request.
 
 Time filtering happens on the GPU: tiles are uploaded once per bucket, and a
 per-frame uniform window selects what's visible, so a 60 fps clock costs no
@@ -170,9 +168,9 @@ Prefetch alone can't guarantee the playhead never outruns the network. The
 the loader the way a video player does: it gates `play()` and seeks on a
 buffered runway ahead of the playhead, freezes the clock (with resume
 hysteresis) when the runway drains instead of advancing into unloaded time,
-and can drive an **Auto speed** that adapts the playback rate to measured
-throughput. The result is "buffering…" semantics — never silently empty
-frames.
+and can drive an Auto speed that adapts the playback rate to measured
+throughput. Playback therefore gets "buffering…" semantics rather than silently
+empty frames.
 
 ## Specifications
 

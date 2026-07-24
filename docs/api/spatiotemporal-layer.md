@@ -61,21 +61,59 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 ### Tier dispatch
 
-| Property | Type                           | Default  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| :------- | :----------------------------- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tier`   | `'auto' \| 'summary' \| 'raw'` | `'auto'` | Which tier the tileset draws from when the archive carries a server-aggregated summary tier (`stt-build --summary-tier`). `'auto'` uses the summary tier at zooms inside its `[minZoom, maxZoom]` band and the raw tier above it, so a wide low-zoom view streams a few thousand aggregated cells instead of millions of raw features. `'summary'` always uses the summary tier; `'raw'` always uses the raw tier. No effect on archives without a summary tier. |
+| Property | Type                           | Default  | Description                        |
+| :------- | :----------------------------- | :------- | :--------------------------------- |
+| `tier`   | `'auto' \| 'summary' \| 'raw'` | `'auto'` | Which tier the tileset draws from. |
+
+Applies only to archives carrying a server-aggregated summary tier
+(`stt-build --summary-tier`); on any other archive the prop has no effect.
+`'auto'` uses the summary tier at zooms inside its `[minZoom, maxZoom]` band and
+the raw tier above it, so a wide low-zoom view streams a few thousand aggregated
+cells instead of millions of raw features. `'summary'` and `'raw'` pin one tier.
 
 ### Level of detail
 
-| Property  | Type                              | Default             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| :-------- | :-------------------------------- | :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `lodMode` | `'parent-fallback' \| 'additive'` | `'parent-fallback'` | How the tileset composes tiles across zoom levels (threaded straight to `SpatiotemporalTilesetOptions.lodMode`). `'parent-fallback'` renders the single best zoom for the current viewport, with coarser parent tiles kept only as a transient fallback until matching detail streams in. `'additive'` renders the UNION of zoom levels `[minZoom..cameraZoom]` and keeps every level resident instead of dropping parents once children arrive. Use `'additive'` for additive-octree point clouds built with `stt-build --min-zoom-field=--max-zoom-field=<home_zoom column>`, where each point lives at exactly one zoom level: coarse tiles are a sparse overview and finer tiles add only the residual, so zooming in streams in new detail without re-fetching the coarse cloud. |
+| Property  | Type                              | Default             | Description                           |
+| :-------- | :-------------------------------- | :------------------ | :------------------------------------ |
+| `lodMode` | `'parent-fallback' \| 'additive'` | `'parent-fallback'` | How tiles compose across zoom levels. |
+
+`'parent-fallback'` renders the single best zoom for the current viewport,
+keeping coarser parents only as a transient fallback until matching detail
+streams in.
+
+`'additive'` renders the union of zoom levels `[minZoom..cameraZoom]` and keeps
+every level resident. Use it for additive-octree point clouds built with
+`stt-build --min-zoom-field=--max-zoom-field=<home_zoom column>`, where each
+point lives at exactly one zoom: coarse tiles are a sparse overview and finer
+tiles add only the residual, so zooming in streams new detail without re-fetching
+the coarse cloud.
+
+Threaded straight to `SpatiotemporalTilesetOptions.lodMode`.
 
 ### Scrub-LOD (motion tier)
 
-| Property   | Type                                                                          | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| :--------- | :---------------------------------------------------------------------------- | :------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scrubLod` | `{ spatial?: boolean; spatialZoomDrop?: number; temporal?: boolean } \| null` | `null`  | Opt-in scrub-time LOD degradation. While the user drags the timeline, tile SELECTION may degrade to a cheaper preview tier: `spatial` requests a coarser zoom (`spatialZoomDrop` levels, default 2, clamped `[0, 4]`) — usually tiles the parent-fallback path already fetched; `temporal` routes selection through the archive's temporal-LOD pyramid (requires an archive built with `stt-build --temporal-lod`, else silently no-ops). The degraded tier is preview-only — buffered-runway/gate math and prefetch keep tracking the fine tier, and release restores it. `null` (default) is the kill switch: scrub state is stored but changes nothing. Threaded straight to `SpatiotemporalTilesetOptions.scrubLod`; see the tileset's [`ScrubLodOptions`](./spatiotemporal-tileset.md#scrub-lod-motion-tier) for exact field semantics. The `temporal` axis auto-wires the tileset's `temporalLodLevels` + `getAvailableTemporalLodTiles` from `ArchiveMetadata.temporalLod` when the archive carries the pyramid (capability detection). |
+| Property   | Type                                                                          | Default | Description                        |
+| :--------- | :---------------------------------------------------------------------------- | :------ | :--------------------------------- |
+| `scrubLod` | `{ spatial?: boolean; spatialZoomDrop?: number; temporal?: boolean } \| null` | `null`  | Opt-in scrub-time LOD degradation. |
+
+While the user drags the timeline, tile selection may drop to a cheaper preview
+tier:
+
+- `spatial` requests a coarser zoom — `spatialZoomDrop` levels, default 2,
+  clamped to `[0, 4]` — usually tiles the parent-fallback path already fetched.
+- `temporal` routes selection through the archive's temporal-LOD pyramid. It
+  requires an archive built with `stt-build --temporal-lod` and silently no-ops
+  otherwise. The axis auto-wires the tileset's `temporalLodLevels` and
+  `getAvailableTemporalLodTiles` from `ArchiveMetadata.temporalLod` when the
+  archive carries the pyramid.
+
+The degraded tier is preview-only: the buffered-runway and gate math and the
+prefetch planner keep tracking the fine tier, and release restores it. `null`
+(the default) is the kill switch — scrub state is stored but changes nothing.
+
+Threaded straight to `SpatiotemporalTilesetOptions.scrubLod`; see the tileset's
+[`ScrubLodOptions`](./spatiotemporal-tileset.md#scrub-lod-motion-tier) for exact
+field semantics.
 
 ### GlobeView / projection helpers
 
@@ -93,10 +131,24 @@ Inherits from all [CompositeLayer](https://deck.gl/docs/api-reference/core/compo
 
 ### Overview (storyboard) preload
 
-| Property            | Type                                                    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| :------------------ | :------------------------------------------------------ | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `overviewPreload`   | `boolean \| { budgetBytes?: number; maxZoom?: number }` | `false` | When truthy, the layer calls `tileset.preloadOverviewTier()` right after tileset init: the coarsest tiles (z0..`maxZoom`, default 1) across the FULL dataset time range are loaded at the lowest request tier and PINNED, so scrubbing always renders a coarse preview via the parent-zoom fallback — the data analog of a video player's thumbnail strip. Budget-gated per dataset (default 20 MiB of directory bytes): datasets with giant coarse tiles are rejected without fetching anything. Init is never blocked on the preload. |
-| `onOverviewPreload` | `(result: OverviewPreloadResult) => void`               | `null`  | Fired once per tileset init with the preload's outcome (loaded, candidate tile count, directory byte sum, and the rejection reason when skipped). Only fires when `overviewPreload` is truthy.                                                                                                                                                                                                                                                                                                                                          |
+| Property            | Type                                                    | Default | Description                                   |
+| :------------------ | :------------------------------------------------------ | :------ | :-------------------------------------------- |
+| `overviewPreload`   | `boolean \| { budgetBytes?: number; maxZoom?: number }` | `false` | Preload and pin the coarsest tiles.           |
+| `onOverviewPreload` | `(result: OverviewPreloadResult) => void`               | `null`  | Fires once per tileset init with the outcome. |
+
+When `overviewPreload` is truthy the layer calls `tileset.preloadOverviewTier()`
+right after tileset init: the coarsest tiles (z0..`maxZoom`, default 1) across the
+full dataset time range are loaded at the lowest request tier and pinned. Scrubbing
+then always renders a coarse preview through the parent-zoom fallback — the data
+analog of a video player's thumbnail strip.
+
+The preload is budget-gated per dataset (default 20 MiB of directory bytes), so
+datasets with giant coarse tiles are rejected without fetching anything. Init is
+never blocked on it.
+
+`onOverviewPreload` reports what happened: whether it loaded, the candidate tile
+count, the directory byte sum, and the rejection reason when skipped. It fires
+only when `overviewPreload` is truthy.
 
 ### Callbacks
 

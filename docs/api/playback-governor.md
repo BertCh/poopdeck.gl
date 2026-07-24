@@ -1,6 +1,6 @@
 # PlaybackGovernor
 
-The `PlaybackGovernor` is the buffering state machine between user intent and the [`TimeController`](./time-controller.md). The TimeController stays a dumb wall-clock × speed rAF clock; the governor wraps it and supplies the coupling video players have and data players historically lacked:
+The `PlaybackGovernor` is the buffering state machine between user intent and the [`TimeController`](./time-controller.md). The TimeController stays a plain wall-clock × speed rAF clock; the governor wraps it and adds the loader coupling a video player has:
 
 - it **gates `play()`** on a buffered runway ahead of the playhead,
 - it **freezes the clock** (instead of advancing into unloaded time) when the runway drains,

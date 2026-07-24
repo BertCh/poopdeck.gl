@@ -9,10 +9,17 @@
  * ships the docs and can serve them with no repo on disk (the server's
  * default `docsRoot` prefers this bundled copy — see `src/config.ts`).
  *
- * The corpus is EXACTLY `docs/README.md` plus every `*.md` directly under
- * `docs/{intro,architecture,spec,api,guides}` — the same "published" set the
- * showcase renders (`examples/showcase/src/docs/content.ts`) and the server's
- * `src/docs.ts` corpus allow-list. It EXCLUDES `docs/roadmap/`.
+ * The corpus is EXACTLY `docs/README.md`, every `*.md` directly under
+ * `docs/{intro,architecture,spec,api,guides}`, plus the direct `*.json`
+ * children of `docs/spec/` (the normative machine-readable schemas) — the
+ * "published" set the showcase renders
+ * (`examples/showcase/src/docs/content.ts`) widened by the JSON contracts. It
+ * EXCLUDES `docs/roadmap/`.
+ *
+ * ⚠ This allow-list MUST stay in lockstep with `isCorpusRelPath` in
+ * `src/docs.ts`. Anything the server admits but this script skips is readable
+ * in a dev checkout (which points `docsRoot` at the repo's own `docs/`) and
+ * silently MISSING from every published install.
  *
  * Resilient by design: if the source `docs/` tree is absent (e.g. building
  * from an extracted npm tarball, which carries no repo `docs/`), it skips
@@ -24,6 +31,13 @@ import { fileURLToPath } from 'node:url';
 
 const PUBLISHED_DOC_DIRS = ['intro', 'architecture', 'spec', 'api', 'guides'];
 const ROOT_DOC = 'README.md';
+/** Dirs whose direct `*.json` children are published too (mirrors `JSON_DOC_DIRS` in `src/docs.ts`). */
+const JSON_DOC_DIRS = ['spec'];
+
+/** Extensions bundled for a published dir — mirrors `allowedExtensions()` in `src/docs.ts`. */
+function allowedExtensions(dir) {
+  return JSON_DOC_DIRS.includes(dir) ? ['.md', '.json'] : ['.md'];
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(HERE, '..');
@@ -66,10 +80,15 @@ async function main() {
     const srcDir = path.join(SRC_DOCS, dir);
     if (!(await exists(srcDir))) continue;
     const names = await readdir(srcDir);
-    const mdFiles = names.filter((n) => n.endsWith('.md'));
-    if (mdFiles.length === 0) continue;
+    const exts = allowedExtensions(dir);
+    // `name.length > ext.length` so a bare ".md"/".json" dotfile is not a doc —
+    // same guard `isCorpusRelPath` applies.
+    const docFiles = names.filter((n) =>
+      exts.some((ext) => n.length > ext.length && n.endsWith(ext)),
+    );
+    if (docFiles.length === 0) continue;
     await mkdir(path.join(DEST_DOCS, dir), { recursive: true });
-    for (const name of mdFiles) {
+    for (const name of docFiles) {
       await cp(path.join(srcDir, name), path.join(DEST_DOCS, dir, name));
       copied++;
     }

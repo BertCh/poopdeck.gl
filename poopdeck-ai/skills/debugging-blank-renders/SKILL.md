@@ -9,7 +9,7 @@ description: >-
   the cause.
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # Debugging a blank STT render
@@ -17,11 +17,10 @@ metadata:
 A blank map is almost always one of a small set of causes. Work them in order —
 most are diagnosable from the archive alone, before touching renderer code.
 
-> **Reading the doc paths below.** Citations like `docs/api/spatiotemporal-layer.md`
-> are repo-relative (`<path>` = the part after `docs/`). No repo on disk? Use the
-> MCP `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
-> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**. Every
-> failure class below is inlined, so this checklist works with no doc reachable.
+> **Doc paths** are repo-relative. With no repo on disk, use the MCP
+> `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
+> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**.
+> Everything load-bearing below is inlined.
 
 ## 1. Is the time window excluding everything? (most common)
 
@@ -84,6 +83,10 @@ infer the `@@type`.
   hosted deployment, set `--public-base-url` on the MCP server so `view_map`'s URLs
   are correct.
 - Auth-gated tiles need `loadOptions.fetch` (Bearer) — a 401/403 shows as blank tiles.
+- Cross-origin tiles need a CORS policy that allows the **`Range`** request header
+  and exposes `Content-Range`; a pack that 404s after a deploy means the sync
+  deleted objects a live manifest still references. Both are covered in
+  **serving-and-publishing**.
 
 ## Quick triage checklist
 

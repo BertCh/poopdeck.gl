@@ -104,35 +104,93 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Data Accessors
 
-| Property              | Type                               | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| :-------------------- | :--------------------------------- | :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill color: constant RGBA, or a property name for categorical coloring.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. Unlike upstream deck.gl it accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back to `fillColor`). When set, it wins.                                                                                                                                                                                                                                                                                                                                             |
-| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius` (same domain rules as `getFillColor`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `strokeWidth`         | `number \| string`                 | `1`                  | Outline stroke width: constant, or a numeric property name. In `cumulative` mode a property-column value is ignored (slabs don't pack stroke widths) — the constant branch still applies.                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth` (same domain rules as `getRadius`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. The only way to get stable colors across tiles whose categorical column contains different category subsets. Forces the CPU palette-expansion path (the GPU texture can't look up by string).                                                                                                                                                                                                                                                                                                                                                                      |
-| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent: unknown categories disappear rather than mislead).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB read straight from three NUMERIC property columns (each 0–255), e.g. LIDAR returns colored by projecting them into camera images at build time (`waymo_extract.py --colorize`). Fill is `[r, g, b, 255]` — no palette, no category lookup. Alpha comes from layer `opacity`. Takes precedence over `fillColor`/`colorMapping`; ignored (falls back to the normal color path) if any of the three columns is absent.                                                                                                                                                                        |
-| `colorVectorColumn`   | `string \| null`                   | `null`               | Per-point RGBA from ONE interleaved VECTOR column (`FixedSizeList<UInt8,4>`, baked by `stt-build --vector-group point_rgba=r,g,b,a:u8`). Opt-in: set it (e.g. `'point_rgba'`; `AnimatedPointCloudLayer` defaults to that) and the contiguous u8 buffer is bound to `getFillColor` **zero-copy** — the GPU-ready analogue of `rgbColorColumns`. Takes precedence over every other color path; ignored if the column is absent from the tile. A truthy default here would silently shadow an explicit `fillColor` whenever a tile happens to carry the column, so the base layer defaults it off.          |
-| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Per-feature transform applied to the `radius` property value before GPU upload (e.g. magnitude → area).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `filterProperty`      | `string \| null`                   | `null`               | Name of a baked NUMERIC column to GPU-filter points by — wires the column into [`DataFilterExtension`](./data-filter-extension.md). Points whose value is inside `filterRange` render; the rest are hidden (or soft-faded via `filterSoftRange`); composes WITH the time filter (a point must pass both). Accessor-alias of deck's `getFilterValue`: pass a column NAME, not a function (a function warns once and is ignored). Unset ⇒ the extension is not installed (zero cost). A categorical column can't be range-filtered (warns once). Ignored in `cumulative` mode (slabs bake a fixed schema). |
-| `filterRange`         | `[number, number] \| null`         | `null`               | Inclusive `[min, max]` bounds for `filterProperty`. `null` keeps the column bound with no active range, so a range set later animates purely by uniform with no tile re-preparation. No effect unless `filterProperty` is set.                                                                                                                                                                                                                                                                                                                                                                           |
-| `filterSoftRange`     | `[number, number] \| null`         | `null`               | Optional soft `[min, max]` inside `filterRange`: values between the soft and hard bounds fade rather than hard-clip. No effect unless `filterProperty` + `filterRange` are set.                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `filterEnabled`       | `boolean`                          | `true`               | Enable/disable the column filter without dropping the bound attribute. Effective only when `filterProperty` + a valid `filterRange` are set.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Property              | Type                               | Default              | Description                                                          |
+| :-------------------- | :--------------------------------- | :------------------- | :------------------------------------------------------------------- |
+| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill: constant RGBA, or a property name for categorical coloring.    |
+| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. When set, it wins.         |
+| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name.                  |
+| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius`.                               |
+| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).          |
+| `strokeWidth`         | `number \| string`                 | `1`                  | Outline width: constant, or a numeric property name.                 |
+| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth`.                          |
+| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).  |
+| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. Forces the CPU palette path.   |
+| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent).    |
+| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB from three numeric columns (each 0–255).               |
+| `colorVectorColumn`   | `string \| null`                   | `null`               | Per-point RGBA from one interleaved `FixedSizeList<UInt8,4>` column. |
+| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Transform applied to the `radius` value before GPU upload.           |
+
+**Accessor aliases.** The upstream `get*` names accept a constant or a
+property-column **name** — not a function accessor, since binary tiles cannot run
+per-feature JS. A function warns once and falls back to the plain prop.
+
+**Color precedence.** `colorVectorColumn` wins over everything, then
+`rgbColorColumns`, then `colorMapping`/`colorPalette`, then a constant
+`fillColor`. Both column paths fall through to the next when their columns are
+absent from a tile.
+
+`colorMapping` is the only way to get stable colors across tiles whose
+categorical column contains different category subsets — the GPU palette texture
+cannot look up by string, so setting it forces CPU palette expansion.
+
+`rgbColorColumns` reads three numeric columns (each 0–255) as `[r, g, b, 255]`,
+e.g. LIDAR returns colored by projecting them into camera images at build time
+(`waymo_extract.py --colorize`). Alpha comes from layer `opacity`.
+
+`colorVectorColumn` reads one interleaved column baked by
+`stt-build --vector-group point_rgba=r,g,b,a:u8` and binds the contiguous u8
+buffer to `getFillColor` zero-copy — the GPU-ready analogue of
+`rgbColorColumns`. It defaults off on this layer because a truthy default would
+silently shadow an explicit `fillColor` on any tile that happened to carry the
+column; `AnimatedPointCloudLayer` defaults it to `'point_rgba'`.
+
+In `cumulative` mode a property-column `strokeWidth` is ignored (slabs don't pack
+stroke widths); the constant branch still applies.
+
+### Column filter
+
+Wires a baked numeric column into
+[`DataFilterExtension`](./data-filter-extension.md). Points whose value falls
+inside `filterRange` render; the rest are hidden, or soft-faded via
+`filterSoftRange`. It composes with the time filter — a point must pass both.
+
+| Property          | Type                       | Default | Description                                                    |
+| :---------------- | :------------------------- | :------ | :------------------------------------------------------------- |
+| `filterProperty`  | `string \| null`           | `null`  | Name of the baked numeric column to filter by.                 |
+| `filterRange`     | `[number, number] \| null` | `null`  | Inclusive `[min, max]` bounds.                                 |
+| `filterSoftRange` | `[number, number] \| null` | `null`  | Soft bounds inside `filterRange`; values between the two fade. |
+| `filterEnabled`   | `boolean`                  | `true`  | Toggle the filter without dropping the bound attribute.        |
+
+`filterProperty` is the accessor-alias of deck's `getFilterValue`: pass a column
+name, not a function (a function warns once and is ignored). Leaving it unset
+means the extension is never installed — zero cost. A categorical column cannot
+be range-filtered and warns once. The filter is ignored in `cumulative` mode,
+where slabs bake a fixed schema.
+
+A `null` `filterRange` keeps the column bound with no active range, so a range
+set later animates purely by uniform with no tile re-preparation.
+`filterSoftRange` and `filterEnabled` have no effect unless `filterProperty` (and
+for the former, `filterRange`) is set.
 
 ### 3D props
 
-| Property            | Type             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| :------------------ | :--------------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `elevationProperty` | `string \| null` | `null`  | Numeric property name to source per-point elevation (z) from. Tile geometry is 2D (lon/lat); when set, each point's z is baked as `column[i] * elevationScale` into the position buffer at tile-prepare time, on both the per-tile sublayer path and the cumulative slab path. Negative and zero values pass through unchanged (e.g. below-grade to rooftop LIDAR returns). Left unset (the default), z stays 0 — byte-identical to a flat 2D render. |
-| `elevationScale`    | `number`         | `1`     | Multiplier applied to every `elevationProperty` value before it becomes z. No effect when `elevationProperty` is unset.                                                                                                                                                                                                                                                                                                                               |
-| `use3D`             | `boolean`        | `false` | Accepted for API compatibility only — has **no effect**. 3D is inferred automatically: tiles whose `positionDimensions` is 3 ride their z zero-copy, 2D tiles are padded with z=0 (or with the `elevationProperty`-baked z, if set), regardless of this flag.                                                                                                                                                                                         |
+| Property            | Type             | Default | Description                                              |
+| :------------------ | :--------------- | :------ | :------------------------------------------------------- |
+| `elevationProperty` | `string \| null` | `null`  | Numeric property supplying per-point elevation (z).      |
+| `elevationScale`    | `number`         | `1`     | Multiplier applied before the value becomes z.           |
+| `use3D`             | `boolean`        | `false` | Accepted for API compatibility only — has **no effect**. |
 
-3D handling is otherwise fully automatic — there is no separate "3D mode" to opt into beyond setting `elevationProperty` (for 2D tiles) or building the archive with 3D positions in the first place.
+Tile geometry is 2D lon/lat. With `elevationProperty` set, each point's z is
+baked as `column[i] * elevationScale` into the position buffer at tile-prepare
+time, on both the per-tile sublayer path and the cumulative slab path. Negative
+and zero values pass through unchanged (below-grade to rooftop LIDAR returns).
+Left unset, z stays 0 — byte-identical to a flat 2D render.
+
+3D is otherwise inferred automatically: tiles whose `positionDimensions` is 3
+ride their z zero-copy, and 2D tiles are padded with z=0 (or the
+`elevationProperty`-baked z). There is no separate "3D mode" to opt into beyond
+setting `elevationProperty` for 2D tiles, or building the archive with 3D
+positions in the first place.
 
 ## Architecture & performance
 

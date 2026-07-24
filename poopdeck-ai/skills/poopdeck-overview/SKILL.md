@@ -9,7 +9,7 @@ description: >-
   reach for.
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # poopdeck.gl / SpatioTemporal Tiles — orientation & routing
@@ -69,7 +69,11 @@ GeoParquet / PostGIS / DuckDB
   - `diff_datasets` — before/after regression gate.
   - `view_map` — compose a `@deck.gl/json` spec (STT layers) for one or more datasets.
   - `build_dataset` / `validate_dataset` / `generate_dataset` (bundled reference
-    datasets) — gated (`--allow-cli`) execution.
+    datasets) — registered **only** when the server runs with `--allow-cli`.
+    Those three plus `dataset_report` / `recommend_build` / `diff_datasets`
+    (which always register, then self-gate) are the six tools that shell out to
+    the `stt-*` binaries; `generate_dataset` is the only one that touches the
+    network.
 
 ## Which skill / tool for which job
 
@@ -79,8 +83,10 @@ GeoParquet / PostGIS / DuckDB
 | Turn **your own** source data into a `.stt`                          | skill **building-stt-datasets** → `recommend_build` then `stt-build`                                   |
 | Get a **bundled / example** dataset (earthquakes, drifters, GTFS, …) | skill **generating-stt-datasets** → `generate_dataset`                                                 |
 | Make an archive smaller / publish-ready / lint it                    | skill **tuning-stt-tiles** → `dataset_report`, `diff_datasets`                                         |
+| Choose a renderer backend (deck / maplibre / three / cesium)         | skill **choosing-a-renderer** → `docs/spec/backend-capabilities.md`                                    |
 | Put a layer on a map / pick the right layer                          | skill **wiring-deckgl-layers** → `view_map`                                                            |
-| Serve or publish tiles                                               | `docs/guides/deploying.md` (`stt-serve` + static R2/CDN publishing)                                    |
+| Add play / pause / scrub / a timeline                                | skill **adding-playback** → `SttPlayer`, `usePlayback`                                                 |
+| Serve or publish tiles (static CDN or `stt-serve`)                   | skill **serving-and-publishing** → `scripts/r2-sync.sh`, `stt-serve`                                   |
 | A map renders blank / empty                                          | skill **debugging-blank-renders** → `validate_dataset`                                                 |
 
 ## Ground rules that shape every recommendation
