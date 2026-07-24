@@ -140,6 +140,49 @@ const WEATHER_FRONT_FADE_MS = 2700000; // 45 sim-min
 const STORM4D_ELEVATION_SCALE = 4;
 
 /**
+ * Height-graded alpha range for the CAPPI iso-line stack
+ * (`stormVolumeMode: 'isolines'`), in RAW metres MSL — the archive's CAPPI
+ * levels run 1 → 15 km. Ground sheets keep their band alpha; the anvil-level
+ * sheets fade toward `elevationOpacityFar` so the stack stays readable from
+ * above instead of the top sheet acting as a lid.
+ */
+const STORM4D_ISO_TOP_FADE_RANGE: [number, number] = [1000, 15000];
+
+/**
+ * Cross-dissolve span (sim-ms) between consecutive CAPPI iso-line scans.
+ * BINDING: `nexrad_isolines.py --fade-ms` pads every contour's validity past
+ * the NEXT scan's start by exactly this much, so the outgoing scan ramps 1→0
+ * over the same span its successor ramps 0→1 — constant alpha through the
+ * handoff. Change one side and the volume scans either blink or double up.
+ */
+const STORM4D_ISO_FADE_MS = 90000;
+
+/**
+ * Time window (sim-ms) for the iso-line layer ALONE — deliberately ~nothing.
+ * The archive carries per-feature validity `[scan, next scan + fade]`, so the
+ * playhead needs no window of its own to keep a scan on screen; a wide one
+ * (like the dataset's 360 s, which the instantaneous point overlays DO need)
+ * would stack two or three scans of contours on top of each other.
+ */
+const STORM4D_ISO_TIME_WINDOW_MS = 1000;
+
+/**
+ * Tile-SELECTION window (sim-ms) for the iso-line layer — deliberately much
+ * wider than its render window. The tileset refreshes its visible set at most
+ * every ~100 ms of wall clock, so selecting on a 1 s sim window would go stale
+ * between refreshes and the layer would draw nothing (the baked-frame-sequence
+ * failure `tileLoadTimeWindow` exists for).
+ *
+ * It also has to out-reach the archive's bucketing: `stt-build` files a feature
+ * in the bucket of its START time only (`chunk_by_temporal_bucket`), while a
+ * contour stays VALID for its whole ~6.4 min scan interval — so the bucket
+ * holding the currently-drawn scan can be two buckets behind the playhead.
+ * ±10 min covers that with margin; the RENDER window still shows exactly one
+ * scan, because features are filtered individually on the GPU.
+ */
+const STORM4D_ISO_TILE_WINDOW_MS = 1200000;
+
+/**
  * VTEC warning prism height in METRES (pre-exaggeration): a fixed 12 km —
  * roughly the storm's echo-top depth — so the prism walls enclose the whole
  * volume (§7 Q4 resolved: fixed, not echo-top-derived, for v1).
@@ -181,17 +224,19 @@ const STORM4D_CLOUDTOP_COLORS: Record<
 /**
  * Cloud-top canopy render parameters: keep the translucent EXTRUDED isobands
  * OUT of the depth buffer (`depthWriteEnabled: false`) so their overlapping
- * prism walls — and the tile-seam splits of the continental BT field — blend
- * as pure haze instead of z-fighting / double-blending. That translucent-
- * extruded-polygon failure is the documented AnimatedPolygonLayer limitation
- * (its module docstring: "prefer fully-opaque fills"), and it's the source of
- * the canopy artefacts. Depth TEST stays on (default `depthCompare`), so
- * already-drawn opaque geometry still occludes the haze; because the canopy no
- * longer writes depth, the gate VOLUME drawn AFTER it reads cleanly THROUGH the
- * anvil — the §9.1 "volume pokes through the haze" intent, now literal. Same
- * idiom as GROUND_DECAL_PARAMETERS, minus the `depthCompare:'always'` (we WANT
- * the canopy to sit behind foreground geometry). Module-scope for stable object
- * identity across layer-list rebuilds.
+ * prism walls blend as pure haze instead of z-fighting. Depth TEST stays on
+ * (default `depthCompare`), so already-drawn opaque geometry still occludes the
+ * haze; because the canopy no longer writes depth, the gate VOLUME drawn AFTER
+ * it reads cleanly THROUGH the anvil — the §9.1 "volume pokes through the haze"
+ * intent, now literal. Same idiom as GROUND_DECAL_PARAMETERS, minus the
+ * `depthCompare:'always'` (we WANT the canopy to sit behind foreground
+ * geometry). Module-scope for stable object identity across layer-list rebuilds.
+ *
+ * The tile-seam artefact this used to also paper over — the tile grid printed
+ * through the canopy as full-height curtains — is fixed at the source now:
+ * AnimatedPolygonLayer no longer walls the synthetic edges the tiler laid along
+ * tile boundaries (`seamWalls`, default false). Depth-write stays off for the
+ * genuine overlapping-band blending it was always needed for.
  */
 const STORM4D_CANOPY_PARAMETERS = { depthWriteEnabled: false };
 
@@ -1612,49 +1657,111 @@ export function buildDemoLayers({
       // survive the toggle and only tile styling re-prepares. The GPU dBZ
       // threshold (`filterProperty: 'dbz'`) composes with the time window;
       // scan-boundary pops are hidden by the dataset's cross-dissolve fades.
-      layers.push(
-        new AnimatedPointLayer({
-          ...baseProps,
-          // Full-duplication archive → exact-zoom loading (see overlayBase).
-          refinementStrategy: 'no-overlap',
-          ...sourceProps(selectedDataset.id, true),
-          fillColor:
-            activeSummaryToggle?.weightProperty ??
-            selectedDataset.colorProperty ??
-            'dbz_band',
-          colorMapping:
-            activeSummaryToggle?.colorMapping ?? selectedDataset.colorMapping,
-          colorMappingDefault: selectedDataset.colorMappingDefault ?? [
-            120, 120, 130, 60,
-          ],
-          billboard: true,
-          use3D: true,
-          elevationProperty: 'alt_m',
-          // Shared scene exaggeration, overridable per-dataset (the continental
-          // MRMS demo lifts a 19 km column against a 4,500 km continent).
-          elevationScale:
-            selectedDataset.elevationScale ?? STORM4D_ELEVATION_SCALE,
-          radius:
-            selectedDataset.radiusProperty ?? selectedDataset.radius ?? 320,
-          radiusUnits: selectedDataset.radiusUnits ?? 'meters',
-          radiusScale: selectedDataset.radiusScale ?? 1,
-          radiusMinPixels: selectedDataset.radiusMinPixels ?? 1.2,
-          radiusMaxPixels: selectedDataset.radiusMaxPixels ?? 8,
-          stroked: false,
-          ...(selectedDataset.filterProperty && {
-            filterProperty: selectedDataset.filterProperty,
+      //
+      // `stormVolumeMode: 'isolines'` swaps that point cloud for the CAPPI
+      // CONTOUR SHEETS (`storm4d-isolines`): the same volumes gridded to
+      // constant-altitude slices and contoured at fixed dBZ levels, so the
+      // storm reads as nested iso-line rings terracing up through the
+      // troposphere instead of a haze of gates. Same archive slot, same
+      // governor, same shared exaggeration — AnimatedPathLayer lifts every
+      // ring by its own `alt_m` CAPPI height (see its `elevationProperty`
+      // doc: "nested contour rings terrace into a hill"). The render-mode
+      // toggle swaps the categorical column between echo strength
+      // (`dbz_level`) and HEIGHT (`alt_band`) in place, exactly like the
+      // volume's reflectivity/velocity swap.
+      if (selectedDataset.stormVolumeMode === 'isolines') {
+        layers.push(
+          new AnimatedPathLayer({
+            ...baseProps,
+            refinementStrategy: 'no-overlap',
+            ...sourceProps(selectedDataset.id, true),
+            pathColor:
+              activeSummaryToggle?.weightProperty ??
+              selectedDataset.colorProperty ??
+              'dbz_level',
+            colorMapping:
+              activeSummaryToggle?.colorMapping ?? selectedDataset.colorMapping,
+            colorMappingDefault: selectedDataset.colorMappingDefault ?? [
+              150, 160, 175, 120,
+            ],
+            elevationProperty: 'alt_m',
+            elevationScale:
+              selectedDataset.elevationScale ?? STORM4D_ELEVATION_SCALE,
+            // Height-graded alpha: the upper sheets go translucent so the
+            // stack reads from ABOVE too (you see down through the anvil to
+            // the core instead of the 15 km roof hiding everything under it).
+            // Keyed on the RAW metres, so it's stable across tiles.
+            elevationOpacityRange: STORM4D_ISO_TOP_FADE_RANGE,
+            elevationOpacityNear: 1,
+            elevationOpacityFar: 0.45,
+            pathWidth: 1.6,
+            widthUnits: 'pixels',
+            widthMinPixels: 1,
+            widthMaxPixels: 3,
+            capRounded: true,
+            jointRounded: true,
+            // The archive's numeric `dbz` column IS the contour level, so the
+            // demo's threshold peels whole sheets off the stack.
+            ...(selectedDataset.filterProperty && {
+              filterProperty: selectedDataset.filterProperty,
+            }),
+            ...(selectedDataset.filterRange && {
+              filterRange: selectedDataset.filterRange,
+            }),
+            // Per-feature validity + a matched cross-dissolve (see the consts)
+            // — NOT the dataset's window/fades, which belong to the overlays.
+            timeWindow: STORM4D_ISO_TIME_WINDOW_MS,
+            tileLoadTimeWindow: STORM4D_ISO_TILE_WINDOW_MS,
+            fadeInDuration: STORM4D_ISO_FADE_MS,
+            fadeOutDuration: STORM4D_ISO_FADE_MS,
           }),
-          ...(selectedDataset.filterRange && {
-            filterRange: selectedDataset.filterRange,
+        );
+      } else {
+        layers.push(
+          new AnimatedPointLayer({
+            ...baseProps,
+            // Full-duplication archive → exact-zoom loading (see overlayBase).
+            refinementStrategy: 'no-overlap',
+            ...sourceProps(selectedDataset.id, true),
+            fillColor:
+              activeSummaryToggle?.weightProperty ??
+              selectedDataset.colorProperty ??
+              'dbz_band',
+            colorMapping:
+              activeSummaryToggle?.colorMapping ?? selectedDataset.colorMapping,
+            colorMappingDefault: selectedDataset.colorMappingDefault ?? [
+              120, 120, 130, 60,
+            ],
+            billboard: true,
+            use3D: true,
+            elevationProperty: 'alt_m',
+            // Shared scene exaggeration, overridable per-dataset (the
+            // continental MRMS demo lifts a 19 km column against a 4,500 km
+            // continent).
+            elevationScale:
+              selectedDataset.elevationScale ?? STORM4D_ELEVATION_SCALE,
+            radius:
+              selectedDataset.radiusProperty ?? selectedDataset.radius ?? 320,
+            radiusUnits: selectedDataset.radiusUnits ?? 'meters',
+            radiusScale: selectedDataset.radiusScale ?? 1,
+            radiusMinPixels: selectedDataset.radiusMinPixels ?? 1.2,
+            radiusMaxPixels: selectedDataset.radiusMaxPixels ?? 8,
+            stroked: false,
+            ...(selectedDataset.filterProperty && {
+              filterProperty: selectedDataset.filterProperty,
+            }),
+            ...(selectedDataset.filterRange && {
+              filterRange: selectedDataset.filterRange,
+            }),
+            ...(selectedDataset.fadeInDuration !== undefined && {
+              fadeInDuration: selectedDataset.fadeInDuration,
+            }),
+            ...(selectedDataset.fadeOutDuration !== undefined && {
+              fadeOutDuration: selectedDataset.fadeOutDuration,
+            }),
           }),
-          ...(selectedDataset.fadeInDuration !== undefined && {
-            fadeInDuration: selectedDataset.fadeInDuration,
-          }),
-          ...(selectedDataset.fadeOutDuration !== undefined && {
-            fadeOutDuration: selectedDataset.fadeOutDuration,
-          }),
-        }),
-      );
+        );
+      }
 
       // 5. VTEC warning polygons — translucent prisms with wireframe edges,
       // extruded 12 km so the walls enclose the volume. One feature per SBW

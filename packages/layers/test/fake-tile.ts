@@ -59,6 +59,14 @@ export interface FakePolygonTileOptions {
   endTimes: number[];
   timeOffset: number;
   tileId?: { z: number; x: number; y: number; t: number };
+  /**
+   * Per-RING vertex offsets (length = ringCount + 1). Omit for the common
+   * one-ring-per-feature case, where the decoder's ring offsets coincide with
+   * `startIndices`; supply it to model features carrying holes.
+   */
+  ringIndices?: number[];
+  /** Coordinate-quantization step `[sx, sy]` in degrees, as a quantized archive reports. */
+  coordQuantStep?: [number, number];
 }
 
 export function makePolygonTile(opts: FakePolygonTileOptions): Tile {
@@ -86,6 +94,10 @@ export function makePolygonTile(opts: FakePolygonTileOptions): Tile {
     positionDimensions: 2,
     positions,
     startIndices,
+    ringIndices: opts.ringIndices
+      ? new Uint32Array(opts.ringIndices)
+      : undefined,
+    coordQuantStep: opts.coordQuantStep,
     featureIds: new Uint32Array(featureCount),
     startTimes: new Float32Array(opts.startTimes),
     endTimes: new Float32Array(opts.endTimes),

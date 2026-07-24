@@ -29,12 +29,17 @@
  * - dataComparator: (a, b) => a === b lets deck.gl short-circuit prop diff
  *   when the cached prepared data ref is unchanged.
  *
- * KNOWN LIMITATION (tile-seam overdraw, deferred): polygons that span a tile
- * boundary are split across tiles and drawn by separate sublayers. With
- * opacity < 1 the two halves blend twice along the seam; extruded polygons
- * can z-fight. Consolidating into a single SolidPolygonLayer would fix it
- * but needs careful startIndices handling across variable ring counts.
- * Prefer fully-opaque fills until that lands.
+ * TILE SEAMS: `stt-build` clips polygon coverage to each tile rect exactly
+ * (`polygon_buffer_degrees: 0`), so a polygon spanning a boundary arrives as
+ * two pieces whose FILLS abut watertight — flat fills show no seam. What did
+ * show was extrusion: SolidPolygonLayer grows a side wall on every ring edge,
+ * including the synthetic edges the clipper laid along the tile boundary, so
+ * an extruded fill drew a full-height curtain along every tile edge its shape
+ * crossed and the tile grid read straight through the surface. prepareTile now
+ * supplies `instanceVertexValid` itself (see {@link computePolygonWallMask}),
+ * masking walls on tile-cut edges and on ring closures — the latter also kills
+ * the wall deck otherwise stitched from the end of a polygon's exterior to the
+ * start of its first hole. `seamWalls: true` restores deck's raw behaviour.
  */
 
 import { SolidPolygonLayer } from '@deck.gl/layers';
@@ -75,6 +80,7 @@ import type {
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
+import { computePolygonWallMask } from '@poopdeck.gl/core/geometry';
 import type {
   Tile,
   Layer as TileLayer,
@@ -163,6 +169,22 @@ export interface _AnimatedPolygonLayerProps {
    * @default false
    */
   wireframe?: boolean;
+
+  /**
+   * Raise side walls on the SYNTHETIC edges the tiler laid along tile
+   * boundaries when it clipped a polygon into per-tile pieces.
+   *
+   * Those edges are not part of the polygon, so extruding them draws a
+   * full-height curtain along every tile boundary the shape crosses — the tile
+   * grid printed through the surface. Default `false` suppresses them (and the
+   * ring-closure walls deck would otherwise stitch across holes), leaving walls
+   * only on real polygon edges; the abutting tile's piece continues the surface
+   * across the seam. Set `true` for deck's raw `SolidPolygonLayer` behaviour —
+   * e.g. a dataset whose polygons are genuinely tile-aligned cells and want
+   * their boundary walls. Only takes effect when `extruded` is true.
+   * @default false
+   */
+  seamWalls?: boolean;
 
   /**
    * Lighting material for extruded polygons — SolidPolygonLayer pass-through.
@@ -472,6 +494,7 @@ export class AnimatedPolygonLayer<
     extruded: false,
     elevationScale: { type: 'number', value: 1, min: 0 },
     wireframe: false,
+    seamWalls: false,
     // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
     material: { type: 'object', value: true, compare: true },
     // Outline subsystem (deck PolygonLayer parity). Off by default → the
@@ -789,7 +812,10 @@ export class AnimatedPolygonLayer<
     // adds/removes the per-vertex `filterValue` buffer). The RANGE/enabled are
     // uniform-only and live in the layerPropsKey instead.
     const filterSig = filterProp ? `f${filterProp}` : '';
-    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${filterSig}|${
+    // The side-wall mask is baked into the tile's attributes, so both switches
+    // that decide whether it exists must invalidate the prepared tile.
+    const wallSig = `w${this.props.extruded ? 1 : 0}${this.props.seamWalls ? 1 : 0}`;
+    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${filterSig}|${wallSig}|${
       fillColorProp
         ? this.props.colorMapping
           ? `m${colorMappingDigest(this.props.colorMapping)}`
@@ -905,6 +931,21 @@ export class AnimatedPolygonLayer<
           ),
           size: 1,
         };
+      }
+    }
+
+    // Side-wall mask. deck's own `instanceVertexValid` updater only knows
+    // FEATURE boundaries here (the binary path has no hole indices), and knows
+    // nothing about which edges the tiler synthesised when it clipped a polygon
+    // to this tile's rect — so it walls the tile seams and bridges every hole.
+    // Supplying the attribute by name short-circuits that updater with a mask
+    // computed from the tile's own geometry (see the module docstring). Only
+    // the extruded path consumes it: the top model excludes the attribute, and
+    // without `extruded` deck builds no side/wireframe model at all.
+    if (this.props.extruded && !this.props.seamWalls) {
+      const wallMask = computePolygonWallMask(binary, tile.id);
+      if (wallMask) {
+        attributes.instanceVertexValid = { value: wallMask, size: 1 };
       }
     }
 

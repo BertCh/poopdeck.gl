@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { GeometryType } from '../src/types';
 import type { BinaryFeatures } from '../src/types';
 import {
+  computePolygonWallMask,
   deriveSourceTargetPositions,
   tessellateFeature,
 } from '../src/render/geometry';
@@ -147,5 +148,196 @@ describe('tessellateFeature', () => {
       startIndices: new Uint32Array([0, 2]),
     });
     expect(tessellateFeature(twoVert, 0)).toBeNull(); // < 3 verts
+  });
+});
+
+describe('computePolygonWallMask', () => {
+  // Zoom 2, tile (1, 1): lon [-90, 0], lat [0, 66.51326044311186].
+  const Z = 2;
+  const TX = 1;
+  const TY = 1;
+  const MIN_LON = -90;
+  const MAX_LON = 0;
+  const MIN_LAT = 0;
+  const MAX_LAT = 66.51326044311186;
+
+  it('masks the tile-cut edge of a polygon clipped at a tile boundary', () => {
+    // A box that ran on past the tile's eastern edge and was clipped there:
+    // (-40,10) → (0,10) → (0,30) → (-40,30) → close. The (0,10)→(0,30) edge is
+    // the synthetic cut and must grow no wall; the other three are real.
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([
+        -40,
+        10,
+        MAX_LON,
+        10,
+        MAX_LON,
+        30,
+        -40,
+        30,
+        -40,
+        10,
+      ]),
+      startIndices: new Uint32Array([0, 5]),
+      ringIndices: new Uint32Array([0, 5]),
+    });
+    const mask = computePolygonWallMask(binary, { z: Z, x: TX, y: TY })!;
+    //                            v0 v1 v2 v3 v4(ring close)
+    expect(Array.from(mask)).toEqual([1, 0, 1, 1, 0]);
+  });
+
+  it('masks cuts on every one of the four tile boundaries', () => {
+    const cases: Array<[number, number, number, number]> = [
+      [MIN_LON, 10, MIN_LON, 30], // western meridian
+      [MAX_LON, 10, MAX_LON, 30], // eastern meridian
+      [-40, MIN_LAT, -20, MIN_LAT], // southern parallel
+      [-40, MAX_LAT, -20, MAX_LAT], // northern parallel
+    ];
+    for (const [ax, ay, bx, by] of cases) {
+      const binary = polyBf({
+        featureCount: 1,
+        positionDimensions: 2,
+        positions: new Float64Array([ax, ay, bx, by, -45, 20, ax, ay]),
+        startIndices: new Uint32Array([0, 4]),
+        ringIndices: new Uint32Array([0, 4]),
+      });
+      const mask = computePolygonWallMask(binary, { z: Z, x: TX, y: TY })!;
+      expect(mask[0]).toBe(0);
+    }
+  });
+
+  it('keeps walls on real edges that merely touch a boundary at one end', () => {
+    // Only ONE endpoint sits on the seam — a real edge running away from it.
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([MAX_LON, 10, -30, 25, -45, 5, MAX_LON, 10]),
+      startIndices: new Uint32Array([0, 4]),
+      ringIndices: new Uint32Array([0, 4]),
+    });
+    const mask = computePolygonWallMask(binary, { z: Z, x: TX, y: TY })!;
+    expect(Array.from(mask)).toEqual([1, 1, 1, 0]);
+  });
+
+  it('tolerates seam vertices snapped to the coordinate-quantization grid', () => {
+    // Quantized archives snap the clipper's exact seam coordinate to the
+    // nearest world-anchored grid point — up to half a step off the boundary.
+    const step = 0.01;
+    const snapped = MAX_LON - step / 2;
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([-40, 10, snapped, 10, snapped, 30, -40, 10]),
+      startIndices: new Uint32Array([0, 4]),
+      ringIndices: new Uint32Array([0, 4]),
+      coordQuantStep: [step, step],
+    });
+    const mask = computePolygonWallMask(binary, { z: Z, x: TX, y: TY })!;
+    expect(mask[1]).toBe(0);
+    // Without the declared step the same vertices read as interior geometry.
+    const unquantized = polyBf({
+      ...binary,
+      coordQuantStep: undefined,
+    });
+    expect(
+      computePolygonWallMask(unquantized, { z: Z, x: TX, y: TY })![1],
+    ).toBe(1);
+  });
+
+  it('breaks the wall run at every ring boundary, not just each feature', () => {
+    // One feature, two rings (exterior + hole). Without the ring break deck
+    // stitches a wall from the exterior's last vertex to the hole's first.
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([
+        // exterior (4 verts, closed)
+        -60, 10, -20, 10, -20, 40, -60, 10,
+        // hole (4 verts, closed)
+        -50, 20, -30, 20, -30, 30, -50, 20,
+      ]),
+      startIndices: new Uint32Array([0, 8]),
+      ringIndices: new Uint32Array([0, 4, 8]),
+    });
+    const mask = computePolygonWallMask(binary, { z: Z, x: TX, y: TY })!;
+    expect(mask[3]).toBe(0); // exterior closes here — no bridge into the hole
+    expect(mask[7]).toBe(0); // hole closes here
+    expect(Array.from(mask)).toEqual([1, 1, 1, 0, 1, 1, 1, 0]);
+  });
+
+  it('falls back to feature-level breaks when ringIndices is absent', () => {
+    const binary = polyBf({
+      featureCount: 2,
+      positionDimensions: 2,
+      positions: new Float64Array([
+        -60, 10, -50, 10, -50, 20, -60, 10, -40, 10, -30, 10, -30, 20, -40, 10,
+      ]),
+      startIndices: new Uint32Array([0, 4, 8]),
+    });
+    const mask = computePolygonWallMask(binary, { z: Z, x: TX, y: TY })!;
+    expect(Array.from(mask)).toEqual([1, 1, 1, 0, 1, 1, 1, 0]);
+  });
+
+  it('wrapLastEdge: keeps the closing edge of an UNCLOSED ring', () => {
+    // Wrapping builders (three's `kn = (k + 1) % ringLen`) read the final slot
+    // as the edge back to the ring start. An unclosed triangle's closing edge
+    // is real geometry and must still wall.
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([-60, 10, -20, 10, -20, 40]),
+      startIndices: new Uint32Array([0, 3]),
+      ringIndices: new Uint32Array([0, 3]),
+    });
+    const at = { z: Z, x: TX, y: TY };
+    expect(
+      Array.from(computePolygonWallMask(binary, at, { wrapLastEdge: true })!),
+    ).toEqual([1, 1, 1]);
+    // The linear (deck) convention has no edge leaving the last vertex.
+    expect(Array.from(computePolygonWallMask(binary, at)!)).toEqual([1, 1, 0]);
+  });
+
+  it('wrapLastEdge: still drops a CLOSED ring’s degenerate closing edge', () => {
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([-60, 10, -20, 10, -20, 40, -60, 10]),
+      startIndices: new Uint32Array([0, 4]),
+      ringIndices: new Uint32Array([0, 4]),
+    });
+    const mask = computePolygonWallMask(
+      binary,
+      { z: Z, x: TX, y: TY },
+      { wrapLastEdge: true },
+    )!;
+    expect(Array.from(mask)).toEqual([1, 1, 1, 0]);
+  });
+
+  it('wrapLastEdge: masks a closing edge that is itself a tile cut', () => {
+    // Unclosed ring whose LAST → FIRST edge runs along the eastern boundary.
+    const binary = polyBf({
+      featureCount: 1,
+      positionDimensions: 2,
+      positions: new Float64Array([MAX_LON, 10, -30, 25, MAX_LON, 30]),
+      startIndices: new Uint32Array([0, 3]),
+      ringIndices: new Uint32Array([0, 3]),
+    });
+    const mask = computePolygonWallMask(
+      binary,
+      { z: Z, x: TX, y: TY },
+      { wrapLastEdge: true },
+    )!;
+    expect(Array.from(mask)).toEqual([1, 1, 0]);
+  });
+
+  it('returns null for non-polygon or geometry-less tiles', () => {
+    expect(
+      computePolygonWallMask(lineBf({ featureCount: 1 }), { z: 0, x: 0, y: 0 }),
+    ).toBeNull();
+    expect(
+      computePolygonWallMask(polyBf({ featureCount: 1 }), { z: 0, x: 0, y: 0 }),
+    ).toBeNull(); // no startIndices
   });
 });

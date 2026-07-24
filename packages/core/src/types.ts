@@ -279,6 +279,34 @@ export interface BinaryFeatures {
    */
   startIndices?: Uint32Array;
 
+  /**
+   * Start index for each RING's positions, for Polygon geometries only.
+   * Length = totalRingCount + 1 (last value is the total position count), so
+   * ring `r` spans `[ringIndices[r], ringIndices[r + 1])` and every feature
+   * boundary in {@link startIndices} also appears here.
+   *
+   * `startIndices` collapses a feature's rings into one flat run, which is all
+   * the fill path needs (the exterior/hole structure rides the pre-baked
+   * `triangles`). Consumers that walk EDGES — extruded side walls, per-ring
+   * outlines — need the ring breaks too, or they stitch a spurious edge from
+   * the last vertex of one ring to the first vertex of the next.
+   *
+   * Absent for non-polygon geometries (and for polygon tiles decoded by
+   * readers predating this column).
+   */
+  ringIndices?: Uint32Array;
+
+  /**
+   * Coordinate-quantization step `[sx, sy]` in DEGREES, when the source layer
+   * stored fixed-point grid indices (`stt:quant`) rather than Float64 lon/lat.
+   * Positions are always dequantized to real lon/lat before they reach here;
+   * this records the grid resolution they snapped to, so consumers that need
+   * to recognise a coordinate as "on" a known line (e.g. a tile boundary the
+   * builder clipped against) know the tolerance to allow. Absent when the
+   * layer's coordinates are full-precision Float64.
+   */
+  coordQuantStep?: [number, number];
+
   /** Feature IDs (per feature) */
   featureIds: Uint32Array;
 

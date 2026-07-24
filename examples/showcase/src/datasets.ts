@@ -857,6 +857,52 @@ const STORM4D_VEL_COLORS: Record<string, ColorRGBA> = {
   'out-extreme': [255, 40, 60, 255],
 };
 
+// ─── storm-4d-isolines (type: 'storm4d', stormVolumeMode: 'isolines') ─────
+// The CAPPI contour-sheet variant: `nexrad_isolines.py` grids the same KDMX
+// volumes to constant-altitude slices and contours each one at fixed dBZ
+// levels, so the storm reads as nested iso-line rings terracing up through the
+// troposphere. Both maps are keyed on the generator's BINDING label columns
+// (`dbz_level` / `alt_band`) — a mismatch renders the colorMappingDefault.
+//
+// Echo strength: the NWS reflectivity ramp stretched across the contoured
+// range (20 → 60 dBZ) rather than the volume's 13 five-dBZ bands, so adjacent
+// SHEETS stay distinguishable as thin lines. Alpha rises with intensity: the
+// weak outer isopleth is a faint boundary, the core rings are hot wire.
+const STORM4D_ISO_DBZ_COLORS: Record<string, ColorRGBA> = {
+  '20': [2, 253, 2, 140],
+  '25': [1, 200, 1, 165],
+  '30': [140, 225, 0, 185],
+  '35': [253, 248, 2, 205],
+  '40': [253, 196, 0, 220],
+  '45': [253, 149, 0, 235],
+  '50': [253, 60, 0, 245],
+  '55': [232, 0, 40, 252],
+  '60': [248, 0, 253, 255],
+};
+
+// Height: the SECOND render mode — same geometry, colored by which CAPPI level
+// each ring rides at (deep blue near the ground → cyan/green mid-levels →
+// amber/magenta in the anvil), so the vertical structure reads as color as
+// well as elevation. Keys are `alt_band` = "<km>km" for every level the
+// generator emitted (1 → 15 km at 1 km spacing).
+const STORM4D_ISO_ALT_COLORS: Record<string, ColorRGBA> = {
+  '1km': [40, 60, 170, 190],
+  '2km': [35, 100, 205, 195],
+  '3km': [28, 140, 222, 200],
+  '4km': [20, 180, 230, 205],
+  '5km': [30, 214, 214, 210],
+  '6km': [60, 230, 170, 210],
+  '7km': [120, 240, 120, 215],
+  '8km': [190, 245, 80, 215],
+  '9km': [240, 230, 60, 220],
+  '10km': [255, 195, 50, 220],
+  '11km': [255, 150, 50, 225],
+  '12km': [255, 110, 70, 225],
+  '13km': [255, 90, 120, 230],
+  '14km': [250, 110, 180, 235],
+  '15km': [245, 150, 235, 240],
+};
+
 const rawDatasets: Dataset[] = [
   {
     id: 'nyc-taxi-od-summary',
@@ -3235,6 +3281,127 @@ const rawDatasets: Dataset[] = [
     },
   },
   {
+    // ─── storm-4d-isolines: the CONTOUR-SHEET cut of storm-4d-greenfield ─────
+    // Same storm, same 9.5 h clock, same nine context overlays — the ONE
+    // difference is how the rain itself is drawn. Instead of a gate point
+    // cloud, nexrad_isolines.py grids each KDMX volume to constant-altitude
+    // (CAPPI) slices and contours every slice at fixed reflectivity levels, so
+    // the storm becomes a stack of nested iso-line sheets: a 3D contour plot of
+    // a supercell. The point cloud shows you WHERE the echo is; the sheets show
+    // you its SHAPE — where the core leans, how the anvil overhangs the inflow.
+    // Everything is a LineString, so the whole storm is 70 MB against the
+    // volume's 556 MB, and the layer is AnimatedPathLayer + `elevationProperty`
+    // (its doc's own worked example: "nested contour rings terrace into a
+    // hill"). Contours are a DERIVED product — storm4d-volume stays the
+    // lossless citable base (no-thinning principle, same status as the GOES
+    // cloud-top isobands).
+    id: 'storm-4d-isolines',
+    name: 'Storm as a 4D Object — Iso-Line Sheets',
+    description:
+      'The Greenfield EF4 supercell drawn as a stack of contour sheets instead of a point cloud: every KDMX Level II volume is gridded to constant-altitude slices from 1 to 15 km and contoured at nine reflectivity levels, so the storm terraces upward as nested iso-lines you can orbit — a 3D contour plot of a tornadic supercell, morphing scan by scan. Toggle the sheets between echo strength and altitude coloring, and pull the reflectivity threshold to peel the outer isopleths away down to the bare core. The same nine context archives ride the same clock: warning prisms, the cloud-top anvil canopy, multi-level winds, county outages, gusting stations, storm reports, GLM lightning and the 18Z Omaha sounding. Sources: NOAA NEXRAD / GOES / HRRR, NWS via IEM, SPC, DOE EAGLE-I.',
+    // Primary `url` = the CAPPI iso-line sheets (REQUIRED governor). The nine
+    // overlay manifests are byte-identical to storm-4d-greenfield's.
+    url: '/data/storm4d-isolines/manifest.json',
+    stormVolumeMode: 'isolines',
+    coupletUrl: '/data/storm4d-couplet/manifest.json',
+    warningsUrl: '/data/storm4d-warnings/manifest.json',
+    reportsUrl: '/data/storm4d-reports/manifest.json',
+    stationsUrl: '/data/storm4d-stations/manifest.json',
+    outagesUrl: '/data/storm4d-outages/manifest.json',
+    cloudTopUrl: '/data/storm4d-cloudtop/manifest.json',
+    wind3dUrl: '/data/storm4d-wind3d/manifest.json',
+    soundingUrl: '/data/storm4d-sounding/manifest.json',
+    lightningUrl: '/data/goes-glm-lightning/manifest.json',
+    type: 'storm4d',
+    sources: ['noaa'],
+    timeRange: {
+      start: Date.UTC(2024, 4, 21, 17, 30, 0),
+      end: Date.UTC(2024, 4, 22, 3, 0, 0),
+    },
+    // The OVERLAYS' window (instantaneous points need one). The iso-line layer
+    // ignores it: its features carry `[scan, next scan + fade]` validity and it
+    // sets its own ~zero render window (STORM4D_ISO_TIME_WINDOW_MS).
+    timeWindow: 360000,
+    fadeInDuration: 150000,
+    fadeOutDuration: 150000,
+    targetPlaybackSeconds: 120,
+    // Same camera as the point-cloud cut, so the two read as one comparison.
+    initialViewState: {
+      longitude: -94.46,
+      latitude: 41.4,
+      zoom: 8,
+      pitch: 55,
+      bearing: 25,
+      maxPitch: 85,
+    },
+    // Render modes on the SAME layer/tileset (the DemoViewer segmented
+    // control): color the sheets by the contour's own reflectivity level, or
+    // by the CAPPI height it rides at. Both are categorical columns baked by
+    // the generator, so the toggle only re-prepares tile styling.
+    colorProperty: 'dbz_level',
+    colorMapping: STORM4D_ISO_DBZ_COLORS,
+    colorMappingDefault: [150, 160, 175, 120],
+    summaryToggleWeights: [
+      {
+        id: 'reflectivity',
+        label: 'Echo strength',
+        weightProperty: 'dbz_level',
+        colorRange: [
+          [2, 253, 2, 140],
+          [253, 248, 2, 205],
+          [253, 149, 0, 235],
+          [232, 0, 40, 252],
+          [248, 0, 253, 255],
+        ],
+        legendColors: ['#02fd02', '#fdf802', '#fd9500', '#e80028', '#f800fd'],
+        colorMapping: STORM4D_ISO_DBZ_COLORS,
+      },
+      {
+        id: 'altitude',
+        label: 'Altitude',
+        weightProperty: 'alt_band',
+        colorRange: [
+          [40, 60, 170, 190],
+          [20, 180, 230, 205],
+          [120, 240, 120, 215],
+          [255, 195, 50, 220],
+          [245, 150, 235, 240],
+        ],
+        legendColors: ['#283caa', '#14b4e6', '#78f078', '#ffc332', '#f596eb'],
+        colorMapping: STORM4D_ISO_ALT_COLORS,
+      },
+    ],
+    // GPU threshold on the contour LEVEL (`dbz` is numeric and equals the
+    // level), so dragging the floor up peels whole sheets off the stack until
+    // only the core rings are left. Default admits every contoured level.
+    filterProperty: 'dbz',
+    filterRange: [20, 95],
+    opacity: 0.95,
+    legend: {
+      title: 'Storm as contour sheets',
+      items: [
+        { color: '#02fd02', label: '20 dBZ isopleth (echo edge)' },
+        { color: '#fdf802', label: '35 dBZ' },
+        { color: '#fd9500', label: '45 dBZ' },
+        { color: '#f800fd', label: '60 dBZ (core)' },
+        { color: '#ff4646', label: 'tornado warning prism' },
+        { color: '#ffbe3c', label: 'severe-tstorm warning prism' },
+        { color: '#b43232', label: 'county outage' },
+        { color: '#deecff', label: 'lightning flash' },
+      ],
+      ramps: [
+        {
+          label: 'contour level 20 → 60 dBZ',
+          colors: ['#02fd02', '#8ce100', '#fdf802', '#fd9500', '#f800fd'],
+        },
+        {
+          label: 'CAPPI height 1 → 15 km',
+          colors: ['#283caa', '#14b4e6', '#78f078', '#ffc332', '#f596eb'],
+        },
+      ],
+    },
+  },
+  {
     // ─── storm-3d-conus: the NATIONAL companion to storm-4d-greenfield ───────
     // Where Greenfield goes deep on ONE supercell from one radar (velocity
     // couplet + full context stack), this scales the same "storm as a 4D
@@ -4988,7 +5155,13 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 // storm4d-*, mrms-storm3d-volume, goes-glm-lightning, and the cosmos bundle incl.
 // worlds.json + all 266 videos) and each manifest verified 200 on
 // tiles.poopdeck.gl. The gate set stays (empty) for the next pre-sync dataset.
-const LOCAL_ONLY_DATASETS = new Set<string>([]);
+//
+// (2026-07-24) storm-4d-isolines: the CAPPI contour-sheet cut of the Greenfield
+// composite. Its NINE context overlays are already on R2 (they are the
+// storm-4d-greenfield archives, byte-identical), but its own primary archive
+// `storm4d-isolines` is local-only until r2-sync lands it — and the primary IS
+// the governor, so an un-gated deploy would 404-stall the whole composite.
+const LOCAL_ONLY_DATASETS = new Set<string>(['storm-4d-isolines']);
 
 export const datasets: Dataset[] = [
   ...rawDatasets,
@@ -5079,6 +5252,7 @@ export const SHIPPED_DATASET_IDS: string[] = [
   'goes-glm-lightning', // GOES GLM Lightning — flashes + density (late-May 2024)
   'severe-weather-2024', // Weather Suite — wind + precip + cells/tracks + lightning
   'storm-4d-greenfield', // Storm as a 4D Object — Greenfield EF4 volumetric composite
+  'storm-4d-isolines', // Storm as a 4D Object — the same storm as CAPPI contour sheets
   'storm-3d-conus', // Storm as a 4D Object — Continental MRMS 3D reflectivity volume
 ];
 

@@ -621,6 +621,7 @@ function extractGeometry(
 ): {
   positions: Float64Array;
   startIndices?: Uint32Array;
+  ringIndices?: Uint32Array;
   positionDimensions: 2 | 3;
 } {
   const geom = chunk(geomVec);
@@ -668,10 +669,12 @@ function extractGeometry(
   // Polygon: List<List<FixedSizeList<Float64|Int32,2>>>. Two levels of offsets:
   //   featureOffsets : feature -> ring index
   //   ringOffsets    : ring    -> vertex index
-  // We collapse to per-feature VERTEX offsets so the renderer sees one flat
-  // run per feature. Ring boundaries inside a feature are not preserved in
-  // BinaryFeatures — every existing STT polygon path treats `startIndices`
-  // as feature-level vertex offsets.
+  // We collapse to per-feature VERTEX offsets (`startIndices`) so the renderer
+  // sees one flat run per feature — the shape every STT polygon fill path
+  // expects. The ring breaks INSIDE a feature are also surfaced, rebased the
+  // same way (`ringIndices`), because edge-walking consumers (extruded side
+  // walls, per-ring outlines) otherwise stitch a spurious edge from the last
+  // vertex of one ring to the first vertex of the next.
   const featureOffsets: Int32Array = geom.valueOffsets;
   const ringList = geom.children[0]; // List<FixedSizeList<Float64|Int32,2>>
   const ringOffsets: Int32Array = ringList.valueOffsets;
@@ -688,6 +691,10 @@ function extractGeometry(
     const ringIdx = featureOffsets[geom.offset + i];
     startIndices[i] = ringOffsets[ringIdx] - startVertex;
   }
+  const ringIndices = new Uint32Array(lastRing - firstRing + 1);
+  for (let r = firstRing; r <= lastRing; r++) {
+    ringIndices[r - firstRing] = ringOffsets[r] - startVertex;
+  }
   const positions = readCoordRun(
     coords,
     startVertex * 2,
@@ -695,7 +702,7 @@ function extractGeometry(
     2,
     affine,
   );
-  return { positions, startIndices, positionDimensions: 2 };
+  return { positions, startIndices, ringIndices, positionDimensions: 2 };
 }
 
 /**
@@ -1064,11 +1071,8 @@ function tableToBinaryFeatures(
   // Quantized tiles store i32 grid indices + an affine; reconstruct Float64
   // here so every downstream layer still sees standard lon/lat positions.
   const quantAffine = readQuantAffine(table);
-  const { positions, startIndices, positionDimensions } = extractGeometry(
-    geomVec,
-    kind,
-    quantAffine,
-  );
+  const { positions, startIndices, ringIndices, positionDimensions } =
+    extractGeometry(geomVec, kind, quantAffine);
 
   // --- per-vertex times ---
   // The u16-delta origin/step pair rides the resolved meta (v1 schema
@@ -1278,6 +1282,13 @@ function tableToBinaryFeatures(
     positionDimensions,
     positions,
     startIndices,
+    ringIndices,
+    // Grid resolution the (already dequantized) coordinates snapped to, so
+    // edge consumers know how far a builder-emitted vertex may sit from the
+    // exact line it was clipped against. Undefined for Float64 layers.
+    coordQuantStep: quantAffine
+      ? ([quantAffine.sx, quantAffine.sy] as [number, number])
+      : undefined,
     featureIds,
     featureIds64,
     startTimes,

@@ -36,13 +36,20 @@
  *   When `extrusionProperty` is set, each feature is raised to a prism of height
  *   `value · elevationScale · (1/metersPerWorldUnit)` (so a metric height reads
  *   true at any latitude): the flat cap is duplicated at base+top and the side
- *   walls are stitched from the feature's ring edges. The base ring is the
- *   feature's full vertex run (no per-ring split — same single-ring caveat as the
- *   earcut fallback for the walls).
+ *   walls are stitched from the feature's ring edges.
+ *
+ *   Which edges actually get a wall comes from the shared kernel
+ *   `computePolygonWallMask`: it drops ring closures (so no wall bridges from a
+ *   feature's exterior into its first hole) and — the visible one — the
+ *   SYNTHETIC edges the tiler laid along tile boundaries when it clipped
+ *   polygon coverage into per-tile pieces. Walling those raises a full-height
+ *   curtain along every tile boundary a shape crosses, printing the tile grid
+ *   through the surface. The abutting tile's piece continues the prism there.
  */
 
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
+import { computePolygonWallMask } from '@poopdeck.gl/core/geometry';
 import { InstanceProvenance, encodePickId } from '@poopdeck.gl/core/picking';
 import earcut from 'earcut';
 import type { Projection } from '../projection/local-enu.js';
@@ -156,8 +163,12 @@ function featureColor(
 
 function collectPolygonLayers(
   tiles: Tile[],
-): Array<{ b: BinaryFeatures; tileKey: string }> {
-  const out: Array<{ b: BinaryFeatures; tileKey: string }> = [];
+): Array<{ b: BinaryFeatures; tileKey: string; wallMask: Uint16Array | null }> {
+  const out: Array<{
+    b: BinaryFeatures;
+    tileKey: string;
+    wallMask: Uint16Array | null;
+  }> = [];
   for (const tile of tiles) {
     for (const tl of tile.layers) {
       const b = tl.features;
@@ -167,7 +178,15 @@ function collectPolygonLayers(
         !b.startIndices
       )
         continue;
-      out.push({ b, tileKey: featureTileKey(tile.id, tl.name) });
+      out.push({
+        b,
+        tileKey: featureTileKey(tile.id, tl.name),
+        // Which edges may grow a side wall. Computed per TILE (it depends on
+        // the tile's own rect), so it is resolved here rather than inside the
+        // merge loop, which has already forgotten which tile a layer came from.
+        // `wrapLastEdge` matches this builder's `kn = (k + 1) % ringLen` wrap.
+        wallMask: computePolygonWallMask(b, tile.id, { wrapLastEdge: true }),
+      });
     }
   }
   return out;
@@ -279,7 +298,7 @@ export function buildPolygonBuffers(
     return vi;
   };
 
-  for (const { b, tileKey } of layers) {
+  for (const { b, tileKey, wallMask } of layers) {
     binaryByTileKey.set(tileKey, b);
     const dims = b.positionDimensions ?? fdims;
     const rebase = b.timeOffset - timeOrigin;
@@ -428,8 +447,12 @@ export function buildPolygonBuffers(
           const tri = earcut(flat, undefined, 2);
           for (let t = 0; t < tri.length; t++) indices.push(topVi[tri[t]]);
         }
-        // Side walls: quad per ring edge (k → k+1, wrapping). Two triangles each.
+        // Side walls: quad per ring edge (k → k+1, wrapping). Two triangles
+        // each — skipping every edge the wall mask rejects (ring closures and
+        // tile-boundary cuts; see the module docstring). Without a mask the
+        // whole run walls, which is the pre-mask behaviour.
         for (let k = 0; k < ringLen; k++) {
+          if (wallMask && wallMask[v0 + k] === 0) continue;
           const kn = (k + 1) % ringLen;
           const b0 = baseVi[k],
             b1 = baseVi[kn],

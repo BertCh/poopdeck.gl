@@ -51,6 +51,7 @@ export function forEachBufferView(
   visit(features.startTimes);
   visit(features.endTimes);
   visit(features.startIndices);
+  visit(features.ringIndices);
   visit(features.vertexTimestamps);
   visit(features.vertexValues);
   visit(features.vertexValueMatrix);

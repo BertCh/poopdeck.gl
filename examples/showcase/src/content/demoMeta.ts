@@ -705,7 +705,95 @@ export const DEMO_META: Record<string, DemoMeta> = {
         docPath: '/docs/api/playback-governor',
       },
     ],
-    related: ['severe-weather-2024', 'storm-radar', 'goes-glm-lightning'],
+    related: ['storm-4d-isolines', 'storm-3d-conus', 'severe-weather-2024'],
+  },
+  'storm-4d-isolines': {
+    category: 'earth-ocean',
+    tagline:
+      'The same supercell drawn as contour sheets — constant-altitude reflectivity iso-lines terracing from 1 to 15 km, a 3D contour plot of a tornadic storm.',
+    techniqueTag: 'Storm 4D · CAPPI iso-line sheets',
+    about: [
+      'This is the Greenfield EF4 demo with one thing changed: how the rain itself is drawn. The volumetric cut keeps every NEXRAD gate as a 3D point, which shows you where the echo IS. This cut asks the other question — what SHAPE is it? Each KDMX volume scan is interpolated from its cone of radar sweeps onto a true Cartesian grid, sliced at constant altitudes every kilometre from 1 to 15 km, and each slice is contoured at nine fixed reflectivity levels from 20 to 60 dBZ. Every contour is one closed ring riding at its own CAPPI height, so the storm builds itself out of nested iso-line sheets: a 3D contour plot of a supercell, redrawn every scan.',
+      'Reading it is the payoff. The 20 dBZ isopleth is the storm’s outline; where the rings crowd together the reflectivity gradient is steep — the flanking edge of the updraft. Watch the sheets stack and you can see the core LEAN: the 50 dBZ ring at 8 km sits displaced from the one at 2 km, because the strongest updraft carries hydrometeors downshear before they fall. The anvil-level sheets sprawl far past the ground-level ones. Pull the reflectivity threshold up and the outer isopleths peel away one level at a time until only the bare 55–60 dBZ core is left hanging in space; switch the coloring from echo strength to altitude and the same geometry re-reads as a height map.',
+      'Contours are a DERIVED product, and the archive is honest about it: the gridded field is what the radar resolved (the 0.5° beam is already ~1.3 km wide over Greenfield, so the analysis grid is 1 km and no finer), and the lossless citable base stays the gate volume next door. It is also small — the whole storm is about 70 MB of LineStrings against the point cloud’s 556 MB, because a contour ring spends its vertices only on the boundary. The same nine context archives ride the same clock and the same 4× vertical exaggeration: warning prisms, the cloud-top anvil canopy, multi-level HRRR winds, county outages, gusting stations, storm reports, GLM lightning, and the 18Z Omaha radiosonde.',
+    ],
+    dataSources: [
+      {
+        name: 'NOAA NEXRAD Level II — KDMX (Unidata AWS archive)',
+        url: 'https://registry.opendata.aws/noaa-nexrad/',
+        license: 'Public domain (US Gov)',
+        note: 'Bucket unidata-nexrad-level2, 2024-05-21 17:30 → 05-22 03:00Z; gridded to CAPPI slices with Py-ART, contoured with contourpy.',
+      },
+      {
+        name: 'NOAA GOES-16 ABI C13 + GLM (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-goes/',
+        license: 'Public domain (US Gov)',
+        note: 'ABI-L2-CMIPC brightness temperature → anvil isobands; GLM L2 LCFA flashes (reused goes-glm-lightning archive).',
+      },
+      {
+        name: 'NOAA HRRR pressure-level winds (AWS Open Data)',
+        url: 'https://registry.opendata.aws/noaa-hrrr-bdp-pds/',
+        license: 'Public domain (US Gov)',
+        note: '850/700/500/250 mb UGRD/VGRD via .idx byte-range subsetting → multi-level particle trips.',
+      },
+      {
+        name: 'NWS warnings, storm reports & 1-min ASOS (IEM archives)',
+        url: 'https://mesonet.agron.iastate.edu/',
+        license: 'Public domain (US Gov)',
+        note: 'VTEC storm-based warning polygons (with SVS phases), local storm reports, and one-minute ASOS observations.',
+      },
+      {
+        name: 'DOE/ORNL EAGLE-I power outages',
+        url: 'https://figshare.com/articles/dataset/The_Environment_for_Analysis_of_Geo-Located_Energy_Information_s_Recorded_Electricity_Outages_2014-2022/24237376',
+        license: 'CC BY 4.0',
+        note: 'County-level customers-out at 15-min cadence, filtered to Iowa + border counties.',
+      },
+      {
+        name: 'NWS radiosonde — OAX 18Z special launch (U. Wyoming archive)',
+        url: 'https://weather.uwyo.edu/upperair/sounding.html',
+        license: 'Public domain (US Gov)',
+        note: 'The 2024-05-21 18Z Omaha special sounding, drift-integrated from its wind profile.',
+      },
+    ],
+    buildCommand:
+      'python scripts/data-generation/nexrad_isolines.py --start 2024-05-21T17:30Z --end 2024-05-22T03:00Z --skip-fetch --publish --out-dir examples/showcase/public/data',
+    buildNote:
+      'nexrad_isolines.py shares the Level II cache, the storm reference ' +
+      'point and the S3 fetch of nexrad_volume.py, so with the volume ' +
+      'archive already built it runs --skip-fetch off local files (~2 min ' +
+      'for the full 9.5 h window). It grids each volume with Py-ART ' +
+      '(nearest-neighbour, 1 km, 15 CAPPI levels), contours each slice with ' +
+      'contourpy, and builds LineStrings with --no-clip (a clipped ring ' +
+      'would be re-timed by the trajectory clipper). The nine context ' +
+      'archives are the storm-4d-greenfield ones, unchanged and unrebuilt. ' +
+      'Exact schema + knobs: docs/roadmap/storm-4d-greenfield-2026-07.md §10.',
+    techniques: [
+      {
+        label: 'AnimatedPathLayer',
+        docPath: '/docs/api/animated-path-layer',
+      },
+      {
+        label: 'AnimatedPolygonLayer',
+        docPath: '/docs/api/animated-polygon-layer',
+      },
+      {
+        label: 'AnimatedPointLayer',
+        docPath: '/docs/api/animated-point-layer',
+      },
+      {
+        label: 'DataFilterExtension',
+        docPath: '/docs/api/data-filter-extension',
+      },
+      {
+        label: 'TimeFilterExtension',
+        docPath: '/docs/api/time-filter-extension',
+      },
+      {
+        label: 'PlaybackGovernor',
+        docPath: '/docs/api/playback-governor',
+      },
+    ],
+    related: ['storm-4d-greenfield', 'storm-3d-conus', 'severe-weather-2024'],
   },
   'storm-3d-conus': {
     category: 'earth-ocean',

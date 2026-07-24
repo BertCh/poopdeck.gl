@@ -125,6 +125,39 @@ describe('buildPolygonBuffers', () => {
     expect(maxZ).toBeCloseTo(5, 1);
   });
 
+  it('raises no wall on the edge the tiler cut along a tile boundary', () => {
+    // Zoom 2, tile (1, 1) spans lon [-90, 0]: a box clipped at the tile's
+    // eastern boundary, so the (0,10)→(0,30) edge is the tiler's synthetic cut.
+    // Walling it draws a full-height curtain along the tile seam.
+    const clipped = polyTile({
+      positions: new Float64Array([-40, 10, 0, 10, 0, 30, -40, 30]),
+      startIndices: new Uint32Array([0, 4]),
+      numericProps: { h: new Float32Array([5]) },
+    });
+    clipped.id = { z: 2, x: 1, y: 1, t: 0 };
+    const prism = buildPolygonBuffers([clipped], proj, 0, {
+      colorMode: { type: 'constant', color: RED },
+      extrusionProperty: 'h',
+    });
+
+    // Same box moved clear of every boundary keeps all four walls; the clipped
+    // one loses exactly the cut edge (one quad = 2 tris = 6 indices).
+    const interior = polyTile({
+      positions: new Float64Array([-40, 10, -10, 10, -10, 30, -40, 30]),
+      startIndices: new Uint32Array([0, 4]),
+      numericProps: { h: new Float32Array([5]) },
+    });
+    interior.id = { z: 2, x: 1, y: 1, t: 0 };
+    const full = buildPolygonBuffers([interior], proj, 0, {
+      colorMode: { type: 'constant', color: RED },
+      extrusionProperty: 'h',
+    });
+
+    expect(prism.indices.length).toBe(full.indices.length - 6);
+    // The caps are untouched — only the wall band shrank.
+    expect(prism.vertexCount).toBe(full.vertexCount);
+  });
+
   it('skips sub-triangle rings and non-polygon layers, returns empty', () => {
     const degenerate = polyTile({
       positions: new Float64Array([
