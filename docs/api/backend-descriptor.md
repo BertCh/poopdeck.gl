@@ -229,11 +229,12 @@ node scripts/gen-capabilities-doc.mjs
 ```
 
 (after building `core` and the four backend packages — see that script's
-header comment for the exact bundling invocation). The file is a checked-in
-snapshot, not something computed at doc-build time: there is no automated test
-that regenerates and diffs it against the live descriptors, so keeping it
-current after a `BackendDescriptor` change is a manual regenerate-and-commit
-step.
+header comment). The file is a checked-in snapshot, not something computed at
+doc-build time, so a `BackendDescriptor` change still needs a manual
+regenerate-and-commit step — but CI does catch it if you forget: the
+`typescript` job runs `node scripts/gen-capabilities-doc.mjs --check`, which
+re-renders the matrix from the live descriptors and byte-compares it with the
+committed file.
 
 The generated file has four sections, one row group per `id` column
 (`deck`/`three`/`maplibre`/`cesium` today):

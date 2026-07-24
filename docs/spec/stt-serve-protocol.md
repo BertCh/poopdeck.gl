@@ -1,9 +1,10 @@
 # The `stt-serve` Protocol
 
-> **Scope:** the HTTP surface of `stt-serve` (`crates/stt-serve`) — an axum
-> server that generates STT tiles **on the fly**, one per request, from a live
-> PostGIS table or a DuckDB database, with no `manifest.json` or packs written
-> to disk. This is the `ST_AsMVT` analog for the STT format: request a
+> **Scope:** the HTTP surface of `stt-serve`
+> (`crates/spatiotemporal-tiles/src/bin/stt-serve.rs`) — an axum server that
+> generates STT tiles **on the fly**, one per request, from a live PostGIS
+> table or a DuckDB database, with no `manifest.json` or packs written to
+> disk. This is the `ST_AsMVT` analog for the STT format: request a
 > `(z, x, y, t)`, get back one tile. Route shapes, status codes, response
 > headers, and the JSON descriptor are documented here; the full CLI flag
 > surface (every generation-parity flag `stt-serve` shares with `stt-build`) is

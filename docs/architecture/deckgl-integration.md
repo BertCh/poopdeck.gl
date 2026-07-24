@@ -63,17 +63,16 @@ same wall with a 60 Hz `currentTime` prop).
 STT's hot path bypasses props entirely: the playback tick mutates internal
 time and calls `setNeedsRedraw()`, and sublayers read time through a stable
 `getTime()` closure evaluated inside `TimeFilterExtension`'s `draw()` — the
-uniform updates every frame with **zero prop churn** and zero sublayer
-re-creation. This is the headline departure from declarative deck.gl, and it
-is deliberate: deck has no per-frame-uniform prop idiom.
+uniform updates every frame with zero prop churn and zero sublayer
+re-creation. This is the main departure from declarative deck.gl, and it is
+deliberate: deck has no per-frame-uniform prop idiom.
 
 The declarative path still exists: set the `currentTime` prop (e.g. from a
 scrubber) for casual, non-animated use. Use a `TimeController` for playback.
 
 ## When stock `DataFilterExtension` is enough
 
-Be honest about the overlap: plain time-window filtering **is** expressible
-with upstream's
+The overlap is real: plain time-window filtering is expressible with upstream's
 [`DataFilterExtension`](https://deck.gl/docs/api-reference/extensions/data-filter-extension)
 — `filterSize: 2` per-channel ranges, `fp64: true` for epoch-millisecond
 values, `filterSoftRange` for edge fades. If all you need is "show features

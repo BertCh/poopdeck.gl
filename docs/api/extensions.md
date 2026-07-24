@@ -7,8 +7,8 @@ animated layers **unchanged**, because those layers append your top-level
 `extensions` to their own internal set and forward each extension's scalar
 props to every binary sublayer.
 
-This page is the reference for **which deck extensions work as-is**, the **two
-that are ported/adapted**, and the **three we skip** (with reasons). It
+This page is the reference for which deck extensions work as-is, the two that
+are ported or adapted, and the three that are skipped, with reasons. It
 cross-references the parity decision record
 (`docs/roadmap/renderer-architecture.md`, §3 "Tier 3 — extensions").
 

@@ -9,7 +9,7 @@ description: >-
   temporal bucketing, and non-lossy byte levers — NEVER by thinning features.
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # Tuning STT tiles for publishing
@@ -17,11 +17,10 @@ metadata:
 The optimize loop over a **built** archive is: **inspect → doctor → (fix) → diff**.
 All of `stt-optimize`'s reporting subcommands emit `--format json`.
 
-> **Reading the doc paths below.** Citations like `docs/guides/tuning-tiles.md` are
-> repo-relative (`<path>` = the part after `docs/`). No repo on disk? Use the MCP
+> **Doc paths** are repo-relative. With no repo on disk, use the MCP
 > `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
-> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**. The
-> no-thinning rule, `doctor` codes, and byte levers here are inlined and complete.
+> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**.
+> Everything load-bearing below is inlined.
 
 ## The cardinal rule — no thinning
 

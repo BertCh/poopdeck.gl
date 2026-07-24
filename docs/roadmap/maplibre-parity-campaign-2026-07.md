@@ -356,7 +356,8 @@ reviewer sweep).
    hosts — capability resolution becomes host-aware (`hostApiRange` idea from
    renderer-architecture §5.4 L506, now triggered).
 
-- **DoD:** all existing 5 layers render correctly on maplibre v5 mercator
+- **DoD:** all 5 layers that existed at the time of this wave (2026-07; the
+  catalog is fifteen today) render correctly on maplibre v5 mercator
   AND globe (browser-verified by user), on v3/v4 via legacy path
   (unit-tested), styledata/context-loss survived in tests; conformance +
   full suites green; dist rebuilt.

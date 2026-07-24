@@ -9,7 +9,7 @@ description: >-
   NOT for turning a user's OWN data into a .stt (that's building-stt-datasets / stt-build).
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # Generating reference STT datasets
@@ -19,11 +19,10 @@ metadata:
 for the **curated reference datasets**. For a user's own GeoParquet/PostGIS/DuckDB,
 use the **building-stt-datasets** skill (`stt-build`) instead.
 
-> **Reading the doc paths below.** Citations like `docs/guides/data-generation.md`
-> are repo-relative (`<path>` = the part after `docs/`). No repo on disk? Use the
-> MCP `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
-> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**. The
-> dataset catalog below is inlined, so this skill works with no doc reachable.
+> **Doc paths** are repo-relative. With no repo on disk, use the MCP
+> `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
+> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**.
+> Everything load-bearing below is inlined.
 
 ## How to run it
 

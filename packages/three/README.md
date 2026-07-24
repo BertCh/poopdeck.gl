@@ -7,10 +7,10 @@ Tiles** — an independent, GPU-native alternative to the deck.gl renderer
 and renders them through a single `WebGPURenderer` (with automatic WebGL2
 fallback) using TSL node materials.
 
-The first-class target is the **AV LIDAR cockpit**: oriented anisotropic Gaussian
-**surfels** and billboard point splats animated by a soft temporal Gaussian, in a
-local ENU metric frame — the kind of surface-splatting that is awkward in a 2D map
-renderer but natural in Three.
+Its main target is the AV LIDAR cockpit: oriented anisotropic Gaussian surfels and
+billboard point splats animated by a soft temporal Gaussian, in a local ENU metric
+frame — surface splatting that is awkward in a 2D map renderer and natural in
+Three.
 
 ```
 @poopdeck.gl/core (tiles)  ─┐

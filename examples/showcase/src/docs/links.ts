@@ -4,7 +4,7 @@
  *
  *  - `./sibling.md`, `../spec/foo.md`  → internal `/docs/<slug>` routes
  *  - `./spec/manifest.schema.json`     → the rendered `/docs/spec/manifest-schema` page
- *  - `../../packages/**`, anything escaping docs/ → GitHub blob URLs (branch master)
+ *  - `../../packages/**`, anything escaping docs/ → GitHub blob URLs (branch main)
  *  - `https://…`, `#fragment`          → passed through
  */
 import { GITHUB_BLOB_BASE } from './manifest';

@@ -7,14 +7,15 @@
  *  - `llms.txt`      — the curated corpus map (repo-root `llms.txt` with its
  *                      relative markdown links rewritten to absolute URLs).
  *  - `llms-full.txt` — the entire published corpus concatenated.
- *  - `llms/<path>.md`— a raw copy of every published doc.
+ *  - `llms/<path>`   — a raw copy of every published doc.
  *
- * The PUBLISHED corpus mirrors `content.ts`: `docs/README.md` plus every
- * `*.md` directly under the five published dirs below. `docs/roadmap/` and any
- * other internal docs are excluded (links to them fall back to GitHub blob
- * URLs). Kept here (not in content.ts) because this runs in plain Node during
- * the build and reads from disk with `fs`, whereas content.ts uses Vite's
- * `import.meta.glob`; the dir list is the shared source of truth.
+ * The PUBLISHED corpus is `docs/README.md` plus every `*.md` directly under the
+ * five published dirs below (mirroring `content.ts`), WIDENED with the
+ * machine-readable `docs/spec/*.json` schemas — see {@link JSON_DOC_DIRS}.
+ * `docs/roadmap/` and any other internal docs are excluded (links to them fall
+ * back to GitHub blob URLs). Kept here (not in content.ts) because this runs in
+ * plain Node during the build and reads from disk with `fs`, whereas content.ts
+ * uses Vite's `import.meta.glob`; the dir list is the shared source of truth.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,8 +39,25 @@ export const PUBLISHED_DOC_DIRS = [
   'guides',
 ] as const;
 
+/**
+ * Published dirs that ALSO publish their direct `*.json` children. Only
+ * `docs/spec/` qualifies: its JSON files (manifest / scene JSON Schema, the
+ * tile-matrix-set, the render-spec op-set) are normative machine-readable
+ * contracts and the single most directly usable artifact in the corpus for an
+ * agent — previously unreachable from every agent-facing surface. Matches the
+ * MCP server's corpus allow-list (`packages/mcp/src/docs.ts`).
+ */
+export const JSON_DOC_DIRS = ['spec'] as const;
+
+/** Extensions published for a given doc dir (`.md` everywhere, `.json` under spec/). */
+function allowedExtensions(dir: string): readonly string[] {
+  return (JSON_DOC_DIRS as readonly string[]).includes(dir)
+    ? ['.md', '.json']
+    : ['.md'];
+}
+
 export interface CorpusDoc {
-  /** Path relative to `docs/`, e.g. "api/cli-reference.md" or "README.md". */
+  /** Path relative to `docs/`, e.g. "api/cli-reference.md" or "spec/scene.schema.json". */
   file: string;
   /** Raw file contents. */
   text: string;
@@ -66,8 +84,10 @@ export function collectCorpus(docsDir: string): CorpusDoc[] {
   for (const dir of PUBLISHED_DOC_DIRS) {
     const abs = path.join(docsDir, dir);
     if (!fs.existsSync(abs)) continue;
+    const exts = allowedExtensions(dir);
     for (const name of fs.readdirSync(abs)) {
-      if (!name.endsWith('.md')) continue;
+      if (!exts.some((ext) => name.length > ext.length && name.endsWith(ext)))
+        continue;
       const full = path.join(abs, name);
       if (!fs.statSync(full).isFile()) continue;
       docs.push({
@@ -141,6 +161,14 @@ function linkedOrder(source: string, publishedFiles: Set<string>): string[] {
  * then per doc a `--- / # <path> / <raw contents>` block. Docs appear in the
  * order they are linked from the corpus map first, then any remaining published
  * docs in alphabetical path order.
+ *
+ * JSON schemas ARE included here, not just in the `/llms/<path>` mirror. The
+ * file already frames itself as "the complete published corpus" and an agent
+ * reading it wants the normative contract, not a prose paraphrase of it; the
+ * bloat argument does not survive the numbers (the four `spec/*.json` files are
+ * ~27 kB against ~1.1 MB of markdown, i.e. ~2%). They are wrapped in a fenced
+ * ```json block so the concatenation stays valid markdown and the schema's
+ * boundaries are unambiguous to a reader that is skimming for headings.
  */
 export function buildLlmsFull(source: string, corpus: CorpusDoc[]): string {
   const byFile = new Map(corpus.map((d) => [d.file, d]));
@@ -163,7 +191,15 @@ export function buildLlmsFull(source: string, corpus: CorpusDoc[]): string {
   for (const file of ordered) {
     const doc = byFile.get(file);
     if (!doc) continue;
-    parts.push('', '---', '', `# ${file}`, '', doc.text.replace(/\n+$/, ''));
+    const body = doc.text.replace(/\n+$/, '');
+    parts.push(
+      '',
+      '---',
+      '',
+      `# ${file}`,
+      '',
+      ...(file.endsWith('.json') ? ['```json', body, '```'] : [body]),
+    );
   }
 
   return `${parts.join('\n')}\n`;
@@ -184,6 +220,8 @@ export function generateLlmsArtifacts(opts: {
   return {
     llmsTxt: rewriteLlmsLinks(opts.llmsSource, publishedFiles),
     llmsFull: buildLlmsFull(opts.llmsSource, corpus),
+    // Raw mirror keeps each file byte-identical under its own extension, so
+    // `/llms/spec/manifest.schema.json` is fetchable and JSON.parse-able.
     docFiles: corpus.map((d) => ({ path: `llms/${d.file}`, text: d.text })),
   };
 }

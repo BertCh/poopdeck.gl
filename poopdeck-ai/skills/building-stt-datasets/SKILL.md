@@ -9,19 +9,17 @@ description: >-
   recommend_build (or stt-optimize recommend) FIRST to get an evidence-backed recipe.
 license: MIT
 metadata:
-  version: '0.4.0'
+  version: '0.5.0'
 ---
 
 # Building an STT dataset
 
 Goal: source data → a packed `.stt` archive (`manifest.json` + `index/` + `packs/`).
 
-> **Reading the doc paths below.** Citations like `docs/api/cli-reference.md` are
-> repo-relative (`<path>` = the part after `docs/`). No repo on disk? Use the MCP
+> **Doc paths** are repo-relative. With no repo on disk, use the MCP
 > `get_doc`/`search_docs` tools (or the `stt://docs/<path>` resource), or fetch
-> `https://poopdeck.gl/llms/<path>` — the full fallback chain is in
-> **poopdeck-overview**. The canonical flags and rules here are inlined, so this
-> skill is correct even with no doc reachable.
+> `https://poopdeck.gl/llms/<path>` — full chain in **poopdeck-overview**.
+> Everything load-bearing below is inlined.
 
 ## Step 1 — Get a recipe before hand-writing flags
 

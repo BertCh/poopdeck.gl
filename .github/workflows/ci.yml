@@ -158,11 +158,25 @@ jobs:
         with:
           node-version: '20'
           cache: pnpm
+      # Version gate: the Claude Code plugin surface (plugin.json, the
+      # marketplace entry, every skill's `metadata.version`) is outside the
+      # changesets fixed group, so nothing bumps it automatically. Pure fs +
+      # JSON, no install or build needed — run it first so drift fails in
+      # seconds instead of after the whole build.
+      - name: plugin/skill versions in sync
+        run: node scripts/sync-versions.mjs --check
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run build
+      # Generated-doc gate: re-renders docs/spec/backend-capabilities.md from
+      # the four BackendDescriptors and byte-compares it with the committed
+      # file, so a descriptor edit without a regeneration fails here instead of
+      # rotting the doc. Must run AFTER the build — it imports packages/*/dist.
+      - name: backend-capabilities doc in sync
+        run: node scripts/gen-capabilities-doc.mjs --check
       - run: pnpm --filter '@poopdeck.gl/core' typecheck
       - run: pnpm --filter '@poopdeck.gl/layers' typecheck
       - run: pnpm --filter '@poopdeck.gl/maplibre' typecheck
+      - run: pnpm --filter '@poopdeck.gl/mcp' typecheck
       - run: pnpm --filter '@poopdeck.gl/playback' typecheck
       - run: pnpm --filter '@poopdeck.gl/react' typecheck
       - run: pnpm --filter '@poopdeck.gl/three' typecheck
@@ -170,14 +184,16 @@ jobs:
       - run: pnpm --filter '@poopdeck.gl/core' test
       - run: pnpm --filter '@poopdeck.gl/layers' test
       - run: pnpm --filter '@poopdeck.gl/maplibre' test
+      - run: pnpm --filter '@poopdeck.gl/mcp' test
       - run: pnpm --filter '@poopdeck.gl/playback' test
       - run: pnpm --filter '@poopdeck.gl/react' test
       - run: pnpm --filter '@poopdeck.gl/three' test
       - run: pnpm --filter '@poopdeck.gl/cesium' test
       - run: pnpm --filter '@poopdeck.gl/showcase' test
       # Publish-shape gate: pack every tarball, scratch-install with real
-      # peers, import every exports subpath under plain Node, and prove the
-      # react barrel works without the optional @deck.gl peers.
+      # peers, import every exports subpath under plain Node, prove the react
+      # barrel works without the optional @deck.gl peers, and check that the
+      # mcp tarball carries an executable stt-mcp bin plus its bundled docs.
       - name: smoke-pack (tarball import matrix)
         run: node scripts/smoke-pack.mjs
 

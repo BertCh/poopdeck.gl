@@ -8,12 +8,12 @@ authoritative per-kind reference.
 
 ## Which backend?
 
-| Backend                                                           | Pick it when                                                                                                    | Trade-off                                                                                    |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| [`@poopdeck.gl/layers`](../api/spatiotemporal-layer.md) (deck.gl) | Default choice — you want the full catalog below, GPU picking, and the extensions                               | Brings the deck.gl dependency                                                                |
-| [`@poopdeck.gl/maplibre`](../api/stt-maplibre.md)                 | You already run MapLibre and want STT interleaved between native style layers without deck.gl                   | Five layer kinds (point / line / polygon / trips / heatmap)                                  |
-| [`@poopdeck.gl/three`](../api/stt-three.md)                       | 3D-native scenes: LIDAR surfels, point clouds, metric local frames (the AV cockpit), WebGPU + react-three-fiber | Its own camera/controls world, not a slippy map (mercator + globe projections exist)         |
-| [`@poopdeck.gl/cesium`](../api/stt-cesium.md)                     | You're already a Cesium shop and want STT on a true WGS84 globe                                                 | Movement kinds (point / path / line / arc / trips / trip-heads); aggregation kinds fall back |
+| Backend                                                           | Pick it when                                                                                                    | Trade-off                                                                                   |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [`@poopdeck.gl/layers`](../api/spatiotemporal-layer.md) (deck.gl) | Default choice — you want the full catalog below, GPU picking, and the extensions                               | Brings the deck.gl dependency                                                               |
+| [`@poopdeck.gl/maplibre`](../api/stt-maplibre.md)                 | You already run MapLibre (or Mapbox) and want STT interleaved between native style layers without deck.gl       | Fifteen layer kinds (core geometry / motion & 3D / summary tiers / flow)                    |
+| [`@poopdeck.gl/three`](../api/stt-three.md)                       | 3D-native scenes: LIDAR surfels, point clouds, metric local frames (the AV cockpit), WebGPU + react-three-fiber | Its own camera/controls world, not a slippy map (mercator + globe projections exist)        |
+| [`@poopdeck.gl/cesium`](../api/stt-cesium.md)                     | You're already a Cesium shop and want STT on a true WGS84 globe                                                 | Movement kinds (point / path / line / arc / trips / trip-heads); no polygons or aggregation |
 
 All four consume the same archives through the same
 [`@poopdeck.gl/core`](../api/spatiotemporal-tileset.md) reader and the same

@@ -5,10 +5,19 @@
  * style as `server.test.ts`.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createSttMcpServer } from '../src/server';
-import { resolveDocPath } from '../src/docs';
+import {
+  resolveDocPath,
+  docMimeType,
+  listCorpusDocs,
+  readDoc,
+  searchDocs,
+} from '../src/docs';
 import type { SttMcpConfig } from '../src/config';
 import {
   writeFixtureDocsRoot,
@@ -30,9 +39,26 @@ const CORPUS: Record<string, string> = {
     'Run `stt-build --help` for the full flag surface.\n',
   'guides/ai-suite.md':
     '# AI Suite\n\nThe poopdeck-ai suite bundles an MCP server and skills.\n',
+  // Machine-readable contracts — published, but ONLY from spec/.
+  'spec/manifest.schema.json': `${JSON.stringify(
+    {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      title: 'STT packed-format manifest',
+      properties: { temporalBucketMs: { type: 'integer' } },
+    },
+    null,
+    2,
+  )}\n`,
+  // No top-level `title` → exercises the humanized-filename fallback.
+  'spec/render-spec.json': '{\n  "version": 1,\n  "ops": ["uniform"]\n}\n',
+  // JSON OUTSIDE spec/ is not published — the widening is one dir, one ext.
+  'api/notes.json': '{ "secret": "not published" }\n',
+  // Neither is any other extension inside spec/.
+  'spec/notes.txt': 'plain text — not published\n',
   // A roadmap doc lives in the docs tree but is NOT part of the published corpus.
   'roadmap/secret-plan.md':
     '# Secret Plan\n\nInternal only — must never be served.\n',
+  'roadmap/secret.json': '{ "plan": "Internal only" }\n',
 };
 
 async function docsFixture(): Promise<string> {
@@ -96,14 +122,44 @@ describe('docs resource — stt://docs/<path>', () => {
         'README.md',
         'api/cli-reference.md',
         'guides/ai-suite.md',
+        'spec/manifest.schema.json',
+        'spec/render-spec.json',
       ]);
-      // The roadmap doc is present on disk but must not be enumerated.
+      // The roadmap docs are present on disk but must not be enumerated, and
+      // JSON outside spec/ (or a non-allow-listed ext inside it) stays hidden.
       expect(docNames).not.toContain('roadmap/secret-plan.md');
+      expect(docNames).not.toContain('roadmap/secret.json');
+      expect(docNames).not.toContain('api/notes.json');
+      expect(docNames).not.toContain('spec/notes.txt');
       // Multi-segment paths are percent-encoded into a single URI segment.
       const cliRef = resources.find((r) => r.name === 'api/cli-reference.md');
       expect(cliRef?.uri).toBe('stt://docs/api%2Fcli-reference.md');
       expect(cliRef?.title).toBe('CLI Reference');
       expect(cliRef?.mimeType).toBe('text/markdown');
+    } finally {
+      await close();
+    }
+  });
+
+  it('lists the spec JSON schemas with a JSON mime type and a human title', async () => {
+    const { client, close } = await connectedClient(
+      baseConfig(await emptyDataRoot(), await docsFixture()),
+    );
+    try {
+      const { resources } = await client.listResources();
+      const schema = resources.find(
+        (r) => r.name === 'spec/manifest.schema.json',
+      );
+      expect(schema?.uri).toBe('stt://docs/spec%2Fmanifest.schema.json');
+      expect(schema?.mimeType).toBe('application/json');
+      // Title comes from the schema's own top-level `title`.
+      expect(schema?.title).toBe('STT packed-format manifest');
+      // …and falls back to a humanized filename when the JSON carries none.
+      const renderSpec = resources.find(
+        (r) => r.name === 'spec/render-spec.json',
+      );
+      expect(renderSpec?.mimeType).toBe('application/json');
+      expect(renderSpec?.title).toBe('Render Spec');
     } finally {
       await close();
     }
@@ -123,6 +179,26 @@ describe('docs resource — stt://docs/<path>', () => {
       await close();
     }
   });
+
+  it('reads a spec JSON schema verbatim', async () => {
+    const { client, close } = await connectedClient(
+      baseConfig(await emptyDataRoot(), await docsFixture()),
+    );
+    try {
+      const read = await client.readResource({
+        uri: 'stt://docs/spec%2Fmanifest.schema.json',
+      });
+      const text = (read.contents[0] as any).text as string;
+      // Served byte-for-byte, so an agent can JSON.parse it straight off.
+      expect(JSON.parse(text).title).toBe('STT packed-format manifest');
+      // The READ handler labels per entry via docMimeType(), matching what the
+      // resource LIST advertised. A client that dispatches on mimeType would
+      // otherwise be told this schema is markdown.
+      expect(read.contents[0].mimeType).toBe('application/json');
+    } finally {
+      await close();
+    }
+  });
 });
 
 describe('get_doc tool', () => {
@@ -137,6 +213,42 @@ describe('get_doc tool', () => {
       });
       expect(result.isError).toBeFalsy();
       expect(firstText(result)).toContain('The `stt-build` command');
+    } finally {
+      await close();
+    }
+  });
+
+  it('returns a spec JSON schema as parseable JSON', async () => {
+    const { client, close } = await connectedClient(
+      baseConfig(await emptyDataRoot(), await docsFixture()),
+    );
+    try {
+      const result = await client.callTool({
+        name: 'get_doc',
+        arguments: { path: 'spec/manifest.schema.json' },
+      });
+      expect(result.isError).toBeFalsy();
+      const parsed = JSON.parse(firstText(result));
+      expect(parsed.title).toBe('STT packed-format manifest');
+      expect(parsed.properties.temporalBucketMs.type).toBe('integer');
+    } finally {
+      await close();
+    }
+  });
+
+  it('refuses a .json outside spec/ and a non-allow-listed ext inside it', async () => {
+    const { client, close } = await connectedClient(
+      baseConfig(await emptyDataRoot(), await docsFixture()),
+    );
+    try {
+      for (const path of ['api/notes.json', 'spec/notes.txt']) {
+        const result = await client.callTool({
+          name: 'get_doc',
+          arguments: { path },
+        });
+        expect([path, result.isError]).toEqual([path, true]);
+        expect(firstText(result)).not.toContain('not published');
+      }
     } finally {
       await close();
     }
@@ -178,12 +290,14 @@ describe('get_doc tool', () => {
       baseConfig(await emptyDataRoot(), await docsFixture()),
     );
     try {
-      const result = await client.callTool({
-        name: 'get_doc',
-        arguments: { path: 'roadmap/secret-plan.md' },
-      });
-      expect(result.isError).toBe(true);
-      expect(firstText(result)).not.toContain('Internal only');
+      for (const path of ['roadmap/secret-plan.md', 'roadmap/secret.json']) {
+        const result = await client.callTool({
+          name: 'get_doc',
+          arguments: { path },
+        });
+        expect([path, result.isError]).toEqual([path, true]);
+        expect(firstText(result)).not.toContain('Internal only');
+      }
     } finally {
       await close();
     }
@@ -239,22 +353,157 @@ describe('search_docs tool', () => {
     }
   });
 
-  it('never matches inside a non-corpus doc', async () => {
+  it('searches inside the spec JSON schemas', async () => {
     const { client, close } = await connectedClient(
       baseConfig(await emptyDataRoot(), await docsFixture()),
     );
     try {
       const result = await client.callTool({
         name: 'search_docs',
-        arguments: { query: 'Secret Plan' },
+        arguments: { query: 'temporalBucketMs' },
       });
       const parsed = JSON.parse(firstText(result));
-      expect(parsed.count).toBe(0);
+      const hit = parsed.results.find(
+        (r: any) => r.path === 'spec/manifest.schema.json',
+      );
+      expect(hit).toBeTruthy();
+      expect(hit.title).toBe('STT packed-format manifest');
+      expect(hit.snippets[0].text).toContain('temporalBucketMs');
+    } finally {
+      await close();
+    }
+  });
+
+  it('windows a snippet around the match on a near-minified JSON line', async () => {
+    // A single ~1kB line (real spec/*.json lines reach ~988 chars) with the
+    // needle far past the snippet cap: a head-only clamp would drop it.
+    const filler = 'a'.repeat(600);
+    const docsRoot = await writeFixtureDocsRoot({
+      'spec/wide.json': `{"pad":"${filler}","needleProp":{"type":"integer"},"tail":"${filler}"}\n`,
+    });
+    roots.push(docsRoot);
+    const { client, close } = await connectedClient(
+      baseConfig(await emptyDataRoot(), docsRoot),
+    );
+    try {
+      const result = await client.callTool({
+        name: 'search_docs',
+        arguments: { query: 'needleProp' },
+      });
+      const parsed = JSON.parse(firstText(result));
+      expect(parsed.count).toBe(1);
+      const snippet = parsed.results[0].snippets[0];
+      expect(snippet.line).toBe(1);
+      expect(snippet.text).toContain('needleProp');
+      // Still hard-bounded (200 chars + the two ellipsis markers).
+      expect(snippet.text.length).toBeLessThanOrEqual(202);
+    } finally {
+      await close();
+    }
+  });
+
+  it('never matches inside a non-corpus doc', async () => {
+    const { client, close } = await connectedClient(
+      baseConfig(await emptyDataRoot(), await docsFixture()),
+    );
+    try {
+      for (const query of ['Secret Plan', 'not published']) {
+        const result = await client.callTool({
+          name: 'search_docs',
+          arguments: { query },
+        });
+        const parsed = JSON.parse(firstText(result));
+        expect([query, parsed.count]).toEqual([query, 0]);
+      }
     } finally {
       await close();
     }
   });
 });
+
+describe('docMimeType (unit)', () => {
+  it('maps each admitted extension to its mime type', () => {
+    expect(docMimeType('README.md')).toBe('text/markdown');
+    expect(docMimeType('api/cli-reference.md')).toBe('text/markdown');
+    expect(docMimeType('spec/manifest.schema.json')).toBe('application/json');
+    expect(docMimeType('spec/tile-matrix-set.json')).toBe('application/json');
+  });
+});
+
+describe('listCorpusDocs (unit)', () => {
+  it('every listed entry is also readable through the path guard', async () => {
+    const root = await docsFixture();
+    const entries = await listCorpusDocs(root);
+    expect(entries.length).toBe(5);
+    for (const entry of entries) {
+      expect(() => resolveDocPath(root, entry.path)).not.toThrow();
+    }
+  });
+
+  /**
+   * The listing/search channel must be exactly as narrow as the read channel.
+   * Two entries used to slip past it because `readdir` names were trusted
+   * without canonicalizing or stat-ing: a symlink under `spec/` pointing OUT of
+   * the docs root (its target's H1/`title` became the listed title and its
+   * contents were searchable, while `get_doc` correctly refused the same path)
+   * and a DIRECTORY named `foo.md`/`foo.json` (listed, then EISDIR on read).
+   */
+  it('drops symlinks that escape the docs root and dirs named like docs', async () => {
+    const root = await docsFixture();
+    const outside = await mkdtemp(path.join(tmpdir(), 'stt-mcp-outside-'));
+    roots.push(outside);
+    await writeFile(
+      path.join(outside, 'hosts'),
+      '# Host Database\n127.0.0.1\tlocalhost\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(outside, 'evil.json'),
+      '{ "title": "Evil", "host": "localhost" }\n',
+      'utf8',
+    );
+    // Both admitted extensions, planted in the one dir that publishes both.
+    await symlink(path.join(outside, 'hosts'), path.join(root, 'spec/evil.md'));
+    await symlink(
+      path.join(outside, 'evil.json'),
+      path.join(root, 'spec/evil.json'),
+    );
+    await mkdir(path.join(root, 'spec/adir.md'));
+    await mkdir(path.join(root, 'spec/weird.json'));
+
+    // Declared PUBLISHED_DOC_DIRS order (…, spec, api, guides), not alphabetical.
+    const listed = (await listCorpusDocs(root)).map((d) => d.path);
+    expect(listed).toEqual([
+      'README.md',
+      'spec/manifest.schema.json',
+      'spec/render-spec.json',
+      'api/cli-reference.md',
+      'guides/ai-suite.md',
+    ]);
+    // The out-of-root bytes are not searchable either — this was the leak: the
+    // read channel refused these paths while search returned their contents.
+    expect(await searchDocs(root, 'localhost')).toEqual([]);
+    // The symlinks are refused by the guard, the dirs by the read itself.
+    for (const rel of ['spec/evil.md', 'spec/evil.json']) {
+      await expect(readDoc(root, rel)).rejects.toThrow(
+        /resolves outside the docs root/,
+      );
+    }
+    for (const rel of ['spec/adir.md', 'spec/weird.json']) {
+      await expect(readDoc(root, rel)).rejects.toThrow(/EISDIR/);
+    }
+  });
+});
+
+/** True when `rel` is rejected by the corpus allow-list (not by containment). */
+function throwsNotPublished(root: string, rel: string): boolean {
+  try {
+    resolveDocPath(root, rel);
+    return false;
+  } catch (err) {
+    return /not a published doc/.test((err as Error).message);
+  }
+}
 
 describe('resolveDocPath (unit)', () => {
   it('accepts a corpus path and rejects traversal, absolutes, and non-corpus paths', () => {
@@ -275,6 +524,55 @@ describe('resolveDocPath (unit)', () => {
     );
     expect(() => resolveDocPath(root, 'api/notes.txt')).toThrow(
       /not a published doc/,
+    );
+  });
+
+  it('accepts spec/*.json but nothing the widening did not admit', () => {
+    const root = '/docs';
+    expect(resolveDocPath(root, 'spec/manifest.schema.json')).toBe(
+      '/docs/spec/manifest.schema.json',
+    );
+    expect(resolveDocPath(root, 'spec/tile-matrix-set.json')).toBe(
+      '/docs/spec/tile-matrix-set.json',
+    );
+    // JSON is published from spec/ ONLY.
+    for (const rel of [
+      'api/manifest.schema.json',
+      'guides/thing.json',
+      'intro/thing.json',
+      'architecture/thing.json',
+      'roadmap/secret.json',
+      'package.json',
+    ]) {
+      // `rel` is folded into the assertion so a failure names the offender.
+      expect([rel, throwsNotPublished(root, rel)]).toEqual([rel, true]);
+    }
+    // Other extensions stay rejected inside spec/, nesting still rejected, and
+    // a bare ".md"/".json" dotfile is not a doc.
+    expect(() => resolveDocPath(root, 'spec/notes.txt')).toThrow(
+      /not a published doc/,
+    );
+    expect(() => resolveDocPath(root, 'spec/schema.json.bak')).toThrow(
+      /not a published doc/,
+    );
+    expect(() => resolveDocPath(root, 'spec/nested/deep.json')).toThrow(
+      /not a published doc/,
+    );
+    expect(() => resolveDocPath(root, 'spec/.json')).toThrow(
+      /not a published doc/,
+    );
+    expect(() => resolveDocPath(root, 'api/.md')).toThrow(
+      /not a published doc/,
+    );
+    // Traversal is unaffected by the widening.
+    expect(() => resolveDocPath(root, '../spec/manifest.schema.json')).toThrow(
+      /outside the docs root/,
+    );
+    expect(() => resolveDocPath(root, 'spec/../../secrets.json')).toThrow(
+      /outside the docs root/,
+    );
+    expect(() => resolveDocPath(root, '/etc/manifest.schema.json')).toThrow(
+      /absolute/,
     );
   });
 });

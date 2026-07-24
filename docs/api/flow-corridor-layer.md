@@ -50,16 +50,39 @@ Inherits all properties from [`AnimatedTripsLayer`](./animated-trips-layer.md) (
 
 `FlowCorridorLayer` also adds its own props, all optional, that control how the active-bucket scalar is derived and how a paired [`ChevronFlowExtension`](./chevron-flow-extension.md) reads direction/intensity off it:
 
-| Property                   | Type      | Default                    | Description                                                                                                                                                                                                                                                                                                                                                                                                          |
-| :------------------------- | :-------- | :------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signedFlow`               | `boolean` | `false`                    | Treats the value matrix as **signed**: `abs(value)` drives the color (volume) while the sign carries per-bucket travel direction. Set this for tiles built with `bixi --streets --per-bucket-direction`. When on, `chevronDirectionsFor` emits a continuous `[-1, 1]` directional-coherence signal (a rolling `Σsigned / Σ                                                                                           | value | `ratio) instead of the default plain-magnitude blend, so a paired`ChevronFlowExtension` can morph arrow shape/hue/march smoothly between forward and reverse. |
-| `chevronPerTripLight`      | `boolean` | `false`                    | Switches the gradient source to a **two-signal** mode built for `ChevronFlowExtension({ perTripLight: true })`: the RGB channel becomes a rolling-window aggregate mean of `abs(value)` (the "style over a granular period" color), and the color buffer's alpha byte is packed with a separate instantaneous per-trip flash (a short trailing decay of the nearest fine bucket) — no extra GPU attribute is needed. |
-| `chevronAggregateWindowMs` | `number`  | `240000`                   | Half-span, in ms of data time, of the rolling window used for the `chevronPerTripLight` RGB aggregate (±4 min by default). Wider windows smooth the ramp color further.                                                                                                                                                                                                                                              |
-| `chevronInstantDomain`     | `number`  | `1.5`                      | Normalization top for the `chevronPerTripLight` instant flash: a trailing-sum value at or above this reads as a full-brightness flash in the alpha channel. Non-positive values fall back to the default.                                                                                                                                                                                                            |
-| `chevronInstantDecayMs`    | `number`  | `120000`                   | Trailing exponential decay time constant, in ms of data time, for the `chevronPerTripLight` instant flash (2 min by default) — controls how long a segment stays lit after a trip passes.                                                                                                                                                                                                                            |
-| `chevronDirectionWindowMs` | `number`  | `chevronAggregateWindowMs` | Half-span, in ms of data time, of the rolling window used for the `signedFlow` directional-coherence signal. Defaults to sharing the aggregate window so color and direction resolve at the same temporal granularity; set separately to decouple them.                                                                                                                                                              |
+| Property                   | Type      | Default                    | Description                                                             |
+| :------------------------- | :-------- | :------------------------- | :---------------------------------------------------------------------- |
+| `signedFlow`               | `boolean` | `false`                    | Read the value matrix as signed, so the sign carries travel direction.  |
+| `chevronPerTripLight`      | `boolean` | `false`                    | Pack a rolling aggregate and an instantaneous flash into one buffer.    |
+| `chevronAggregateWindowMs` | `number`  | `240000`                   | Half-span (ms of data time) of the `chevronPerTripLight` RGB aggregate. |
+| `chevronInstantDomain`     | `number`  | `1.5`                      | Trailing-sum value that reads as a full-brightness flash.               |
+| `chevronInstantDecayMs`    | `number`  | `120000`                   | Decay time constant (ms of data time) of the instant flash.             |
+| `chevronDirectionWindowMs` | `number`  | `chevronAggregateWindowMs` | Half-span of the `signedFlow` directional-coherence window.             |
 
-These props power the directional chevron rendering used by the `bixi-streets-flow` demo, where `signedFlow` + `chevronPerTripLight` on this layer pair with a `ChevronFlowExtension` added via the inherited `extensions` prop.
+**`signedFlow`** — `abs(value)` drives the color (volume) while the sign carries
+per-bucket travel direction. Set it for tiles built with
+`bixi --streets --per-bucket-direction`. When on, `chevronDirectionsFor` emits a
+continuous `[-1, 1]` directional-coherence signal — a rolling
+`Σsigned / Σ abs(value)` ratio — instead of the default plain-magnitude blend, so
+a paired `ChevronFlowExtension` can morph arrow shape, hue, and march smoothly
+between forward and reverse.
+
+**`chevronPerTripLight`** — switches the gradient source to the two-signal mode
+`ChevronFlowExtension({ perTripLight: true })` expects. The RGB channel becomes a
+rolling-window aggregate mean of `abs(value)` (the colour over a granular
+period), and the colour buffer's alpha byte carries a separate instantaneous
+per-trip flash — a short trailing decay of the nearest fine bucket. No extra GPU
+attribute is needed.
+
+`chevronAggregateWindowMs` defaults to ±4 min; wider windows smooth the ramp
+colour further. A non-positive `chevronInstantDomain` falls back to the default.
+`chevronDirectionWindowMs` defaults to sharing the aggregate window so colour and
+direction resolve at the same temporal granularity — set it separately to
+decouple them.
+
+These props drive the directional chevrons in the `bixi-streets-flow` demo, where
+`signedFlow` and `chevronPerTripLight` pair with a `ChevronFlowExtension` added
+through the inherited `extensions` prop.
 
 ## Related layers
 

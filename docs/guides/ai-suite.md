@@ -1,29 +1,23 @@
 # AI Suite: MCP + Agent Skills
 
-The **poopdeck-ai** suite gives an AI coding assistant a first-class, _temporal-
-native_ surface over the whole STT toolchain — so "turn this parquet into an
-animated map," "why is my tileset so big," and "my map renders blank" become
-things the agent can actually _do_ and _diagnose_, not just describe.
+The **poopdeck-ai** suite gives an AI coding assistant a surface over the STT
+toolchain, so requests like "turn this parquet into an animated map", "why is my
+tileset so big", or "my map renders blank" can be acted on and diagnosed rather
+than only described.
 
-It ships as one Claude Code plugin bundling two complementary tiers:
+It ships as one Claude Code plugin bundling two tiers:
 
-- **[`@poopdeck.gl/mcp`](../api/stt-mcp.md)** — an MCP server: the **live**
-  surface. Discover datasets, analyze/lint archives, compose `@deck.gl/json`
-  map specs, and (gated) build/validate. Returns structured JSON the agent
-  reasons over.
-- **Agent Skills** — the **procedural** surface: the workflow, the opinions,
-  and — the load-bearing part — _which CLI or MCP tool to reach for_.
-
-There is real whitespace here: no official deck.gl or kepler.gl MCP exists, and
-none of the comparable geo/dataviz agent surfaces make **time** first-class. That
-temporal wedge is the point.
+- **[`@poopdeck.gl/mcp`](../api/stt-mcp.md)** — an MCP server: the live surface.
+  Discover datasets, analyze/lint archives, compose `@deck.gl/json` map specs,
+  and (gated) build/validate. Returns structured JSON the agent reasons over.
+- **Agent Skills** — the procedural surface: the workflow, the opinions, and
+  which CLI or MCP tool to reach for.
 
 ## The two surfaces (and why both)
 
-The field has converged on a split, and the one-line test everyone quotes is:
-_"If you're explaining how to do something, that's a skill. If you need the model
-to access something, that's MCP."_ You want both, because they carry different
-things:
+The usual split: if you're explaining how to do something, that's a skill; if the
+model needs to access something, that's MCP. Both are here because they carry
+different things:
 
 |          | **Skills**                                                                 | **MCP server**                    | **Static (`llms.txt` / docs)** |
 | -------- | -------------------------------------------------------------------------- | --------------------------------- | ------------------------------ |
@@ -32,9 +26,9 @@ things:
 | Cost     | ~100 tok idle, <5k on trigger                                              | tool defs load up front           | crawl-time                     |
 | Best for | multi-step workflows, "which layer / which tool", consistency-critical ops | real-time state, mutating actions | cheap fallback                 |
 
-The pattern to copy is Cloudflare's `wrangler` skill routing between its MCP and
-its CLI. Here the `stt-*` Rust CLIs are the CLI, the MCP server is the live
-surface, and the skills route between them.
+The arrangement follows Cloudflare's `wrangler` skill, which routes between its
+MCP server and its CLI: here the `stt-*` Rust CLIs are the CLI, the MCP server is
+the live surface, and the skills route between them.
 
 ## Install (Claude Code plugin)
 
@@ -55,10 +49,11 @@ pnpm --filter @poopdeck.gl/mcp build
 Once `@poopdeck.gl/mcp` is published to npm you can switch the command in
 `.mcp.json` to `npx -y @poopdeck.gl/mcp` and drop the local build step.
 
-### What you get out of the box (safe defaults)
+### What you get out of the box
 
-The server starts **without `--allow-cli`**, so the always-on tools are read-only
-and shell nothing out:
+The bundled `.mcp.json` launches the server with **`--allow-cli`** — a locally
+installed, stdio-only plugin the user deliberately enabled — so all thirteen
+tools are live. Seven of them are read-only and shell nothing out:
 
 - `list_datasets`, `describe_dataset` — discover + inspect archives (manifest only).
 - `view_map` — compose a `@deck.gl/json` spec for one or more datasets.
@@ -69,32 +64,55 @@ and shell nothing out:
   the package**, so an `npx @poopdeck.gl/mcp` install serves docs with no repo on
   disk (point elsewhere with `--docs-root`).
 
-To enable the analysis + build tools (`recommend_build`, `diff_datasets`,
-`dataset_report`, `validate_dataset`, `build_dataset`), add `--allow-cli` to the
-server args in `.mcp.json` — only when you trust the client. See the
-[MCP reference](../api/stt-mcp.md#the---allow-cli-safety-note) for the full tool
-table and the safety model.
+The other six — `recommend_build`, `diff_datasets`, `dataset_report`,
+`validate_dataset`, `build_dataset`, `generate_dataset` — shell out to the
+`stt-*` binaries (resolved from `target/release/` or `PATH`); of those only
+`generate_dataset` touches the network.
+
+> **Security:** `--allow-cli` lets the MCP client spawn the `stt-*` binaries,
+> which read and write the filesystem (and, for `generate_dataset`, fetch over
+> the network). That's the intended behavior for a trusted local stdio session.
+> **Remove `--allow-cli` from the server args in `.mcp.json` for a read-only,
+> no-shell-out setup** — the three execution tools (`build_dataset`,
+> `validate_dataset`, `generate_dataset`) then don't register at all, and the
+> three analysis tools return an "enable `--allow-cli`" hint (or, for
+> `dataset_report`, a manifest-only summary) instead of running. Do **not**
+> pair `--allow-cli` with a non-localhost HTTP transport on an untrusted
+> network.
+
+See the [MCP reference](../api/stt-mcp.md#the---allow-cli-safety-note) for the
+full tool table and the safety model.
 
 ## The skills
 
-Five skills ship in the plugin, each mapped to a job-to-be-done. They fire on
+Ten skills ship in the plugin, each mapped to a job-to-be-done. They fire on
 their `description` (model-invoked), pull deeper reference from this `docs/` tree
 on demand, and route to the matching MCP tool or CLI.
 
-| Skill                     | Fires when…                                              | Routes to                                          |
-| ------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
-| `poopdeck-overview`       | any poopdeck.gl / STT work — the **router**              | the right CLI, package, MCP tool, or sibling skill |
-| `building-stt-datasets`   | turn GeoParquet / PostGIS / DuckDB into a `.stt`         | `recommend_build` → `stt-build`                    |
-| `tuning-stt-tiles`        | shrink / lint / publish an archive                       | `dataset_report`, `diff_datasets`                  |
-| `wiring-deckgl-layers`    | pick the right STT layer, compose a `@deck.gl/json` spec | `view_map`                                         |
-| `debugging-blank-renders` | a map renders blank / empty                              | `describe_dataset`, `validate_dataset`             |
+| Skill                     | Fires when…                                                   | Routes to                                            |
+| ------------------------- | ------------------------------------------------------------- | ---------------------------------------------------- |
+| `poopdeck-overview`       | any poopdeck.gl / STT work — the **router**                   | the right CLI, package, MCP tool, or sibling skill   |
+| `installing-poopdeck`     | cold start — no CLIs, no packages, no first render            | the `stt-*` CLIs, `@poopdeck.gl/*` + deck.gl `9.3.x` |
+| `building-stt-datasets`   | turn **your own** GeoParquet / PostGIS / DuckDB into a `.stt` | `recommend_build` → `stt-build`                      |
+| `generating-stt-datasets` | you want a bundled **reference** dataset to test with         | `generate_dataset` → `stt-generate`                  |
+| `tuning-stt-tiles`        | shrink / lint / publish an archive                            | `dataset_report`, `diff_datasets`                    |
+| `wiring-deckgl-layers`    | pick the right STT layer, compose a `@deck.gl/json` spec      | `view_map`                                           |
+| `debugging-blank-renders` | a map renders blank / empty                                   | `describe_dataset`, `validate_dataset`               |
+| `choosing-a-renderer`     | deck vs three vs maplibre vs cesium — which backend?          | `@poopdeck.gl/{three,maplibre,cesium}`               |
+| `adding-playback`         | add a clock, scrubber, or autoplay to a render                | `@poopdeck.gl/playback` + `/react`, `set_time`       |
+| `serving-and-publishing`  | ship it — dynamic tile server vs static object store          | `stt-serve`, R2 / S3 / GCS / nginx                   |
 
-Two of these encode hard-won, non-obvious project knowledge that lives nowhere in
-the code: `tuning-stt-tiles` carries the **no-thinning rule** (never drop or
-aggregate features to hit a byte budget — clamp the zoom range and coarsen the
-temporal bucket instead), and `debugging-blank-renders` carries the failure
-taxonomy for empty maps (the time-window trap, the summary-tier cell-id defect,
-capability mismatches).
+Three of them carry project rules that are not derivable from the code:
+
+- `tuning-stt-tiles` — the no-thinning rule: never drop or aggregate features to
+  hit a byte budget; clamp the zoom range and coarsen the temporal bucket
+  instead.
+- `debugging-blank-renders` — the failure taxonomy for empty maps: the
+  time-window trap, the summary-tier cell-id defect, capability mismatches.
+- `serving-and-publishing` — the hosting rules: cross-origin Range requests need
+  CORS exposing `Content-Range`; content-addressed packs cache forever while the
+  manifest must not; a republish copies and never sync-with-deletes, with the old
+  packs garbage-collected later behind a retention window.
 
 ## Using it — worked flows
 
@@ -112,10 +130,9 @@ the change with `diff_datasets` — checking bytes went _down_ and the feature
 count did **not** (a negative feature delta is a regression, not a win).
 
 **Put it on a map.** "Show me the hurricanes dataset." → `wiring-deckgl-layers`
-
-- `view_map` compose a `@deck.gl/json` spec, inferring `AnimatedTripsLayer` from
-  the archive's `style_hints.layer_hint`, with `currentTime` inside the dataset's
-  real time range.
+→ `view_map` composes a `@deck.gl/json` spec, inferring `AnimatedTripsLayer` from
+the archive's `style_hints.layer_hint`, with `currentTime` inside the dataset's
+real time range.
 
 **Debug a blank render.** "My STT map is blank." → `debugging-blank-renders`
 walks the failure classes: `describe_dataset` for the time range and

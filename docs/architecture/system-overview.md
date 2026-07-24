@@ -1,11 +1,10 @@
 # System overview
 
-STT has two stacks: a **Rust** toolchain that accepts either a GeoParquet file
-or a live **PostGIS**/**DuckDB** source, and either builds a **packed
-dataset** (`manifest.json` + content-addressed packs) or serves tiles
-dynamically, per request, over HTTP (`stt-serve`); and a **TypeScript**
-client that streams tiles from that dataset into one of four renderer
-backends — deck.gl, Three.js, MapLibre, or Cesium.
+STT has two stacks. A **Rust** toolchain reads either a GeoParquet file or a live
+PostGIS/DuckDB source, and either builds a packed dataset (`manifest.json` +
+content-addressed packs) or serves tiles per request over HTTP (`stt-serve`). A
+**TypeScript** client then streams tiles from that dataset into one of four
+renderer backends: deck.gl, Three.js, MapLibre, or Cesium.
 
 ```mermaid
 graph TD
@@ -76,10 +75,10 @@ directory. Pipeline:
    [Data format](./data-format.md)).
 6. **Write**: `stt-core::PackWriter` orders blobs for locality, per-blob
    zstd-compresses and byte-dedups them (no shared dictionary), then cuts the
-   stream into content-addressed packs (≤64 MiB each) and emits `manifest.json`
-   - `index/<hash>.sttd` + `packs/<hash>.sttp`. The lower-memory `--streaming`
-     path writes tiles into the same `PackWriter` as each zoom level completes,
-     trimming peak RAM on large inputs.
+   stream into content-addressed packs (≤64 MiB each) and emits `manifest.json`,
+   `index/<hash>.sttd`, and `packs/<hash>.sttp`. The lower-memory `--streaming`
+   path writes tiles into the same `PackWriter` as each zoom level completes,
+   trimming peak RAM on large inputs.
 
 Optional pipeline extras: `--summary-tier h3` adds a server-aggregated
 H3-hex tier alongside the raw tier (so 100M-feature point datasets render
@@ -138,21 +137,25 @@ async connection pool, while DuckDB (embedded, blocking) runs its pool
 checkout, query, decode, and encode on a blocking task.
 
 Each `GET /tiles/{z}/{x}/{y}/{t}.stt` request maps `(z, x, y)` to a WGS84
-bounding box and `t` to a temporal bucket, runs a source query filtered by
-that bbox and time window, decodes the matching rows to features, and encodes
-exactly one tile. Parity with `stt-build` comes from a shared
-`EncoderConfig`/`build_options` seam: both binaries parse the same flags
-(clip, simplify, pre-tessellate, min-/max-zoom-field, per-tile budget,
-attribute filter, coordinate/attribute quantization, vector grouping) into
-the same config types and call the same per-tile encode path, so a served
-tile is byte-identical to the offline-built tile for the same `(z, x, y, t)`
-and source rows. `--summary-tier` (cross-tile aggregation) and
-`--adaptive-temporal` (windows sized across a cell's whole time range) are
-rejected at startup — neither can be computed from a single tile's rows;
-pre-bake them with `stt-build` and serve the resulting static archive
-instead. `GET /metadata.json` reports the dataset's extent, time range, zoom
-range, and (if configured) heatmap domain; `--config <FILE>` serves several
-datasets from one process under `/{name}/…`.
+bounding box and `t` to a temporal bucket, runs a source query filtered by that
+bbox and time window, decodes the matching rows to features, and encodes exactly
+one tile.
+
+Parity with `stt-build` comes from a shared `EncoderConfig`/`build_options` seam.
+Both binaries parse the same flags — clip, simplify, pre-tessellate,
+min-/max-zoom-field, per-tile budget, attribute filter, coordinate/attribute
+quantization, vector grouping — into the same config types and call the same
+per-tile encode path, so a served tile is byte-identical to the offline-built
+tile for the same `(z, x, y, t)` and source rows.
+
+Two flags are rejected at startup because neither can be computed from a single
+tile's rows: `--summary-tier` (cross-tile aggregation) and `--adaptive-temporal`
+(windows sized across a cell's whole time range). Pre-bake them with `stt-build`
+and serve the resulting static archive instead.
+
+`GET /metadata.json` reports the dataset's extent, time range, zoom range, and —
+if configured — heatmap domain. `--config <FILE>` serves several datasets from
+one process under `/{name}/…`.
 
 Tiles are regenerated on every request — there is no app-level cache — so
 unlike the packed format this path is not edge-cacheable; that is the
@@ -263,11 +266,15 @@ heatmap + live edge-bundling. See
 Same archive reader and tileset, rendered through MapLibre GL's
 `CustomLayerInterface` in raw WebGL — for sites that don't want a deck.gl
 dependency or that need to interleave STT layers between native MapLibre
-style layers. Five layer classes mirror a subset of the deck.gl coverage:
-`STTPointLayer`, `STTLineLayer`, `STTPolygonLayer`, `STTTripsLayer`,
-`STTHeatmapLayer` (`window`/`trail` time modes only). Mercator-only — the
-shaders assume the mercator projection, so there is no globe support. See
-[stt-maplibre.md](../api/stt-maplibre.md).
+style layers. Fifteen layer classes across four families mirror most of the
+deck.gl coverage: **core geometry** (`STTPointLayer`, `STTLineLayer`,
+`STTPolygonLayer`, `STTHeatmapLayer`), **motion + 3D** (`STTTripsLayer`,
+`STTTripHeadsLayer`, `STTIconLayer`, `STTColumnLayer`, `STTArcLayer`),
+**summary tiers** (`STTH3SummaryLayer`, `STTQuadbinSummaryLayer`,
+`STTHexbinLayer`) and **flow** (`STTFlowCorridorLayer`, `STTFlowStrokeLayer`,
+`STTFlowmapLayer`). Globe renders on v5+ MapLibre hosts, which expose the
+projection prelude and `projectTile` to custom layers; v3/v4 hosts and Mapbox
+GL JS stay mercator-only. See [stt-maplibre.md](../api/stt-maplibre.md).
 
 ### `@poopdeck.gl/cesium`
 
@@ -310,8 +317,8 @@ and the fade.
 A dataset is a `manifest.json` plus many immutable, content-addressed pack
 objects (and one directory object), served as static bytes by any host that
 honours Range requests — R2, S3, GCS, nginx. Because each pack is small and
-immutable, a dumb CDN caches every one natively (no Worker, no vendor lock-in);
-only the tiny manifest is mutable. A single multi-GB file cannot be edge-cached
+immutable, a plain CDN caches every one natively — no Worker required; only the
+tiny manifest is mutable. A single multi-GB file cannot be edge-cached
 once it exceeds the CDN per-object limit; small immutable packs can.
 
 ## Key interactions

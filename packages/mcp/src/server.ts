@@ -24,6 +24,7 @@ import {
 } from './manifest.js';
 import {
   DEFAULT_DOC_MAX_BYTES,
+  docMimeType,
   listCorpusDocs,
   readDoc,
   searchDocs,
@@ -406,9 +407,10 @@ function registerDocTools(server: McpServer, config: SttMcpConfig): void {
     {
       title: 'Read a documentation page',
       description:
-        'Returns the markdown text of ONE published STT documentation page (docs/README.md or a file under ' +
-        'docs/{intro,architecture,spec,api,guides}), addressed by its docs-relative path (e.g. ' +
-        '"api/cli-reference.md", "guides/ai-suite.md"). Discover valid paths with search_docs or the ' +
+        'Returns the text of ONE published STT documentation page (docs/README.md, a *.md file under ' +
+        'docs/{intro,architecture,spec,api,guides}, or one of the machine-readable docs/spec/*.json schemas, ' +
+        'served verbatim so it can be JSON.parse-d), addressed by its docs-relative path (e.g. ' +
+        '"api/cli-reference.md", "guides/ai-suite.md", "spec/manifest.schema.json"). Discover valid paths with search_docs or the ' +
         'stt://docs/<path> resource list. Oversized docs are truncated at `maxBytes` (default ' +
         `${DEFAULT_DOC_MAX_BYTES}) with a "...[truncated]" marker that reports the true byte length. Pure ` +
         'file read — never shells out.',
@@ -820,8 +822,11 @@ function registerResources(server: McpServer, config: SttMcpConfig): void {
     {
       title: 'STT documentation',
       description:
-        'The published STT documentation corpus (README + intro/architecture/spec/api/guides), addressable ' +
-        'as stt://docs/<path>. Read-only markdown; also searchable via search_docs and readable via get_doc.',
+        'The published STT documentation corpus (README + intro/architecture/spec/api/guides prose, plus the ' +
+        'machine-readable spec/*.json schemas), addressable as stt://docs/<path>. Read-only; also searchable ' +
+        'via search_docs and readable via get_doc. Each entry carries its own mimeType in the resource list.',
+      // Template-level default for the markdown majority; the read handler
+      // labels each response with its actual per-entry type.
       mimeType: 'text/markdown',
     },
     async (uri, variables) => {
@@ -830,8 +835,12 @@ function registerResources(server: McpServer, config: SttMcpConfig): void {
         : variables.path;
       const requested = decodeURIComponent(String(rawPath));
       const text = await readDoc(config.docsRoot, requested);
+      // Label per entry, not per template: the corpus is markdown PLUS the
+      // `spec/*.json` schemas, and `docMimeType` is the same classifier
+      // `listCorpusDocs` labels the resource list with — so list and read can
+      // never disagree about what a given URI serves.
       return {
-        contents: [{ uri: uri.href, mimeType: 'text/markdown', text }],
+        contents: [{ uri: uri.href, mimeType: docMimeType(requested), text }],
       };
     },
   );

@@ -460,12 +460,11 @@ additional normative constraints:
   index (`"quadbin"`) — at the resolution
   `summary_tier.cell_resolution_per_zoom[z - summary_tier.min_zoom]` for the
   tile's zoom `z` (clamped to the table's ends outside
-  `[min_zoom, max_zoom]`). This MUST is written in blood: renderers derive
-  the cell polygon from the id, and any `u64` "decodes" — three shipped
-  archives once carried sequential row numbers in `id`, decoded cleanly,
-  passed validation, and rendered **blank** (the 2026-07 summary-id repair
-  incident). `stt-validate` now checks cell-id validity per
-  scheme/resolution.
+  `[min_zoom, max_zoom]`). Renderers derive the cell polygon from the id and
+  any `u64` decodes without error, so a wrong id fails silently: three shipped
+  archives once carried sequential row numbers here, decoded cleanly, passed
+  validation, and rendered blank. `stt-validate` now checks cell-id validity
+  per scheme/resolution.
 - **Geometry.** The `geometry` column is a GeoArrow **Point at the cell's
   centroid** — a representative lon/lat for picking and fallbacks; the cell
   outline is reconstructed client-side from the id (h3-js for H3, the
