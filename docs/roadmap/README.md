@@ -53,117 +53,85 @@ Two house rules:
   that shaped the product, the security model, and the as-built tool/skill
   inventory.
 
-### Not a record
+### Measurements
 
-- [**release-plan-2026-07.md**](./release-plan-2026-07.md) — **temporary.** The
-  sequenced execution plan (waves 0–4) for the work in the register below, plus
-  the positioning and the presentation risks. Its durable residue is the
-  register; **delete it once the waves are discharged.**
+- [**measurements-2026-07.md**](./measurements-2026-07.md) — cold start:
+  requests and bytes to first frame across three archive shapes, with the
+  harness, the hardware, and the caveats. Four to five requests whether the
+  archive is 46 MB or 807 MB.
 
 ## The open register
 
-The single source. Every item was re-verified against the tree, the registries,
-or the live deployment on **2026-07-24**; each carries the evidence needed to
-re-check it in under a minute. Nothing here is aspirational work — these are
-things that are broken, dead, or false today.
+The single source. Re-verified against the tree, the registries, and the live
+deployment on **2026-07-24**, after the three hardening waves
+(`4b6d141`, `dc81451`, `2a58eb4`). Everything below is broken, unverified, or
+blocked on an action only the maintainer can take — nothing here is speculative
+work.
 
-**1. Cloudflare is not caching the packs.** _Highest priority: this one
-falsifies the project's central claim with a single `curl -I`._ The origin side
-is correct — `scripts/r2-sync.sh` uploads two Cache-Control regimes in separate
-passes — but the edge never considered the objects cacheable:
+**Discharged in the hardening waves** (kept as a line each so the ledger is
+auditable, not to imply they are still open): the JSON Schemas now resolve at
+their own `$id`; `packages/core`'s `clean` no longer leaves a stale build stamp;
+the shipped plugin no longer passes `--allow-cli` and no longer points at
+gitignored paths; the showcase is on maplibre-gl v5, so the backend's
+`globe: true` is backed by the version actually deployed; the Mercator limit is
+one constant across both tiers; v2 has a byte golden; `stt-validate` and
+`stt-serve` have real tests; and cold-start is measured
+([measurements-2026-07.md](./measurements-2026-07.md)).
 
-```
-data/earthquakes-v2/manifest.json   cache-control: public, max-age=60, must-revalidate     cf-cache-status: DYNAMIC
-data/earthquakes-v2/packs/*.sttp    cache-control: public, max-age=31536000, immutable     cf-cache-status: DYNAMIC
-```
+---
 
-A repeated `Range: bytes=0-1023` request on the pack still returns `206` with
-`cf-cache-status: DYNAMIC`. `.sttp`/`.sttd` are not in Cloudflare's default
-cacheable-extension set and a custom R2 domain will not cache non-standard
-extensions without an explicit **Cache Rule**. Fix: add a Cache Rule for
-`tiles.poopdeck.gl/*`, then re-probe until `cf-cache-status: HIT`, and add that
-probe to `docs/guides/deploying.md` as a post-sync step — nothing in the repo
-currently verifies cache status. **Accept:** a repeated ranged request on a
-`.sttp` returns `HIT`.
+**1. Cloudflare is not caching the packs.** _Highest priority, and the only item
+here that falsifies a headline claim._ Verified repeatedly on 2026-07-24: a
+`.sttp` returns `cf-cache-status: DYNAMIC` on `bytes=0-1023`, on
+`bytes=0-65535`, and on a full-object GET, all repeated. The origin is correct —
+`scripts/r2-sync.sh` uploads `public, max-age=31536000, immutable` and that
+header survives to the client — but `.sttp`/`.sttd` are not in Cloudflare's
+default cacheable-extension set, and a custom R2 domain will not cache unknown
+extensions without an explicit **Cache Rule**. Until one exists, every viewport
+range request is a full origin round-trip, which is precisely what the
+content-addressed-immutable-pack design exists to avoid, and the cold-start
+numbers in [measurements-2026-07.md](./measurements-2026-07.md) are
+origin-round-trip figures rather than edge figures. Fix and probe are documented
+in [deploying.md](../guides/deploying.md). **Accept:** a repeated ranged request
+returns `HIT`.
 
 **2. The published repository URL 404s.** `https://github.com/BertCh/spatiotemporal-tiles`
 returns **404** (the repo is private). It is the `repository`/`homepage`/`bugs`
 on all four published crates and all eight published npm packages, the
-`GITHUB_BLOB_BASE` in `examples/showcase/src/docs/manifest.ts:38` (so
-source links from the _published_ docs site 404), the releases page both READMEs
-send `cargo install` users to, and a precondition for npm provenance and the
-OIDC publish both workflows assume. Flipping it to public also publishes this
-directory and the commit history, so it is one switch with an ordering
-constraint, not a trivial one.
+`GITHUB_BLOB_BASE` the docs site uses for source links, the releases page both
+READMEs send `cargo install` users to, and a precondition for npm provenance.
+The ordering constraint that made this non-trivial is now largely discharged —
+the roadmap is consolidated, the scratch files are gone, and the false install
+claims are corrected — so this is closer to a straight switch than it was.
 
-**3. crates.io is a release behind, and 0.5.0 was never tagged.** crates.io
-`max_version` is **0.4.0** (versions `0.1.0, 0.1.1, 0.3.0, 0.4.0` — 0.2.0 never
-existed); npm is at **0.5.0** across all eight packages; the workspace is
-`0.5.0` (`Cargo.toml:12`). Origin tags stop at `v0.4.0`, and cargo-dist builds
-binaries **on tag push**, so the prebuilt binaries and installer script the
-crate README advertises do not exist for 0.5.0. Publishing has an operational
-constraint recorded in [shipping.md](./shipping.md): `cargo publish` stalls on
-HTTP/2 upload from the author's network — publish from another one.
+**3. crates.io is a release behind, and there is now a rename to version.**
+crates.io `max_version` is **0.4.0**; npm is at **0.5.0**; the workspace is
+`0.5.0`. Origin tags stop at `v0.4.0`, and cargo-dist builds binaries **on tag
+push**, so the prebuilt binaries the crate README advertises do not exist for
+0.5.0. Separately, the `STT*` layer rename landed with deprecated aliases and a
+changeset, and wants a **0.6.0** bump. Operational constraint recorded in
+[shipping.md](./shipping.md): `cargo publish` stalls on HTTP/2 upload from the
+author's network — publish from another one.
 
-**4. The JSON Schemas do not resolve at their own `$id`.**
-`docs/spec/manifest.schema.json` and `docs/spec/scene.schema.json` declare
-`$id: https://poopdeck.gl/spec/<name>.json`; both URLs return **200
-`text/html`** — the SPA shell. Any validator that resolves `$id` gets HTML.
-`examples/showcase/public/spec/` does not exist. Fix: publish the schemas at
-that path with an `application/schema+json` `_headers` rule.
+**4. Three archives are built but unsynced, and correctly gated.**
+`rain-flood-2019`, `gtfs-ch`, and `storm-4d-isolines` are in
+`LOCAL_ONLY_DATASETS`, so the deploy is honest today and no demo 404s. The open
+work is the r2-sync and the un-gate, which needs R2 credentials.
 
-**5. Two registered demos 404 on the CDN.** `rainfall-2019` and `gtfs-ch`
-return **404** on `tiles.poopdeck.gl` while neither is in `LOCAL_ONLY_DATASETS`
-(`examples/showcase/src/datasets.ts`, which gates only `storm-4d-isolines`), so
-the gate built to hide unsynced stems does not cover them and the live catalog
-links them. Sync them or gate them.
+**5. GitHub Actions has not been running; the CI gates are unverified config.**
+183 commits, no bot commit, no release PR, no `crates/*/CHANGELOG.md` despite
+release-plz having claimed to write them (that config is now deleted — one
+release system, changesets + cargo-dist). The workflows were repaired in wave 1
+(the `showcase-probe` job could not pass as written), and a roadmap-citation
+gate was added, but **none of it has executed**. Corollary, and the reason
+`cargo fmt --check` and `clippy -D warnings` are deliberately absent: gates on a
+CI that does not run are theater. Add them in the same pass that confirms
+Actions is alive — the formatting itself is already clean as of `81eea7c`.
 
-**5b. `storm4d-isolines` is built but unsynced.** The CAPPI contour-sheet cut of
-the Greenfield composite (demo `storm-4d-isolines`, 73 MB, built 2026-07-24 —
-[storm-4d-greenfield-2026-07.md §10](./storm-4d-greenfield-2026-07.md)) exists
-only in `examples/showcase/public/data/`. It is gated, so the deploy is correct
-today; the open work is the r2-sync + un-gate. Its nine context overlays are
-already on R2 (they are the `storm-4d-greenfield` archives, unchanged).
-
-**6. `packages/core`'s `clean` script leaves a stale build stamp.**
-`packages/core/package.json:73` is `rm -rf dist`; all seven siblings also remove
-`tsconfig.tsbuildinfo`, which lives _outside_ `dist/` under `composite: true`.
-So `clean` + `build` exits **0 with an empty `dist/`** — for the package every
-other package depends on. One word.
-
-**7. The shipped Claude plugin config disarms the MCP security posture.**
-`poopdeck-ai/.mcp.json` passes `--allow-cli` (documented in
-`packages/mcp/src/config.ts` as enabling browser-driven arbitrary file
-read/write and subprocess execution, and correctly defaulting **off**) and
-points at two gitignored paths — `packages/mcp/dist/bin.js` (`.gitignore:9`) and
-`STT_DATA_ROOT=examples/showcase/public/data` (`.gitignore:83`). It is inert
-only because the paths are broken. **The fix is to drop `--allow-cli` _and_
-point at `npx -y @poopdeck.gl/mcp`** — repairing the path alone would ship a
-marketplace plugin that enables arbitrary subprocess execution by default for
-every installer.
-
-**8. The maplibre backend claims a globe the showcase cannot render.**
-`packages/maplibre/src/backend-descriptor.ts:162` declares `globe: true` and the
-generated capability matrix therefore asserts it, but
-`examples/showcase/package.json:38` pins `maplibre-gl: ^3.6.0`, where
-`setProjection` does not exist — `MaplibreRenderer.tsx:169,265` optional-chain
-it into a silent no-op. This is the one place the honesty discipline breaks, and
-it breaks inside the capability gate that _is_ the enforcement story. Ruling:
-bump the showcase to maplibre-gl **v5** (not v6 — ESM-only, WebGL2-only,
-restructures Map/Camera); fallback is to flip `globe: false` and regenerate the
-matrix.
-
-**9. GitHub Actions has not been running; the CI gates are unverified config.**
-Four workflows exist (`ci.yml`, `release.yml`, `release-npm.yml`,
-`release-plz.yml`). All 183 commits are the author's — no bot commit, no
-`chore: release` PR, no `crates/*/CHANGELOG.md` despite
-`release-plz.toml` setting `changelog_update = true`. The `showcase-probe` job
-starts the showcase in **dev** mode, so `.env.production` never loads,
-`VITE_DATA_BASE_URL` is unset, every dataset resolves to gitignored
-`public/data/`, and the probe fail-closes — that job cannot pass as written.
-Corollary: **do not add new CI gates until Actions actually executes.** Gates on
-a CI that never runs are theater, and several records cite dead Actions as a
-blocker on their own behalf.
+**6. Browser verification.** Several things now claim to work that no human has
+looked at: the maplibre v5 globe, the re-linked `/drive` and `/worlds` routes,
+the 12-card catalog, the markdown-rendered demo prose, and the polygon seam-wall
+masking. All are test-green and none is aesthetically verified.
 
 ## Consolidation ledger
 

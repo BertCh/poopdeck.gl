@@ -499,7 +499,8 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
       zoom: view.zoom,
       bearing: view.bearing,
       pitch: view.pitch,
-      attributionControl: true,
+      // maplibre-gl v5 dropped the boolean form; {} keeps the default control.
+      attributionControl: {},
       // The Three camera drives the map every frame — no user interaction with
       // the map itself (all gestures go to the transparent canvas above it).
       interactive: false,

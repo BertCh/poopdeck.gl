@@ -92,24 +92,25 @@ dirs; that output is **not committed and nothing reads it** (see the gap
 below). Builds are byte-reproducible, so re-running either generator is a
 no-op diff unless the writer's bytes intentionally changed.
 
-#### Byte-exact writer pins — and the v2 gap
+#### Byte-exact writer pins
 
 Decoding a fixture proves reader agreement. Pinning a fixture's _bytes_ proves
-the writer did not drift. Today only **formatVersion 1** has that second pin:
-`crates/stt-core/tests/fixtures/v1-golden/` (a `single/` and a `paged/`
-dataset plus `expected-hashes.json`), asserted by
-`crates/stt-core/tests/v1_golden.rs`.
+the writer did not drift. **Both format versions now carry that second pin**,
+each a `single/` and a `paged/` dataset plus an `expected-hashes.json`:
 
-> **OPEN GAP (release-plan W2.1).** `formatVersion: 2` — the default that §1
-> declares, and the thing an implementer will actually be handed — has **no**
-> byte-exact golden pin: `git grep v2-golden crates/` returns nothing. The four
-> `v2-golden*` fixtures are committed but no CI step re-runs
-> `make-v2-golden.sh` and diffs the result, so a deliberate pack-layout tweak
-> turns the v1 pin red and leaves v2 silently green. The intended end state is
-> the v1 arrangement mirrored for v2: a `v2_golden.rs` byte pin alongside a CI
-> step that regenerates and `git diff --exit-code`s. Until that lands, an
-> external implementer should treat the v2 fixtures as decode-equivalence
-> references, not as a byte contract.
+| version           | fixtures                                    | asserted by                          |
+| ----------------- | ------------------------------------------- | ------------------------------------ |
+| 1 (frozen legacy) | `crates/stt-core/tests/fixtures/v1-golden/` | `crates/stt-core/tests/v1_golden.rs` |
+| 2 (**default**)   | `crates/stt-core/tests/fixtures/v2-golden/` | `crates/stt-core/tests/v2_golden.rs` |
+
+The v2 pin was added 2026-07-24 and closed a structural inversion worth naming,
+because it is the failure mode this whole section exists to prevent: the
+**frozen legacy** format was byte-pinned while the **current default** was not.
+The `v2-golden*` fixtures under `packages/core/test/` had given v2
+decode-equivalence coverage the whole time — which catches a reader that stops
+understanding the bytes, but not a _writer_ that starts emitting different ones.
+An encoder change that still round-tripped cleanly would have turned the v1 pin
+red and left v2 silently green.
 
 ### 2.3 The reference validator
 

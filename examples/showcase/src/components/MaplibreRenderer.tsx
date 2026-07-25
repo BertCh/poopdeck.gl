@@ -159,7 +159,8 @@ const MaplibreRenderer: React.FC<MaplibreRendererProps> = ({
       zoom: view.zoom,
       bearing: view.bearing,
       pitch: view.pitch,
-      attributionControl: true,
+      // maplibre-gl v5 dropped the boolean form; {} keeps the default control.
+      attributionControl: {},
     });
     mapRef.current = map;
     // setProjection lives on the runtime map, not the constructor — apply on
