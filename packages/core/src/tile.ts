@@ -53,7 +53,7 @@ import {
   type TileId,
   type TileMetaJson,
   type TimeRange,
-  type Layer,
+  type STTTileLayer,
   type BinaryFeatures,
   GeometryType,
 } from './types.js';
@@ -1358,7 +1358,7 @@ export function decodeTile(
 
   if (isV2) {
     const rawLayers = parseLayerFrameV2(payload, tileKey, options?.templates);
-    const layers: Layer[] = rawLayers.map((raw) => {
+    const layers: STTTileLayer[] = rawLayers.map((raw) => {
       const coreTable = tableFromIPC(raw.coreIpc);
       // Eager PROPS materialization (design §4.1 — this reader ships
       // eager-only): parse the PROPS batch now and merge its columns into
@@ -1396,7 +1396,7 @@ export function decodeTile(
   }
 
   const rawLayers = parseLayerFrame(payload);
-  const layers: Layer[] = rawLayers.map((raw) => {
+  const layers: STTTileLayer[] = rawLayers.map((raw) => {
     const table = tableFromIPC(raw.ipc);
     return {
       name: raw.name,
@@ -1496,7 +1496,7 @@ export function getFeatureProperties(
  *
  * @see https://geoarrow.org/format.html
  */
-export function toGeoArrowTable(layer: Layer): Table {
+export function toGeoArrowTable(layer: STTTileLayer): Table {
   let table = layer.arrowTable;
   if (!table && layer.arrowIpc) {
     // Worker-decoded tiles arrive without the (non-cloneable) Table but

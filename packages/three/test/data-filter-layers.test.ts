@@ -16,12 +16,12 @@ import { Mesh } from 'three';
 import type { BufferGeometry } from 'three';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { ArcLayer } from '../src/layers/arc-layer';
-import { WideLineLayer } from '../src/layers/wide-line-layer';
-import { OdLineLayer } from '../src/layers/od-line-layer';
-import { TripsLayer } from '../src/layers/trips-layer';
-import { ColumnLayer } from '../src/layers/column-layer';
-import { PolygonLayer } from '../src/layers/polygon-layer';
+import { STTArcLayer } from '../src/layers/arc-layer';
+import { STTWideLineLayer } from '../src/layers/wide-line-layer';
+import { STTOdLineLayer } from '../src/layers/od-line-layer';
+import { STTTripsLayer } from '../src/layers/trips-layer';
+import { STTColumnLayer } from '../src/layers/column-layer';
+import { STTPolygonLayer } from '../src/layers/polygon-layer';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeLineTile, makePointTile } from './_support/features';
@@ -110,9 +110,12 @@ function attr(geom: BufferGeometry, name: string) {
   return geom.getAttribute(name);
 }
 
-describe('ArcLayer — DataFilter end-to-end', () => {
+describe('STTArcLayer — DataFilter end-to-end', () => {
   it('binds sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new ArcLayer({ sourceColor: CONST, filterProperty: 'mag' });
+    const layer = new STTArcLayer({
+      sourceColor: CONST,
+      filterProperty: 'mag',
+    });
     layer.setTiles([lineTile()], ctx);
     const geom = layer.object.geometry as BufferGeometry;
     const a = attr(geom, 'sttFilterValue');
@@ -122,7 +125,7 @@ describe('ArcLayer — DataFilter end-to-end', () => {
     layer.dispose();
   });
   it('binds nothing + installs no filter without filterProperty', () => {
-    const layer = new ArcLayer({ sourceColor: CONST });
+    const layer = new STTArcLayer({ sourceColor: CONST });
     layer.setTiles([lineTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttFilterValue'),
@@ -132,9 +135,9 @@ describe('ArcLayer — DataFilter end-to-end', () => {
   });
 });
 
-describe('WideLineLayer — DataFilter end-to-end', () => {
+describe('STTWideLineLayer — DataFilter end-to-end', () => {
   it('binds sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new WideLineLayer({
+    const layer = new STTWideLineLayer({
       colorMode: CONST,
       mode: 'window',
       filterProperty: 'mag',
@@ -147,7 +150,7 @@ describe('WideLineLayer — DataFilter end-to-end', () => {
     layer.dispose();
   });
   it('binds nothing + installs no filter without filterProperty', () => {
-    const layer = new WideLineLayer({ colorMode: CONST, mode: 'window' });
+    const layer = new STTWideLineLayer({ colorMode: CONST, mode: 'window' });
     layer.setTiles([lineTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttFilterValue'),
@@ -157,9 +160,12 @@ describe('WideLineLayer — DataFilter end-to-end', () => {
   });
 });
 
-describe('OdLineLayer — DataFilter end-to-end', () => {
+describe('STTOdLineLayer — DataFilter end-to-end', () => {
   it('binds sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new OdLineLayer({ colorMode: CONST, filterProperty: 'mag' });
+    const layer = new STTOdLineLayer({
+      colorMode: CONST,
+      filterProperty: 'mag',
+    });
     layer.setTiles([lineTile()], ctx);
     const a = attr(layer.object.geometry as BufferGeometry, 'sttFilterValue');
     expect(a).toBeTruthy();
@@ -168,7 +174,7 @@ describe('OdLineLayer — DataFilter end-to-end', () => {
     layer.dispose();
   });
   it('binds nothing + installs no filter without filterProperty', () => {
-    const layer = new OdLineLayer({ colorMode: CONST });
+    const layer = new STTOdLineLayer({ colorMode: CONST });
     layer.setTiles([lineTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttFilterValue'),
@@ -178,9 +184,12 @@ describe('OdLineLayer — DataFilter end-to-end', () => {
   });
 });
 
-describe('TripsLayer — DataFilter end-to-end', () => {
+describe('STTTripsLayer — DataFilter end-to-end', () => {
   it('binds sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new TripsLayer({ colorMode: CONST, filterProperty: 'mag' });
+    const layer = new STTTripsLayer({
+      colorMode: CONST,
+      filterProperty: 'mag',
+    });
     layer.setTiles([lineTile()], ctx);
     const a = attr(layer.object.geometry as BufferGeometry, 'sttFilterValue');
     expect(a).toBeTruthy();
@@ -189,7 +198,7 @@ describe('TripsLayer — DataFilter end-to-end', () => {
     layer.dispose();
   });
   it('binds nothing + installs no filter without filterProperty', () => {
-    const layer = new TripsLayer({ colorMode: CONST });
+    const layer = new STTTripsLayer({ colorMode: CONST });
     layer.setTiles([lineTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttFilterValue'),
@@ -199,9 +208,12 @@ describe('TripsLayer — DataFilter end-to-end', () => {
   });
 });
 
-describe('ColumnLayer — DataFilter end-to-end', () => {
+describe('STTColumnLayer — DataFilter end-to-end', () => {
   it('binds sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new ColumnLayer({ colorMode: CONST, filterProperty: 'mag' });
+    const layer = new STTColumnLayer({
+      colorMode: CONST,
+      filterProperty: 'mag',
+    });
     layer.setTiles([pointTile()], ctx);
     const a = attr(layer.object.geometry as BufferGeometry, 'sttFilterValue');
     expect(a).toBeTruthy();
@@ -210,7 +222,7 @@ describe('ColumnLayer — DataFilter end-to-end', () => {
     layer.dispose();
   });
   it('binds nothing + installs no filter without filterProperty', () => {
-    const layer = new ColumnLayer({ colorMode: CONST });
+    const layer = new STTColumnLayer({ colorMode: CONST });
     layer.setTiles([pointTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttFilterValue'),
@@ -220,13 +232,13 @@ describe('ColumnLayer — DataFilter end-to-end', () => {
   });
 });
 
-describe('PolygonLayer — DataFilter end-to-end', () => {
+describe('STTPolygonLayer — DataFilter end-to-end', () => {
   // The polygon material is built once in the ctor; its bundle is the layer field.
-  function meshGeom(layer: PolygonLayer): BufferGeometry {
+  function meshGeom(layer: STTPolygonLayer): BufferGeometry {
     return (layer.object.children[0] as Mesh).geometry;
   }
   it('binds per-vertex sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new PolygonLayer({
+    const layer = new STTPolygonLayer({
       colorMode: CONST,
       mode: 'none',
       filterProperty: 'mag',
@@ -240,7 +252,7 @@ describe('PolygonLayer — DataFilter end-to-end', () => {
     layer.dispose();
   });
   it('binds nothing + installs no filter without filterProperty (static map-decal path)', () => {
-    const layer = new PolygonLayer({ colorMode: CONST, mode: 'none' });
+    const layer = new STTPolygonLayer({ colorMode: CONST, mode: 'none' });
     layer.setTiles([squarePoly()], ctx);
     expect(attr(meshGeom(layer), 'sttFilterValue')).toBeUndefined();
     expect(bundleFilter(layer)).toBeUndefined();

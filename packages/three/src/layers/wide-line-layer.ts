@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `WideLineLayer` — screen-pixel-width animated lines, the Three port of deck's
+ * `STTWideLineLayer` — screen-pixel-width animated lines, the Three port of deck's
  * `PathLayer` / `AnimatedLineLayer` / `AnimatedTripsLayer` (window + trail) over
  * the {@link createWideLineMaterial} ribbon. Every LineString segment is one quad
  * instance; the GPU expands it to `widthPx` and time-filters it. This is the base
@@ -56,7 +56,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface WideLineLayerOptions extends ThreeTimeWindowOptions {
+export interface STTWideLineLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** window (Path/OD-Line) | trail (Trips) | none (static map lines). @default 'none' */
   mode?: WideLineMode;
@@ -107,14 +107,14 @@ export interface WideLineLayerOptions extends ThreeTimeWindowOptions {
   categoryOrder?: string[];
 }
 
-export class WideLineLayer extends BaseSttLayer implements SttIdPickable {
+export class STTWideLineLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: WideLineMaterialBundle | null = null;
   private paletteTexture: DataTexture | null = null;
   private viewport: [number, number] = [1280, 720];
-  protected readonly opts: WideLineLayerOptions;
+  protected readonly opts: STTWideLineLayerOptions;
 
   // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
   private provenance = new InstanceProvenance();
@@ -125,12 +125,12 @@ export class WideLineLayer extends BaseSttLayer implements SttIdPickable {
   private currentTimeMs = 0;
   /**
    * The pick kind reported for this layer — `'line'` for the wide-line / OD-line
-   * family, overridden to `'path'` by the {@link PathGeoLayer} subclass. Protected
+   * family, overridden to `'path'` by the {@link STTPathGeoLayer} subclass. Protected
    * so a subclass can retag its picks without duplicating the pick machinery.
    */
   protected pickKind: SttIdPickKind = 'line';
 
-  constructor(options: WideLineLayerOptions) {
+  constructor(options: STTWideLineLayerOptions) {
     super();
     this.opts = options;
     this.id = options.id ?? 'wide-line';
@@ -305,7 +305,7 @@ export class WideLineLayer extends BaseSttLayer implements SttIdPickable {
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback) to
    * a normalised {@link SttIdPickInfo}, or `null` for a miss. The `kind` is
-   * {@link pickKind} (`'line'`, or `'path'` for the {@link PathGeoLayer} subclass);
+   * {@link pickKind} (`'line'`, or `'path'` for the {@link STTPathGeoLayer} subclass);
    * the coordinate is the feature's FIRST vertex (indexed geometry). Pure — the
    * unit-tested seam; call it directly with a decoded index.
    */

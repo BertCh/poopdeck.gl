@@ -4,7 +4,7 @@ The `SplatLayer` renders a spatiotemporal point cloud — most commonly LIDAR re
 
 Where [`AnimatedPointLayer`](./animated-point-layer.md)'s `splat: true` draws each point as a soft, unoriented round billboard (an isotropic point splat — no surface frame), `SplatLayer` draws each feature as a true oriented ellipse tilted to match the surface it was sampled from, with a soft radial Gaussian falloff **and** a soft temporal Gaussian weight. Overlapping surfels read as a continuous, depth-correct surface rather than a field of discs — _surface splatting_ (Pfister/Zwicker surfels, Zwicker's "EWA Surface Splatting"), the right formalism for splats derived from an oriented surface scan rather than a volumetric optimization (contrast 3D Gaussian Splatting, which needs a per-frame back-to-front sort — `SplatLayer` does not, see [How it draws](#how-it-draws)).
 
-`SplatLayer` is the deck-side analogue of `@poopdeck.gl/three`'s `SurfelLayer` — same primitive, same baked columns — and powers the "Surfel" render mode of the AV cockpit demos.
+`SplatLayer` is the deck-side analogue of `@poopdeck.gl/three`'s `STTSurfelLayer` — same primitive, same baked columns — and powers the "Surfel" render mode of the AV cockpit demos.
 
 ## Installation
 

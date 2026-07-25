@@ -6,7 +6,7 @@
  * `IconMaterial` — directional billboard markers, the Three port of deck's
  * `AnimatedIconLayer`. Each instance is a camera-facing quad (built in
  * `vertexNode` like {@link createPointMaterial}) BUT sized in **screen pixels**
- * (deck `IconLayer`'s default `sizeUnits: 'pixels'`), rotated by a per-instance
+ * (deck `STTIconLayer`'s default `sizeUnits: 'pixels'`), rotated by a per-instance
  * heading attribute, and textured from a shared icon-atlas {@link Texture} via a
  * per-instance UV sub-rectangle. The shared {@link timeFilterAlphaNode} gives the
  * same window / cumulative / wake animation as deck — `wake` mode adds a trailing
@@ -329,7 +329,7 @@ export function updateIconUniforms(
 // at full intensity (never × alpha), so the decoded RGB is an exact 24-bit index;
 // off-time / off-range fragments are discarded (opacity 0 + alphaTest) so they never
 // win a pick. Unlike the colour material it does NOT sample the atlas — the whole
-// marker quad is pickable (deck's `IconLayer` picks the bounding quad too). STATIC
+// marker quad is pickable (deck's `STTIconLayer` picks the bounding quad too). STATIC
 // icon path only: the glide (motionInterpolation) path defers per-track picking (its
 // provenance is empty), consistent with the point layer. Bind
 // {@link updateIconUniforms} to sync its time / size / filter uniforms before the

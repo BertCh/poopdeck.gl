@@ -56,7 +56,7 @@
  * a heatmap means picking the underlying POINT layer.
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {

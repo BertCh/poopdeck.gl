@@ -3,10 +3,10 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `PathGeoLayer` — the Three port of deck's `AnimatedPathLayer` (WINDOW mode):
+ * `STTPathGeoLayer` — the Three port of deck's `AnimatedPathLayer` (WINDOW mode):
  * whole-feature visibility (each multi-vertex path is shown, with optional fade,
  * when its `[startTime, endTime]` overlaps the current time window). Geographic
- * (mercator / globe) sibling of the AV {@link WideLineLayer} — it is literally a
+ * (mercator / globe) sibling of the AV {@link STTWideLineLayer} — it is literally a
  * thin configuration of that base, fixing `mode: 'window'` and exposing
  * path-vocabulary option names (`widthPx`, `pathColor`, fade) so callers read
  * like the deck `AnimatedPathLayer`.
@@ -20,18 +20,21 @@
  * Unlocks the geographic path demos (trajectories, lane lines, density
  * iso-contour outlines) on the Three renderer.
  *
- * PROGRESSIVE-REVEAL / TRAIL MODE (opt-in via {@link PathGeoLayerOptions.revealTrail}):
+ * PROGRESSIVE-REVEAL / TRAIL MODE (opt-in via {@link STTPathGeoLayerOptions.revealTrail}):
  * instead of the whole path appearing at once, it is drawn PROGRESSIVELY up to the
  * playhead — each vertex reveals as time reaches its per-vertex reveal time — so a
  * timeless line inks itself in along its length over its `[start,end]` span. This
  * is the Three port of deck's `AnimatedPathLayer` `revealTrail`/`revealDuration`/
- * `fadeTrail`: it feeds the base {@link WideLineLayer}'s reveal gate the arc-length
+ * `fadeTrail`: it feeds the base {@link STTWideLineLayer}'s reveal gate the arc-length
  * reveal times synthesized by the buffer builder, drives it with
  * `trailLength`/`trailFade`, and — per the project accessibility contract —
  * degrades to the static whole-path window render under {@link reducedMotion}.
  */
 
-import { WideLineLayer, type WideLineLayerOptions } from './wide-line-layer.js';
+import {
+  STTWideLineLayer,
+  type STTWideLineLayerOptions,
+} from './wide-line-layer.js';
 import type { ThreeTimeWindowOptions } from '../lib/time-window.js';
 import type {
   LineColorMode,
@@ -49,7 +52,7 @@ import type {
  */
 const REVEAL_PERSIST_TRAIL_MS = 250 * 365 * 24 * 60 * 60 * 1000;
 
-export interface PathGeoLayerOptions extends ThreeTimeWindowOptions {
+export interface STTPathGeoLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Per-feature color (categorical / ramp / constant). */
   colorMode: LineColorMode;
@@ -103,9 +106,9 @@ export interface PathGeoLayerOptions extends ThreeTimeWindowOptions {
 }
 
 /**
- * Geographic path layer. Subclasses {@link WideLineLayer}. In the DEFAULT
+ * Geographic path layer. Subclasses {@link STTWideLineLayer}. In the DEFAULT
  * (window) mode it pins `mode: 'window'` — whole-feature visibility. With
- * {@link PathGeoLayerOptions.revealTrail} it switches the base into the shared
+ * {@link STTPathGeoLayerOptions.revealTrail} it switches the base into the shared
  * `trail` gate (the SAME per-vertex vertex-collapse + fragment-fade the trips
  * kind uses, deck.gl #7509), fed the arc-length reveal times its
  * {@link bufferOptions} override asks {@link buildLineSegmentBuffers} to
@@ -115,7 +118,7 @@ export interface PathGeoLayerOptions extends ThreeTimeWindowOptions {
  * so the `line`/`od-line` kinds (window/none mode, no `revealTimes`) are
  * byte-identical.
  */
-export class PathGeoLayer extends WideLineLayer {
+export class STTPathGeoLayer extends STTWideLineLayer {
   /**
    * Whether progressive reveal is EFFECTIVE — opted in via `revealTrail` AND not
    * suppressed by `reducedMotion` (the accessibility contract every animated
@@ -125,10 +128,10 @@ export class PathGeoLayer extends WideLineLayer {
    */
   private readonly revealActive: boolean;
 
-  constructor(options: PathGeoLayerOptions) {
+  constructor(options: STTPathGeoLayerOptions) {
     const revealActive =
       options.revealTrail === true && options.reducedMotion !== true;
-    const base: WideLineLayerOptions = {
+    const base: STTWideLineLayerOptions = {
       id: options.id ?? 'path-geo',
       // Reveal routes through the shared `trail` gate (per-vertex reveal up to the
       // playhead); otherwise the whole-path `window` gate. `window` is the exact
@@ -143,7 +146,7 @@ export class PathGeoLayer extends WideLineLayer {
       elevationProperty: options.elevationProperty ?? null,
       elevationScale: options.elevationScale ?? 1,
       zLift: options.zLift ?? 0,
-      // Forward the full time-window vocabulary as-is; WideLineLayer resolves it
+      // Forward the full time-window vocabulary as-is; STTWideLineLayer resolves it
       // (defaulting windowHalf to 0). Passing the RAW values — not `?? 0` — is
       // load-bearing: a `windowHalf: 0` fallback would win over `timeWindow`.
       timeWindow: options.timeWindow,
@@ -171,7 +174,7 @@ export class PathGeoLayer extends WideLineLayer {
     super(base);
     this.revealActive = revealActive;
     // Retag the inherited GPU id-buffer pick as the `path` kind (the pick machinery
-    // — provenance, id material, dispatch — is inherited from WideLineLayer whole).
+    // — provenance, id material, dispatch — is inherited from STTWideLineLayer whole).
     this.pickKind = 'path';
   }
 

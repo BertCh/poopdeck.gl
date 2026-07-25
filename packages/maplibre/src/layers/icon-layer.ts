@@ -63,7 +63,7 @@
 
 import type {
   Tile,
-  Layer as STTLayer,
+  STTTileLayer as STTLayer,
   BinaryFeatures,
   TrackFieldConfig,
   TrackSampleConfig,

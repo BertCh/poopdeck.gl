@@ -7,7 +7,7 @@
  * `@poopdeck.gl/layers`'s `lib/summary/h3-summary-layer.ts` id-decode. Where the
  * deck version hands the H3 hex string straight to deck's `H3HexagonLayer`, this
  * version decodes the same u64 → the cell's **lon/lat boundary ring** (via
- * h3-js's `cellToBoundary`) so the Three {@link H3SummaryLayer} can project +
+ * h3-js's `cellToBoundary`) so the Three {@link STTH3SummaryLayer} can project +
  * tessellate the cell itself (no H3HexagonLayer sublayer exists in the Three
  * world).
  *

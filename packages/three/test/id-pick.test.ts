@@ -21,29 +21,29 @@ import {
   parseIdTileKey,
   resolveIdPick,
 } from '../src/lib/id-pick';
-import { ColumnLayer } from '../src/layers/column-layer';
-import { ArcLayer } from '../src/layers/arc-layer';
-import { PointCloudLayer } from '../src/layers/point-cloud-layer';
-import { PolygonLayer } from '../src/layers/polygon-layer';
-import { IsoLayer } from '../src/layers/iso-layer';
+import { STTColumnLayer } from '../src/layers/column-layer';
+import { STTArcLayer } from '../src/layers/arc-layer';
+import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTPolygonLayer } from '../src/layers/polygon-layer';
+import { STTIsoLayer } from '../src/layers/iso-layer';
 
 describe('isIdPickable (auto-registration signal)', () => {
   it('is true for anything exposing a pick() method', () => {
     expect(isIdPickable({ pick() {} })).toBe(true);
     // The real instanced layers all satisfy it (constructor-only, no GPU).
-    expect(isIdPickable(new PointCloudLayer())).toBe(true);
+    expect(isIdPickable(new STTPointCloudLayer())).toBe(true);
     expect(
       isIdPickable(
-        new ColumnLayer({
+        new STTColumnLayer({
           colorMode: { type: 'constant', color: [1, 2, 3, 255] },
         }),
       ),
     ).toBe(true);
-    expect(isIdPickable(new ArcLayer())).toBe(true);
+    expect(isIdPickable(new STTArcLayer())).toBe(true);
     // The MERGED-mesh kinds satisfy it too, so the r3f mount auto-registers them
     // with no per-kind wiring (they never touch r3f/index.tsx).
-    expect(isIdPickable(new PolygonLayer())).toBe(true);
-    expect(isIdPickable(new IsoLayer())).toBe(true);
+    expect(isIdPickable(new STTPolygonLayer())).toBe(true);
+    expect(isIdPickable(new STTIsoLayer())).toBe(true);
   });
 
   it('is false for box pickables (getPickBoxes) and non-pickables', () => {

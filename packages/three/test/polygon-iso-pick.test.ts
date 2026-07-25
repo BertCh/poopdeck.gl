@@ -34,8 +34,8 @@ import {
 import { createIsoLineIdMaterial } from '../src/tsl/iso-line-material';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
 import { TimeFilterUniforms } from '../src/tsl/time-filter';
-import { PolygonLayer } from '../src/layers/polygon-layer';
-import { IsoLayer } from '../src/layers/iso-layer';
+import { STTPolygonLayer } from '../src/layers/polygon-layer';
+import { STTIsoLayer } from '../src/layers/iso-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import {
   GpuPicker,
@@ -204,9 +204,9 @@ describe('createPolygonIdMaterial (reuses the colour material collapse gates)', 
   });
 });
 
-describe('PolygonLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
+describe('STTPolygonLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   it('resolves a merged id colour to the right polygon + its FIRST source vertex', async () => {
-    const layer = new PolygonLayer({ id: 'storms', ...POLY_OPTS });
+    const layer = new STTPolygonLayer({ id: 'storms', ...POLY_OPTS });
     layer.setTiles([polyTile], ctx);
     const mesh = layer.object.children[0] as Mesh;
     const colourMat = mesh.material;
@@ -230,14 +230,14 @@ describe('PolygonLayer.pick (full GPU id-buffer dispatch, mock readback)', () =>
   });
 
   it('reports a sentinel background readback as a miss (collapsed/absent)', async () => {
-    const layer = new PolygonLayer({ id: 'storms', ...POLY_OPTS });
+    const layer = new STTPolygonLayer({ id: 'storms', ...POLY_OPTS });
     layer.setTiles([polyTile], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]); // white → MAX_PICK_ID ≥ count
     expect(await layer.pick(picker, camera, 15, 25)).toBeNull();
   });
 
   it('returns null (never touches the GPU) when there are no polygons', async () => {
-    const layer = new PolygonLayer({ id: 'storms', ...POLY_OPTS });
+    const layer = new STTPolygonLayer({ id: 'storms', ...POLY_OPTS });
     layer.setTiles([], ctx);
     const { picker, camera } = mockPicker(encodeId(0));
     expect(await layer.pick(picker, camera, 15, 25)).toBeNull();
@@ -282,9 +282,9 @@ describe('createIsoLineIdMaterial (reuses the colour material window collapse ga
   });
 });
 
-describe('IsoLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
+describe('STTIsoLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   it('resolves a merged id colour to the right contour + its FIRST source vertex', async () => {
-    const layer = new IsoLayer({ id: 'iso' });
+    const layer = new STTIsoLayer({ id: 'iso' });
     layer.setTiles([isoTile], ctx);
     const lines = layer.object.children[0] as LineSegments;
     const colourMat = lines.material;
@@ -306,14 +306,14 @@ describe('IsoLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   });
 
   it('reports a sentinel background readback as a miss', async () => {
-    const layer = new IsoLayer({ id: 'iso' });
+    const layer = new STTIsoLayer({ id: 'iso' });
     layer.setTiles([isoTile], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]);
     expect(await layer.pick(picker, camera, 40, 50)).toBeNull();
   });
 
   it('returns null (never touches the GPU) when there are no contours', async () => {
-    const layer = new IsoLayer({ id: 'iso' });
+    const layer = new STTIsoLayer({ id: 'iso' });
     layer.setTiles([], ctx);
     const { picker, camera } = mockPicker(encodeId(0));
     expect(await layer.pick(picker, camera, 40, 50)).toBeNull();

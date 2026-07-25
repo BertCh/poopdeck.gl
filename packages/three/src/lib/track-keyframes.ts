@@ -9,7 +9,7 @@
  * (`AnimatedPointLayer.renderInterpolated`), this module bakes each entity's
  * motion ONCE into a keyframe texture so the GPU does the per-frame
  * interpolation from a single `currentTime` uniform, with zero per-frame CPU
- * attribute writes (the roadmap's "storage-buffer / TripsLayer pattern" verdict).
+ * attribute writes (the roadmap's "storage-buffer / STTTripsLayer pattern" verdict).
  *
  * ── THE MODEL ────────────────────────────────────────────────────────────────
  * A point/icon archive carries one row per entity PER SAMPLE. Grouping by an
@@ -79,7 +79,7 @@ export interface KeyframeAssemblyOptions {
   withHeading?: boolean;
   /**
    * Angular unit of `Track.heading` when {@link withHeading} is on: `'deg'`
-   * (deck `IconLayer.getAngle`, AIS `cog`, aircraft `heading`) or `'rad'`.
+   * (deck `STTIconLayer.getAngle`, AIS `cog`, aircraft `heading`) or `'rad'`.
    * @default 'rad'
    */
   angleUnit?: 'rad' | 'deg';

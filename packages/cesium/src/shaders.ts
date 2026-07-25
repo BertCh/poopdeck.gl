@@ -6,7 +6,7 @@
  * The generated time-filter alpha for a Cesium custom `Appearance` fragment
  * shader (GLSL ES 3.00). Cesium is a WebGL2/GLSL backend, so it consumes the
  * SAME `ALPHA_EXPR` AST as deck's `TimeFilterExtension` — no hand-written copy.
- * The worked `CesiumPointLayer` currently CPU-time-filters via the oracle; this
+ * The worked `STTPointLayer` currently CPU-time-filters via the oracle; this
  * is the ready-made snippet for the GPU-appearance path (browser-verify to wire).
  */
 

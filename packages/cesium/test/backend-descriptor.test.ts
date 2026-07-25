@@ -40,12 +40,12 @@ describe('cesiumBackend descriptor', () => {
     // unavailable in node): assert the source actually exports the class
     // backing each claim, and that nothing else is claimed.
     const backing: Record<string, [file: string, cls: string]> = {
-      point: ['cesium-point-layer.ts', 'CesiumPointLayer'],
-      path: ['cesium-path-layer.ts', 'CesiumPathLayer'],
-      line: ['cesium-path-layer.ts', 'CesiumPathLayer'], // an OD line is a 2-vertex LineString
-      arc: ['cesium-arc-layer.ts', 'CesiumArcLayer'],
-      trips: ['cesium-trips-layer.ts', 'CesiumTripsLayer'],
-      tripHeads: ['cesium-trip-heads-layer.ts', 'CesiumTripHeadsLayer'],
+      point: ['cesium-point-layer.ts', 'STTPointLayer'],
+      path: ['cesium-path-layer.ts', 'STTPathLayer'],
+      line: ['cesium-path-layer.ts', 'STTPathLayer'], // an OD line is a 2-vertex LineString
+      arc: ['cesium-arc-layer.ts', 'STTArcLayer'],
+      trips: ['cesium-trips-layer.ts', 'STTTripsLayer'],
+      tripHeads: ['cesium-trip-heads-layer.ts', 'STTTripHeadsLayer'],
     };
     const supported = LAYER_KINDS.filter(
       (k) => cesiumBackend.layerKinds[k].supported,

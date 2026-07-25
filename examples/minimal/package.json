@@ -1,0 +1,34 @@
+{
+  "name": "poopdeck-minimal-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The smallest runnable poopdeck.gl app: one hosted .stt archive, one animated layer, playback controls.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.3.2",
+    "@deck.gl/core": "^9.3.2",
+    "@deck.gl/extensions": "^9.3.2",
+    "@deck.gl/geo-layers": "^9.3.2",
+    "@deck.gl/layers": "^9.3.2",
+    "@deck.gl/mesh-layers": "^9.3.2",
+    "@deck.gl/react": "^9.3.2",
+    "@luma.gl/core": "^9.3.3",
+    "@luma.gl/engine": "^9.3.3",
+    "@poopdeck.gl/layers": "^0.5.0",
+    "@poopdeck.gl/react": "^0.5.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.4.0",
+    "vite": "^5.4.11"
+  }
+}

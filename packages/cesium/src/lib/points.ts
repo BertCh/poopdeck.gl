@@ -4,7 +4,7 @@
 
 /**
  * Pure (Cesium-free) assembly of per-feature ECEF points from decoded Point
- * tiles — the CPU builder behind `CesiumPointLayer.setTiles`. Kernel-built,
+ * tiles — the CPU builder behind `STTPointLayer.setTiles`. Kernel-built,
  * mirroring the polyline builders:
  *
  *   - positions → `core/geo` `GlobeProjection({datum:'wgs84'})` (Cesium's frame)

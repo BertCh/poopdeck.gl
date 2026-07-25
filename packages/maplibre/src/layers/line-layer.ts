@@ -54,7 +54,7 @@
  * shares the builder — unrevealed geometry is unpickable as well as invisible.
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { synthesizeVertexTimes } from '@poopdeck.gl/core/trips';
 import {
   GeometryType,

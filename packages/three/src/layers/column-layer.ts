@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `ColumnLayer` — extruded 3D columns (bars / prisms) at point features, the
+ * `STTColumnLayer` — extruded 3D columns (bars / prisms) at point features, the
  * Three port of deck's `AnimatedColumnLayer`. Each Point feature becomes one
  * instance of a shared unit prism (`diskResolution` sides, see
  * `geometry/column-prism.ts`), scaled by a metric `radius` + a per-feature HEIGHT
@@ -58,7 +58,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface ColumnLayerOptions extends ThreeTimeWindowOptions {
+export interface STTColumnLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   colorMode: ColumnColorMode;
   /** Disk faces (deck `diskResolution`). @default 20 */
@@ -139,13 +139,13 @@ export interface ColumnLayerOptions extends ThreeTimeWindowOptions {
   // ThreeTimeWindowOptions.
 }
 
-export class ColumnLayer extends BaseSttLayer implements SttIdPickable {
+export class STTColumnLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: ColumnMaterialBundle | null = null;
   private paletteTexture: DataTexture | null = null;
-  protected readonly opts: ColumnLayerOptions;
+  protected readonly opts: STTColumnLayerOptions;
 
   // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
   private provenance = new InstanceProvenance();
@@ -155,7 +155,7 @@ export class ColumnLayer extends BaseSttLayer implements SttIdPickable {
   private idColorsPresent = false;
   private currentTimeMs = 0;
 
-  constructor(options: ColumnLayerOptions) {
+  constructor(options: STTColumnLayerOptions) {
     super();
     this.opts = options;
     this.id = options.id ?? 'columns';

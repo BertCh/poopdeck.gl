@@ -48,7 +48,7 @@ const UNSUPPORTED_KINDS: Partial<Record<LayerKind, LayerKindSupport>> = {
   flowStroke: {
     supported: false,
     fallbackKind: 'flowCorridor',
-    reason: 'no FlowStrokeLayer in three; use FlowCorridorLayer',
+    reason: 'no FlowStrokeLayer in three; use STTFlowCorridorLayer',
   },
   text: {
     supported: false,

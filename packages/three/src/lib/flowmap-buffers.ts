@@ -4,7 +4,7 @@
 
 /**
  * Pure (Three-free) assembly of flowmap **arrow + node-circle** buffers from
- * decoded OD-flow tiles — the Three port of deck's `FlowmapLayer`
+ * decoded OD-flow tiles — the Three port of deck's `STTFlowmapLayer`
  * (`packages/layers/.../summary/flowmap-layer.ts`). Feeds
  * {@link createFlowArrowMaterial} (tapered half-arrows) and a node-circle splat.
  *
@@ -76,7 +76,7 @@ function nodeKey(lon: number, lat: number): string {
 
 /**
  * Continuous bucket position in `[0, nb-1]` for an absolute time, from a tile's
- * own axis (matches deck `FlowmapLayer.posFromBinary`). `null` when the tile
+ * own axis (matches deck `STTFlowmapLayer.posFromBinary`). `null` when the tile
  * carries no matrix.
  */
 function posFromBinary(binary: BinaryFeatures, time: number): number | null {

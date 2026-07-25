@@ -13,11 +13,11 @@ export type {
   ArchiveOptions,
   BinaryFeatures,
   BoundingBox,
-  Layer,
+  STTTileLayer,
   LayerInfo,
-  Position,
-  Position2D,
-  Position3D,
+  STTPosition,
+  STTPosition2D,
+  STTPosition3D,
   PropertyInfo,
   SpatialIndex,
   SttLoadOptions,
@@ -188,3 +188,32 @@ export {
   type SttTileSource,
   type SttTileSourceMetadata,
 } from './tile-source.js';
+
+// ════════════════════════════════════════════════════════════════════════════
+//  DEPRECATED ALIASES (0.6.0) — removal target: 0.8.0
+//
+//  Two names here shadowed `@deck.gl/core` exports, so neither package could be
+//  imported alongside deck under its natural spelling:
+//
+//   • `Layer` (a decoded layer inside a tile) vs deck's `Layer` CLASS — the base
+//     every deck layer extends, and the single most-imported deck symbol. Every
+//     consumer in this repo already had to write `import { STTTileLayer as TileLayer }`.
+//   • `Position` vs deck's `Position`, which is a DIFFERENT (broader) type:
+//     deck's admits `Readonly<Float32Array>` / `Readonly<Float64Array>` as well
+//     as the two tuple arities. `Position2D` / `Position3D` come along so the
+//     trio keeps one spelling.
+//
+//  The JSDoc sits on the export SPECIFIER: TypeScript ignores a `@deprecated`
+//  block placed above an `export … from` statement, so this is the form that
+//  actually produces an IDE strikethrough.
+// ════════════════════════════════════════════════════════════════════════════
+export type {
+  /** @deprecated Renamed to {@link STTTileLayer} in 0.6.0 — the old name shadowed the `Layer` base class from `@deck.gl/core` (removed in 0.8.0). */
+  STTTileLayer as Layer,
+  /** @deprecated Renamed to {@link STTPosition} in 0.6.0 — the old name shadowed `Position` from `@deck.gl/core`, which is a broader type (removed in 0.8.0). */
+  STTPosition as Position,
+  /** @deprecated Renamed to {@link STTPosition2D} in 0.6.0 (removed in 0.8.0). */
+  STTPosition2D as Position2D,
+  /** @deprecated Renamed to {@link STTPosition3D} in 0.6.0 (removed in 0.8.0). */
+  STTPosition3D as Position3D,
+} from './types.js';

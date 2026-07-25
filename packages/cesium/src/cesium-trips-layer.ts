@@ -49,7 +49,7 @@ import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import { featureColor, type FeatureColorMode } from './lib/feature-color.js';
 import { lineStringTimeOrigin } from './lib/polylines.js';
 
-export interface CesiumTripsLayerOptions {
+export interface STTTripsLayerOptions {
   id?: string;
   /** Trail duration in ms behind the playhead. @default 300_000 (5 min) */
   trailLength?: number;
@@ -109,7 +109,7 @@ const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
   datum: 'wgs84',
 });
 
-export class CesiumTripsLayer implements SttRenderNode {
+export class STTTripsLayer implements SttRenderNode {
   readonly id: string;
   private readonly scene: Scene;
   private readonly collection: PolylineCollection;
@@ -125,7 +125,7 @@ export class CesiumTripsLayer implements SttRenderNode {
   /** Materials keyed by resolved RGBA so same-colour trips batch. */
   private materials = new Map<string, Material>();
 
-  constructor(scene: Scene, options: CesiumTripsLayerOptions = {}) {
+  constructor(scene: Scene, options: STTTripsLayerOptions = {}) {
     this.id = options.id ?? 'stt-cesium-trips';
     this.scene = scene;
     this.trailLength = options.trailLength ?? 300_000;

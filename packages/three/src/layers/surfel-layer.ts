@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `SurfelLayer` — render an STT point cloud as oriented anisotropic Gaussian
+ * `STTSurfelLayer` — render an STT point cloud as oriented anisotropic Gaussian
  * surfels using {@link createSurfelMaterial}. The Three analogue of deck's
  * `SplatLayer`: it reads the same `--surfel`-baked columns
  * (`qx,qy,qz,qw` | packed `q_a,q_b,q_c,q_imax`, `s_major,s_minor`, `r,g,b`,
@@ -25,7 +25,7 @@ import {
 } from '../tsl/surfel-material.js';
 import type { MeshBasicNodeMaterial } from 'three/webgpu';
 
-export interface SurfelLayerOptions {
+export interface STTSurfelLayerOptions {
   id?: string;
   /** Interleaved quaternion vector column (preferred). @default 'surfel_quat' */
   quatVectorColumn?: string;
@@ -61,7 +61,7 @@ export interface SurfelLayerOptions {
 
 const DEFAULT_FALLBACK: [number, number, number] = [200, 205, 215];
 
-export class SurfelLayer extends BaseSttLayer {
+export class STTSurfelLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -69,16 +69,16 @@ export class SurfelLayer extends BaseSttLayer {
   private material: MeshBasicNodeMaterial | null = null;
   private readonly opts: Required<
     Omit<
-      SurfelLayerOptions,
+      STTSurfelLayerOptions,
       'id' | 'rgbColumns' | 'opacityColumn' | 'elevationProperty'
     >
   > &
     Pick<
-      SurfelLayerOptions,
+      STTSurfelLayerOptions,
       'rgbColumns' | 'opacityColumn' | 'elevationProperty'
     >;
 
-  constructor(options: SurfelLayerOptions = {}) {
+  constructor(options: STTSurfelLayerOptions = {}) {
     super();
     this.id = options.id ?? 'surfels';
     this.object.name = this.id;

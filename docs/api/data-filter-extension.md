@@ -1,6 +1,13 @@
-# DataFilterExtension
+# STTDataFilterExtension
 
-The `DataFilterExtension` is a deck.gl layer extension that GPU range-filters features by a single baked numeric column. A feature is rendered when its `filterValue` falls inside a `[min, max]` range and hidden otherwise, with optional soft fading at the edges — the CPU only updates one uniform block per `draw()`. It is the general-column sibling of the `TimeFilterExtension` (which is a hand-built `DataFilterExtension` specialized to the time window): both bind a per-feature numeric attribute and gate the feature in the vertex shader.
+> **Renamed in 0.6.0** from `DataFilterExtension`. The old spelling shadowed
+> `@deck.gl/extensions`' own `DataFilterExtension`, which is a **different**
+> class with a different `getFilterValue` contract — and `@poopdeck.gl/layers`
+> imports both (the heatmap and hexagon composites drive deck's stock extension
+> over CPU rows). `DataFilterExtension`, `DataFilterExtensionProps` and
+> `DataFilterExtensionOptions` remain `@deprecated` aliases until 0.8.0.
+
+The `STTDataFilterExtension` is a deck.gl layer extension that GPU range-filters features by a single baked numeric column. A feature is rendered when its `filterValue` falls inside a `[min, max]` range and hidden otherwise, with optional soft fading at the edges — the CPU only updates one uniform block per `draw()`. It is the general-column sibling of the `TimeFilterExtension` (which is a hand-built data filter specialized to the time window): both bind a per-feature numeric attribute and gate the feature in the vertex shader.
 
 It works on instanced layers (`ScatterplotLayer`, `PathLayer`) and non-instanced ones (`SolidPolygonLayer`) alike: its `filterValue` attribute is registered with `stepMode: 'dynamic'`, which resolves to per-instance on instanced models and per-vertex on non-instanced ones — the same mechanism as upstream `DataFilterExtension`.
 
@@ -11,7 +18,7 @@ Upstream `@deck.gl/extensions` sources its filter value by running a JS **functi
 ## Installation
 
 ```typescript
-import { DataFilterExtension } from '@poopdeck.gl/layers';
+import { STTDataFilterExtension } from '@poopdeck.gl/layers';
 import type { DataFilterRange } from '@poopdeck.gl/layers';
 ```
 
@@ -21,13 +28,13 @@ The extension is used internally by the STT layers (`AnimatedPointLayer`, `Anima
 
 ```typescript
 import { ScatterplotLayer } from '@deck.gl/layers';
-import { DataFilterExtension } from '@poopdeck.gl/layers';
+import { STTDataFilterExtension } from '@poopdeck.gl/layers';
 
 const layer = new ScatterplotLayer({
   id: 'value-filtered-points',
   data: myData,
 
-  extensions: [new DataFilterExtension({ filterSize: 1 })],
+  extensions: [new STTDataFilterExtension({ filterSize: 1 })],
   getFilterValue: (d) => d.magnitude,
   filterRange: [2.5, 6.0], // render features with magnitude in [2.5, 6.0]
   filterSoftRange: [3.0, 5.5], // fade the [2.5, 3.0] and [5.5, 6.0] margins

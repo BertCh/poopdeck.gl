@@ -232,13 +232,22 @@ export interface PropertyInfo {
 }
 
 /** 2D position [lon, lat] */
-export type Position2D = [number, number];
+export type STTPosition2D = [number, number];
 
 /** 3D position [lon, lat, altitude] */
-export type Position3D = [number, number, number];
+export type STTPosition3D = [number, number, number];
 
-/** Position can be 2D or 3D */
-export type Position = Position2D | Position3D;
+/**
+ * A tile-space coordinate: 2D or 3D.
+ *
+ * Prefixed because `@deck.gl/core` also exports a `Position`, and it is NOT the
+ * same type — deck's is broader (`Readonly<[number, number]> | Readonly<[number,
+ * number, number]> | Readonly<Float32Array> | Readonly<Float64Array>`). Two
+ * different types under one name in the packages an app imports together is the
+ * collision worth spending a rename on. The 0.5.x spellings remain deprecated
+ * aliases on the barrel until 0.8.0.
+ */
+export type STTPosition = STTPosition2D | STTPosition3D;
 
 /**
  * Binary representation of features for GPU-efficient rendering.
@@ -472,8 +481,17 @@ export interface TileMetaJson {
   vt?: [number, number];
 }
 
-/** Layer within a tile - uses binary format for GPU efficiency */
-export interface Layer {
+/**
+ * One decoded layer within a tile — binary (GPU-ready) typed arrays plus the
+ * Arrow table they came from.
+ *
+ * Named `STTTileLayer`, not `Layer`: `@deck.gl/core` exports a `Layer` CLASS
+ * (the base every deck layer extends), and importing both into one module is a
+ * hard duplicate-identifier error — which is why every consumer in this repo
+ * had to write `import { STTTileLayer as TileLayer }`. `Layer` remains a deprecated
+ * alias on the barrel until 0.8.0.
+ */
+export interface STTTileLayer {
   name: string;
   extent: number;
   features: BinaryFeatures;
@@ -553,7 +571,7 @@ export interface Layer {
 export interface Tile {
   id: TileId;
   timeRange: TimeRange;
-  layers: Layer[];
+  layers: STTTileLayer[];
 }
 
 export interface TileEntry {
@@ -681,8 +699,8 @@ export interface ArchiveOptions {
    */
   verifyChecksums?: boolean;
   /**
-   * Whether decoded layers keep their raw Arrow IPC bytes (`Layer.arrowIpc` /
-   * `Layer.arrowTable`) for lazy `toGeoArrowTable()` rehydration:
+   * Whether decoded layers keep their raw Arrow IPC bytes (`STTTileLayer.arrowIpc` /
+   * `STTTileLayer.arrowTable`) for lazy `toGeoArrowTable()` rehydration:
    *
    * - `'auto'` (**default**): SEMANTIC — drop the reference only for
    *   coordinate-quantized layers (`stt:quant`), whose tables are not

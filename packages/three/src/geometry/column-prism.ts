@@ -4,10 +4,10 @@
 
 /**
  * Unit extruded-prism geometry for the column layer — the Three analogue of
- * deck `ColumnLayer`'s `diskResolution`-sided disk swept into a 3D bar.
+ * deck `STTColumnLayer`'s `diskResolution`-sided disk swept into a 3D bar.
  *
  * The prism is a regular `sides`-gon of **incircle radius 1** in the local XY
- * plane (matching ColumnLayer's "radius" = inscribed circle), extruded along
+ * plane (matching STTColumnLayer's "radius" = inscribed circle), extruded along
  * local +Z from `z = 0` (the foot) to `z = 1` (the top). The column layer scales
  * & orients this unit prism per-instance: `basisX`/`basisY` carry the world east/
  * north × metric radius, `basisZ` carries world up × metric height, so XY → ground

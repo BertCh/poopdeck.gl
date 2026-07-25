@@ -12,11 +12,11 @@
 
 import type { Scene } from 'cesium';
 import {
-  CesiumPointLayer,
-  CesiumPathLayer,
-  CesiumTripsLayer,
-  CesiumTripHeadsLayer,
-  CesiumArcLayer,
+  STTPointLayer,
+  STTPathLayer,
+  STTTripsLayer,
+  STTTripHeadsLayer,
+  STTArcLayer,
   cesiumBackend,
   type FeatureColorMode,
 } from '@poopdeck.gl/cesium';
@@ -79,7 +79,7 @@ export function buildCesiumLayer(
         : dataset.wakeLength
           ? 'wake'
           : 'window';
-      return new CesiumPointLayer(scene, {
+      return new STTPointLayer(scene, {
         id,
         mode,
         timeFilter:
@@ -96,7 +96,7 @@ export function buildCesiumLayer(
     }
 
     case 'path':
-      return new CesiumPathLayer(scene, {
+      return new STTPathLayer(scene, {
         id,
         mode: 'window',
         timeFilter: { windowHalf: dataset.timeWindow / 2 },
@@ -122,7 +122,7 @@ export function buildCesiumLayer(
             dataset,
             rgba(dataset.tripColor, [31, 186, 214, 255]),
           );
-      return new CesiumTripsLayer(scene, {
+      return new STTTripsLayer(scene, {
         id,
         trailLength: dataset.trailLength ?? 60_000,
         color,
@@ -132,7 +132,7 @@ export function buildCesiumLayer(
     }
 
     case 'tripHeads':
-      return new CesiumTripHeadsLayer(scene, {
+      return new STTTripHeadsLayer(scene, {
         id,
         color: {
           type: 'constant',
@@ -143,7 +143,7 @@ export function buildCesiumLayer(
       });
 
     case 'arc':
-      return new CesiumArcLayer(scene, {
+      return new STTArcLayer(scene, {
         id,
         mode: 'window',
         timeFilter: { windowHalf: dataset.timeWindow / 2 },

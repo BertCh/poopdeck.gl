@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `TripHeadsLayer` — a smooth moving DOT at the head of every active trip, the
+ * `STTTripHeadsLayer` — a smooth moving DOT at the head of every active trip, the
  * Three port of deck's `AnimatedTripHeadsLayer`. {@link buildTripIndex} pools all
  * LineString features into per-trip polylines (projected RTC + per-vertex times);
  * each frame {@link sampleHeads} CPU-interpolates the head of every active trip,
@@ -35,7 +35,7 @@ import {
 import type { Projection } from '../projection/local-enu.js';
 import type { RGBA } from '../lib/color.js';
 
-export interface TripHeadsLayerOptions {
+export interface STTTripHeadsLayerOptions {
   id?: string;
   /** Head dot colour (RGBA, 0–255). @default [253,128,93,255] */
   headColor?: RGBA;
@@ -55,7 +55,7 @@ export interface TripHeadsLayerOptions {
 
 const DEFAULT_COLOR: RGBA = [253, 128, 93, 255];
 
-export class TripHeadsLayer extends BaseSttLayer {
+export class STTTripHeadsLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -70,9 +70,9 @@ export class TripHeadsLayer extends BaseSttLayer {
   private times = new Float32Array(0); // start==end==relTime per instance
   private capacity = 0;
 
-  private readonly opts: Required<Omit<TripHeadsLayerOptions, 'id'>>;
+  private readonly opts: Required<Omit<STTTripHeadsLayerOptions, 'id'>>;
 
-  constructor(options: TripHeadsLayerOptions = {}) {
+  constructor(options: STTTripHeadsLayerOptions = {}) {
     super();
     this.id = options.id ?? 'trip-heads';
     this.object.name = this.id;

@@ -91,7 +91,7 @@
 import type {
   BinaryFeatures,
   Tile,
-  Layer as STTLayer,
+  STTTileLayer as STTLayer,
 } from '@poopdeck.gl/core';
 import {
   GeometryType,

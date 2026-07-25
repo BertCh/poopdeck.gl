@@ -19,8 +19,8 @@ import { Mesh } from 'three';
 import type { BufferGeometry } from 'three';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { Tile } from '@poopdeck.gl/core';
-import { ColumnLayer } from '../src/layers/column-layer';
-import { PolygonLayer } from '../src/layers/polygon-layer';
+import { STTColumnLayer } from '../src/layers/column-layer';
+import { STTPolygonLayer } from '../src/layers/polygon-layer';
 import { TimeHeightUniforms as ColumnTimeHeightUniforms } from '../src/tsl/column-material';
 import { TimeHeightUniforms as PolygonTimeHeightUniforms } from '../src/tsl/polygon-material';
 import { LocalEnuProjection } from '../src/projection/local-enu';
@@ -82,9 +82,12 @@ function attr(geom: BufferGeometry, name: string) {
   return geom.getAttribute(name);
 }
 
-describe('ColumnLayer — time-as-height end-to-end', () => {
+describe('STTColumnLayer — time-as-height end-to-end', () => {
   it('binds sttLift + a lift-installed material when timeHeightScale is set', () => {
-    const layer = new ColumnLayer({ colorMode: CONST, timeHeightScale: 0.5 });
+    const layer = new STTColumnLayer({
+      colorMode: CONST,
+      timeHeightScale: 0.5,
+    });
     layer.setTiles([pointTile()], ctx);
     const geom = layer.object.geometry as BufferGeometry;
     const a = attr(geom, 'sttLift');
@@ -97,7 +100,7 @@ describe('ColumnLayer — time-as-height end-to-end', () => {
   });
 
   it('installs the lift even at timeHeightScale 0 (animatable), rendering flat', () => {
-    const layer = new ColumnLayer({ colorMode: CONST, timeHeightScale: 0 });
+    const layer = new STTColumnLayer({ colorMode: CONST, timeHeightScale: 0 });
     layer.setTiles([pointTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttLift'),
@@ -109,7 +112,7 @@ describe('ColumnLayer — time-as-height end-to-end', () => {
   });
 
   it('binds nothing + installs no lift without timeHeightScale', () => {
-    const layer = new ColumnLayer({ colorMode: CONST });
+    const layer = new STTColumnLayer({ colorMode: CONST });
     layer.setTiles([pointTile()], ctx);
     expect(
       attr(layer.object.geometry as BufferGeometry, 'sttLift'),
@@ -119,7 +122,7 @@ describe('ColumnLayer — time-as-height end-to-end', () => {
   });
 
   it('relativizes timeHeightOrigin against the layer timeOrigin', () => {
-    const layer = new ColumnLayer({
+    const layer = new STTColumnLayer({
       colorMode: CONST,
       timeHeightScale: 1,
       timeHeightOrigin: 5000,
@@ -133,14 +136,14 @@ describe('ColumnLayer — time-as-height end-to-end', () => {
   });
 });
 
-describe('PolygonLayer — time-as-height end-to-end', () => {
+describe('STTPolygonLayer — time-as-height end-to-end', () => {
   // The polygon material is built once in the ctor; its bundle is the layer field.
-  function meshGeom(layer: PolygonLayer): BufferGeometry {
+  function meshGeom(layer: STTPolygonLayer): BufferGeometry {
     return (layer.object.children[0] as Mesh).geometry;
   }
 
   it('binds per-vertex sttLift + a lift-installed material when timeHeightScale is set', () => {
-    const layer = new PolygonLayer({
+    const layer = new STTPolygonLayer({
       colorMode: CONST,
       mode: 'window',
       timeHeightScale: 0.5,
@@ -157,7 +160,7 @@ describe('PolygonLayer — time-as-height end-to-end', () => {
   });
 
   it('lifts a static (none-mode) polygon too — the space-time-cube map decal', () => {
-    const layer = new PolygonLayer({
+    const layer = new STTPolygonLayer({
       colorMode: CONST,
       mode: 'none',
       timeHeightScale: 0.25,
@@ -169,7 +172,7 @@ describe('PolygonLayer — time-as-height end-to-end', () => {
   });
 
   it('binds nothing + installs no lift without timeHeightScale (flat map-decal path)', () => {
-    const layer = new PolygonLayer({ colorMode: CONST, mode: 'none' });
+    const layer = new STTPolygonLayer({ colorMode: CONST, mode: 'none' });
     layer.setTiles([squarePoly()], ctx);
     expect(attr(meshGeom(layer), 'sttLift')).toBeUndefined();
     expect(bundleTimeHeight(layer)).toBeUndefined();
@@ -177,7 +180,7 @@ describe('PolygonLayer — time-as-height end-to-end', () => {
   });
 
   it('relativizes timeHeightOrigin against the layer timeOrigin', () => {
-    const layer = new PolygonLayer({
+    const layer = new STTPolygonLayer({
       colorMode: CONST,
       mode: 'window',
       timeHeightScale: 1,

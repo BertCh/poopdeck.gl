@@ -34,7 +34,7 @@ import {
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import { CategoryColorExtension } from '../../extensions/category-color-extension.js';
-import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import { STTDataFilterExtension } from '../../extensions/data-filter-extension.js';
 import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
@@ -53,7 +53,7 @@ import type {
 import { DEFAULT_TRIPS_PALETTE } from '@poopdeck.gl/core';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 
@@ -168,7 +168,7 @@ export interface _AnimatedTripsLayerProps {
   billboard?: boolean;
   /**
    * GPU range filter — the NAME of a baked numeric column to filter trips by
-   * (installs {@link DataFilterExtension}). Trips whose value in this column
+   * (installs {@link STTDataFilterExtension}). Trips whose value in this column
    * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
    * via {@link filterSoftRange}). Composes WITH the trail-mode time filter — a
    * trip must pass both the trail window and the column range.
@@ -585,7 +585,7 @@ export class AnimatedTripsLayer<
     jointRounded: true,
     miterLimit: { type: 'number', value: 4, min: 0 },
     billboard: false,
-    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Column range filter (STTDataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors: filterProperty holds a column
     // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
     filterProperty: {
@@ -668,13 +668,13 @@ export class AnimatedTripsLayer<
   private readonly categoryColorExtension = new CategoryColorExtension();
 
   /**
-   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * Singleton STTDataFilterExtension. Composed into a sublayer's extension list
    * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
    * stable across this layer's sublayers). Constructed unconditionally — a
    * no-op object alloc; it contributes no attribute, uniform or shader unless
    * actually installed. Mirrors {@link AnimatedPointLayer}.
    */
-  private readonly dataFilterExtension = new DataFilterExtension({
+  private readonly dataFilterExtension = new STTDataFilterExtension({
     filterSize: 1,
   });
 
@@ -759,7 +759,7 @@ export class AnimatedTripsLayer<
       // in `prepared` and is keyed via preparedKey.
       Array.isArray(color) ? color.join(',') : '',
       typeof width === 'number' ? width : 0,
-      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
       // a uniform-only edit, so — like timeWindow — it rebuilds the cached
       // sublayers (whose props carry the values) rather than re-preparing tiles.
       Array.isArray(this.props.filterRange)
@@ -1019,7 +1019,7 @@ export class AnimatedTripsLayer<
     ).join(',');
     // The filter-column NAME is baked into the per-vertex `filterValue`
     // attribute, so a change (incl. the unset↔set toggle that adds/removes
-    // DataFilterExtension) must re-prepare tiles → rebuild sublayers via the
+    // STTDataFilterExtension) must re-prepare tiles → rebuild sublayers via the
     // new preparedKey.
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp
@@ -1173,7 +1173,7 @@ export class AnimatedTripsLayer<
       attributes.getWidth = { value: dynWidths, size: 1 };
     }
 
-    // Column range filter (DataFilterExtension): bind the named numeric column
+    // Column range filter (STTDataFilterExtension): bind the named numeric column
     // to the `filterValue` attribute. Unlike the instanced arc/line/point path,
     // PathLayer's `filterValue` is a per-SEGMENT-instanced attribute sized to
     // the tessellated vertex count, so a per-FEATURE column must be splatted
@@ -1264,7 +1264,7 @@ export class AnimatedTripsLayer<
     // (e.g. PathStyleExtension's offset), which otherwise overflows the 16-slot
     // floor on GPUs that report exactly 16. The list stays CONSTANT per instance
     // (the subclass's choice never changes), so shader-pipeline caching holds.
-    // Column filter: install DataFilterExtension only when a column is named
+    // Column filter: install STTDataFilterExtension only when a column is named
     // (per-layer constant ⇒ stable list across this layer's sublayers). Whether
     // THIS tile actually baked the attribute gates the per-tile enable, so a
     // tile missing the column renders unfiltered (idle extension). Its
@@ -1278,7 +1278,7 @@ export class AnimatedTripsLayer<
     // so it costs a slot even while idle) is pure DEAD WEIGHT for trips —
     // gpuPalette is hardwired null (categorical color is CPU-expanded into
     // getColor), so its shader branch is permanently off (`useCategoryColor`
-    // false). Installing BOTH it AND DataFilterExtension (`filterValue`) would
+    // false). Installing BOTH it AND STTDataFilterExtension (`filterValue`) would
     // make 17 — a fatal per-pipeline link FAILURE (blank trips) on GPUs that
     // report exactly 16 (Apple Silicon, Intel UHD, software WebGL). So when a
     // column filter is installed we DROP the idle CategoryColorExtension and
@@ -1358,7 +1358,7 @@ export class AnimatedTripsLayer<
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
 
-      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // STTDataFilterExtension wiring (only when a filterProperty is set). The
       // constant getFilterValue is the fallback for tiles missing the column;
       // filterEnabled is additionally gated on THIS tile having baked it.
       ...(filterProp

@@ -28,10 +28,10 @@ import {
 } from '../src/tsl/wide-line-material';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
 import { TimeFilterUniforms } from '../src/tsl/time-filter';
-import { WideLineLayer } from '../src/layers/wide-line-layer';
-import { OdLineLayer } from '../src/layers/od-line-layer';
-import { TripsLayer } from '../src/layers/trips-layer';
-import { PathGeoLayer } from '../src/layers/path-geo-layer';
+import { STTWideLineLayer } from '../src/layers/wide-line-layer';
+import { STTOdLineLayer } from '../src/layers/od-line-layer';
+import { STTTripsLayer } from '../src/layers/trips-layer';
+import { STTPathGeoLayer } from '../src/layers/path-geo-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import {
   GpuPicker,
@@ -206,9 +206,9 @@ describe('createWideLineIdMaterial (reuses the colour material width-collapse ga
 
 // ── DISPATCH (full layer.pick, mock readback) ─────────────────────────────────
 
-describe('WideLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
+describe('STTWideLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
   it('resolves a merged id colour to the right {tileKey, featureIndex} + first vertex', async () => {
-    const layer = new WideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
+    const layer = new STTWideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const colourMat = layer.object.material;
 
@@ -229,7 +229,7 @@ describe('WideLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
   });
 
   it('resolves a segment of feature 0 to feature 0 (many segments → one feature)', async () => {
-    const layer = new WideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
+    const layer = new STTWideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const { picker, camera } = mockPicker(encodeId(1)); // merged 1 → feature 0 (2nd seg)
     const hit = await layer.pick(picker, camera, 5, 5);
@@ -238,23 +238,23 @@ describe('WideLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
   });
 
   it('reports a sentinel background readback as a miss', async () => {
-    const layer = new WideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
+    const layer = new STTWideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]); // → MAX_PICK_ID ≥ count
     expect(await layer.pick(picker, camera, 10, 10)).toBeNull();
   });
 
   it('returns null (never touches the GPU) when there are no lines', async () => {
-    const layer = new WideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
+    const layer = new STTWideLineLayer({ id: 'paths', colorMode: CONST_COLOR });
     layer.setTiles([], ctx);
     const { picker, camera } = mockPicker(encodeId(0));
     expect(await layer.pick(picker, camera, 10, 10)).toBeNull();
   });
 });
 
-describe('OdLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
+describe('STTOdLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
   it('resolves a merged id colour to the right OD feature + its SOURCE vertex', async () => {
-    const layer = new OdLineLayer({ id: 'flows', colorMode: CONST_COLOR });
+    const layer = new STTOdLineLayer({ id: 'flows', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const colourMat = layer.object.material;
 
@@ -271,16 +271,16 @@ describe('OdLineLayer.pick (GPU id-buffer dispatch → `line` kind)', () => {
   });
 
   it('reports a sentinel background readback as a miss', async () => {
-    const layer = new OdLineLayer({ id: 'flows', colorMode: CONST_COLOR });
+    const layer = new STTOdLineLayer({ id: 'flows', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]);
     expect(await layer.pick(picker, camera, 20, 30)).toBeNull();
   });
 });
 
-describe('TripsLayer.pick (GPU id-buffer dispatch → `trips` kind)', () => {
+describe('STTTripsLayer.pick (GPU id-buffer dispatch → `trips` kind)', () => {
   it('resolves a trail segment to the whole trip', async () => {
-    const layer = new TripsLayer({ id: 'trips', colorMode: CONST_COLOR });
+    const layer = new STTTripsLayer({ id: 'trips', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const colourMat = layer.object.material;
 
@@ -296,16 +296,19 @@ describe('TripsLayer.pick (GPU id-buffer dispatch → `trips` kind)', () => {
   });
 
   it('reports a sentinel background readback as a miss', async () => {
-    const layer = new TripsLayer({ id: 'trips', colorMode: CONST_COLOR });
+    const layer = new STTTripsLayer({ id: 'trips', colorMode: CONST_COLOR });
     layer.setTiles([makeTile()], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]);
     expect(await layer.pick(picker, camera, 40, 40)).toBeNull();
   });
 });
 
-describe('PathGeoLayer.pick (GPU id-buffer dispatch → `path` kind)', () => {
+describe('STTPathGeoLayer.pick (GPU id-buffer dispatch → `path` kind)', () => {
   it('resolves a merged id colour and reports the `path` kind (inherited machinery)', async () => {
-    const layer = new PathGeoLayer({ id: 'path-geo', colorMode: CONST_COLOR });
+    const layer = new STTPathGeoLayer({
+      id: 'path-geo',
+      colorMode: CONST_COLOR,
+    });
     layer.setTiles([makeTile()], ctx);
     const colourMat = layer.object.material;
 
@@ -322,7 +325,7 @@ describe('PathGeoLayer.pick (GPU id-buffer dispatch → `path` kind)', () => {
   });
 
   it('reveal-trail mode still resolves as the `path` kind', async () => {
-    const layer = new PathGeoLayer({
+    const layer = new STTPathGeoLayer({
       id: 'path-reveal',
       colorMode: CONST_COLOR,
       revealTrail: true,

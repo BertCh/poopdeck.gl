@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `IconLayer` — directional billboard markers, the Three port of deck's
+ * `STTIconLayer` — directional billboard markers, the Three port of deck's
  * `AnimatedIconLayer`. One {@link createIconMaterial} billboard-quad instance per
  * Point feature, rotated by a per-feature heading/bearing column and textured from
  * a shared icon atlas the host supplies. Unlocks AIS-vessel / aircraft
@@ -14,7 +14,7 @@
  * shared `origin` written to `object.position` so large mercator/globe magnitudes
  * stay in the f64 CPU transform (no-op in the ENU/AV frame).
  *
- * Sizing is in **screen pixels** (deck `IconLayer`'s default `sizeUnits`), so the
+ * Sizing is in **screen pixels** (deck `STTIconLayer`'s default `sizeUnits`), so the
  * host must push the drawing-buffer size via {@link setViewport} on resize.
  */
 
@@ -71,7 +71,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface IconLayerOptions extends ThreeTimeWindowOptions {
+export interface STTIconLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** window (raw) | wake (trailing comet tail) | cumulative (markers persist) |
    *  none. @default 'window' */
@@ -209,13 +209,13 @@ export interface IconLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_TINT: RGBA = [255, 255, 255, 255];
 
-export class IconLayer extends BaseSttLayer implements SttIdPickable {
+export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: IconMaterialBundle | null = null;
   private viewport: [number, number] = [1280, 720];
-  private readonly opts: IconLayerOptions;
+  private readonly opts: STTIconLayerOptions;
 
   // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
   private provenance = new InstanceProvenance();
@@ -231,7 +231,7 @@ export class IconLayer extends BaseSttLayer implements SttIdPickable {
   // ── stable-palette (categorical tint) state ─────────────────────────────────
   private paletteTexture: DataTexture | null = null;
 
-  constructor(options: IconLayerOptions) {
+  constructor(options: STTIconLayerOptions) {
     super();
     this.opts = options;
     this.id = options.id ?? 'icons';

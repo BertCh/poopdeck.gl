@@ -36,7 +36,11 @@
  * the pooling and interpolation are here.
  */
 
-import type { Tile, BinaryFeatures, Layer as TileLayer } from '../types.js';
+import type {
+  Tile,
+  BinaryFeatures,
+  STTTileLayer as TileLayer,
+} from '../types.js';
 import type { RGBA255 } from './style.js';
 
 /**

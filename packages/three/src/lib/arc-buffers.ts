@@ -6,7 +6,7 @@
  * Pure (Three-free) assembly of instanced **arc** buffers from decoded
  * LineString tiles — the OD-flow analogue of `geo-line-buffers.ts`, feeding
  * {@link createArcMaterial}. The Three port of deck's `AnimatedArcLayer`
- * (`ArcLayer`): every feature collapses to its SOURCE (first vertex) / TARGET
+ * (`STTArcLayer`): every feature collapses to its SOURCE (first vertex) / TARGET
  * (last vertex) endpoint, becoming ONE arc instance — a raised curve from
  * source to target that the GPU tessellates along `t ∈ [0,1]`.
  *

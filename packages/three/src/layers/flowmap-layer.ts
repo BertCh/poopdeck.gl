@@ -3,8 +3,8 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `FlowmapLayer` — flowmap.gl-style **animated OD flowmap**, the Three port of
- * deck's `FlowmapLayer`. Renders one weighted tapered half-arrow per OD
+ * `STTFlowmapLayer` — flowmap.gl-style **animated OD flowmap**, the Three port of
+ * deck's `STTFlowmapLayer`. Renders one weighted tapered half-arrow per OD
  * station-pair whose WIDTH tracks trip volume at the playhead (from the tile's
  * `vertexValueMatrix`), plus node circles sized by each station's total incident
  * flow. As the slider scrubs, corridors swell and recede and the node circles
@@ -64,12 +64,12 @@ import {
 } from '../tsl/point-material.js';
 import type { RGBA } from '../lib/color.js';
 
-/** Cross-fade granularity in fractions of a bucket (matches deck FlowmapLayer.STEP). */
+/** Cross-fade granularity in fractions of a bucket (matches deck STTFlowmapLayer.STEP). */
 const STEP = 0.1;
 /** A node's window is forced wide-open (always visible) with this half-width. */
 const OPEN_WINDOW_HALF = 1e12;
 
-export interface FlowmapLayerOptions extends FlowmapBufferOptions {
+export interface STTFlowmapLayerOptions extends FlowmapBufferOptions {
   id?: string;
   /** Arrow source (origin / tail) colour, 0..255 RGBA. @default [56,196,232,235] */
   sourceColor?: RGBA;
@@ -105,7 +105,7 @@ function toVec4(c: RGBA): [number, number, number, number] {
   ];
 }
 
-export class FlowmapLayer extends BaseSttLayer {
+export class STTFlowmapLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Group();
 
@@ -118,9 +118,9 @@ export class FlowmapLayer extends BaseSttLayer {
   private projection: SttLayerContext['projection'] | null = null;
   private viewport: [number, number] = [1280, 720];
   private lastStepKey = Number.NaN;
-  private readonly opts: FlowmapLayerOptions;
+  private readonly opts: STTFlowmapLayerOptions;
 
-  constructor(options: FlowmapLayerOptions = {}) {
+  constructor(options: STTFlowmapLayerOptions = {}) {
     super();
     this.opts = options;
     this.id = options.id ?? 'flowmap';

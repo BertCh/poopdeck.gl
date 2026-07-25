@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `PointCloudLayer` — the Three port of deck's `AnimatedPointLayer` for the AV
+ * `STTPointCloudLayer` — the Three port of deck's `AnimatedPointLayer` for the AV
  * LIDAR point modes: raw points (height-band / seg-class categorical colour or
  * `r,g,b` camera colour), soft Gaussian `splat`, `scan` (wake sweep), and
  * worldbuild-on-points (cumulative). All tiles merge into one billboard-quad
@@ -56,7 +56,7 @@ import {
 import type { GpuPicker } from '../lib/gpu-pick.js';
 import type { RGBA } from '../lib/color.js';
 
-export interface PointCloudLayerOptions extends ThreeTimeWindowOptions {
+export interface STTPointCloudLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** window (raw) | wake (scan) | cumulative (worldbuild). @default 'window' */
   mode?: TimeFilterMode;
@@ -161,11 +161,11 @@ const DEFAULT_FALLBACK: RGBA = [150, 160, 175, 220];
  * @deprecated The point-cloud pick interface generalised into the kind-agnostic
  * {@link SttIdPickable} (the GPU picking catalog — see `../lib/id-pick.ts`).
  * Retained as an alias so external importers of `SttPointPickable` keep
- * compiling; `PointCloudLayer` implements `SttIdPickable` directly.
+ * compiling; `STTPointCloudLayer` implements `SttIdPickable` directly.
  */
 export type SttPointPickable = SttIdPickable;
 
-export class PointCloudLayer extends BaseSttLayer implements SttIdPickable {
+export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -193,7 +193,7 @@ export class PointCloudLayer extends BaseSttLayer implements SttIdPickable {
 
   private readonly opts: Required<
     Omit<
-      PointCloudLayerOptions,
+      STTPointCloudLayerOptions,
       | 'id'
       | 'rgbColumns'
       | 'elevationProperty'
@@ -211,11 +211,11 @@ export class PointCloudLayer extends BaseSttLayer implements SttIdPickable {
     >
   > &
     Pick<
-      PointCloudLayerOptions,
+      STTPointCloudLayerOptions,
       'rgbColumns' | 'elevationProperty' | 'rampProperty'
     >;
 
-  constructor(options: PointCloudLayerOptions = {}) {
+  constructor(options: STTPointCloudLayerOptions = {}) {
     super();
     this.id = options.id ?? 'points';
     this.object.name = this.id;
@@ -507,7 +507,7 @@ export class PointCloudLayer extends BaseSttLayer implements SttIdPickable {
 
   /** Host pushes the drawing-buffer size on resize so `sizeUnits:'pixels'` points
    *  size against the live canvas (the per-frame `setTime` reads it). No-op for the
-   *  default metre sizing. Mirrors WideLineLayer.setViewport. */
+   *  default metre sizing. Mirrors STTWideLineLayer.setViewport. */
   setViewport(width: number, height: number): void {
     this.opts.viewport = [width, height];
   }

@@ -24,7 +24,7 @@ import {
   type IconMaterialBundle,
   type IconMode,
 } from '../src/tsl/icon-material';
-import { IconLayer } from '../src/layers/icon-layer';
+import { STTIconLayer } from '../src/layers/icon-layer';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile } from './_support/features';
@@ -63,7 +63,7 @@ function iconTile(extra: Partial<BinaryFeatures> = {}) {
   );
 }
 
-const bundleOf = (layer: IconLayer): IconMaterialBundle =>
+const bundleOf = (layer: STTIconLayer): IconMaterialBundle =>
   (layer as unknown as { bundle: IconMaterialBundle }).bundle;
 
 describe('icon buffers — filterValues (per icon instance)', () => {
@@ -171,9 +171,9 @@ describe('icon material — DataFilter node graph builds + composes', () => {
   });
 });
 
-describe('IconLayer — DataFilter end-to-end', () => {
+describe('STTIconLayer — DataFilter end-to-end', () => {
   it('binds sttFilterValue + a filter-enabled material when filterProperty is set', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       angleProperty: 'heading',
       filterProperty: 'mag',
@@ -195,7 +195,7 @@ describe('IconLayer — DataFilter end-to-end', () => {
   });
 
   it('binds nothing + installs no filter without filterProperty (byte-identical off)', () => {
-    const layer = new IconLayer({ ...iconOpts, angleProperty: 'heading' });
+    const layer = new STTIconLayer({ ...iconOpts, angleProperty: 'heading' });
     layer.setTiles([iconTile()], ctx);
     const geom = layer.object.geometry as InstancedBufferGeometry;
     expect(geom.getAttribute('sttFilterValue')).toBeUndefined();
@@ -207,7 +207,7 @@ describe('IconLayer — DataFilter end-to-end', () => {
   });
 
   it('composes the filter collapse with the wake tail (both gates present)', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       mode: 'wake',
       wakeLength: 5000,
@@ -229,7 +229,7 @@ describe('IconLayer — DataFilter end-to-end', () => {
   });
 
   it('glide path is unaffected — the filter is a documented no-op there', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       angleProperty: 'heading',
       // Glide activation (interpolate + a resolvable id, window mode).

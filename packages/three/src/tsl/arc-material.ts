@@ -4,7 +4,7 @@
 
 /**
  * `ArcMaterial` — raised origin→destination arcs, the Three port of deck's
- * `AnimatedArcLayer` (`ArcLayer`). Each arc is ONE instance of a multi-segment
+ * `AnimatedArcLayer` (`STTArcLayer`). Each arc is ONE instance of a multi-segment
  * strip ({@link makeArcStripGeometry}, `N+1` samples × 2 sides) whose vertex
  * stage **tessellates the curve along `t ∈ [0,1]`**: the position is
  * interpolated between the per-instance source/target endpoints with a raised

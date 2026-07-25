@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `ArcLayer` — raised origin→destination arcs, the Three port of deck's
+ * `STTArcLayer` — raised origin→destination arcs, the Three port of deck's
  * `AnimatedArcLayer`. Every LineString feature collapses to its source (first)
  * and target (last) endpoint (one arc instance); the GPU tessellates a raised,
  * window-time-filtered, source→target gradient curve over the instanced strip
@@ -56,7 +56,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface ArcLayerOptions extends ThreeTimeWindowOptions {
+export interface STTArcLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** parabolic flat-map raised arc | greatCircle spherical (globe). @default 'parabolic' */
   shape?: ArcShape;
@@ -118,14 +118,14 @@ export interface ArcLayerOptions extends ThreeTimeWindowOptions {
   // lower-level `windowHalf`/`fadeIn`/`fadeOut` aliases) via ThreeTimeWindowOptions.
 }
 
-export class ArcLayer extends BaseSttLayer implements SttIdPickable {
+export class STTArcLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: ArcMaterialBundle | null = null;
   private paletteTexture: DataTexture | null = null;
   private viewport: [number, number] = [1280, 720];
-  protected readonly opts: ArcLayerOptions;
+  protected readonly opts: STTArcLayerOptions;
 
   // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
   private provenance = new InstanceProvenance();
@@ -136,7 +136,7 @@ export class ArcLayer extends BaseSttLayer implements SttIdPickable {
   /** RTC origin of the current buffers (greatCircle id pass needs it too). */
   private origin: [number, number, number] = [0, 0, 0];
 
-  constructor(options: ArcLayerOptions = {}) {
+  constructor(options: STTArcLayerOptions = {}) {
     super();
     this.opts = options;
     this.id = options.id ?? 'arc';

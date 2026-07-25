@@ -3,13 +3,13 @@
 // Copyright (c) @poopdeck.gl/cesium contributors
 
 /**
- * The shared Cesium machinery behind `CesiumPathLayer` and `CesiumArcLayer`:
+ * The shared Cesium machinery behind `STTPathLayer` and `STTArcLayer`:
  * one batched `Primitive` of `PolylineGeometry` instances with a per-instance
  * `ColorGeometryInstanceAttribute` — Cesium's idiomatic way to animate many
  * geometry colours (one draw-call bucket; a colour write is a batch-table
  * texel update, not a rebatch).
  *
- * Per-frame animation mirrors `CesiumPointLayer.setTime`: the kernel
+ * Per-frame animation mirrors `STTPointLayer.setTime`: the kernel
  * `timeFilterAlpha` oracle computes each feature's alpha, unchanged alphas are
  * skipped, and the write reuses one scratch `Uint8Array` (the batch-table
  * setter copies the value immediately). Colour handles come from
@@ -65,7 +65,7 @@ interface PolylineEntry {
   lat: number;
 }
 
-export interface BatchedPolylineOptions {
+export interface STTBatchedPolylineOptions {
   /** Time-filter mode. @default 'window' */
   mode?: TimeFilterMode;
   /** Window/wake/cumulative/trail parameters (relative ms). */
@@ -87,17 +87,17 @@ export interface BatchedPolylineOptions {
 const SCRATCH_RGBA = new Uint8Array(4);
 
 /** Map the option string onto Cesium's enum (default `'none'`). */
-function toArcType(a: BatchedPolylineOptions['arcType']): ArcType {
+function toArcType(a: STTBatchedPolylineOptions['arcType']): ArcType {
   if (a === 'geodesic') return ArcType.GEODESIC;
   if (a === 'rhumb') return ArcType.RHUMB;
   return ArcType.NONE;
 }
 
 /**
- * Owns the batched primitive + per-frame colour animation. `CesiumPathLayer` /
- * `CesiumArcLayer` compose this with their pure geometry builder.
+ * Owns the batched primitive + per-frame colour animation. `STTPathLayer` /
+ * `STTArcLayer` compose this with their pure geometry builder.
  */
-export class BatchedPolylineLayer {
+export class STTBatchedPolylineLayer {
   private readonly scene: Scene;
   private readonly layerId: string;
   private readonly mode: TimeFilterMode;
@@ -112,7 +112,7 @@ export class BatchedPolylineLayer {
   constructor(
     scene: Scene,
     layerId: string,
-    options: BatchedPolylineOptions = {},
+    options: STTBatchedPolylineOptions = {},
   ) {
     this.scene = scene;
     this.layerId = layerId;
@@ -122,7 +122,7 @@ export class BatchedPolylineLayer {
     this.arcType = toArcType(options.arcType);
   }
 
-  /** Replace the rendered polylines (replace-all, like `CesiumPointLayer.setTiles`). */
+  /** Replace the rendered polylines (replace-all, like `STTPointLayer.setTiles`). */
   setPolylines(build: PolylineBuild): void {
     if (this.primitive) {
       this.scene.primitives.remove(this.primitive); // destroys the primitive
@@ -211,7 +211,7 @@ export class BatchedPolylineLayer {
     return p.binary.positions[v0 * dims + 1];
   }
 
-  /** Advance to an absolute playhead time (same contract as `CesiumPointLayer.setTime`). */
+  /** Advance to an absolute playhead time (same contract as `STTPointLayer.setTime`). */
   setTime(absoluteMs: number): void {
     const prim = this.primitive;
     if (!prim || !prim.ready) return; // batch table exists only after the first render

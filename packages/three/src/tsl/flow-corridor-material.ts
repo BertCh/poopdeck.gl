@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `FlowCorridorMaterial` — the Three/TSL port of deck's `FlowCorridorLayer`
+ * `FlowCorridorMaterial` — the Three/TSL port of deck's `STTFlowCorridorLayer`
  * rendering. A static street/route network drawn as screen-pixel-width segments
  * (the {@link createWideLineMaterial} ribbon expansion), but whose per-segment
  * ridership is a TIME SERIES sampled live from a GPU texture.

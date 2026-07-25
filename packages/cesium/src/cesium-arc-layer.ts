@@ -9,7 +9,7 @@
  * great-circle polyline by the pure `sampleGreatCircleArc` — the SAME
  * parametrization as three's globe arc material, so a backend toggle shows the
  * same arc. Per-frame time-filter colour animation + picking come from
- * {@link BatchedPolylineLayer}.
+ * {@link STTBatchedPolylineLayer}.
  *
  * Deviation from deck (see the capability matrix): one colour per arc — the
  * source→target gradient collapses to a single per-instance colour.
@@ -20,14 +20,14 @@ import type { Tile } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import {
-  BatchedPolylineLayer,
-  type BatchedPolylineOptions,
+  STTBatchedPolylineLayer,
+  type STTBatchedPolylineOptions,
 } from './batched-polyline-layer.js';
 import { buildArcPolylines } from './lib/polylines.js';
 import type { FeatureColorMode } from './lib/feature-color.js';
 
-export interface CesiumArcLayerOptions extends Omit<
-  BatchedPolylineOptions,
+export interface STTArcLayerOptions extends Omit<
+  STTBatchedPolylineOptions,
   'arcType'
 > {
   id?: string;
@@ -41,16 +41,16 @@ export interface CesiumArcLayerOptions extends Omit<
   zLift?: number;
 }
 
-export class CesiumArcLayer implements SttRenderNode {
+export class STTArcLayer implements SttRenderNode {
   readonly id: string;
-  private readonly batch: BatchedPolylineLayer;
-  private readonly opts: CesiumArcLayerOptions;
+  private readonly batch: STTBatchedPolylineLayer;
+  private readonly opts: STTArcLayerOptions;
 
-  constructor(scene: Scene, options: CesiumArcLayerOptions = {}) {
+  constructor(scene: Scene, options: STTArcLayerOptions = {}) {
     this.id = options.id ?? 'stt-cesium-arcs';
     this.opts = options;
     // The arc is already densely sampled — straight segments between samples.
-    this.batch = new BatchedPolylineLayer(scene, this.id, {
+    this.batch = new STTBatchedPolylineLayer(scene, this.id, {
       ...options,
       arcType: 'none',
     });

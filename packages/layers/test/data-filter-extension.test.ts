@@ -1,5 +1,5 @@
 /**
- * DataFilterExtension — the poopdeck-native "filter by any baked column"
+ * STTDataFilterExtension — the poopdeck-native "filter by any baked column"
  * extension + its opt-in integration on AnimatedPointLayer / AnimatedPathLayer.
  *
  * Covers:
@@ -64,9 +64,9 @@ vi.mock('@deck.gl/core', async () => {
 
 // Imported AFTER the mocks so the extension extends the fake LayerExtension —
 // its constructor never touches LayerExtension internals (it clamps filterSize
-// into the super() call), so a bare `new DataFilterExtension()` works here.
+// into the super() call), so a bare `new STTDataFilterExtension()` works here.
 import {
-  DataFilterExtension,
+  STTDataFilterExtension,
   dataFilterUniforms,
 } from '../src/extensions/data-filter-extension';
 import { _resetWarnOnce } from '../src/lib/log';
@@ -75,26 +75,26 @@ import { _resetWarnOnce } from '../src/lib/log';
 // Part 1 — the extension in isolation
 // ---------------------------------------------------------------------------
 
-describe('DataFilterExtension getShaders', () => {
+describe('STTDataFilterExtension getShaders', () => {
   // getShaders only reads its `extension` arg (not `this`), matching the sibling
   // extension suites.
-  const getShaders = (ext: DataFilterExtension) =>
+  const getShaders = (ext: STTDataFilterExtension) =>
     (ext.getShaders as any).call({}, ext);
 
   it('returns a reference-stable object (one shader-cache entry per instance)', () => {
-    const ext = new DataFilterExtension();
+    const ext = new STTDataFilterExtension();
     expect(getShaders(ext)).toBe(getShaders(ext));
   });
 
   it('binds a `filterValue` attribute and a `vDataFilterAlpha` varying', () => {
-    const inject = getShaders(new DataFilterExtension()).inject;
+    const inject = getShaders(new STTDataFilterExtension()).inject;
     expect(inject['vs:#decl']).toContain('in float filterValue;');
     expect(inject['vs:#decl']).toContain('out float vDataFilterAlpha;');
     expect(inject['fs:#decl']).toContain('in float vDataFilterAlpha;');
   });
 
   it('hard-clips with step() and discards fully-filtered fragments', () => {
-    const inject = getShaders(new DataFilterExtension()).inject;
+    const inject = getShaders(new STTDataFilterExtension()).inject;
     expect(inject['vs:#main-start']).toContain(
       'step(sttFilter.filterMin, filterValue)',
     );
@@ -105,13 +105,13 @@ describe('DataFilterExtension getShaders', () => {
   });
 
   it('soft-fades via smoothstep with deck-parity truncation fallback', () => {
-    const mainStart = getShaders(new DataFilterExtension()).inject[
+    const mainStart = getShaders(new STTDataFilterExtension()).inject[
       'vs:#main-start'
     ];
     expect(mainStart).toContain('smoothstep');
     // The mix(smoothstep, step, step(soft, hard)) fallback that dodges
     // smoothstep's "edge0 >= edge1 is undefined" when the soft range is
-    // truncated by the hard range (mirrors upstream DataFilterExtension).
+    // truncated by the hard range (mirrors upstream STTDataFilterExtension).
     expect(mainStart).toContain(
       'step(sttFilter.filterSoftMin, sttFilter.filterMin)',
     );
@@ -121,7 +121,7 @@ describe('DataFilterExtension getShaders', () => {
   });
 
   it('collapses filtered features at the vertex stage (zero fragments)', () => {
-    const mainEnd = getShaders(new DataFilterExtension()).inject[
+    const mainEnd = getShaders(new STTDataFilterExtension()).inject[
       'vs:#main-end'
     ];
     expect(mainEnd).toContain('gl_Position = vec4(0.);');
@@ -134,12 +134,12 @@ describe('DataFilterExtension getShaders', () => {
     expect(dataFilterUniforms.vs).toContain(
       'layout(std140) uniform sttFilterUniforms',
     );
-    const modules = getShaders(new DataFilterExtension()).modules as any[];
+    const modules = getShaders(new STTDataFilterExtension()).modules as any[];
     expect(modules[0]).toBe(dataFilterUniforms);
   });
 });
 
-describe('DataFilterExtension attribute registration', () => {
+describe('STTDataFilterExtension attribute registration', () => {
   it('registers `filterValue` via add() + stepMode dynamic (not addInstanced)', () => {
     const perVertex: Record<string, any> = {};
     const instanced: Record<string, any> = {};
@@ -149,7 +149,7 @@ describe('DataFilterExtension attribute registration', () => {
         addInstanced: (d: Record<string, any>) => Object.assign(instanced, d),
       }),
     };
-    const ext = new DataFilterExtension();
+    const ext = new STTDataFilterExtension();
     (ext.initializeState as any).call(fakeLayer, {}, ext);
 
     expect(Object.keys(instanced)).toEqual([]);
@@ -163,9 +163,9 @@ describe('DataFilterExtension attribute registration', () => {
   });
 });
 
-describe('DataFilterExtension draw() uniform forwarding', () => {
+describe('STTDataFilterExtension draw() uniform forwarding', () => {
   function drawUniforms(props: Record<string, any>) {
-    const ext = new DataFilterExtension();
+    const ext = new STTDataFilterExtension();
     let captured: any;
     const fakeLayer = {
       props,
@@ -227,7 +227,7 @@ describe('DataFilterExtension draw() uniform forwarding', () => {
   });
 });
 
-describe('DataFilterExtension shader module (real luma ShaderInputs)', () => {
+describe('STTDataFilterExtension shader module (real luma ShaderInputs)', () => {
   it('flows the filter scalars through to the UBO values (no getUniforms drop)', () => {
     // The module has no getUniforms, so luma writes the props straight to the
     // UBO — this proves the uniformTypes declaration matches what draw() sends.
@@ -258,14 +258,14 @@ describe('DataFilterExtension shader module (real luma ShaderInputs)', () => {
   });
 });
 
-describe('DataFilterExtension filterSize v1 guard', () => {
+describe('STTDataFilterExtension filterSize v1 guard', () => {
   it('warns once and clamps to 1 for an unsupported filterSize', () => {
     _resetWarnOnce();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       // Options are typed to `1`; cast to exercise the runtime clamp.
       expect(
-        () => new DataFilterExtension({ filterSize: 3 } as any),
+        () => new STTDataFilterExtension({ filterSize: 3 } as any),
       ).not.toThrow();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('filterSize'));
     } finally {
@@ -337,7 +337,7 @@ async function makePointLayer(props: Record<string, any> = {}) {
   layer.boundGetTime = () => 0;
   layer.timeFilterExtension = { __k: 'time' };
   layer.categoryColorExtension = { __k: 'category' };
-  layer.dataFilterExtension = new DataFilterExtension({ filterSize: 1 });
+  layer.dataFilterExtension = new STTDataFilterExtension({ filterSize: 1 });
   layer.preparedTileCache = new Map();
   layer.sublayerCache = new Map();
   layer.lastLayerPropsKey = '';
@@ -362,7 +362,7 @@ async function makePathLayer(props: Record<string, any> = {}) {
   layer.boundGetTime = () => 0;
   layer.timeFilterExtension = { __k: 'time' };
   layer.categoryColorExtension = { __k: 'category' };
-  layer.dataFilterExtension = new DataFilterExtension({ filterSize: 1 });
+  layer.dataFilterExtension = new STTDataFilterExtension({ filterSize: 1 });
   layer.preparedTileCache = new Map();
   layer.sublayerCache = new Map();
   layer.lastLayerPropsKey = '';
@@ -406,7 +406,7 @@ describe.each([
 ])(
   '$name filterProperty integration',
   ({ make, tile, column, assertBaked }) => {
-    it('does NOT compose DataFilterExtension when filterProperty is unset (zero cost)', async () => {
+    it('does NOT compose STTDataFilterExtension when filterProperty is unset (zero cost)', async () => {
       const layer = await make();
       const sub = buildSub(layer, tile());
       expect(sub.props.extensions).not.toContain(layer.dataFilterExtension);
@@ -416,7 +416,7 @@ describe.each([
       expect(sub.props.filterRange).toBeUndefined();
     });
 
-    it('composes DataFilterExtension and bakes the named column when set', async () => {
+    it('composes STTDataFilterExtension and bakes the named column when set', async () => {
       const layer = await make({ filterProperty: column, filterRange: [0, 5] });
       const t = tile();
       const sub = buildSub(layer, t);
@@ -489,7 +489,7 @@ describe.each([
 // Regression: the path pipeline sits at WebGL2's 16 vertex-attribute floor
 // (NoPickingPathLayer 12 + TimeFilterExtension 3 + one extension attribute).
 // Installing BOTH CategoryColorExtension (`instanceCategoryIndex`) AND
-// DataFilterExtension (`filterValue`) would make 17 — a fatal link failure
+// STTDataFilterExtension (`filterValue`) would make 17 — a fatal link failure
 // (blank paths) on GPUs reporting exactly 16. The path family never uses the
 // GPU category path (categorical color is CPU-expanded into `getColor`;
 // `gpuPalette` is always null), so when a filter is installed the layer DROPS

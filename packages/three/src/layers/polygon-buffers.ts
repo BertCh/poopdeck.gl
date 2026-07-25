@@ -5,7 +5,7 @@
 /**
  * Pure (Three-free) assembly of merged polygon mesh buffers — the polygon
  * analogue of `point-buffers.ts` / `geo-line-buffers.ts`. This is the unit-tested
- * heart of {@link PolygonLayer}: it projects each feature's ring(s) under the
+ * heart of {@link STTPolygonLayer}: it projects each feature's ring(s) under the
  * active {@link Projection}, tessellates them into triangles, and emits a single
  * indexed mesh (position / color / per-vertex start+end time) for one shared
  * material + a window time-filter.

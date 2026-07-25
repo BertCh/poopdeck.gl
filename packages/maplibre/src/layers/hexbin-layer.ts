@@ -103,7 +103,7 @@
  *    `colorMapping` (an aggregate has no category).
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import { MAX_PICK_ID, type SttPickResult } from '@poopdeck.gl/core/picking';

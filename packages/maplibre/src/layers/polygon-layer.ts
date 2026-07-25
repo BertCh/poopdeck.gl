@@ -66,7 +66,7 @@
  *     unpickable.
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import { tessellateFeature } from '@poopdeck.gl/core/geometry';
 import { buildElevatedProjection } from '../shaders/globe-elevation.glsl.js';

@@ -7,7 +7,7 @@
  * port of `@poopdeck.gl/layers`'s `lib/quadbin-cell.ts`. Where the deck version
  * decodes a Quadbin u64 → `(z, x, y)` → a Bing **quadkey string** for deck's
  * `QuadkeyLayer`, this version decodes the same u64 → `(z, x, y)` → the cell's
- * **lon/lat bounds** (a mercator quad) so the Three {@link QuadbinSummaryLayer}
+ * **lon/lat bounds** (a mercator quad) so the Three {@link STTQuadbinSummaryLayer}
  * can project + tessellate the cell itself (no QuadkeyLayer sublayer exists in
  * the Three world).
  *

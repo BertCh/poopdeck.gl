@@ -9,7 +9,7 @@
 //      prefers per-vertex arc-length reveal times; OFF = feature `[start,end]`.
 //   2. material: the shared `trail` gate (`createWideLineMaterial({ mode: 'trail' })`)
 //      that reveal routes through BUILDS and composes with the column filter.
-//   3. PathGeoLayer end-to-end: `revealTrail` switches the base into `trail` mode,
+//   3. STTPathGeoLayer end-to-end: `revealTrail` switches the base into `trail` mode,
 //      threads the reveal times into the geometry, AND drives `trailLength`
 //      (persist vs comet) / `trailFade`; `reducedMotion` degrades to the static
 //      whole-path window render.
@@ -22,7 +22,7 @@ import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { buildLineSegmentBuffers } from '../src/lib/geo-line-buffers';
 import { createWideLineMaterial } from '../src/tsl/wide-line-material';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
-import { PathGeoLayer } from '../src/layers/path-geo-layer';
+import { STTPathGeoLayer } from '../src/layers/path-geo-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeLineTile } from './_support/features';
 
@@ -126,9 +126,9 @@ describe('createWideLineMaterial — reveal routes through the trail gate', () =
   });
 });
 
-describe('PathGeoLayer — pathReveal end-to-end', () => {
+describe('STTPathGeoLayer — pathReveal end-to-end', () => {
   it('OFF (default): whole path — window mode, sttTimeA/B = feature [start,end], no trail', () => {
-    const layer = new PathGeoLayer({ colorMode: CONST });
+    const layer = new STTPathGeoLayer({ colorMode: CONST });
     layer.setTiles([pathTile()], ctx);
     const geom = layer.object.geometry as BufferGeometry;
     expect(bundle(layer).mode).toBe('window');
@@ -139,7 +139,7 @@ describe('PathGeoLayer — pathReveal end-to-end', () => {
   });
 
   it('revealTrail: trail mode reveals per-vertex + PERSISTS (huge trailLength, fade default on)', () => {
-    const layer = new PathGeoLayer({ colorMode: CONST, revealTrail: true });
+    const layer = new STTPathGeoLayer({ colorMode: CONST, revealTrail: true });
     layer.setTiles([pathTile()], ctx);
     const geom = layer.object.geometry as BufferGeometry;
     expect(bundle(layer).mode).toBe('trail');
@@ -156,7 +156,7 @@ describe('PathGeoLayer — pathReveal end-to-end', () => {
   });
 
   it('revealDuration: finite comet trail maps to trailLength', () => {
-    const layer = new PathGeoLayer({
+    const layer = new STTPathGeoLayer({
       colorMode: CONST,
       revealTrail: true,
       revealDuration: 5000,
@@ -167,7 +167,7 @@ describe('PathGeoLayer — pathReveal end-to-end', () => {
   });
 
   it('fadeTrail:false draws a solid snake (trailFade = 0)', () => {
-    const layer = new PathGeoLayer({
+    const layer = new STTPathGeoLayer({
       colorMode: CONST,
       revealTrail: true,
       fadeTrail: false,
@@ -178,7 +178,7 @@ describe('PathGeoLayer — pathReveal end-to-end', () => {
   });
 
   it('reducedMotion suppresses the reveal — static whole path (window fallback)', () => {
-    const layer = new PathGeoLayer({
+    const layer = new STTPathGeoLayer({
       colorMode: CONST,
       revealTrail: true,
       reducedMotion: true,

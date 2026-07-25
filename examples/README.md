@@ -1,11 +1,42 @@
 # Example Applications
 
-This directory contains example applications demonstrating the
-SpatioTemporal Tiles (STT) format.
+Two examples, at opposite ends of the scale.
+
+|                             |                                                                             |
+| --------------------------- | --------------------------------------------------------------------------- |
+| [**minimal**](./minimal/)   | ~60 lines. One hosted archive, one layer, a play button. **Start here.**    |
+| [**showcase**](./showcase/) | The full gallery — every layer type, every dataset, every renderer backend. |
+
+---
+
+## [Minimal](./minimal/) — start here
+
+The smallest thing that shows what the format does: one `.stt` archive streamed
+from `tiles.poopdeck.gl`, one `AnimatedPointLayer`, playback controls. No
+dataset to build, no server to run, no API key.
+
+```bash
+cd minimal
+pnpm install --ignore-workspace
+pnpm dev            # http://localhost:5180
+```
+
+Five years of global M4.0+ earthquakes (USGS) animating out of a 46 MB archive
+on a CDN bucket. The plate boundaries draw themselves. Press play and the
+catalogue runs past in about a minute; pan, zoom or scrub and only the tiles for
+that viewport and time window are fetched.
+
+It depends on the **published** `@poopdeck.gl` packages by version, not on
+workspace path deps, so it is a faithful copy-paste starting point for your own
+project. `--ignore-workspace` is what makes that resolution honest inside this
+monorepo — see [`minimal/README.md`](./minimal/README.md) for why, and for the
+one piece of Vite config the worker-based tile decoder needs in dev.
+
+---
 
 ## [Showcase](./showcase/)
 
-**The primary demonstration of STT capabilities.**
+**The full demonstration of STT capabilities.**
 
 An interactive web application showcasing dozens of real and synthetic
 datasets across every layer type the project ships. Two files, two jobs: the
@@ -41,6 +72,8 @@ pnpm dev
 
 See [`showcase/README.md`](./showcase/README.md) for dataset details.
 
+---
+
 ## Dataset Generation
 
 Datasets are produced by `stt-generate`, which fetches the source,
@@ -48,7 +81,7 @@ normalises it into GeoParquet, and shells out to `stt-build`.
 
 ```bash
 # Build the toolchain
-cargo install --path ../crates/stt-generate
+cargo install --path ../tools/stt-generate
 cargo install --path ../crates/spatiotemporal-tiles   # stt-build + the other CLIs
 
 # Generate everything into the showcase's public/data
@@ -67,14 +100,26 @@ For arbitrary GeoParquet input, use `stt-build` directly. See the
 
 ## Creating Your Own App
 
-All eight `@poopdeck.gl/*` packages are published to npm (0.5.0):
-`core`, `layers`, `playback`, `react`, `three`, `maplibre`, `cesium`, `mcp`.
+Copy [`minimal/`](./minimal/) out of the repo and edit it — that is the fastest
+path, and it already carries the correct peer-dependency set. To start from
+nothing instead, all eight `@poopdeck.gl/*` packages are published to npm
+(0.5.0): `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `cesium`,
+`mcp`.
 
 ```bash
 mkdir ~/my-stt-app && cd ~/my-stt-app
 npm init -y
-npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback @deck.gl/react react react-dom
+npm install @poopdeck.gl/layers @poopdeck.gl/react \
+  @deck.gl/core@^9.3 @deck.gl/layers@^9.3 @deck.gl/react@^9.3 \
+  @deck.gl/geo-layers@^9.3 @deck.gl/mesh-layers@^9.3 \
+  @deck.gl/aggregation-layers@^9.3 @deck.gl/extensions@^9.3 \
+  @luma.gl/core@^9.3 @luma.gl/engine@^9.3 \
+  react react-dom
 ```
+
+The deck.gl/luma.gl packages are **peer** dependencies of
+`@poopdeck.gl/layers`, all pinned `>=9.3.0 <10.0.0`, and are not installed for
+you. A missing or out-of-range peer is the most common cause of a blank map.
 
 To work against unreleased changes instead, build the monorepo and link the
 workspace packages:
@@ -88,22 +133,25 @@ npm install <path-to>/spatiotemporal-tiles/packages/{core,layers,playback}
 ```
 
 ```typescript
-import { useState } from 'react';
 import DeckGL from '@deck.gl/react';
 import { AnimatedPointLayer } from '@poopdeck.gl/layers';
-import { TimeController } from '@poopdeck.gl/playback';
+import { usePlayback } from '@poopdeck.gl/react';
+
+const TIME_RANGE = { start: 1577836800000, end: 1735602989977 };
 
 function App() {
-  const [timeController] = useState(() => new TimeController());
+  const pb = usePlayback({ timeRange: TIME_RANGE });
 
   const layer = new AnimatedPointLayer({
     id: 'points',
-    data: 'https://example.com/data.stt',
-    timeController,
-    timeWindow: 86_400_000,
+    data: 'https://tiles.poopdeck.gl/data/earthquakes-v2/manifest.json',
+    timeController: pb.timeController,
+    currentTime: TIME_RANGE.start,
+    timeRange: TIME_RANGE,
+    timeWindow: 30 * 86_400_000,
   });
 
-  return <DeckGL layers={[layer]} />;
+  return <DeckGL controller layers={[layer]} />;
 }
 ```
 
@@ -122,6 +170,8 @@ stt-build \
 - [Main README](../README.md)
 - [Documentation](../docs/README.md)
 - [API Reference](../docs/api/)
+- [Cold-start measurements](../docs/roadmap/measurements-2026-07.md) — what a
+  client actually fetches before the first frame
 - [deck.gl docs](https://deck.gl)
 
 ## License

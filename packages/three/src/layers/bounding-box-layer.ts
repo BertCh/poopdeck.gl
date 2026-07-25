@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `BoundingBoxLayer` — one smooth-moving oriented 3D box per tracked object, the
+ * `STTBoundingBoxLayer` — one smooth-moving oriented 3D box per tracked object, the
  * Three port of deck's `AnimatedBoundingBoxLayer`. The objects archive carries one
  * point snapshot per object per keyframe; {@link buildTrackIndex} pools them by
  * `track_id` and {@link sampleTracks} interpolates each active track to a pose at
@@ -36,7 +36,7 @@ import type { Projection } from '../projection/local-enu.js';
 import type { RGBA } from '../lib/color.js';
 import type { SttPickable, PickBox } from '../lib/box-pick.js';
 
-export interface BoundingBoxLayerOptions {
+export interface STTBoundingBoxLayerOptions {
   id?: string;
   trackIdProperty?: string;
   colorProperty?: string;
@@ -89,7 +89,7 @@ function emptyColoredLineGeometry(): BufferGeometry {
   return geom;
 }
 
-export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
+export class STTBoundingBoxLayer extends BaseSttLayer implements SttPickable {
   readonly id: string;
   readonly object = new Group();
 
@@ -107,9 +107,9 @@ export class BoundingBoxLayer extends BaseSttLayer implements SttPickable {
   private velColors = new Float32Array(0);
   private velCapacity = 0;
 
-  private readonly opts: Required<Omit<BoundingBoxLayerOptions, 'id'>>;
+  private readonly opts: Required<Omit<STTBoundingBoxLayerOptions, 'id'>>;
 
-  constructor(options: BoundingBoxLayerOptions = {}) {
+  constructor(options: STTBoundingBoxLayerOptions = {}) {
     super();
     this.id = options.id ?? 'objects';
     this.object.name = this.id;

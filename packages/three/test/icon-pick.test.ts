@@ -32,7 +32,7 @@ import {
 } from '../src/tsl/icon-material';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
 import { TimeFilterUniforms } from '../src/tsl/time-filter';
-import { IconLayer } from '../src/layers/icon-layer';
+import { STTIconLayer } from '../src/layers/icon-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import {
   GpuPicker,
@@ -52,7 +52,7 @@ const ATLAS_H = 128;
 const MAPPING: Record<string, IconMappingEntry> = {
   marker: { x: 0, y: 0, width: 64, height: 64 },
 };
-// Shared atlas/mapping shell. `IconLayer` resolves its own `colorMode` from
+// Shared atlas/mapping shell. `STTIconLayer` resolves its own `colorMode` from
 // `color`/`colorProperty`; the buffer builder takes an explicit `colorMode`, so
 // the buffer-provenance test spreads this + a constant white `colorMode`.
 const ATLAS_OPTS = {
@@ -199,9 +199,9 @@ describe('createIconIdMaterial (reuses the colour material collapse gates)', () 
 
 // ── DISPATCH ──────────────────────────────────────────────────────────────────
 
-describe('IconLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
+describe('STTIconLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   it('resolves a merged id colour to the right {tileKey, featureIndex, kind:icon}', async () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       id: 'vessels',
       ...ATLAS_OPTS,
       angleProperty: 'heading',
@@ -226,7 +226,7 @@ describe('IconLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   });
 
   it('reports a sentinel background readback as a miss (no hit)', async () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       id: 'vessels',
       ...ATLAS_OPTS,
       angleProperty: 'heading',
@@ -238,7 +238,7 @@ describe('IconLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   });
 
   it('returns null (never touches the GPU) when there are no markers', async () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       id: 'vessels',
       ...ATLAS_OPTS,
       angleProperty: 'heading',
@@ -250,7 +250,7 @@ describe('IconLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   });
 
   it('defers picking on the glide (motionInterpolation) path — empty provenance', async () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       id: 'vessels',
       ...ATLAS_OPTS,
       angleProperty: 'heading',

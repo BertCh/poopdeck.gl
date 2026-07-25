@@ -80,7 +80,7 @@
  *    0, whose DataFilter hid it or whose colour alpha is 0 is NOT pickable.
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {

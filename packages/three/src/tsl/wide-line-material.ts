@@ -4,7 +4,7 @@
 
 /**
  * `WideLineMaterial` — screen-pixel-width lines/ribbons, the Three port of deck's
- * `PathLayer` / `AnimatedTripsLayer` / `AnimatedLineLayer` / `FlowCorridorLayer`
+ * `PathLayer` / `AnimatedTripsLayer` / `AnimatedLineLayer` / `STTFlowCorridorLayer`
  * wide-line rendering. No Three primitive draws constant-pixel-width lines (GL
  * `LineSegments` is 1px), so each line segment is one instance of a
  * {@link makeSegmentQuadGeometry} quad that the **vertex stage expands to width

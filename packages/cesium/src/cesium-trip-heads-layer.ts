@@ -37,7 +37,7 @@ import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import { featureColor, type FeatureColorMode } from './lib/feature-color.js';
 
-export interface CesiumTripHeadsLayerOptions {
+export interface STTTripHeadsLayerOptions {
   id?: string;
   /** Head-dot colour (constant / categorical / ramp). @default warm white */
   color?: FeatureColorMode;
@@ -62,7 +62,7 @@ const GLOBE = new GlobeProjection({ longitude: 0, latitude: 0 }, undefined, {
   datum: 'wgs84',
 });
 
-export class CesiumTripHeadsLayer implements SttRenderNode {
+export class STTTripHeadsLayer implements SttRenderNode {
   readonly id: string;
   private readonly scene: Scene;
   private readonly collection: PointPrimitiveCollection;
@@ -72,7 +72,7 @@ export class CesiumTripHeadsLayer implements SttRenderNode {
   private origin: [number, number, number] = [0, 0, 0];
   private timeOrigin = 0;
 
-  constructor(scene: Scene, options: CesiumTripHeadsLayerOptions = {}) {
+  constructor(scene: Scene, options: STTTripHeadsLayerOptions = {}) {
     this.id = options.id ?? 'stt-cesium-trip-heads';
     this.scene = scene;
     this.colorMode = options.color ?? {

@@ -83,7 +83,7 @@ import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdec
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 

@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "bench": "node src/index.mjs"
+    "bench": "node src/index.mjs",
+    "bench:cold-start": "node src/cold-start.mjs"
   },
   "dependencies": {
     "@poopdeck.gl/core": "workspace:*",

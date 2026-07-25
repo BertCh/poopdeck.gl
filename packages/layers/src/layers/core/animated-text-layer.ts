@@ -72,7 +72,7 @@ import type {
 import { getFeatureProperties } from '@poopdeck.gl/core';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 

@@ -91,63 +91,69 @@ import {
 } from '../scene/projection-rig.js';
 import type { SttLayer } from '../layers/layer.js';
 import {
-  SurfelLayer,
-  type SurfelLayerOptions,
+  STTSurfelLayer,
+  type STTSurfelLayerOptions,
 } from '../layers/surfel-layer.js';
 import {
-  PointCloudLayer,
-  type PointCloudLayerOptions,
+  STTPointCloudLayer,
+  type STTPointCloudLayerOptions,
 } from '../layers/point-cloud-layer.js';
 import {
-  BoundingBoxLayer,
-  type BoundingBoxLayerOptions,
+  STTBoundingBoxLayer,
+  type STTBoundingBoxLayerOptions,
 } from '../layers/bounding-box-layer.js';
 import {
-  StaticPathLayer,
-  type StaticPathLayerOptions,
+  STTStaticPathLayer,
+  type STTStaticPathLayerOptions,
 } from '../layers/path-layer.js';
 import {
-  StaticPolygonLayer,
-  type StaticPolygonLayerOptions,
-  PolygonLayer,
-  type PolygonLayerOptions,
+  STTStaticPolygonLayer,
+  type STTStaticPolygonLayerOptions,
+  STTPolygonLayer,
+  type STTPolygonLayerOptions,
 } from '../layers/polygon-layer.js';
-import { EgoLayer, type EgoLayerOptions } from '../layers/ego-layer.js';
-import { IsoLayer, type IsoLayerOptions } from '../layers/iso-layer.js';
-import { TripsLayer, type TripsLayerOptions } from '../layers/trips-layer.js';
+import { STTEgoLayer, type STTEgoLayerOptions } from '../layers/ego-layer.js';
+import { STTIsoLayer, type STTIsoLayerOptions } from '../layers/iso-layer.js';
 import {
-  PathGeoLayer,
-  type PathGeoLayerOptions,
+  STTTripsLayer,
+  type STTTripsLayerOptions,
+} from '../layers/trips-layer.js';
+import {
+  STTPathGeoLayer,
+  type STTPathGeoLayerOptions,
 } from '../layers/path-geo-layer.js';
 import {
-  OdLineLayer,
-  type OdLineLayerOptions,
+  STTOdLineLayer,
+  type STTOdLineLayerOptions,
 } from '../layers/od-line-layer.js';
-import { ArcLayer, type ArcLayerOptions } from '../layers/arc-layer.js';
-import { IconLayer, type IconLayerOptions } from '../layers/icon-layer.js';
+import { STTArcLayer, type STTArcLayerOptions } from '../layers/arc-layer.js';
 import {
-  ColumnLayer,
-  type ColumnLayerOptions,
+  STTIconLayer,
+  type STTIconLayerOptions,
+} from '../layers/icon-layer.js';
+import {
+  STTColumnLayer,
+  type STTColumnLayerOptions,
 } from '../layers/column-layer.js';
 import {
-  TripHeadsLayer,
-  type TripHeadsLayerOptions,
+  STTTripHeadsLayer,
+  type STTTripHeadsLayerOptions,
 } from '../layers/trip-heads-layer.js';
 import {
-  QuadbinSummaryLayer,
-  type QuadbinSummaryLayerOptions,
+  STTQuadbinSummaryLayer,
+  type STTQuadbinSummaryLayerOptions,
 } from '../layers/quadbin-summary-layer.js';
 import {
-  H3SummaryLayer,
-  type H3SummaryLayerOptions,
+  STTH3SummaryLayer,
+  type STTH3SummaryLayerOptions,
 } from '../layers/h3-summary-layer.js';
 import {
-  FlowmapLayer,
-  type FlowmapLayerOptions,
+  STTFlowmapLayer,
+  type STTFlowmapLayerOptions,
 } from '../layers/flowmap-layer.js';
 import {
-  FlowCorridorLayer,
-  type FlowCorridorLayerOptions,
+  STTFlowCorridorLayer,
+  type STTFlowCorridorLayerOptions,
 } from '../layers/flow-corridor-layer.js';
 import {
   makeGlobeBasemap,
@@ -161,7 +167,7 @@ interface SttSceneCtx {
   projection: Projection;
   timeOrigin: number;
   getTime: () => number;
-  egoRef: React.MutableRefObject<EgoLayer | null>;
+  egoRef: React.MutableRefObject<STTEgoLayer | null>;
   /** Layers contributing pickable boxes (objects + ego) for click-to-inspect. */
   pickables: React.MutableRefObject<Set<SttPickable>>;
   /**
@@ -717,11 +723,11 @@ interface UrlProp {
 }
 
 export function SttSurfelLayer(
-  props: SurfelLayerOptions & UrlProp,
+  props: STTSurfelLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): SurfelLayer => new SurfelLayer(opts);
+  const make = (): STTSurfelLayer => new STTSurfelLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -744,11 +750,11 @@ export function SttSurfelLayer(
 }
 
 export function SttPointCloudLayer(
-  props: PointCloudLayerOptions & UrlProp,
+  props: STTPointCloudLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): PointCloudLayer => new PointCloudLayer(opts);
+  const make = (): STTPointCloudLayer => new STTPointCloudLayer(opts);
   // GPU id-buffer picking is auto-registered by the shared layer mount for ANY
   // SttIdPickable layer (see useEngineLayer / useStreamingEngineLayer) — no
   // per-kind `extra` here. The controller runs the GPU pass only when a box pick
@@ -775,14 +781,14 @@ export function SttPointCloudLayer(
 }
 
 export function SttBoundingBoxLayer(
-  props: BoundingBoxLayerOptions & UrlProp,
+  props: STTBoundingBoxLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const { pickables } = useSttScene();
-  const make = (): BoundingBoxLayer => new BoundingBoxLayer(opts);
+  const make = (): STTBoundingBoxLayer => new STTBoundingBoxLayer(opts);
   // Register the layer's boxes for click-to-inspect (both modes).
-  const extra = (layer: BoundingBoxLayer): void => {
+  const extra = (layer: STTBoundingBoxLayer): void => {
     React.useEffect(() => {
       const set = pickables.current;
       set.add(layer);
@@ -815,11 +821,11 @@ export function SttBoundingBoxLayer(
 }
 
 export function SttMapPolygonLayer(
-  props: StaticPolygonLayerOptions & UrlProp,
+  props: STTStaticPolygonLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): StaticPolygonLayer => new StaticPolygonLayer(opts);
+  const make = (): STTStaticPolygonLayer => new STTStaticPolygonLayer(opts);
   // Map overlays load coordinated but never gate the clock (HD-map idiom).
   return resolved ? (
     <StreamingLayerMount
@@ -845,11 +851,11 @@ export function SttMapPolygonLayer(
 }
 
 export function SttMapLineLayer(
-  props: StaticPathLayerOptions & UrlProp,
+  props: STTStaticPathLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): StaticPathLayer => new StaticPathLayer(opts);
+  const make = (): STTStaticPathLayer => new STTStaticPathLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -874,11 +880,11 @@ export function SttMapLineLayer(
 }
 
 export function SttIsoLayer(
-  props: IsoLayerOptions & UrlProp,
+  props: STTIsoLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): IsoLayer => new IsoLayer(opts);
+  const make = (): STTIsoLayer => new STTIsoLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -901,11 +907,11 @@ export function SttIsoLayer(
 }
 
 export function SttTripsLayer(
-  props: TripsLayerOptions & UrlProp,
+  props: STTTripsLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): TripsLayer => new TripsLayer(opts);
+  const make = (): STTTripsLayer => new STTTripsLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -928,11 +934,11 @@ export function SttTripsLayer(
 }
 
 export function SttPathLayer(
-  props: PathGeoLayerOptions & UrlProp,
+  props: STTPathGeoLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): PathGeoLayer => new PathGeoLayer(opts);
+  const make = (): STTPathGeoLayer => new STTPathGeoLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -955,11 +961,11 @@ export function SttPathLayer(
 }
 
 export function SttOdLineLayer(
-  props: OdLineLayerOptions & UrlProp,
+  props: STTOdLineLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): OdLineLayer => new OdLineLayer(opts);
+  const make = (): STTOdLineLayer => new STTOdLineLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -982,11 +988,11 @@ export function SttOdLineLayer(
 }
 
 export function SttArcLayer(
-  props: ArcLayerOptions & UrlProp,
+  props: STTArcLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): ArcLayer => new ArcLayer(opts);
+  const make = (): STTArcLayer => new STTArcLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1009,11 +1015,11 @@ export function SttArcLayer(
 }
 
 export function SttIconLayer(
-  props: IconLayerOptions & UrlProp,
+  props: STTIconLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): IconLayer => new IconLayer(opts);
+  const make = (): STTIconLayer => new STTIconLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1036,11 +1042,11 @@ export function SttIconLayer(
 }
 
 export function SttColumnLayer(
-  props: ColumnLayerOptions & UrlProp,
+  props: STTColumnLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): ColumnLayer => new ColumnLayer(opts);
+  const make = (): STTColumnLayer => new STTColumnLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1063,11 +1069,11 @@ export function SttColumnLayer(
 }
 
 export function SttPolygonLayer(
-  props: PolygonLayerOptions & UrlProp,
+  props: STTPolygonLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): PolygonLayer => new PolygonLayer(opts);
+  const make = (): STTPolygonLayer => new STTPolygonLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1090,11 +1096,11 @@ export function SttPolygonLayer(
 }
 
 export function SttTripHeadsLayer(
-  props: TripHeadsLayerOptions & UrlProp,
+  props: STTTripHeadsLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): TripHeadsLayer => new TripHeadsLayer(opts);
+  const make = (): STTTripHeadsLayer => new STTTripHeadsLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1117,11 +1123,11 @@ export function SttTripHeadsLayer(
 }
 
 export function SttQuadbinLayer(
-  props: QuadbinSummaryLayerOptions & UrlProp,
+  props: STTQuadbinSummaryLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): QuadbinSummaryLayer => new QuadbinSummaryLayer(opts);
+  const make = (): STTQuadbinSummaryLayer => new STTQuadbinSummaryLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1144,11 +1150,11 @@ export function SttQuadbinLayer(
 }
 
 export function SttH3Layer(
-  props: H3SummaryLayerOptions & UrlProp,
+  props: STTH3SummaryLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): H3SummaryLayer => new H3SummaryLayer(opts);
+  const make = (): STTH3SummaryLayer => new STTH3SummaryLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1171,11 +1177,11 @@ export function SttH3Layer(
 }
 
 export function SttFlowmapLayer(
-  props: FlowmapLayerOptions & UrlProp,
+  props: STTFlowmapLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): FlowmapLayer => new FlowmapLayer(opts);
+  const make = (): STTFlowmapLayer => new STTFlowmapLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1198,11 +1204,11 @@ export function SttFlowmapLayer(
 }
 
 export function SttFlowCorridorLayer(
-  props: FlowCorridorLayerOptions & UrlProp,
+  props: STTFlowCorridorLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): FlowCorridorLayer => new FlowCorridorLayer(opts);
+  const make = (): STTFlowCorridorLayer => new STTFlowCorridorLayer(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1225,14 +1231,14 @@ export function SttFlowCorridorLayer(
 }
 
 export function SttEgoLayer(
-  props: EgoLayerOptions & UrlProp,
+  props: STTEgoLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const { egoRef, pickables } = useSttScene();
-  const make = (): EgoLayer => new EgoLayer(opts);
+  const make = (): STTEgoLayer => new STTEgoLayer(opts);
   // Publish the ego layer + its pickable box (both modes).
-  const extra = (layer: EgoLayer): void => {
+  const extra = (layer: STTEgoLayer): void => {
     React.useEffect(() => {
       egoRef.current = layer;
       const set = pickables.current;
@@ -1304,7 +1310,7 @@ function CameraRig(props: {
   headingDeg?: number;
   /** Explicit initial geographic view (geo demos); overrides the bounds-fit below. */
   initialViewState?: ViewState;
-  egoRef: React.MutableRefObject<EgoLayer | null>;
+  egoRef: React.MutableRefObject<STTEgoLayer | null>;
   layers: React.MutableRefObject<Set<SttLayer>>;
   getTime: () => number;
   reducedMotion: boolean;
@@ -2197,7 +2203,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
   );
   // Globe scenes swap the flat MapControls for an earth-orbit OrbitControls.
   const globe = isGlobeProjection(projection) ? projection : null;
-  const egoRef = React.useRef<EgoLayer | null>(null);
+  const egoRef = React.useRef<STTEgoLayer | null>(null);
   const pickables = React.useRef<Set<SttPickable>>(new Set());
   const idPickables = React.useRef<Set<SttIdPickable>>(new Set());
   const layers = React.useRef<Set<SttLayer>>(new Set());

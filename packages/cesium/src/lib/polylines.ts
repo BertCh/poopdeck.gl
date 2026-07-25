@@ -4,8 +4,8 @@
 
 /**
  * Pure (Cesium-free) assembly of per-feature ECEF polylines from decoded
- * LineString tiles — the CPU builders behind `CesiumPathLayer` (every vertex
- * of every feature) and `CesiumArcLayer` (OD endpoints swept into a raised
+ * LineString tiles — the CPU builders behind `STTPathLayer` (every vertex
+ * of every feature) and `STTArcLayer` (OD endpoints swept into a raised
  * great-circle arc). Kernel-built:
  *
  *   - positions   → `core/geo` `GlobeProjection({datum:'wgs84'})` (Cesium's frame)
@@ -77,7 +77,7 @@ function collectLineLayers(tiles: Tile[]): BinaryFeatures[] {
  * The scene-wide time origin for LineString-based layers: the first animatable
  * LineString layer's `timeOffset`, or 0 when there is none. This is the same
  * first-match convention `buildPathPolylines` / `buildArcPolylines` rebase to;
- * `CesiumTripsLayer` needs only the scalar (its geometry origin comes from the
+ * `STTTripsLayer` needs only the scalar (its geometry origin comes from the
  * core `buildTripIndex`), so it is factored out here rather than re-scanned.
  */
 export function lineStringTimeOrigin(tiles: Tile[]): number {
@@ -96,7 +96,7 @@ export interface PathBuildOptions {
  * Build one ECEF polyline per LineString feature (every vertex kept; geometry
  * z used when the tile is 3-D). Single-vertex features are skipped — a
  * polyline needs two ends. Times are rebased to the first layer's
- * `timeOffset`, mirroring `CesiumPointLayer.setTiles`.
+ * `timeOffset`, mirroring `STTPointLayer.setTiles`.
  */
 export function buildPathPolylines(
   tiles: Tile[],

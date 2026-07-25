@@ -47,7 +47,7 @@ import {
   type BufferedRunway,
   type Tile,
   type TileId,
-  type Layer as STTLayer,
+  type STTTileLayer as STTLayer,
   type GeometryType,
 } from '@poopdeck.gl/core';
 import * as core from '@poopdeck.gl/core/style';

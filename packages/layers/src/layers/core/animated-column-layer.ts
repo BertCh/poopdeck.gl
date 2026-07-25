@@ -36,7 +36,7 @@
  * (explicit `{ category: Color }`) instead CPU-expands a stable per-feature RGBA
  * buffer (a category string can't hash to a palette slot on the GPU), matching
  * AnimatedPointLayer. A baked numeric column can also drive a GPU
- * DataFilterExtension range filter (`filterProperty`/`filterRange`).
+ * STTDataFilterExtension range filter (`filterProperty`/`filterRange`).
  *
  * There is no cumulative-slab path: columns are an overview/aggregate primitive
  * (a few thousand bars at low zoom), so the per-tile-sublayer count never climbs
@@ -56,7 +56,7 @@ import {
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
-import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import { STTDataFilterExtension } from '../../extensions/data-filter-extension.js';
 import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
@@ -83,7 +83,7 @@ import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdec
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 
@@ -231,7 +231,7 @@ export interface _AnimatedColumnLayerProps {
 
   /**
    * GPU range filter — the NAME of a baked numeric column to filter columns by
-   * (installs {@link DataFilterExtension}). Columns whose value in this column
+   * (installs {@link STTDataFilterExtension}). Columns whose value in this column
    * falls inside {@link filterRange} render; the rest are hidden (or soft-faded
    * via {@link filterSoftRange}). Composes WITH the time filter — a column must
    * pass both the time window and the column range.
@@ -528,7 +528,7 @@ export class AnimatedColumnLayer<
     fadeInDuration: { type: 'number', value: 300, min: 0 },
     fadeOutDuration: { type: 'number', value: 300, min: 0 },
 
-    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Column range filter (STTDataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors: filterProperty holds a column
     // name; the ranges hold a [min,max] tuple OR null (rejected by 'array').
     filterProperty: {
@@ -585,13 +585,13 @@ export class AnimatedColumnLayer<
   private readonly categoryColorExtension = new CategoryColorExtension();
 
   /**
-   * Singleton DataFilterExtension. Composed into a sublayer's extension list
+   * Singleton STTDataFilterExtension. Composed into a sublayer's extension list
    * ONLY when `filterProperty` is set (a per-layer constant, so the list stays
    * stable across this layer's sublayers). Constructed unconditionally — a
    * no-op object alloc; it contributes no attribute, uniform or shader unless
    * actually installed.
    */
-  private readonly dataFilterExtension = new DataFilterExtension({
+  private readonly dataFilterExtension = new STTDataFilterExtension({
     filterSize: 1,
   });
 
@@ -720,7 +720,7 @@ export class AnimatedColumnLayer<
       // lives in `prepared` and is keyed via preparedKey.
       Array.isArray(fillColor) ? fillColor.join(',') : '',
       typeof elevation === 'number' ? elevation : 0,
-      // Column-filter uniforms (DataFilterExtension). A range/enabled change is
+      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
       // a uniform-only edit, so — like timeWindow — it rebuilds the cached
       // sublayers (whose props carry the values) rather than re-preparing tiles.
       Array.isArray(this.props.filterRange)
@@ -825,7 +825,7 @@ export class AnimatedColumnLayer<
     );
     // Filter column NAME is baked into the `filterValue` attribute, so a change
     // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
-    // covering the unset↔set toggle that adds/removes DataFilterExtension).
+    // covering the unset↔set toggle that adds/removes STTDataFilterExtension).
     const filterProp = this.filterPropertyValue() ?? '';
     // Palette identity matters only when fillColor is a column name. Digests
     // are memoized per object reference (style-digest.ts), so this stays a
@@ -946,7 +946,7 @@ export class AnimatedColumnLayer<
       }
     }
 
-    // Column range filter (DataFilterExtension): bind the named numeric column
+    // Column range filter (STTDataFilterExtension): bind the named numeric column
     // to the `filterValue` attribute zero-copy (already a Float32Array). Absent
     // column ⇒ no attribute baked → the sublayer idles the filter for this tile
     // (renders unfiltered), mirroring how a missing color/elevation column falls
@@ -1014,7 +1014,7 @@ export class AnimatedColumnLayer<
       );
     }
 
-    // Column range filter: install DataFilterExtension only when a
+    // Column range filter: install STTDataFilterExtension only when a
     // filterProperty is set (a per-layer constant → the list stays stable
     // across this layer's sublayers). `hasFilter` is whether THIS tile actually
     // baked the column — a tile lacking it idles the filter (renders all).
@@ -1095,7 +1095,7 @@ export class AnimatedColumnLayer<
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
 
-      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // STTDataFilterExtension wiring (only when a filterProperty is set). The
       // constant getFilterValue is the fallback for tiles missing the column;
       // filterEnabled is additionally gated on THIS tile having baked it.
       ...(filterProp

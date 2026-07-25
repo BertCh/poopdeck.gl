@@ -20,7 +20,7 @@
  *  - {@link buildOdLineSegmentBuffers}: collapses each feature to ONE
  *    source→target segment and emits the EXACT {@link LineSegmentBuffers} shape
  *    so the OD-line layer rides the shared {@link createWideLineMaterial} ribbon
- *    (one quad instance per OD pair) — the GPU path the `WideLineLayer` already
+ *    (one quad instance per OD pair) — the GPU path the `STTWideLineLayer` already
  *    uses. RTC-relative like {@link buildLineSegmentBuffers}, so the layer sets
  *    `object.position = origin`.
  */

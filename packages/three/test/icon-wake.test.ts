@@ -5,7 +5,7 @@
 // compilation is browser-verified (like every TSL material here); this suite
 // asserts (1) the icon material CONSTRUCTS its `wake` node graph without throwing
 // — the trailing comet tail = `wakeAlphaNode` on opacity + `wakeSizeScaleNode`
-// tapering the quad size — and (2) the IconLayer threads `wakeLength` /
+// tapering the quad size — and (2) the STTIconLayer threads `wakeLength` /
 // `wakeTailScale` into the shared TimeFilterUniforms, gates the tail off under
 // reduced motion (collapse to a static window marker), and leaves the non-wake
 // paths byte-identical (wake uniform stays 0, static attributes intact).
@@ -20,7 +20,7 @@ import {
   createIconMaterial,
   type IconMaterialBundle,
 } from '../src/tsl/icon-material';
-import { IconLayer } from '../src/layers/icon-layer';
+import { STTIconLayer } from '../src/layers/icon-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile } from './_support/features';
 
@@ -65,12 +65,12 @@ describe('icon material — wake node graph builds', () => {
   }
 });
 
-describe('IconLayer — wake render path', () => {
-  const bundleOf = (layer: IconLayer): IconMaterialBundle =>
+describe('STTIconLayer — wake render path', () => {
+  const bundleOf = (layer: STTIconLayer): IconMaterialBundle =>
     (layer as unknown as { bundle: IconMaterialBundle }).bundle;
 
   it('threads wakeLength / wakeTailScale into the shared time uniforms', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       mode: 'wake',
       angleProperty: 'heading',
@@ -96,7 +96,7 @@ describe('IconLayer — wake render path', () => {
   });
 
   it('defaults wakeTailScale to DEFAULT_WAKE_TAIL_SCALE when unset', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       mode: 'wake',
       wakeLength: 5000,
@@ -111,7 +111,7 @@ describe('IconLayer — wake render path', () => {
   });
 
   it('collapses wake → static window marker under reduced motion (no trail)', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       mode: 'wake',
       wakeLength: 5000,
@@ -130,7 +130,7 @@ describe('IconLayer — wake render path', () => {
   });
 
   it('leaves the wake uniform at 0 in the default (window) mode — byte-identical off', () => {
-    const layer = new IconLayer({ ...iconOpts, angleProperty: 'heading' });
+    const layer = new STTIconLayer({ ...iconOpts, angleProperty: 'heading' });
     layer.setTiles([iconTile()], ctx);
     layer.setTime(2000);
 
@@ -145,7 +145,7 @@ describe('IconLayer — wake render path', () => {
   });
 
   it('wake takes precedence over glide — the interpolate gate stays off in wake mode', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       mode: 'wake',
       wakeLength: 5000,

@@ -16,9 +16,7 @@
  *
  * ## What works (constant)
  * ```ts
- * import { AnimatedIconLayer } from '@poopdeck.gl/layers';
- * import { collisionFilterProps } from
- *   '@poopdeck.gl/layers/extensions/collision-filter-extension';
+ * import { AnimatedIconLayer, collisionFilterProps } from '@poopdeck.gl/layers';
  *
  * new AnimatedIconLayer({
  *   // …tileset / icon props…

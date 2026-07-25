@@ -13,7 +13,7 @@
  *                writes `object.position = origin`). For the ENU/AV frame the
  *                origin is ~0 so it's a no-op; for mercator/globe it keeps the
  *                huge world magnitude in the f64 CPU transform.
- *   • `angles`   per-instance rotation in RADIANS. deck `IconLayer` measures
+ *   • `angles`   per-instance rotation in RADIANS. deck `STTIconLayer` measures
  *                `getAngle` in DEGREES, counter-clockwise from the icon's default
  *                (up) orientation — we convert once here so the shader just rotates.
  *   • `sizes`    per-instance on-screen size in pixels (the icon's full height;
@@ -28,7 +28,7 @@
  *                tint replaces the sprite colour; for an opaque icon it modulates.
  *   • `starts`/`ends`  per-feature `[startTime,endTime]` rebased to `timeOrigin`.
  *
- * The atlas anchor convention follows deck `IconLayer`: `anchorX`/`anchorY`
+ * The atlas anchor convention follows deck `STTIconLayer`: `anchorX`/`anchorY`
  * default to the icon centre (`width/2`, `height/2`). We translate the anchor into
  * a normalized `[-1,1]` quad offset so off-centre anchors (e.g. a pin tip) line up.
  */
@@ -49,7 +49,7 @@ const DEG2RAD = Math.PI / 180;
 
 /**
  * One entry of an `iconMapping` — the sub-rectangle of the atlas a named icon
- * occupies (pixels), plus optional anchor. Mirrors deck.gl `IconLayer`'s mapping
+ * occupies (pixels), plus optional anchor. Mirrors deck.gl `STTIconLayer`'s mapping
  * shape (the `mask` flag is a render-time concern, not a buffer one, so it lives
  * on the material options, not here).
  */

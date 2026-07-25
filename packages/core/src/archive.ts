@@ -595,7 +595,7 @@ export function estimateTileSize(tile: Tile): number {
     size += view.buffer.byteLength;
   };
   for (const layer of tile.layers) {
-    // The retained raw IPC bytes (GeoArrow hand-off; see Layer.arrowIpc and
+    // The retained raw IPC bytes (GeoArrow hand-off; see STTTileLayer.arrowIpc and
     // the v2 spliced-props sibling) keep the decoded payload buffers alive
     // for the tile's lifetime, so they count toward the byte budget like
     // any other buffer.

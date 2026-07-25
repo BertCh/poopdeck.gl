@@ -66,7 +66,7 @@ import {
 } from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
-import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import { STTDataFilterExtension } from '../../extensions/data-filter-extension.js';
 import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
@@ -93,7 +93,7 @@ import { DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import { computePolygonWallMask } from '@poopdeck.gl/core/geometry';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 
@@ -362,7 +362,7 @@ export interface _AnimatedPolygonLayerProps {
 
   /**
    * GPU range filter — the NAME of a baked numeric column to filter polygons
-   * by (installs {@link DataFilterExtension}). A polygon renders when its value
+   * by (installs {@link STTDataFilterExtension}). A polygon renders when its value
    * in this column is inside {@link filterRange}, else it is hidden (or
    * soft-faded via {@link filterSoftRange}). Composes WITH the time filter (a
    * polygon must pass both) and the categorical fill path. The per-feature
@@ -584,7 +584,7 @@ export class AnimatedPolygonLayer<
     // timeHeightOrigin is inherited from SpatioTemporalLayer.defaultProps.
     timeHeightScale: { type: 'number', value: 0 },
     reducedMotion: false,
-    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Column range filter (STTDataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors: these hold a column-name string /
     // [min,max] tuple / null, which the 'array'/'accessor' validators would
     // reject in deck's debug mode (see the path layer).
@@ -628,13 +628,13 @@ export class AnimatedPolygonLayer<
   });
   private readonly categoryColorExtension = new CategoryColorExtension();
   /**
-   * Singleton DataFilterExtension, composed into the sublayer extension list
+   * Singleton STTDataFilterExtension, composed into the sublayer extension list
    * only when `filterProperty` is set (per-layer constant ⇒ stable list, so the
    * shader-cache contract holds). SolidPolygonLayer's non-instanced fill has a
    * roomy attribute budget, so it composes ALONGSIDE the time + category
    * extensions (unlike the tight PathLayer family, which must drop one).
    */
-  private readonly dataFilterExtension = new DataFilterExtension({
+  private readonly dataFilterExtension = new STTDataFilterExtension({
     filterSize: 1,
   });
 
@@ -772,7 +772,7 @@ export class AnimatedPolygonLayer<
       this.effectiveTimeHeightScale(),
       this.props.timeHeightOrigin,
       this.props.reducedMotion,
-      // Column-filter uniforms (DataFilterExtension) — a range/enabled edit is
+      // Column-filter uniforms (STTDataFilterExtension) — a range/enabled edit is
       // uniform-only; same rebuild-not-reprepare rationale as timeWindow.
       Array.isArray(this.props.filterRange)
         ? this.props.filterRange.join(',')
@@ -888,7 +888,7 @@ export class AnimatedPolygonLayer<
     // Property-column name for a per-feature outline width (else '').
     const lineWidthProp =
       typeof lineWidthValue === 'string' ? lineWidthValue : '';
-    // Property-column name for the DataFilterExtension range filter (else '').
+    // Property-column name for the STTDataFilterExtension range filter (else '').
     const filterProp = this.filterPropertyValue() ?? '';
     // Palette keyed by CONTENT (memoized digest), not length — matches the
     // sibling layers' stale-key fix. updateTriggers ride the key so a user
@@ -1186,7 +1186,7 @@ export class AnimatedPolygonLayer<
       }
     }
 
-    // Column range filter (DataFilterExtension). The value is per-FEATURE, but
+    // Column range filter (STTDataFilterExtension). The value is per-FEATURE, but
     // SolidPolygonLayer's non-instanced fill (and the outline PathLayer's
     // instanced segments) consume the `filterValue` attribute PER-VERTEX — the
     // same per-vertex contract as the time / elevation attributes above, and
@@ -1269,7 +1269,7 @@ export class AnimatedPolygonLayer<
       );
     }
 
-    // Column range filter — install DataFilterExtension only when a column is
+    // Column range filter — install STTDataFilterExtension only when a column is
     // named (per-layer constant ⇒ stable list). `hasFilter` gates the per-tile
     // enable so a tile missing the column renders unfiltered. Unlike the tight
     // PathLayer family, SolidPolygonLayer's non-instanced fill has attribute
@@ -1338,7 +1338,7 @@ export class AnimatedPolygonLayer<
       categoryPalette: useGpuCategory ? prepared.gpuPalette! : [],
       useCategoryColor: useGpuCategory,
 
-      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // STTDataFilterExtension wiring (only when a filterProperty is set). The
       // constant getFilterValue is the fallback for tiles missing the column;
       // filterEnabled is additionally gated on THIS tile having baked it.
       ...(filterProp
@@ -1457,7 +1457,7 @@ export class AnimatedPolygonLayer<
       timeHeightScale: this.effectiveTimeHeightScale(),
       timeHeightOrigin: this.props.timeHeightOrigin,
 
-      // DataFilterExtension wiring — mirrors the fill so the stroke clips/fades
+      // STTDataFilterExtension wiring — mirrors the fill so the stroke clips/fades
       // with it. filterEnabled is gated on THIS tile having baked the column.
       ...(filterProp
         ? {

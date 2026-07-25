@@ -7,7 +7,7 @@ transparently. It consumes the exact same decoded tiles as
 [`@poopdeck.gl/layers`](./spatiotemporal-layer.md) (via `@poopdeck.gl/core`)
 and the same playback clock from `@poopdeck.gl/playback`, so it is a drop-in
 alternative renderer rather than a separate data pipeline. It ships two
-surfaces: a framework-agnostic engine core (`SttScene`, `StandaloneViewer`,
+surfaces: a framework-agnostic engine core (`SttScene`, `createSttRenderer`,
 individual `SttLayer`s) and a declarative react-three-fiber binding at the
 `@poopdeck.gl/three/r3f` subpath (`<SttCanvas>` + layer components). It covers
 a first-class local-metric (ENU) frame for the AV LIDAR cockpit — oriented
@@ -68,47 +68,55 @@ that; `forceWebGL: true` skips this (the WebGL2 backend has no such cap).
 
 | Field             | Type                                             | Default              | Description                                                                                         |
 | ----------------- | ------------------------------------------------ | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `canvas`          | `HTMLCanvasElement`                              | new canvas           | Target canvas (r3f/`StandaloneViewer` supply their own).                                            |
+| `canvas`          | `HTMLCanvasElement`                              | new canvas           | Target canvas (the r3f binding supplies its own).                                                   |
 | `antialias`       | `boolean`                                        | `true`               | MSAA.                                                                                               |
 | `alpha`           | `boolean`                                        | `true`               | Transparent clear, so a DOM/basemap layer underneath shows through.                                 |
 | `forceWebGL`      | `boolean`                                        | `false`              | Pin the WebGL2 backend even when WebGPU is available (no compute shaders; maximum-uniformity mode). |
 | `powerPreference` | `'high-performance' \| 'low-power' \| 'default'` | `'high-performance'` | GPU power hint.                                                                                     |
 
-### Non-React mount: `StandaloneViewer`
+### Non-React mount
 
-For apps without React, `StandaloneViewer` owns the renderer, a Z-up
-`PerspectiveCamera`, `OrbitControls`, and the render loop around an
-`SttScene`, and is the more robust integration path — it `await`s
-`renderer.init()` **before** the first render, so it never hits the
-"render() before the backend is initialized" warning r3f v8 does (v9 handles
-this correctly too; see the r3f section below).
+For apps without React there is no viewer wrapper — you own the camera and
+the loop, and the package gives you the two halves: `createSttRenderer()`
+(which `await`s `renderer.init()` **before** you ever call `render()`, so the
+"render() before the backend is initialized" warning cannot happen) and
+`SttScene`, whose `root` is a plain `Group` you add to any Three scene.
 
 ```ts
+import { Scene, PerspectiveCamera, Group } from 'three';
 import {
   SttScene,
-  PointCloudLayer,
-  StandaloneViewer,
+  STTPointCloudLayer,
+  createSttRenderer,
 } from '@poopdeck.gl/three';
 
-const scene = new SttScene({
+const { renderer } = await createSttRenderer({
+  canvas: document.getElementById('viewport') as HTMLCanvasElement,
+});
+
+const stt = new SttScene({
   anchor: { longitude: -122.4, latitude: 37.77 },
   timeOrigin: Date.now(),
 });
-scene.addLayer(
-  new PointCloudLayer({ id: 'points', colorProperty: 'category' }),
+stt.addLayer(
+  new STTPointCloudLayer({ id: 'points', colorProperty: 'category' }),
   '/data/points/manifest.json',
 );
-await scene.load();
+await stt.load();
 
-const viewer = new StandaloneViewer(
-  document.getElementById('viewport')!,
-  scene,
-  {
-    getTime: () => Date.now(),
-  },
-);
-await viewer.start();
+const scene = new Scene();
+scene.add(stt.root);
+const camera = new PerspectiveCamera(60, 16 / 9, 0.1, 10_000);
+camera.up.set(0, 0, 1); // the engine's frames are Z-up
+
+renderer.setAnimationLoop(() => {
+  stt.setTime(Date.now());
+  renderer.render(scene, camera);
+});
 ```
+
+For a camera rig, orbit controls and a follow-ego mode, use the r3f binding
+(`<SttCanvas>`) below rather than hand-rolling them.
 
 ## Projections
 
@@ -166,31 +174,40 @@ Every layer implements the small `SttLayer` contract (`setTiles(tiles, ctx)`,
 `setTime(absoluteMs)`, `dispose()`) and owns one Three `Object3D`; a layer
 merges every resident tile into **one** `InstancedMesh`/indexed mesh per
 layer (not one draw call per tile, unlike the maplibre adapter), and
-per-frame animation is a uniform write — no rebuild. Names deliberately fork
-from deck's `Animated*Layer` idiom (bare `*Layer`), matching the vocabulary
-map in the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appendix-canonical-concept-map-deck--three--maplibre).
+per-frame animation is a uniform write — no rebuild. The kind→class map is in
+the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appendix-canonical-concept-map-deck--three--maplibre).
 
-| Class                 | Geometry                         | Deck equivalent                                                  | Notes                                                                                                                                                                                                                                                                                          |
-| --------------------- | -------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PointCloudLayer`     | Point                            | `AnimatedPointLayer`                                             | window/wake/cumulative modes, soft-Gaussian `splat`, categorical/RGB-column/continuous-ramp colour, metre or pixel sizing, GPU id-colour picking (opt-in, browser-verify).                                                                                                                     |
-| `SurfelLayer`         | Point (oriented surfel)          | `SplatLayer` / `SplatPrimitiveLayer`                             | Oriented anisotropic Gaussian surfels (surface splatting) — the AV LIDAR hero mode. Reads `--surfel`-baked quaternion/scale/rgba columns. ENU-only; no globe port.                                                                                                                             |
-| `WideLineLayer`       | LineString                       | `AnimatedPathLayer` / `AnimatedLineLayer` / `AnimatedTripsLayer` | Screen-pixel-width instanced ribbon over `createWideLineMaterial`; `mode: 'window' \| 'trail' \| 'none'`. `PathGeoLayer` subclasses it directly; `OdLineLayer`/`TripsLayer`/`FlowCorridorLayer` are siblings reusing the same material + segment-quad geometry with their own buffer builders. |
-| `PathGeoLayer`        | LineString                       | `AnimatedPathLayer`                                              | `WideLineLayer` subclass pinned to `mode: 'window'` with path-shaped option names.                                                                                                                                                                                                             |
-| `StaticPathLayer`     | LineString                       | — (AV `map_line`)                                                | Flat, static hairline path (no width/time) for AV map-line overlays.                                                                                                                                                                                                                           |
-| `OdLineLayer`         | LineString → 2-point segment     | `AnimatedLineLayer`                                              | Collapses each feature to its first→last vertex (a straight OD flow).                                                                                                                                                                                                                          |
-| `TripsLayer`          | LineString (trail)               | `AnimatedTripsLayer`                                             | Per-vertex trail times, trailing fade over `[cur - trailLength, cur]`.                                                                                                                                                                                                                         |
-| `TripHeadsLayer`      | LineString → point               | `AnimatedTripHeadsLayer`                                         | CPU-interpolates a moving dot at the head of every active trip each frame (sub-ms; only active trips are re-uploaded).                                                                                                                                                                         |
-| `ArcLayer`            | LineString → OD arc              | `AnimatedArcLayer`                                               | Raised parabolic or spherical great-circle source→target arcs, per-endpoint colour, per-feature height.                                                                                                                                                                                        |
-| `IconLayer`           | Point                            | `AnimatedIconLayer`                                              | Directional billboard markers from a host-supplied atlas texture; per-feature heading/size/tint; pixel sizing.                                                                                                                                                                                 |
-| `ColumnLayer`         | Point → prism                    | `AnimatedColumnLayer`                                            | Extruded 3D disk-prism bars, oriented to the local ground frame (stands up straight on a globe too); categorical/ramp/constant colour.                                                                                                                                                         |
-| `PolygonLayer`        | Polygon                          | `AnimatedPolygonLayer`                                           | Projected-space earcut (or pre-baked triangles), window-mode time fade, optional extrusion to a 3D prism. `StaticPolygonLayer` is a flat, static, categorically-coloured preset for AV `map_poly` overlays.                                                                                    |
-| `IsoLayer`            | LineString (contours)            | — (AV `lidarIso`/`lidarIso3d`)                                   | Animated density iso-contour lines; window-filtered, optional per-ring altitude for iso3d.                                                                                                                                                                                                     |
-| `BoundingBoxLayer`    | Point (keyframed) → oriented box | `AnimatedBoundingBoxLayer`                                       | CPU track pooling + binary-search interpolation per frame; draws 12-edge wireframe boxes + optional velocity arrows; supports ray-OBB picking.                                                                                                                                                 |
-| `EgoLayer`            | Point (keyframed) → box + trail  | — (AV ego vehicle)                                               | Static full trajectory line + an interpolated marker box; the source of the follow-camera target.                                                                                                                                                                                              |
-| `FlowmapLayer`        | Point pairs + value matrix       | `FlowmapLayer`                                                   | flowmap.gl-style tapered OD arrows sized by per-bucket trip volume + node circles sized by incident flow; re-expands at ~5 Hz, not per frame.                                                                                                                                                  |
-| `FlowCorridorLayer`   | LineString + value matrix        | `FlowCorridorLayer`                                              | Static route network geometry, ridership-over-time from a `vertexValueMatrix` baked into a linear-filtered `DataTexture` (GPU does the two-bucket lerp — no CPU re-expand per sub-step).                                                                                                       |
-| `H3SummaryLayer`      | H3 cell (summary tier)           | `H3SummaryLayer`                                                 | Decodes summary-tier u64 cell ids to H3 boundary rings; static (built once).                                                                                                                                                                                                                   |
-| `QuadbinSummaryLayer` | Quadbin cell (summary tier)      | `QuadbinSummaryLayer`                                            | Decodes summary-tier u64 cell ids to CARTO quadbin quads; static.                                                                                                                                                                                                                              |
+> **Renamed in 0.6.0.** Through 0.5.x these classes were unprefixed
+> (`ArcLayer`, `IconLayer`, `TripsLayer`, …), which shadowed deck.gl's own
+> exports of the same names in any app importing both — and deck is the
+> primary backend, so that is the normal case. Every layer class now carries
+> the `STT` prefix, matching `@poopdeck.gl/maplibre` and `@poopdeck.gl/cesium`,
+> so one layer kind has one spelling on every backend. The old names still
+> resolve as `@deprecated` aliases (same class, IDE strikethrough) and are
+> removed in 0.8.0. The deck column below keeps deck's own `Animated*` names —
+> those never collided and did not change.
+
+| Class                    | Geometry                         | Deck equivalent                                                  | Notes                                                                                                                                                                                                                                                                                                      |
+| ------------------------ | -------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STTPointCloudLayer`     | Point                            | `AnimatedPointLayer`                                             | window/wake/cumulative modes, soft-Gaussian `splat`, categorical/RGB-column/continuous-ramp colour, metre or pixel sizing, GPU id-colour picking (opt-in, browser-verify).                                                                                                                                 |
+| `STTSurfelLayer`         | Point (oriented surfel)          | `SplatLayer` / `SplatPrimitiveLayer`                             | Oriented anisotropic Gaussian surfels (surface splatting) — the AV LIDAR hero mode. Reads `--surfel`-baked quaternion/scale/rgba columns. ENU-only; no globe port.                                                                                                                                         |
+| `STTWideLineLayer`       | LineString                       | `AnimatedPathLayer` / `AnimatedLineLayer` / `AnimatedTripsLayer` | Screen-pixel-width instanced ribbon over `createWideLineMaterial`; `mode: 'window' \| 'trail' \| 'none'`. `STTPathGeoLayer` subclasses it directly; `STTOdLineLayer`/`STTTripsLayer`/`STTFlowCorridorLayer` are siblings reusing the same material + segment-quad geometry with their own buffer builders. |
+| `STTPathGeoLayer`        | LineString                       | `AnimatedPathLayer`                                              | `STTWideLineLayer` subclass pinned to `mode: 'window'` with path-shaped option names.                                                                                                                                                                                                                      |
+| `STTStaticPathLayer`     | LineString                       | — (AV `map_line`)                                                | Flat, static hairline path (no width/time) for AV map-line overlays.                                                                                                                                                                                                                                       |
+| `STTOdLineLayer`         | LineString → 2-point segment     | `AnimatedLineLayer`                                              | Collapses each feature to its first→last vertex (a straight OD flow).                                                                                                                                                                                                                                      |
+| `STTTripsLayer`          | LineString (trail)               | `AnimatedTripsLayer`                                             | Per-vertex trail times, trailing fade over `[cur - trailLength, cur]`.                                                                                                                                                                                                                                     |
+| `STTTripHeadsLayer`      | LineString → point               | `AnimatedTripHeadsLayer`                                         | CPU-interpolates a moving dot at the head of every active trip each frame (sub-ms; only active trips are re-uploaded).                                                                                                                                                                                     |
+| `STTArcLayer`            | LineString → OD arc              | `AnimatedArcLayer`                                               | Raised parabolic or spherical great-circle source→target arcs, per-endpoint colour, per-feature height.                                                                                                                                                                                                    |
+| `STTIconLayer`           | Point                            | `AnimatedIconLayer`                                              | Directional billboard markers from a host-supplied atlas texture; per-feature heading/size/tint; pixel sizing.                                                                                                                                                                                             |
+| `STTColumnLayer`         | Point → prism                    | `AnimatedColumnLayer`                                            | Extruded 3D disk-prism bars, oriented to the local ground frame (stands up straight on a globe too); categorical/ramp/constant colour.                                                                                                                                                                     |
+| `STTPolygonLayer`        | Polygon                          | `AnimatedPolygonLayer`                                           | Projected-space earcut (or pre-baked triangles), window-mode time fade, optional extrusion to a 3D prism. `STTStaticPolygonLayer` is a flat, static, categorically-coloured preset for AV `map_poly` overlays.                                                                                             |
+| `STTIsoLayer`            | LineString (contours)            | — (AV `lidarIso`/`lidarIso3d`)                                   | Animated density iso-contour lines; window-filtered, optional per-ring altitude for iso3d.                                                                                                                                                                                                                 |
+| `STTBoundingBoxLayer`    | Point (keyframed) → oriented box | `AnimatedBoundingBoxLayer`                                       | CPU track pooling + binary-search interpolation per frame; draws 12-edge wireframe boxes + optional velocity arrows; supports ray-OBB picking.                                                                                                                                                             |
+| `STTEgoLayer`            | Point (keyframed) → box + trail  | — (AV ego vehicle)                                               | Static full trajectory line + an interpolated marker box; the source of the follow-camera target.                                                                                                                                                                                                          |
+| `STTFlowmapLayer`        | Point pairs + value matrix       | `FlowmapLayer`                                                   | flowmap.gl-style tapered OD arrows sized by per-bucket trip volume + node circles sized by incident flow; re-expands at ~5 Hz, not per frame.                                                                                                                                                              |
+| `STTFlowCorridorLayer`   | LineString + value matrix        | `FlowCorridorLayer`                                              | Static route network geometry, ridership-over-time from a `vertexValueMatrix` baked into a linear-filtered `DataTexture` (GPU does the two-bucket lerp — no CPU re-expand per sub-step).                                                                                                                   |
+| `STTH3SummaryLayer`      | H3 cell (summary tier)           | `H3SummaryLayer`                                                 | Decodes summary-tier u64 cell ids to H3 boundary rings; static (built once).                                                                                                                                                                                                                               |
+| `STTQuadbinSummaryLayer` | Quadbin cell (summary tier)      | `QuadbinSummaryLayer`                                            | Decodes summary-tier u64 cell ids to CARTO quadbin quads; static.                                                                                                                                                                                                                                          |
 
 Not ported: `AnimatedHeatmapLayer` (GPU multi-pass aggregation — deferred;
 the backend descriptor advertises `point` as the fallback kind),
@@ -312,7 +329,7 @@ Two independent mechanisms exist:
   pickable layer's boxes (objects + ego). This is the mechanism the backend
   descriptor reports (`pickMechanism: 'cpu-ray'`).
 - **GPU id-colour picking** (`GpuPicker`, `encodeId`/`decodeId`/`buildIdColors`,
-  and `PointCloudLayer.pick()`) — an opt-in off-screen id-buffer render pass +
+  and `STTPointCloudLayer.pick()`) — an opt-in off-screen id-buffer render pass +
   readback for merged-instance point clouds, resolved back to a feature via
   the `InstanceProvenance` merged-buffer identity contract
   (`resolvePointPick`). Exists and is unit-tested on the resolve half; the
@@ -332,7 +349,7 @@ Two independent mechanisms exist:
 | GPU heatmap aggregation                           | — (deferred; fall back to a point-density layer)                                                                         | ✓ (`AnimatedHeatmapLayer`)                             |
 | Live edge bundling                                | — (deferred; static `preBundled` design only, unported)                                                                  | ✓ (`BundledFlowmapLayer`)                              |
 | Category-color GPU palette texture                | — (CPU-expanded per tile)                                                                                                | ✓ (`CategoryColorExtension`)                           |
-| Surfel / oriented-splat rendering                 | ✓ (`SurfelLayer`, ENU-only)                                                                                              | ✓ (`SplatLayer`/`SplatPrimitiveLayer`)                 |
+| Surfel / oriented-splat rendering                 | ✓ (`STTSurfelLayer`, ENU-only)                                                                                           | ✓ (`SplatLayer`/`SplatPrimitiveLayer`)                 |
 | Picking                                           | CPU ray-OBB (default) + opt-in GPU id-buffer (browser-verify)                                                            | GPU id-colour (`Deck.pickObject`)                      |
 | fp64 precision                                    | Not needed — RTC (relative-to-center f32 + f64 CPU origin) instead of an in-shader fp64 split                            | fp64 attribute split                                   |
 | 16-attribute WebGL2 budget                        | Not applicable (WebGPU/TSL has no such ceiling)                                                                          | `NoPickingPathLayer` workaround needed for some layers |
@@ -361,7 +378,7 @@ machine-generated, drift-guarded capability matrix across all four backends
 - **Categorical colour is CPU-expanded per tile,** not a GPU palette-texture
   lookup — matching the maplibre adapter, not the deck `CategoryColorExtension`
   path. Hot-swapping a palette re-uploads the colour attribute.
-- **`SurfelLayer` is ENU-only** — the surfel orientation quaternions are baked
+- **`STTSurfelLayer` is ENU-only** — the surfel orientation quaternions are baked
   at build time in the local-ENU render basis; there is no mercator/globe
   surfel port.
 - **`GlobeProjection` defaults to a sphere**, not the WGS84 ellipsoid — a

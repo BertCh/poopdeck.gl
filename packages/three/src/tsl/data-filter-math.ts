@@ -10,8 +10,8 @@
  * `filterRange` / `filterSoftRange` / `filterEnabled` props into the plain
  * scalar uniforms both stages read.
  *
- * The math is a byte-faithful port of the poopdeck `DataFilterExtension`
- * (`@poopdeck.gl/layers/extensions/data-filter-extension.ts`): a feature is
+ * The math is a byte-faithful port of `STTDataFilterExtension` in
+ * `@poopdeck.gl/layers` (`src/extensions/data-filter-extension.ts`): a feature is
  * shown when its baked `filterValue` lies inside the inclusive `[min, max]`
  * hard range; a `filterSoftRange` INSIDE that range fades features across the
  * margin instead of hard-clipping. `filterSize` is 1 (a single scalar column),

@@ -400,7 +400,20 @@ export {
   type LayerFeatureSupport,
 } from './backend-descriptor.js';
 
-// Backwards-compat alias for the 0.1.x scaffold, which only had a points
-// renderer named STTMaplibreLayer. New code should import STTPointLayer.
-export { STTPointLayer as STTMaplibreLayer } from './layers/point-layer.js';
-export type { STTPointLayerOptions as STTMaplibreLayerOptions } from './layers/point-layer.js';
+// ── Deprecated aliases ───────────────────────────────────────────────────────
+// Backwards-compat for the 0.1.x scaffold, which only had a points renderer
+// named STTMaplibreLayer. New code should import STTPointLayer.
+//
+// Every layer class in this package already carries the `STT` prefix — the
+// convention `@poopdeck.gl/three` and `@poopdeck.gl/cesium` adopted in 0.6.0 —
+// so nothing here shadows a deck.gl export and nothing else needed renaming.
+//
+// The JSDoc must sit on the export SPECIFIER: TypeScript ignores a
+// `@deprecated` block placed above an `export … from` statement, so only this
+// form gives consumers an IDE strikethrough.
+export {
+  /** @deprecated Use {@link STTPointLayer}. The 0.1.x scaffold name, kept since 0.2.0; removal target 0.8.0. */
+  STTPointLayer as STTMaplibreLayer,
+  /** @deprecated Use {@link STTPointLayerOptions}. Removal target 0.8.0. */
+  type STTPointLayerOptions as STTMaplibreLayerOptions,
+} from './layers/point-layer.js';

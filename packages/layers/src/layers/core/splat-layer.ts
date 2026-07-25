@@ -57,7 +57,7 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
-import type { Tile, Layer as TileLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as TileLayer } from '@poopdeck.gl/core';
 
 const DEBUG = false;
 

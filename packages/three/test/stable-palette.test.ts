@@ -36,11 +36,11 @@ import { buildLineSegmentBuffers } from '../src/lib/geo-line-buffers';
 import { buildOdLineSegmentBuffers } from '../src/lib/od-positions';
 import { buildIconBuffers } from '../src/lib/icon-buffers';
 
-import { ColumnLayer } from '../src/layers/column-layer';
-import { ArcLayer } from '../src/layers/arc-layer';
-import { WideLineLayer } from '../src/layers/wide-line-layer';
-import { OdLineLayer } from '../src/layers/od-line-layer';
-import { IconLayer } from '../src/layers/icon-layer';
+import { STTColumnLayer } from '../src/layers/column-layer';
+import { STTArcLayer } from '../src/layers/arc-layer';
+import { STTWideLineLayer } from '../src/layers/wide-line-layer';
+import { STTOdLineLayer } from '../src/layers/od-line-layer';
+import { STTIconLayer } from '../src/layers/icon-layer';
 
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile, makeLineTile } from './_support/features';
@@ -496,8 +496,8 @@ describe('layers — stableColorMapping wires the attribute + palette end-to-end
     return layer.object.geometry as InstancedBufferGeometry;
   }
 
-  it('ColumnLayer: sttCategoryIndex bound + palette bundle when on; neither when off', () => {
-    const on = new ColumnLayer({
+  it('STTColumnLayer: sttCategoryIndex bound + palette bundle when on; neither when off', () => {
+    const on = new STTColumnLayer({
       colorMode: CAT_COL,
       stableColorMapping: true,
     });
@@ -506,29 +506,32 @@ describe('layers — stableColorMapping wires the attribute + palette end-to-end
     expect(on['bundle'].palette).toBeInstanceOf(PaletteUniforms);
     on.dispose();
 
-    const off = new ColumnLayer({ colorMode: CAT_COL }); // stableColorMapping default off
+    const off = new STTColumnLayer({ colorMode: CAT_COL }); // stableColorMapping default off
     off.setTiles([twoPointTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(off).getAttribute('sttCategoryIndex')).toBeUndefined();
     expect(off['bundle'].palette).toBeUndefined();
     off.dispose();
   });
 
-  it('ArcLayer: source-categorical + stableColorMapping wires the palette', () => {
-    const on = new ArcLayer({ sourceColor: CAT_COL, stableColorMapping: true });
+  it('STTArcLayer: source-categorical + stableColorMapping wires the palette', () => {
+    const on = new STTArcLayer({
+      sourceColor: CAT_COL,
+      stableColorMapping: true,
+    });
     on.setTiles([twoLineTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(on).getAttribute('sttCategoryIndex')).toBeTruthy();
     expect(on['bundle'].palette).toBeInstanceOf(PaletteUniforms);
     on.dispose();
 
-    const off = new ArcLayer({ sourceColor: CAT_COL });
+    const off = new STTArcLayer({ sourceColor: CAT_COL });
     off.setTiles([twoLineTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(off).getAttribute('sttCategoryIndex')).toBeUndefined();
     on.dispose();
     off.dispose();
   });
 
-  it('WideLineLayer: sttCategoryIndex bound when on; absent when off', () => {
-    const on = new WideLineLayer({
+  it('STTWideLineLayer: sttCategoryIndex bound when on; absent when off', () => {
+    const on = new STTWideLineLayer({
       mode: 'none',
       colorMode: lineColorMode,
       stableColorMapping: true,
@@ -538,14 +541,17 @@ describe('layers — stableColorMapping wires the attribute + palette end-to-end
     expect(on['bundle'].palette).toBeInstanceOf(PaletteUniforms);
     on.dispose();
 
-    const off = new WideLineLayer({ mode: 'none', colorMode: lineColorMode });
+    const off = new STTWideLineLayer({
+      mode: 'none',
+      colorMode: lineColorMode,
+    });
     off.setTiles([twoLineTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(off).getAttribute('sttCategoryIndex')).toBeUndefined();
     off.dispose();
   });
 
-  it('OdLineLayer: sttCategoryIndex bound when on; absent when off', () => {
-    const on = new OdLineLayer({
+  it('STTOdLineLayer: sttCategoryIndex bound when on; absent when off', () => {
+    const on = new STTOdLineLayer({
       colorMode: lineColorMode,
       stableColorMapping: true,
     });
@@ -554,13 +560,13 @@ describe('layers — stableColorMapping wires the attribute + palette end-to-end
     expect(on['bundle'].palette).toBeInstanceOf(PaletteUniforms);
     on.dispose();
 
-    const off = new OdLineLayer({ colorMode: lineColorMode });
+    const off = new STTOdLineLayer({ colorMode: lineColorMode });
     off.setTiles([twoLineTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(off).getAttribute('sttCategoryIndex')).toBeUndefined();
     off.dispose();
   });
 
-  it('IconLayer (static path): tint palette bound when on; absent when off', () => {
+  it('STTIconLayer (static path): tint palette bound when on; absent when off', () => {
     const iconOpts = {
       atlas: new Texture(),
       atlasWidth: 64,
@@ -568,13 +574,13 @@ describe('layers — stableColorMapping wires the attribute + palette end-to-end
       iconMapping: { marker: { x: 0, y: 0, width: 32, height: 32 } },
       colorProperty: 'vtype',
     };
-    const on = new IconLayer({ ...iconOpts, stableColorMapping: true });
+    const on = new STTIconLayer({ ...iconOpts, stableColorMapping: true });
     on.setTiles([twoPointTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(on).getAttribute('sttCategoryIndex')).toBeTruthy();
     expect(on['bundle'].palette).toBeInstanceOf(PaletteUniforms);
     on.dispose();
 
-    const off = new IconLayer({ ...iconOpts });
+    const off = new STTIconLayer({ ...iconOpts });
     off.setTiles([twoPointTile(['cargo', 'tanker'], [0, 1])], ctx);
     expect(geomOf(off).getAttribute('sttCategoryIndex')).toBeUndefined();
     expect(off['bundle'].palette).toBeNull();
@@ -582,7 +588,7 @@ describe('layers — stableColorMapping wires the attribute + palette end-to-end
   });
 
   it('a constant colour mode never activates the palette even with the flag on', () => {
-    const layer = new ColumnLayer({
+    const layer = new STTColumnLayer({
       colorMode: CONST_COL,
       stableColorMapping: true,
     });

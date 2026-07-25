@@ -3,15 +3,25 @@
 // Copyright (c) @poopdeck.gl/layers contributors
 
 /**
- * DataFilterExtension — poopdeck-native "filter by any baked column".
+ * STTDataFilterExtension — poopdeck-native "filter by any baked column".
  *
  * A GPU range filter that shows/hides (and optionally soft-fades) features
  * whose value in ONE baked numeric column falls inside a `[min, max]` range.
  * It is the general-column sibling of {@link TimeFilterExtension} (which is a
- * hand-built DataFilterExtension specialized to the time window): both bind a
+ * hand-built `DataFilterExtension` specialized to the time window): both bind a
  * per-feature numeric attribute and gate the feature in the vertex shader.
  *
- * ## Why not just pass deck.gl's `@deck.gl/extensions` DataFilterExtension?
+ * ## Why the `STT` prefix (0.6.0)
+ * Because it is a DIFFERENT class with the SAME job: through 0.5.x it was
+ * exported as `DataFilterExtension`, which shadowed
+ * `@deck.gl/extensions`' export of that name in any app importing both — and
+ * this package imports BOTH itself (the heatmap / hexagon composites drive
+ * deck's stock extension over CPU rows, everything else drives this one over
+ * binary columns). Two classes, same name, different `getFilterValue`
+ * contract, is exactly the confusion the prefix removes. The unprefixed name
+ * remains a deprecated alias on the barrel until 0.8.0.
+ *
+ * ## Why not just pass deck.gl's `@deck.gl/extensions` `DataFilterExtension`?
  * Upstream sources its filter value by running a JS **function** accessor
  * (`getFilterValue`) over each data row. STT tiles are binary Arrow columns —
  * there is no per-row JS to run. So the LAYER binds a `filterValue` ATTRIBUTE
@@ -33,7 +43,7 @@
  * `filterSize` is fixed at **1** (a single scalar column). Multi-column
  * filtering (`filterSize` 2–4, a `vec4` range, the min-reduce), 64-bit
  * precision (`fp64`), and category-bitmask filtering (`categorySize`) are
- * deliberately deferred — see the {@link DataFilterExtensionOptions} docstring.
+ * deliberately deferred — see the {@link STTDataFilterExtensionOptions} docstring.
  * v1 compares `filterValue` in **f32**, so columns with huge magnitudes (raw
  * epoch-ms, say) lose precision; bake a pre-normalized / offset column for
  * those (unlike time, which {@link TimeFilterExtension} relativizes for you).
@@ -60,11 +70,11 @@ import { warnOnce } from '../lib/log.js';
 export type DataFilterRange = readonly [number, number];
 
 /**
- * Props for layers using {@link DataFilterExtension}. Mirrors the deck.gl
+ * Props for layers using {@link STTDataFilterExtension}. Mirrors the deck.gl
  * `DataFilterExtension` surface for `filterSize: 1` (a superset via the
  * layer-level `filterProperty` accessor-alias).
  */
-export type DataFilterExtensionProps<DataT = unknown> = {
+export type STTDataFilterExtensionProps<DataT = unknown> = {
   /**
    * Enable/disable the filter. When disabled every feature is rendered (the
    * filter is a no-op). Note the effective state is ALSO gated by whether a
@@ -133,7 +143,7 @@ layout(std140) uniform sttFilterUniforms {
 } sttFilter;
 `;
 
-/** Uniform payload set every draw() — see {@link DataFilterExtension.draw}. */
+/** Uniform payload set every draw() — see {@link STTDataFilterExtension.draw}. */
 type DataFilterUniformProps = {
   filterMin: number;
   filterMax: number;
@@ -165,7 +175,7 @@ export const dataFilterUniforms = {
   },
 };
 
-const defaultProps: DefaultProps<DataFilterExtensionProps> = {
+const defaultProps: DefaultProps<STTDataFilterExtensionProps> = {
   filterEnabled: true,
   // Permissive {type:'object'} descriptor: these hold a [min,max] tuple OR null,
   // which the 'array' validator would reject (null) in deck's debug mode.
@@ -183,7 +193,7 @@ const defaultProps: DefaultProps<DataFilterExtensionProps> = {
 };
 
 /** Construction-time options, mirroring deck's (v1 supports `filterSize: 1`). */
-export interface DataFilterExtensionOptions {
+export interface STTDataFilterExtensionOptions {
   /**
    * Number of scalar columns to filter by. **v1 supports `1` only.** Multi-size
    * filtering (2–4) — a `vec4` range with the classic per-component min-reduce,
@@ -195,7 +205,7 @@ export interface DataFilterExtensionOptions {
   filterSize?: 1;
 }
 
-const defaultOptions: Required<DataFilterExtensionOptions> = {
+const defaultOptions: Required<STTDataFilterExtensionOptions> = {
   filterSize: 1,
 };
 
@@ -209,11 +219,11 @@ const defaultOptions: Required<DataFilterExtensionOptions> = {
  * When no `filterProperty` is set the layer does not install it at all → zero
  * attribute, zero uniform, zero shader change.
  */
-export class DataFilterExtension extends LayerExtension<
-  Required<DataFilterExtensionOptions>
+export class STTDataFilterExtension extends LayerExtension<
+  Required<STTDataFilterExtensionOptions>
 > {
   static defaultProps = defaultProps;
-  static extensionName = 'DataFilterExtension';
+  static extensionName = 'STTDataFilterExtension';
 
   /**
    * Memoized shader-injection object. deck.gl calls `getShaders()` per sublayer
@@ -228,14 +238,14 @@ export class DataFilterExtension extends LayerExtension<
 
   // `filterSize` flows to super() so LayerExtension.equals() (which compares
   // this.opts) distinguishes instances — same pattern as upstream
-  // DataFilterExtension and our TimeFilterExtension `mode`. v1 only supports 1,
+  // `DataFilterExtension` and our TimeFilterExtension `mode`. v1 only supports 1,
   // so we CLAMP it into the opts up front (never mutating this.opts afterward,
   // which keeps the constructor agnostic to LayerExtension's internals).
-  constructor(options: DataFilterExtensionOptions = {}) {
+  constructor(options: STTDataFilterExtensionOptions = {}) {
     if (options.filterSize !== undefined && options.filterSize !== 1) {
       warnOnce(
-        'DataFilterExtension:filterSize',
-        `[DataFilterExtension] filterSize=${options.filterSize} is not supported ` +
+        'STTDataFilterExtension:filterSize',
+        `[STTDataFilterExtension] filterSize=${options.filterSize} is not supported ` +
           'in v1; only a single numeric column (filterSize: 1) filters. Falling ' +
           'back to 1.',
       );
@@ -244,8 +254,8 @@ export class DataFilterExtension extends LayerExtension<
   }
 
   getShaders(
-    this: Layer<DataFilterExtensionProps>,
-    extension: DataFilterExtension,
+    this: Layer<STTDataFilterExtensionProps>,
+    extension: STTDataFilterExtension,
   ) {
     if (extension.cachedShaders) return extension.cachedShaders;
     const shaders = {
@@ -262,7 +272,7 @@ export class DataFilterExtension extends LayerExtension<
           if (sttFilter.enabled > 0.5) {
             if (sttFilter.useSoftMargin > 0.5) {
               // Soft fade. smoothstep is undefined when edge0 >= edge1, so —
-              // exactly like upstream DataFilterExtension — fall back to a hard
+              // exactly like deck's own upstream DataFilterExtension — fall back to a hard
               // step on the edge where filterSoftRange is truncated by
               // filterRange. step(soft, hard) picks step vs smoothstep via mix.
               float leftInRange = mix(
@@ -320,9 +330,9 @@ export class DataFilterExtension extends LayerExtension<
   }
 
   initializeState(
-    this: Layer<DataFilterExtensionProps>,
+    this: Layer<STTDataFilterExtensionProps>,
     _context: LayerContext,
-    _extension: DataFilterExtension,
+    _extension: STTDataFilterExtension,
   ): void {
     const attributeManager = this.getAttributeManager();
     if (!attributeManager) return;
@@ -330,7 +340,7 @@ export class DataFilterExtension extends LayerExtension<
     // stepMode to 'instance'). 'dynamic' resolves to 'instance' on instanced
     // models and 'vertex' on non-instanced ones, so one extension serves every
     // layer type — the same registration TimeFilterExtension / upstream
-    // DataFilterExtension's filterValues use.
+    // `DataFilterExtension`'s filterValues use.
     attributeManager.add({
       filterValue: {
         size: 1,
@@ -343,9 +353,9 @@ export class DataFilterExtension extends LayerExtension<
   }
 
   draw(
-    this: Layer<DataFilterExtensionProps>,
+    this: Layer<STTDataFilterExtensionProps>,
     _params: unknown,
-    _extension: DataFilterExtension,
+    _extension: STTDataFilterExtension,
   ): void {
     const {
       filterEnabled = true,

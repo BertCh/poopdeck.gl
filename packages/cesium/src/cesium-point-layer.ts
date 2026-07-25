@@ -41,7 +41,7 @@ import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import { buildPointEntries } from './lib/points.js';
 
-export interface CesiumPointLayerOptions {
+export interface STTPointLayerOptions {
   id?: string;
   /** Time-filter mode. @default 'window' */
   mode?: TimeFilterMode;
@@ -79,17 +79,17 @@ interface PointEntry {
 // in place would bypass that dirty check and freeze the animation.
 const SCRATCH_COLOR = new Color();
 
-export class CesiumPointLayer implements SttRenderNode {
+export class STTPointLayer implements SttRenderNode {
   readonly id: string;
   private readonly scene: Scene;
   private readonly collection: PointPrimitiveCollection;
   private readonly mode: TimeFilterMode;
   private readonly params: TimeFilterParams;
-  private readonly opts: CesiumPointLayerOptions;
+  private readonly opts: STTPointLayerOptions;
   private timeOrigin = 0;
   private entries: PointEntry[] = [];
 
-  constructor(scene: Scene, options: CesiumPointLayerOptions = {}) {
+  constructor(scene: Scene, options: STTPointLayerOptions = {}) {
     this.id = options.id ?? 'stt-cesium-points';
     this.scene = scene;
     this.opts = options;

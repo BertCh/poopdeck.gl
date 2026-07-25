@@ -8,7 +8,7 @@
  * LineString, so both `path` and `line` kinds land here). Geometry comes from
  * the pure `buildPathPolylines` (kernel WGS84 ECEF projection, geometry z
  * honoured — satellite tracks fly at altitude); per-frame time-filter colour
- * animation + picking come from {@link BatchedPolylineLayer}.
+ * animation + picking come from {@link STTBatchedPolylineLayer}.
  *
  * Deviation from deck (documented in the backend capability matrix): colour is
  * one value per feature — Cesium's batch-table animation path has no per-vertex
@@ -21,13 +21,13 @@ import type { Tile } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import {
-  BatchedPolylineLayer,
-  type BatchedPolylineOptions,
+  STTBatchedPolylineLayer,
+  type STTBatchedPolylineOptions,
 } from './batched-polyline-layer.js';
 import { buildPathPolylines } from './lib/polylines.js';
 import type { FeatureColorMode } from './lib/feature-color.js';
 
-export interface CesiumPathLayerOptions extends BatchedPolylineOptions {
+export interface STTPathLayerOptions extends STTBatchedPolylineOptions {
   id?: string;
   /** Per-feature colour (constant / categorical / ramp). @default opaque grey */
   color?: FeatureColorMode;
@@ -35,15 +35,15 @@ export interface CesiumPathLayerOptions extends BatchedPolylineOptions {
   zLift?: number;
 }
 
-export class CesiumPathLayer implements SttRenderNode {
+export class STTPathLayer implements SttRenderNode {
   readonly id: string;
-  private readonly batch: BatchedPolylineLayer;
-  private readonly opts: CesiumPathLayerOptions;
+  private readonly batch: STTBatchedPolylineLayer;
+  private readonly opts: STTPathLayerOptions;
 
-  constructor(scene: Scene, options: CesiumPathLayerOptions = {}) {
+  constructor(scene: Scene, options: STTPathLayerOptions = {}) {
     this.id = options.id ?? 'stt-cesium-paths';
     this.opts = options;
-    this.batch = new BatchedPolylineLayer(scene, this.id, options);
+    this.batch = new STTBatchedPolylineLayer(scene, this.id, options);
   }
 
   /** (Re)build polylines from decoded tiles (replace-all). */

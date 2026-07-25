@@ -3,15 +3,15 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `OdLineLayer` — the Three port of deck's `AnimatedLineLayer` (WINDOW mode):
+ * `STTOdLineLayer` — the Three port of deck's `AnimatedLineLayer` (WINDOW mode):
  * straight origin→destination flow lines. Each LineString feature collapses to a
  * SINGLE segment from its FIRST vertex (source) to its LAST vertex (target);
  * intermediate vertices are dropped — an OD flow has only two ends. The segment
  * rides the shared {@link createWideLineMaterial} ribbon (screen-pixel width,
  * window-mode time filter), so this is the OD-pair sibling of {@link
- * WideLineLayer} differing only in the buffer builder.
+ * STTWideLineLayer} differing only in the buffer builder.
  *
- * It mirrors the `WideLineLayer.setTiles` GPU flow but feeds {@link
+ * It mirrors the `STTWideLineLayer.setTiles` GPU flow but feeds {@link
  * buildOdLineSegmentBuffers} (one quad instance per OD pair) instead of the
  * per-segment builder. RTC: positions relative to a shared `origin`, written to
  * `object.position`.
@@ -58,7 +58,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface OdLineLayerOptions extends ThreeTimeWindowOptions {
+export interface STTOdLineLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Per-feature color (categorical / ramp / constant). */
   colorMode: LineColorMode;
@@ -105,14 +105,14 @@ export interface OdLineLayerOptions extends ThreeTimeWindowOptions {
   // `fadeOut` aliases come from ThreeTimeWindowOptions.
 }
 
-export class OdLineLayer extends BaseSttLayer implements SttIdPickable {
+export class STTOdLineLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: WideLineMaterialBundle | null = null;
   private paletteTexture: DataTexture | null = null;
   private viewport: [number, number] = [1280, 720];
-  protected readonly opts: OdLineLayerOptions;
+  protected readonly opts: STTOdLineLayerOptions;
 
   // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
   private provenance = new InstanceProvenance();
@@ -121,7 +121,7 @@ export class OdLineLayer extends BaseSttLayer implements SttIdPickable {
   private idColorsPresent = false;
   private currentTimeMs = 0;
 
-  constructor(options: OdLineLayerOptions) {
+  constructor(options: STTOdLineLayerOptions) {
     super();
     this.opts = options;
     this.id = options.id ?? 'od-line';

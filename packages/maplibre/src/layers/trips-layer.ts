@@ -49,7 +49,7 @@
  * so there are no wrap ≠ 0 world-copy draws to skip.
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { synthesizeVertexTimes } from '@poopdeck.gl/core/trips';
 import {
   GeometryType,

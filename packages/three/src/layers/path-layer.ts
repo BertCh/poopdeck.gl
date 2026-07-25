@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `StaticPathLayer` — flat ground-decal polylines, the Three port of the deck AV
+ * `STTStaticPathLayer` — flat ground-decal polylines, the Three port of the deck AV
  * `map_line` rendering (lane dividers, boundaries, centerlines). Each LineString
  * feature is split into `LineSegments`, projected to ENU at a small `zLift`, and
  * coloured by a categorical property (`map_layer`) through a colour map. Static:
@@ -22,7 +22,7 @@ import { GeometryType } from '@poopdeck.gl/core';
 import { BaseSttLayer, type SttLayerContext } from './layer.js';
 import { resolveCategoryColor, type RGBA } from '../lib/color.js';
 
-export interface StaticPathLayerOptions {
+export interface STTStaticPathLayerOptions {
   id?: string;
   /** Categorical property selecting the colour (e.g. `map_layer`). */
   colorProperty?: string;
@@ -35,14 +35,14 @@ export interface StaticPathLayerOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 130, 150, 220];
 
-export class StaticPathLayer extends BaseSttLayer {
+export class STTStaticPathLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Group();
   private lines: LineSegments;
 
-  private readonly opts: Required<Omit<StaticPathLayerOptions, 'id'>>;
+  private readonly opts: Required<Omit<STTStaticPathLayerOptions, 'id'>>;
 
-  constructor(options: StaticPathLayerOptions = {}) {
+  constructor(options: STTStaticPathLayerOptions = {}) {
     super();
     this.id = options.id ?? 'map-line';
     this.object.name = this.id;

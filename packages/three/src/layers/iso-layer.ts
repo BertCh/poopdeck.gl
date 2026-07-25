@@ -43,7 +43,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface IsoLayerOptions extends ThreeTimeWindowOptions {
+export interface STTIsoLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Categorical property selecting the contour colour. @default 'density_band' */
   colorProperty?: string;
@@ -63,7 +63,7 @@ export interface IsoLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 200, 255, 220];
 
-export class IsoLayer extends BaseSttLayer implements SttIdPickable {
+export class STTIsoLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Group();
   private lines: LineSegments;
@@ -83,12 +83,12 @@ export class IsoLayer extends BaseSttLayer implements SttIdPickable {
 
   private readonly opts: Required<
     Omit<
-      IsoLayerOptions,
+      STTIsoLayerOptions,
       'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'
     >
   >;
 
-  constructor(options: IsoLayerOptions = {}) {
+  constructor(options: STTIsoLayerOptions = {}) {
     super();
     this.id = options.id ?? 'iso';
     this.object.name = this.id;

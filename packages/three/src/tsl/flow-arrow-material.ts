@@ -6,7 +6,7 @@
  * `FlowArrowMaterial` — instanced **tapered half-arrows**, the Three port of
  * deck's `FlowLinesLayer` (itself a port of flowmap.gl's `FlowLinesLayer`). One
  * instance = one origin→destination flow; its on-screen WIDTH tracks the trip
- * volume at the playhead (the {@link FlowmapLayer} computes `widthScale·√flow`
+ * volume at the playhead (the {@link STTFlowmapLayer} computes `widthScale·√flow`
  * per instance on the CPU and re-expands the width buffer as the slider scrubs).
  *
  * Each instance draws the {@link makeArrowTemplateGeometry} 9-vertex template

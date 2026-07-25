@@ -4,7 +4,7 @@
 
 /**
  * `ColumnMaterial` — lit extruded prisms (3D bars), the Three port of deck's
- * `AnimatedColumnLayer` over a `ColumnLayer` sublayer. Each instance is a unit
+ * `AnimatedColumnLayer` over a `STTColumnLayer` sublayer. Each instance is a unit
  * prism (see `geometry/column-prism.ts`) scaled & oriented to the local ground
  * frame by three per-instance basis vectors, SELF-LIT by a baked fixed-sun Lambert
  * term (unlit `MeshBasicNodeMaterial`, so no scene light is required — consistent

@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `EgoLayer` — the ego vehicle: its full trajectory as a static trail line plus a
+ * `STTEgoLayer` — the ego vehicle: its full trajectory as a static trail line plus a
  * marker box interpolated to the playhead. Also the source of the follow-camera
  * target via {@link getEgoPose}. The ego archive is point-per-frame snapshots
  * (`lon,lat,alt`, optional `heading`); they are pooled into one sorted track and
@@ -34,7 +34,7 @@ export interface EgoPose {
   heading: number;
 }
 
-export interface EgoLayerOptions {
+export interface STTEgoLayerOptions {
   id?: string;
   headingProperty?: string;
   /** Marker box dims (metres). @default [4.5, 2, 1.5] */
@@ -47,7 +47,7 @@ export interface EgoLayerOptions {
 const DEFAULT_TRAIL: RGBA = [80, 200, 255, 160];
 const DEFAULT_MARKER: RGBA = [120, 230, 255, 255];
 
-export class EgoLayer extends BaseSttLayer implements SttPickable {
+export class STTEgoLayer extends BaseSttLayer implements SttPickable {
   readonly id: string;
   readonly object = new Group();
 
@@ -63,9 +63,9 @@ export class EgoLayer extends BaseSttLayer implements SttPickable {
   private marker: LineSegments;
   private markerBuf = new Float32Array(FLOATS_PER_BOX);
 
-  private readonly opts: Required<Omit<EgoLayerOptions, 'id'>>;
+  private readonly opts: Required<Omit<STTEgoLayerOptions, 'id'>>;
 
-  constructor(options: EgoLayerOptions = {}) {
+  constructor(options: STTEgoLayerOptions = {}) {
     super();
     this.id = options.id ?? 'ego';
     this.object.name = this.id;

@@ -5,7 +5,7 @@
 /**
  * Pure (Three-free) assembly of instanced **flow-corridor** segment buffers — a
  * static street/route network whose per-segment ridership is a TIME SERIES, not a
- * single scalar. The Three port of deck's `FlowCorridorLayer`.
+ * single scalar. The Three port of deck's `STTFlowCorridorLayer`.
  *
  * A flow-corridor tile stores its geometry ONCE and carries a per-vertex ×
  * per-time-bucket value matrix (`BinaryFeatures.vertexValueMatrix`, flattened
@@ -262,7 +262,7 @@ export function buildFlowCorridorBuffers(
 
 /**
  * Continuous bucket position in `[0, numBuckets - 1]` for an absolute time.
- * Mirrors deck `FlowCorridorLayer.posFromBinary`, clamped to the axis ends. The
+ * Mirrors deck `STTFlowCorridorLayer.posFromBinary`, clamped to the axis ends. The
  * material samples the value texture at `(pos + 0.5) / numBuckets` so its linear
  * filtering performs the two-bucket lerp on the GPU.
  */

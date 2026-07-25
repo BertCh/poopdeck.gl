@@ -19,8 +19,8 @@ import {
 } from '../src/tsl/point-material';
 import { createIconMaterial } from '../src/tsl/icon-material';
 import { GlideUniforms } from '../src/tsl/motion-glide';
-import { PointCloudLayer } from '../src/layers/point-cloud-layer';
-import { IconLayer } from '../src/layers/icon-layer';
+import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTIconLayer } from '../src/layers/icon-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile } from './_support/features';
 
@@ -95,9 +95,12 @@ describe('icon material — glide node graph builds', () => {
   });
 });
 
-describe('PointCloudLayer — glide render path', () => {
+describe('STTPointCloudLayer — glide render path', () => {
   it('builds one glided instance per entity with the row locators', () => {
-    const layer = new PointCloudLayer({ interpolate: true, idProperty: 'ac' });
+    const layer = new STTPointCloudLayer({
+      interpolate: true,
+      idProperty: 'ac',
+    });
     layer.setTiles([movingTile('ac', 'points')], ctx);
 
     expect(layer.object.visible).toBe(true);
@@ -118,7 +121,7 @@ describe('PointCloudLayer — glide render path', () => {
   });
 
   it('stays on the static per-sample path when interpolate is off', () => {
-    const layer = new PointCloudLayer({ idProperty: 'ac' }); // interpolate defaults off
+    const layer = new STTPointCloudLayer({ idProperty: 'ac' }); // interpolate defaults off
     layer.setTiles([movingTile('ac', 'points')], ctx);
     const geom = layer.object.geometry as InstancedBufferGeometry;
     expect(geom.instanceCount).toBe(4); // one instance per sample
@@ -128,7 +131,7 @@ describe('PointCloudLayer — glide render path', () => {
   });
 
   it('degrades to the static path under reduced motion', () => {
-    const layer = new PointCloudLayer({
+    const layer = new STTPointCloudLayer({
       interpolate: true,
       idProperty: 'ac',
       reducedMotion: true,
@@ -141,7 +144,7 @@ describe('PointCloudLayer — glide render path', () => {
   });
 });
 
-describe('IconLayer — glide render path', () => {
+describe('STTIconLayer — glide render path', () => {
   const iconOpts = {
     atlas: new Texture(),
     atlasWidth: 64,
@@ -150,7 +153,7 @@ describe('IconLayer — glide render path', () => {
   };
 
   it('glides position + heading with the entity-constant icon geometry', () => {
-    const layer = new IconLayer({
+    const layer = new STTIconLayer({
       ...iconOpts,
       interpolate: true,
       idProperty: 'mmsi',
@@ -182,7 +185,7 @@ describe('IconLayer — glide render path', () => {
   });
 
   it('stays on the static path when interpolate is off', () => {
-    const layer = new IconLayer({ ...iconOpts, angleProperty: 'cog' });
+    const layer = new STTIconLayer({ ...iconOpts, angleProperty: 'cog' });
     layer.setTiles(
       [
         movingTile('mmsi', 'icons', {

@@ -3,13 +3,13 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `TripsLayer` — animated trips/trajectories with a trailing fade, the Three port
+ * `STTTripsLayer` — animated trips/trajectories with a trailing fade, the Three port
  * of deck's `AnimatedTripsLayer` (trail mode) over the {@link createWideLineMaterial}
  * ribbon. Each LineString segment is one quad instance the GPU expands to `widthPx`
  * screen pixels; per-vertex trail times (`sttTimeA`/`sttTimeB`) fade each vertex
  * behind the playhead over `[cur - trailLength, cur]`, with optional head→tail fade.
  *
- * This is a sibling of {@link WideLineLayer} pinned to `mode: 'trail'`, using
+ * This is a sibling of {@link STTWideLineLayer} pinned to `mode: 'trail'`, using
  * {@link buildTripsBuffers} (real per-vertex trail times) instead of
  * {@link buildLineSegmentBuffers} (which leaves `timeA`/`timeB` at feature start).
  *
@@ -42,7 +42,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface TripsLayerOptions {
+export interface STTTripsLayerOptions {
   id?: string;
   /** Per-feature colour: categorical | ramp | constant. */
   colorMode: TripsColorMode;
@@ -78,13 +78,13 @@ export interface TripsLayerOptions {
   trailFade?: number;
 }
 
-export class TripsLayer extends BaseSttLayer implements SttIdPickable {
+export class STTTripsLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: WideLineMaterialBundle | null = null;
   private viewport: [number, number] = [1280, 720];
-  protected readonly opts: TripsLayerOptions;
+  protected readonly opts: STTTripsLayerOptions;
 
   // ── GPU id-buffer pick identity (merged instance i → (tileKey, featureIndex)) ──
   private provenance = new InstanceProvenance();
@@ -93,7 +93,7 @@ export class TripsLayer extends BaseSttLayer implements SttIdPickable {
   private idColorsPresent = false;
   private currentTimeMs = 0;
 
-  constructor(options: TripsLayerOptions) {
+  constructor(options: STTTripsLayerOptions) {
     super();
     this.opts = options;
     this.id = options.id ?? 'trips';

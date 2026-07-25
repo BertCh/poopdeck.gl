@@ -4,13 +4,13 @@
 
 /**
  * Pure (Three-free) assembly of a merged, indexed quad mesh for the Quadbin
- * summary tier — the geometry-side port of deck's `QuadbinSummaryLayer`. Each
+ * summary tier — the geometry-side port of deck's `STTQuadbinSummaryLayer`. Each
  * summary cell's u64 id (`featureIds64`) is decoded to its lon/lat mercator
  * quad ({@link cellBoundsFromTile}), the four corners are projected (RTC,
  * relative to a shared `origin`), and the cell is coloured by a ramp over a
  * numeric `weightProperty` (default `'count'`) bucketed across `colorRange`.
  *
- * This is the unit-tested half; {@link QuadbinSummaryLayer} is the thin GPU
+ * This is the unit-tested half; {@link STTQuadbinSummaryLayer} is the thin GPU
  * wrapper. We bake a flat indexed `TRIANGLES` mesh (4 verts + 6 indices per
  * cell) rather than instancing — cells are few (summary tiles are row-light)
  * and a single merged BufferGeometry is the simplest faithful render.

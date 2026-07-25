@@ -40,16 +40,24 @@ window.CESIUM_BASE_URL =
 
 ## Exports
 
+> **Renamed in 0.6.0.** The layer classes were `Cesium*Layer` through 0.5.x and
+> are now `STT*Layer` — the same prefix `@poopdeck.gl/maplibre` and
+> `@poopdeck.gl/three` use, so one layer kind has one spelling on every backend
+> and the import path (not a word inside the symbol) says which renderer you
+> are on. The old names remain `@deprecated` aliases until 0.8.0. The camera and
+> clock bridges (`viewStateToCesiumView`, `attachCesiumClock`, `CesiumView`) are
+> unchanged — they are named after CesiumJS concepts, not STT layer kinds.
+
 | Export                                                                                       | Kind                | Description                                                                                                                                                            |
 | -------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CesiumPointLayer`                                                                           | class               | The `point` `SttRenderNode` — builds a `PointPrimitiveCollection` from decoded tiles and drives per-point alpha off the shared time-filter oracle                      |
-| `CesiumPathLayer`                                                                            | class               | Animated LineStrings (`path` **and** OD `line` — an OD line is a 2-vertex LineString); batched `Primitive` + per-instance colour animation                             |
-| `CesiumArcLayer`                                                                             | class               | OD flow arcs — endpoints via the kernel's `deriveSourceTargetPositions`, swept into raised great-circle polylines (same parametrization as three's globe arc material) |
-| `CesiumTripsLayer`                                                                           | class               | Vehicle trails — per-frame CPU trail trim (`core/trips` `trimTrail`) into a `PolylineCollection`, arc-length tail fade material                                        |
-| `CesiumTripHeadsLayer`                                                                       | class               | Moving head-dots — per-frame `sampleHead` interpolation (`core/trips`) onto `PointPrimitive`s                                                                          |
-| `BatchedPolylineLayer`                                                                       | class               | The shared batched-`Primitive` machinery behind the path/arc layers (advanced use)                                                                                     |
+| `STTPointLayer`                                                                              | class               | The `point` `SttRenderNode` — builds a `PointPrimitiveCollection` from decoded tiles and drives per-point alpha off the shared time-filter oracle                      |
+| `STTPathLayer`                                                                               | class               | Animated LineStrings (`path` **and** OD `line` — an OD line is a 2-vertex LineString); batched `Primitive` + per-instance colour animation                             |
+| `STTArcLayer`                                                                                | class               | OD flow arcs — endpoints via the kernel's `deriveSourceTargetPositions`, swept into raised great-circle polylines (same parametrization as three's globe arc material) |
+| `STTTripsLayer`                                                                              | class               | Vehicle trails — per-frame CPU trail trim (`core/trips` `trimTrail`) into a `PolylineCollection`, arc-length tail fade material                                        |
+| `STTTripHeadsLayer`                                                                          | class               | Moving head-dots — per-frame `sampleHead` interpolation (`core/trips`) onto `PointPrimitive`s                                                                          |
+| `STTBatchedPolylineLayer`                                                                    | class               | The shared batched-`Primitive` machinery behind the path/arc layers (advanced use)                                                                                     |
 | `buildPathPolylines` / `buildArcPolylines` / `sampleGreatCircleArc` / `lineStringTimeOrigin` | functions           | The pure (Cesium-free, unit-tested) geometry builders behind the polyline layers (`lineStringTimeOrigin` = their shared scene-wide time origin)                        |
-| `buildPointEntries` / `collectPointLayers`                                                   | functions           | The pure (Cesium-free, unit-tested) point builders behind `CesiumPointLayer` — CPU assembly of per-feature ECEF points                                                 |
+| `buildPointEntries` / `collectPointLayers`                                                   | functions           | The pure (Cesium-free, unit-tested) point builders behind `STTPointLayer` — CPU assembly of per-feature ECEF points                                                    |
 | `featureColor`                                                                               | function            | Per-feature constant/categorical/ramp colour dispatch over `core/style` scalar lookups                                                                                 |
 | `cesiumBackend`                                                                              | `BackendDescriptor` | This backend's declared capabilities / layer-kind support, against `@poopdeck.gl/core/capabilities`                                                                    |
 | `viewStateToCesiumView`                                                                      | function            | Pure `ViewState` → Cesium camera-parameter math (no Cesium runtime import)                                                                                             |
@@ -66,12 +74,12 @@ class has the same surface: `setTiles(tiles)`, `setTime(absoluteMs)`,
 
 ### Pure point builders
 
-`CesiumPointLayer` is a thin Cesium shell over a pure CPU core, exactly like the
+`STTPointLayer` is a thin Cesium shell over a pure CPU core, exactly like the
 polyline layers. `buildPointEntries` does the per-feature ECEF assembly behind
 `setTiles`; `collectPointLayers` gathers the non-empty Point layers it walks.
 Both are Cesium-free and unit-tested. `lineStringTimeOrigin` (exported alongside
 the polyline builders) returns the first animatable LineString layer's
-`timeOffset` — the scene-wide origin `CesiumTripsLayer` shares.
+`timeOffset` — the scene-wide origin `STTTripsLayer` shares.
 
 ```ts
 // Every non-empty Point layer across the tiles, in tile/layer order.
@@ -81,7 +89,7 @@ function collectPointLayers(tiles: Tile[]): BinaryFeatures[];
 // timeOffset. Empty build ({ points: [], timeOrigin: 0 }) when no Point features.
 function buildPointEntries(tiles: Tile[], opts?: PointBuildOptions): PointBuild;
 
-// First animatable LineString layer's timeOffset (0 when none) — shared by CesiumTripsLayer.
+// First animatable LineString layer's timeOffset (0 when none) — shared by STTTripsLayer.
 function lineStringTimeOrigin(tiles: Tile[]): number;
 
 interface PointBuildOptions {
@@ -113,7 +121,7 @@ interface FeaturePoint {
 ```
 
 These mirror the polyline builders (`FeaturePolyline` / `PolylineBuild`).
-Factoring them out is a pure refactor — `CesiumPointLayer` and `CesiumTripsLayer`
+Factoring them out is a pure refactor — `STTPointLayer` and `STTTripsLayer`
 options and behaviour are unchanged.
 
 ## Quick start
@@ -123,7 +131,7 @@ import { Viewer } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { STTArchive, SpatiotemporalTileset } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
-import { CesiumPointLayer, applyViewStateToCamera } from '@poopdeck.gl/cesium';
+import { STTPointLayer, applyViewStateToCamera } from '@poopdeck.gl/cesium';
 
 window.CESIUM_BASE_URL =
   'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
@@ -134,7 +142,7 @@ const viewer = new Viewer(document.getElementById('cesiumContainer')!, {
 });
 viewer.clock.shouldAnimate = false; // Cesium's own clock must not compete with the STT playhead
 
-const layer = new CesiumPointLayer(viewer.scene, {
+const layer = new STTPointLayer(viewer.scene, {
   id: 'earthquakes',
   mode: 'window',
   timeFilter: { windowHalf: 12 * 60 * 60 * 1000 }, // 12h half-window
@@ -195,18 +203,18 @@ detach();
 `attachCesiumClock` never advances the clock itself — it is read-only, so it
 cannot double-drive a controller that already owns its own `requestAnimationFrame`.
 
-## `CesiumPointLayer`
+## `STTPointLayer`
 
 ### Constructor
 
 ```ts
-new CesiumPointLayer(scene: Scene, options?: CesiumPointLayerOptions)
+new STTPointLayer(scene: Scene, options?: STTPointLayerOptions)
 ```
 
 Adds a `PointPrimitiveCollection` to `scene.primitives` immediately; no tiles
 are drawn until `setTiles` is called.
 
-### Options (`CesiumPointLayerOptions`)
+### Options (`STTPointLayerOptions`)
 
 | Field                 | Type                      | Default                | Description                                                                                                                                         |
 | --------------------- | ------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -227,24 +235,24 @@ are drawn until `setTiles` is called.
 | `pick(cssX: number, cssY: number)` | `scene.pick()` at the given CSS pixel, filtered to this layer's own primitives, returning a shared `SttPickResult` (`object` from `getFeatureProperties`, `index`, `layerId`, `coordinate: [lon, lat]`, `screen`) or `null` on a miss                                |
 | `dispose()`                        | Removes the point collection from `scene.primitives` and drops all entries                                                                                                                                                                                           |
 
-`CesiumPointLayer` implements the shared `SttRenderNode` interface (`id`,
+`STTPointLayer` implements the shared `SttRenderNode` interface (`id`,
 `setTime`, `pick`, `dispose`) but does not implement the optional
 `setViewState` hook — camera control goes through the camera bridge
 functions below, not through the layer.
 
 ## The movement catalog
 
-The four other layers share `CesiumPointLayer`'s lifecycle (`setTiles` →
+The four other layers share `STTPointLayer`'s lifecycle (`setTiles` →
 `setTime` per drawn frame → `pick` → `dispose`) and its scene-wide
 `timeOrigin` rebasing. All colour options take a `FeatureColorMode` —
 `{ type: 'constant', color }`, `{ type: 'categorical', property,
 colorMapping?, fallback }`, or `{ type: 'ramp', property, domain, range,
 fallback }` — resolved per feature through `core/style`.
 
-### `CesiumPathLayer` (`path` + `line`)
+### `STTPathLayer` (`path` + `line`)
 
 ```ts
-new CesiumPathLayer(scene, { id?, mode?, timeFilter?, color?, width?, zLift?, arcType? })
+new STTPathLayer(scene, { id?, mode?, timeFilter?, color?, width?, zLift?, arcType? })
 ```
 
 One batched `Primitive` of `PolylineGeometry` instances with per-instance
@@ -256,10 +264,10 @@ vertex-to-vertex interpolation; use `'geodesic'` for sparse ground-hugging
 lines. An OD `line` dataset needs no special handling — each 2-vertex
 LineString renders as a (geodesic-capable) polyline.
 
-### `CesiumArcLayer` (`arc`)
+### `STTArcLayer` (`arc`)
 
 ```ts
-new CesiumArcLayer(scene, { id?, mode?, timeFilter?, color?, height?, samples?, width?, zLift? })
+new STTArcLayer(scene, { id?, mode?, timeFilter?, color?, height?, samples?, width?, zLift? })
 ```
 
 Each feature collapses to source/target endpoints
@@ -270,10 +278,10 @@ radial parabolic lift `height · chord · 4·t·(1−t)` — the SAME parametriz
 as three's globe arc material, so a backend toggle shows the same arc.
 `height: 0` hugs the great circle.
 
-### `CesiumTripsLayer` (`trips`)
+### `STTTripsLayer` (`trips`)
 
 ```ts
-new CesiumTripsLayer(scene, { id?, trailLength?, color?, width?, fadeTrail? })
+new STTTripsLayer(scene, { id?, trailLength?, color?, width?, fadeTrail? })
 ```
 
 Cesium's stock polyline has no per-vertex shader hook, so the trail is
@@ -286,10 +294,10 @@ per-vertex time fade. Trips sharing a colour share one material instance, so
 the collection batches by colour. Per-frame cost tracks the number of ACTIVE
 trips.
 
-### `CesiumTripHeadsLayer` (`tripHeads`)
+### `STTTripHeadsLayer` (`tripHeads`)
 
 ```ts
-new CesiumTripHeadsLayer(scene, { id?, color?, pixelSize? })
+new STTTripHeadsLayer(scene, { id?, color?, pixelSize? })
 ```
 
 One `PointPrimitive` per trip, `show`-toggled; every drawn frame the head
@@ -430,13 +438,13 @@ hand-copied fork. `nameMap` rewrites the canonical identifiers
 `wakeLength`, `trailLength`, `trailFade`, `vertexTime`) to whatever a host
 shader's variables are actually called.
 
-This is ready-made for a future GPU-`Appearance` path — `CesiumPointLayer`
+This is ready-made for a future GPU-`Appearance` path — `STTPointLayer`
 does not use it yet; it recomputes and writes alpha per point on the CPU in
 `setTime` (see [Limitations](#limitations)).
 
 ## How it works
 
-1. The `CesiumPointLayer` constructor adds an (initially empty)
+1. The `STTPointLayer` constructor adds an (initially empty)
    `PointPrimitiveCollection` to `scene.primitives`. There's no
    archive-owning base class — the app constructs its own `STTArchive` and
    `SpatiotemporalTileset` (wired via `makeTilesetCallbacks` from
@@ -480,7 +488,7 @@ does not use it yet; it recomputes and writes alpha per point on the CPU in
   arc-length-based rather than per-vertex-time-based.
 - **No shared archive/tileset-owning base class.** Unlike MapLibre's
   `STTBaseLayer` (which owns `onAdd`/streaming/buffer-change forwarding), the
-  Cesium package gives you the primitives (`CesiumPointLayer`,
+  Cesium package gives you the primitives (`STTPointLayer`,
   `attachCesiumClock`, the camera bridge) and expects the host app to wire
   `STTArchive` + `SpatiotemporalTileset` + `makeTilesetCallbacks` itself, as
   shown in [Quick start](#quick-start).

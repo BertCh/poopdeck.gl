@@ -4,13 +4,13 @@
 
 /**
  * Pure (Three-free) assembly of a merged, indexed hexagon mesh for the H3
- * summary tier — the geometry-side port of deck's `H3SummaryLayer`. Each summary
+ * summary tier — the geometry-side port of deck's `STTH3SummaryLayer`. Each summary
  * cell's u64 id (`featureIds64`) is decoded to its lon/lat boundary ring
  * ({@link cellBoundaryFromTile}), the ring vertices are projected (RTC, relative
  * to a shared `origin`), and the cell is coloured by a ramp over a numeric
  * `weightProperty` (default `'count'`) bucketed across `colorRange`.
  *
- * This is the unit-tested half; {@link H3SummaryLayer} is the thin GPU wrapper.
+ * This is the unit-tested half; {@link STTH3SummaryLayer} is the thin GPU wrapper.
  * We bake a flat indexed `TRIANGLES` mesh (one triangle FAN per cell) rather
  * than instancing — cells are few (summary tiles are row-light) and a single
  * merged BufferGeometry is the simplest faithful render. An H3 boundary is 5

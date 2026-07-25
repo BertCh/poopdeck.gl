@@ -3,8 +3,8 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `H3SummaryLayer` — render the server-aggregated summary tier as Uber H3
- * hexagons. The Three port of deck's `H3SummaryLayer`: each summary cell's u64
+ * `STTH3SummaryLayer` — render the server-aggregated summary tier as Uber H3
+ * hexagons. The Three port of deck's `STTH3SummaryLayer`: each summary cell's u64
  * id (`featureIds64`) is decoded to its lon/lat boundary ring, projected (RTC)
  * into one merged indexed mesh, and coloured by a ramp over a numeric
  * `weightProperty` (default `'count'`). At low zooms this is the only way to
@@ -17,7 +17,7 @@
  * BufferGeometry (position + color) → `MeshBasicMaterial` with `vertexColors` →
  * `object.position = origin` (RTC).
  *
- * The H3 analogue of {@link QuadbinSummaryLayer}; same material + RTC approach,
+ * The H3 analogue of {@link STTQuadbinSummaryLayer}; same material + RTC approach,
  * differing only in the cell decode (H3 boundary ring vs mercator quad) and the
  * variable-N triangle-fan tessellation it implies.
  */
@@ -43,7 +43,7 @@ import {
 } from '../lib/h3-buffers.js';
 import type { RGBA } from '../lib/color.js';
 
-export interface H3SummaryLayerOptions {
+export interface STTH3SummaryLayerOptions {
   id?: string;
   /** Numeric property the color ramp is driven by. @default 'count' */
   weightProperty?: string;
@@ -63,15 +63,15 @@ export interface H3SummaryLayerOptions {
   opacity?: number;
 }
 
-export class H3SummaryLayer extends BaseSttLayer {
+export class STTH3SummaryLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
   private material: MeshBasicMaterial;
 
-  private readonly opts: H3SummaryLayerOptions;
+  private readonly opts: STTH3SummaryLayerOptions;
 
-  constructor(options: H3SummaryLayerOptions = {}) {
+  constructor(options: STTH3SummaryLayerOptions = {}) {
     super();
     this.opts = options;
     this.id = options.id ?? 'h3-cells';

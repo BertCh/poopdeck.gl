@@ -82,7 +82,7 @@
  * cell in FRONT wins the texel.
  */
 
-import type { Tile, Layer as STTLayer } from '@poopdeck.gl/core';
+import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
 import { expandRampColors } from '@poopdeck.gl/core/style';
 import {

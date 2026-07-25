@@ -40,7 +40,7 @@ import {
 } from '../spatiotemporal-layer.js';
 import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
-import { DataFilterExtension } from '../../extensions/data-filter-extension.js';
+import { STTDataFilterExtension } from '../../extensions/data-filter-extension.js';
 import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
 import {
   CategoryColorExtension,
@@ -68,7 +68,7 @@ import type {
 import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 
@@ -226,7 +226,7 @@ export interface _AnimatedPathLayerProps {
 
   /**
    * GPU range filter — the NAME of a baked numeric column to filter paths by
-   * (installs {@link DataFilterExtension}). A path renders when its value in
+   * (installs {@link STTDataFilterExtension}). A path renders when its value in
    * this column is inside {@link filterRange}, else it is hidden (or soft-faded
    * via {@link filterSoftRange}). Composes WITH the time filter (a path must
    * pass both). The per-feature value is expanded per-vertex like the path's
@@ -614,7 +614,7 @@ export class AnimatedPathLayer<
     miterLimit: { type: 'number', value: 4, min: 0 },
     billboard: false,
 
-    // Column range filter (DataFilterExtension). Unset ⇒ not installed.
+    // Column range filter (STTDataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors (see the point layer).
     filterProperty: {
       type: 'object',
@@ -670,13 +670,13 @@ export class AnimatedPathLayer<
   });
   private readonly categoryColorExtension = new CategoryColorExtension();
   /**
-   * Singleton DataFilterExtension, composed in only when `filterProperty` is
+   * Singleton STTDataFilterExtension, composed in only when `filterProperty` is
    * set (per-layer constant ⇒ stable list). When installed it REPLACES the
    * idle CategoryColorExtension in the sublayer extension list so the path
    * pipeline stays at WebGL2's 16-slot vertex-attribute floor rather than
    * overflowing to 17 — see the `filterProperty` prop docs.
    */
-  private readonly dataFilterExtension = new DataFilterExtension({
+  private readonly dataFilterExtension = new STTDataFilterExtension({
     filterSize: 1,
   });
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
@@ -762,7 +762,7 @@ export class AnimatedPathLayer<
       this.props.elevationScale,
       Array.isArray(color) ? color.join(',') : '',
       typeof width === 'number' ? width : 0,
-      // Column-filter uniforms (DataFilterExtension) — a range/enabled edit is
+      // Column-filter uniforms (STTDataFilterExtension) — a range/enabled edit is
       // uniform-only, so it rebuilds the cached sublayers (whose props carry the
       // values) rather than re-preparing tiles, like timeWindow above.
       Array.isArray(this.props.filterRange)
@@ -891,7 +891,7 @@ export class AnimatedPathLayer<
         : '';
     // Filter column NAME is baked (per-vertex) into `filterValue`, so a change
     // re-prepares tiles and — via the new preparedKey — rebuilds sublayers,
-    // covering the unset↔set toggle that adds/removes DataFilterExtension.
+    // covering the unset↔set toggle that adds/removes STTDataFilterExtension.
     const filterSig = filterProp ? `f${filterProp}` : '';
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp
@@ -1060,7 +1060,7 @@ export class AnimatedPathLayer<
       }
     }
 
-    // Column range filter (DataFilterExtension). The value is per-FEATURE, but —
+    // Column range filter (STTDataFilterExtension). The value is per-FEATURE, but —
     // exactly like the time attributes above — PathLayer instances are SEGMENTS,
     // so a per-feature buffer under-sizes the instanced draw on multi-vertex
     // paths ("vertex buffer is not big enough" on ANGLE/Metal). Expand it
@@ -1137,7 +1137,7 @@ export class AnimatedPathLayer<
       );
     }
 
-    // Column range filter — install DataFilterExtension only when a column is
+    // Column range filter — install STTDataFilterExtension only when a column is
     // named (per-layer constant ⇒ stable list). `hasFilter` gates the per-tile
     // enable so a tile missing the column renders unfiltered.
     const filterProp = this.filterPropertyValue();
@@ -1150,7 +1150,7 @@ export class AnimatedPathLayer<
     // ATTRIBUTE-BUDGET: the non-pickable path pipeline (NoPickingPathLayer, 12
     // attrs) + TimeFilterExtension's 3 sits at 15, then ONE more extension
     // attribute lands it at WebGL2's guaranteed 16-slot floor. Installing BOTH
-    // CategoryColorExtension (`instanceCategoryIndex`) AND DataFilterExtension
+    // CategoryColorExtension (`instanceCategoryIndex`) AND STTDataFilterExtension
     // (`filterValue`) would make 17 — a fatal per-pipeline link FAILURE (blank
     // paths) on the many GPUs that report exactly 16 slots. The path family
     // never uses the GPU category path (categorical color is expanded on the
@@ -1227,7 +1227,7 @@ export class AnimatedPathLayer<
       useCategoryColor: useGpuCategory,
       ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
 
-      // DataFilterExtension wiring (only when a filterProperty is set). The
+      // STTDataFilterExtension wiring (only when a filterProperty is set). The
       // constant getFilterValue is the fallback for tiles missing the column;
       // filterEnabled is additionally gated on THIS tile having baked it.
       ...(filterProp

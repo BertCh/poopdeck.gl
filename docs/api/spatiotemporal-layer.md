@@ -196,7 +196,7 @@ TileLayer-convention picking enrichment. A hit fills `info.tile` / `info.sourceT
 
 Every animated layer carries internal, load-bearing extensions on its
 sublayers (`TimeFilterExtension` + `CategoryColorExtension`; the heatmap a
-`DataFilterExtension`). Extensions you pass via the standard top-level
+deck's own `DataFilterExtension`). Extensions you pass via the standard top-level
 `extensions` prop are **appended after** the internal ones and reach every
 sublayer:
 

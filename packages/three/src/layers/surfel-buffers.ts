@@ -4,7 +4,7 @@
 
 /**
  * Pure (Three-free, GPU-free) assembly of merged surfel instance buffers from
- * decoded tiles. Split out from {@link SurfelLayer} so the column-wiring,
+ * decoded tiles. Split out from {@link STTSurfelLayer} so the column-wiring,
  * time-rebasing, ENU projection, and column detection are unit-tested without
  * importing the WebGPU material or constructing GPU geometry.
  *

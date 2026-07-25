@@ -311,7 +311,7 @@ export const docSections: DocSection[] = [
       {
         slug: 'api/data-filter-extension',
         file: 'api/data-filter-extension.md',
-        title: 'DataFilterExtension',
+        title: 'STTDataFilterExtension',
       },
       {
         slug: 'api/collision-filter-extension',

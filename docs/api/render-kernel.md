@@ -201,7 +201,7 @@ const TIME_FILTER_VARS: {
 `@poopdeck.gl/cesium`'s `shaders.ts` is the only backend that calls
 `emitGLSL300` directly today (`timeFilterAlphaGlsl`, generating the alpha
 snippet for a Cesium custom `Appearance` fragment shader — Cesium's worked
-`CesiumPointLayer` currently filters via the `core/time-filter` CPU oracle
+`@poopdeck.gl/cesium`'s `STTPointLayer` currently filters via the `core/time-filter` CPU oracle
 rather than this GPU path). deck's `TimeFilterExtension` inject strings and
 maplibre's GLSL are hand-written, independently implementing the same four
 modes rather than consuming the emitted string. An `emitTSL` entry point for

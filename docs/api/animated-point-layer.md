@@ -150,7 +150,7 @@ stroke widths); the constant branch still applies.
 ### Column filter
 
 Wires a baked numeric column into
-[`DataFilterExtension`](./data-filter-extension.md). Points whose value falls
+[`STTDataFilterExtension`](./data-filter-extension.md). Points whose value falls
 inside `filterRange` render; the rest are hidden, or soft-faded via
 `filterSoftRange`. It composes with the time filter — a point must pass both.
 

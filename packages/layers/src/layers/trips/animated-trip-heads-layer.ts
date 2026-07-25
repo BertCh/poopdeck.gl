@@ -43,7 +43,7 @@ import {
 import { emit } from '../../lib/telemetry.js';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 

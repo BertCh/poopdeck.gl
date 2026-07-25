@@ -138,10 +138,22 @@ export { ChevronFlowExtension } from './extensions/chevron-flow-extension.js';
 export type { ChevronFlowExtensionOptions } from './extensions/chevron-flow-extension.js';
 // Filter features by any baked numeric column against a [min,max] range (hard
 // step) or soft range (smoothstep fade) — the poopdeck-native port of deck.gl's
-// DataFilterExtension for binary STT tiles. Opt-in via `filterProperty` on
+// `DataFilterExtension` for binary STT tiles. Opt-in via `filterProperty` on
 // AnimatedPointLayer / AnimatedPathLayer; zero cost when unset.
-export { DataFilterExtension } from './extensions/data-filter-extension.js';
-// Collision-based de-cluttering for STT layers — deck.gl's CollisionFilterExtension
+//
+// PREFIXED (0.6.0) because it is a different class doing the same job under
+// the same name: through 0.5.x this shadowed `@deck.gl/extensions`' own
+// `DataFilterExtension` in any app importing both — and this very package
+// imports both (the heatmap/hexagon composites drive deck's stock extension
+// over CPU rows). The unprefixed spellings survive as deprecated aliases at
+// the bottom of this file.
+export { STTDataFilterExtension } from './extensions/data-filter-extension.js';
+// Collision-based de-cluttering for STT layers. NOTE the name is deliberately
+// NOT prefixed: this re-exports deck.gl's OWN `CollisionFilterExtension` class
+// unchanged, so `@deck.gl/extensions` and this barrel hand you the identical
+// object — there is nothing to shadow. (Contrast STTDataFilterExtension, which
+// is a different class and therefore had to be renamed.)
+// deck.gl's CollisionFilterExtension
 // works as-is via the `extensions` prop for the constant case (great for thinning
 // AnimatedIconLayer / AnimatedTextLayer labels); `collisionFilterProps` ergonomically
 // wires the CONSTANT collision props. A data-driven `collisionPriorityProperty` is
@@ -234,11 +246,37 @@ export type { AnimatedPointCloudLayerProps } from './layers/core/animated-point-
 export type { TimeFilterExtensionProps } from './extensions/time-filter-extension.js';
 export type { CategoryColorExtensionProps } from './extensions/category-color-extension.js';
 export type {
-  DataFilterExtensionProps,
-  DataFilterExtensionOptions,
+  STTDataFilterExtensionProps,
+  STTDataFilterExtensionOptions,
   DataFilterRange,
 } from './extensions/data-filter-extension.js';
 export type {
   CollisionFilterOptions,
   CollisionFilterProps,
 } from './extensions/collision-filter-extension.js';
+
+// ════════════════════════════════════════════════════════════════════════════
+//  DEPRECATED ALIASES (0.6.0) — removal target: 0.8.0
+//
+//  `DataFilterExtension` and its two prop/option types were renamed to
+//  `STTDataFilterExtension*`; the old spellings shadowed `@deck.gl/extensions`.
+//  The JSDoc sits on the export SPECIFIER, the only form TypeScript honours
+//  for a re-export (a `@deprecated` block above `export … from` is ignored),
+//  so callers get a real IDE strikethrough.
+//
+//  Everything else in this barrel keeps its 0.5.x name on purpose:
+//   • the `Animated*` layer family never collided with deck (the prefix IS the
+//     "time-animated variant of deck's X" signal, and it is already unique);
+//   • `CollisionFilterExtension` IS deck's own class re-exported — same object,
+//     nothing to shadow;
+//   • `SpatioTemporalLayer`, `FlowmapLayer`, `H3SummaryLayer` and friends have
+//     no deck counterpart.
+// ════════════════════════════════════════════════════════════════════════════
+export {
+  /** @deprecated Renamed to {@link STTDataFilterExtension} in 0.6.0 — the old name shadowed `DataFilterExtension` from `@deck.gl/extensions`, which is a DIFFERENT class (removed in 0.8.0). */
+  STTDataFilterExtension as DataFilterExtension,
+  /** @deprecated Renamed to {@link STTDataFilterExtensionProps} in 0.6.0 (removed in 0.8.0). */
+  type STTDataFilterExtensionProps as DataFilterExtensionProps,
+  /** @deprecated Renamed to {@link STTDataFilterExtensionOptions} in 0.6.0 (removed in 0.8.0). */
+  type STTDataFilterExtensionOptions as DataFilterExtensionOptions,
+} from './extensions/data-filter-extension.js';

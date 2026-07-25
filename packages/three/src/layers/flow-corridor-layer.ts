@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `FlowCorridorLayer` — the Three/TSL port of deck's `FlowCorridorLayer`: a static
+ * `STTFlowCorridorLayer` — the Three/TSL port of deck's `STTFlowCorridorLayer`: a static
  * street/route network whose per-segment ridership is a TIME SERIES animated by the
  * playhead. Unlocks the `nyc-taxi-flows` / `bixi-streets` overviews.
  *
@@ -55,7 +55,7 @@ import {
 } from '../tsl/flow-corridor-material.js';
 import { rampColorAt, type RGBA } from '../lib/color.js';
 
-export interface FlowCorridorLayerOptions extends ThreeTimeWindowOptions {
+export interface STTFlowCorridorLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** Value domain `[lo, hi]` mapped onto the width range + colour ramp. */
   domain: [number, number];
@@ -135,7 +135,7 @@ function makeValueTexture(
   if (height > maxDim) {
     // eslint-disable-next-line no-console
     console.warn(
-      `[stt-three] FlowCorridorLayer "${layerId}": ${buf.count} merged segments ` +
+      `[stt-three] STTFlowCorridorLayer "${layerId}": ${buf.count} merged segments ` +
         `exceed maxTextureDimension2D (${maxDim}); clamping the value texture — ` +
         `segments beyond row ${maxDim} will not animate correctly.`,
     );
@@ -158,7 +158,7 @@ function makeValueTexture(
   return tex;
 }
 
-export class FlowCorridorLayer extends BaseSttLayer {
+export class STTFlowCorridorLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -168,9 +168,9 @@ export class FlowCorridorLayer extends BaseSttLayer {
   private axis: BucketAxis | null = null;
   private numBuckets = 0;
   private viewport: [number, number] = [1280, 720];
-  protected readonly opts: FlowCorridorLayerOptions;
+  protected readonly opts: STTFlowCorridorLayerOptions;
 
-  constructor(options: FlowCorridorLayerOptions) {
+  constructor(options: STTFlowCorridorLayerOptions) {
     super();
     this.opts = options;
     this.id = options.id ?? 'flow-corridor';

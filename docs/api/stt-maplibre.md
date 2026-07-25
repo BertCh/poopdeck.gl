@@ -476,7 +476,7 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | Rounded joints / caps                     | —                                                  | ✓                                                 |
 | GPU picking                               | ✓ (id-FBO; all kinds except heatmap)               | ✓                                                 |
 | Time modes (window/wake/cumulative/trail) | ✓                                                  | ✓                                                 |
-| Data filtering by column                  | ✓ (`filterProperty` + soft range)                  | ✓ (`DataFilterExtension`)                         |
+| Data filtering by column                  | ✓ (`filterProperty` + soft range)                  | ✓ (`STTDataFilterExtension`)                      |
 | Globe projection                          | ✓ (v5+ hosts, native prelude)                      | ✓ (GlobeView)                                     |
 | Interleaves with MapLibre style layers    | ✓                                                  | partially (overlay)                               |
 

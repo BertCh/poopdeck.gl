@@ -57,7 +57,7 @@ import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import type {
   Tile,
-  Layer as TileLayer,
+  STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 import type { Texture } from '@luma.gl/core';

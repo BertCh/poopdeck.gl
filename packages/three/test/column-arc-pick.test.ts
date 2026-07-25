@@ -29,8 +29,8 @@ import {
 import { createArcIdMaterial } from '../src/tsl/arc-material';
 import { DataFilterUniforms } from '../src/tsl/data-filter';
 import { TimeFilterUniforms } from '../src/tsl/time-filter';
-import { ColumnLayer } from '../src/layers/column-layer';
-import { ArcLayer } from '../src/layers/arc-layer';
+import { STTColumnLayer } from '../src/layers/column-layer';
+import { STTArcLayer } from '../src/layers/arc-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import {
   GpuPicker,
@@ -189,9 +189,9 @@ describe('createColumnIdMaterial (reuses the colour material collapse gates)', (
   });
 });
 
-describe('ColumnLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
+describe('STTColumnLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   it('resolves a merged id colour to the right {tileKey, featureIndex}', async () => {
-    const layer = new ColumnLayer({ id: 'quakes', ...COLUMN_OPTS });
+    const layer = new STTColumnLayer({ id: 'quakes', ...COLUMN_OPTS });
     layer.setTiles([colTileA, colTileB], ctx);
     const colourMat = layer.object.material;
 
@@ -211,14 +211,14 @@ describe('ColumnLayer.pick (full GPU id-buffer dispatch, mock readback)', () => 
   });
 
   it('reports a sentinel background readback as a miss (no hit) — the collapsed/absent case', async () => {
-    const layer = new ColumnLayer({ id: 'quakes', ...COLUMN_OPTS });
+    const layer = new STTColumnLayer({ id: 'quakes', ...COLUMN_OPTS });
     layer.setTiles([colTileA, colTileB], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]); // white → MAX_PICK_ID ≥ count
     expect(await layer.pick(picker, camera, 10, 10)).toBeNull();
   });
 
   it('returns null (never touches the GPU) when there are no columns', async () => {
-    const layer = new ColumnLayer({ id: 'quakes', ...COLUMN_OPTS });
+    const layer = new STTColumnLayer({ id: 'quakes', ...COLUMN_OPTS });
     layer.setTiles([], ctx);
     const { picker, camera } = mockPicker(encodeId(0));
     expect(await layer.pick(picker, camera, 10, 10)).toBeNull();
@@ -271,9 +271,9 @@ describe('createArcIdMaterial (reuses the colour material width-collapse gate)',
   });
 });
 
-describe('ArcLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
+describe('STTArcLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   it('resolves a merged id colour to the right arc + its SOURCE coordinate', async () => {
-    const layer = new ArcLayer({ id: 'flows' });
+    const layer = new STTArcLayer({ id: 'flows' });
     layer.setTiles([arcTileA], ctx);
     const colourMat = layer.object.material;
 
@@ -292,7 +292,7 @@ describe('ArcLayer.pick (full GPU id-buffer dispatch, mock readback)', () => {
   });
 
   it('reports a sentinel background readback as a miss', async () => {
-    const layer = new ArcLayer({ id: 'flows' });
+    const layer = new STTArcLayer({ id: 'flows' });
     layer.setTiles([arcTileA], ctx);
     const { picker, camera } = mockPicker([255, 255, 255]);
     expect(await layer.pick(picker, camera, 20, 30)).toBeNull();

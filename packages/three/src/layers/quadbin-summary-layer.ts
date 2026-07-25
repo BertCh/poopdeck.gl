@@ -3,9 +3,9 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `QuadbinSummaryLayer` — render the server-aggregated summary tier as CARTO
+ * `STTQuadbinSummaryLayer` — render the server-aggregated summary tier as CARTO
  * Quadbin (Z/X/Y quad-key) cells. The Three port of deck's
- * `QuadbinSummaryLayer`: each summary cell's u64 id (`featureIds64`) is decoded
+ * `STTQuadbinSummaryLayer`: each summary cell's u64 id (`featureIds64`) is decoded
  * to its lon/lat mercator quad, projected (RTC) into one merged indexed mesh,
  * and coloured by a ramp over a numeric `weightProperty` (default `'count'`).
  * At low zooms this is the only way to draw a planet-scale point dataset in
@@ -41,7 +41,7 @@ import {
 } from '../lib/quadbin-buffers.js';
 import type { RGBA } from '../lib/color.js';
 
-export interface QuadbinSummaryLayerOptions {
+export interface STTQuadbinSummaryLayerOptions {
   id?: string;
   /** Numeric property the color ramp is driven by. @default 'count' */
   weightProperty?: string;
@@ -61,15 +61,15 @@ export interface QuadbinSummaryLayerOptions {
   opacity?: number;
 }
 
-export class QuadbinSummaryLayer extends BaseSttLayer {
+export class STTQuadbinSummaryLayer extends BaseSttLayer {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
   private material: MeshBasicMaterial;
 
-  private readonly opts: QuadbinSummaryLayerOptions;
+  private readonly opts: STTQuadbinSummaryLayerOptions;
 
-  constructor(options: QuadbinSummaryLayerOptions = {}) {
+  constructor(options: STTQuadbinSummaryLayerOptions = {}) {
     super();
     this.opts = options;
     this.id = options.id ?? 'quadbins';

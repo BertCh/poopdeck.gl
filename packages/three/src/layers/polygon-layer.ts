@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `PolygonLayer` — filled polygon meshes, the Three port of the deck
+ * `STTPolygonLayer` — filled polygon meshes, the Three port of the deck
  * `AnimatedPolygonLayer` (and its static `map_poly` ancestor). It merges every
  * polygon feature across the resident tiles into ONE indexed mesh via the pure
  * {@link buildPolygonBuffers} builder, then shades it with a single
@@ -23,7 +23,7 @@
  *     `object.position = origin` so large mercator/globe magnitudes stay in the
  *     f64 CPU transform.
  *
- * {@link StaticPolygonLayer} is a thin back-compat wrapper preserving the old
+ * {@link STTStaticPolygonLayer} is a thin back-compat wrapper preserving the old
  * AV map-poly API (categorical `map_layer` colouring, flat, no time filter).
  */
 
@@ -63,7 +63,7 @@ import {
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
-export interface PolygonLayerOptions extends ThreeTimeWindowOptions {
+export interface STTPolygonLayerOptions extends ThreeTimeWindowOptions {
   id?: string;
   /** How each feature is coloured. @default constant grey */
   colorMode?: PolygonColorMode;
@@ -115,7 +115,7 @@ export interface PolygonLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 130, 150, 90];
 
-export class PolygonLayer extends BaseSttLayer implements SttIdPickable {
+export class STTPolygonLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
@@ -134,12 +134,12 @@ export class PolygonLayer extends BaseSttLayer implements SttIdPickable {
 
   private readonly opts: Required<
     Omit<
-      PolygonLayerOptions,
+      STTPolygonLayerOptions,
       'id' | 'timeWindow' | 'fadeInDuration' | 'fadeOutDuration'
     >
   >;
 
-  constructor(options: PolygonLayerOptions = {}) {
+  constructor(options: STTPolygonLayerOptions = {}) {
     super();
     this.id = options.id ?? 'polygons';
     this.object.name = this.id;
@@ -371,7 +371,7 @@ export class PolygonLayer extends BaseSttLayer implements SttIdPickable {
 
 // ── Back-compat: the shipped AV map-poly layer ─────────────────────────────────
 
-export interface StaticPolygonLayerOptions {
+export interface STTStaticPolygonLayerOptions {
   id?: string;
   colorProperty?: string;
   colorMapping?: Record<string, RGBA>;
@@ -383,12 +383,12 @@ export interface StaticPolygonLayerOptions {
 
 /**
  * The original flat, static, categorically-coloured AV `map_poly` layer
- * (drivable area / lanes / crosswalks). Now a thin preset over {@link PolygonLayer}
+ * (drivable area / lanes / crosswalks). Now a thin preset over {@link STTPolygonLayer}
  * (`mode:'none'`, categorical colour by `map_layer`) so the shipped cockpit keeps
  * working unchanged.
  */
-export class StaticPolygonLayer extends PolygonLayer {
-  constructor(options: StaticPolygonLayerOptions = {}) {
+export class STTStaticPolygonLayer extends STTPolygonLayer {
+  constructor(options: STTStaticPolygonLayerOptions = {}) {
     super({
       id: options.id ?? 'map-poly',
       mode: 'none',

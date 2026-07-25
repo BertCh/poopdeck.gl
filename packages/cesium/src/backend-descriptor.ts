@@ -11,10 +11,10 @@
  * `core/style` (color), `core/tileset-adapter` (streaming), and
  * `core/shader-codegen`/`core/time-filter` (time-filter alpha).
  *
- * CATALOG: the movement family is implemented — `point` (`CesiumPointLayer`),
- * `path`+`line` (`CesiumPathLayer`; an OD line is a 2-vertex LineString),
- * `arc` (`CesiumArcLayer`), `trips` (`CesiumTripsLayer`, geometric CPU trail
- * trim), `tripHeads` (`CesiumTripHeadsLayer`). Colour is one value per feature
+ * CATALOG: the movement family is implemented — `point` (`STTPointLayer`),
+ * `path`+`line` (`STTPathLayer`; an OD line is a 2-vertex LineString),
+ * `arc` (`STTArcLayer`), `trips` (`STTTripsLayer`, geometric CPU trail
+ * trim), `tripHeads` (`STTTripHeadsLayer`). Colour is one value per feature
  * (batch-table animation has no per-vertex colour), so OD endpoint gradients
  * collapse to the source colour and the trips tail fade is arc-length-based —
  * both documented deviations, not silent ones. Remaining kinds are declared
