@@ -162,7 +162,7 @@ default (`common.rs::run_stt_build_with_full_options`): coord quantization
 - sequential ids, ON for every dataset; `STT_GEN_NO_QUANTIZE=1` opts out wholesale. Measured
   −28% on an OD-line double-build; win is dataset-shaped (large on geometry/numeric, modest on
   text-heavy). The slower fallback for the ~50 GB of already-built archives was the
-  **since-removed `reoptimize` pass** (decode → re-encode through the production encoder →
+  `reoptimize` pass (`crates/stt-core/examples/reoptimize.rs`) (decode → re-encode through the production encoder →
   re-pack); transcoding has since been removed wholesale, so re-optimizing now means a
   from-source rebuild.
 

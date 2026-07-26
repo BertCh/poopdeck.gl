@@ -192,7 +192,7 @@ findings settled it:
   id-hash (**40 %**) and raw-f64 `z` (**38 %**) dominated — the win was seq-ids +
   `--quantize-attr` on `z`. And lightweight column encodings measured NO-GO (§4). A
   heuristic advisor would have recommended exactly the work measurement killed.
-- **Wins are dataset-shaped, 1.07×–21×.** The since-removed reoptimize pass
+- **Wins are dataset-shaped, 1.07×–21×.** The `reoptimize` pass
   measured 21 datasets at 20.4 → 13.2 GB: **1.07–1.99×** typical, up to **21×**
   where a zoom floor was wrong. No formula predicts which lever pays for a given
   dataset; a 30-second sample-encode does.

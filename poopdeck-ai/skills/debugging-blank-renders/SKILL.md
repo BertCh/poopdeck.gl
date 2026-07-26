@@ -52,9 +52,10 @@ raw tier renders fine.
 
 - Confirm the tier exists: `describe_dataset` → `summaryTier {scheme, ...}` and
   `hasSummaryTier: true`.
-- If cells are misplaced, the summary cell ids are suspect. The repair is a
-  centroid-reconstruction pass (see `crates/stt-build/examples/repair_summary_ids.rs`);
-  rebuild the summary tier rather than shipping the defective archive.
+- If cells are misplaced, the summary cell ids are suspect. `stt-validate` checks
+  this directly (summary cell-id validity: H3/Quadbin cells at the tier's
+  resolution for each tile zoom), so run it first to confirm. Rebuild the summary
+  tier rather than shipping the defective archive.
 - Also check you're asking for the right tier: `SpatioTemporalLayer`'s
   `tier: 'auto' | 'summary' | 'raw'` — forcing `'summary'` on an archive with no
   summary tier renders nothing.
