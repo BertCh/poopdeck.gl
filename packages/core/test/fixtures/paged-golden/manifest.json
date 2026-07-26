@@ -1,89 +1,122 @@
 {
   "format": "stt-packed",
-  "formatVersion": 1,
+  "formatVersion": 2,
   "compression": "zstd",
+  "blobOrdering": "spatial",
   "directory": {
-    "key": "index/f7ae6148b568a8263a2d7d2e158e5454.sttd",
-    "length": 5661,
+    "key": "index/0066f4385641ed4cd70c58adc3d345e9.sttd",
+    "length": 5673,
     "directoryVersion": 5,
     "encoding": "zstd",
     "layout": "paged",
-    "rootLength": 526,
+    "rootLength": 532,
     "pageCount": 32,
     "pageEntries": 8
   },
   "packs": [
     {
-      "key": "packs/93d3d81e51b2079aa45fb6560e6d3a45.sttp",
-      "length": 7782
+      "key": "packs/ec94fb7b0d8766aa78113fec91e3c87e.sttp",
+      "length": 7966
     },
     {
-      "key": "packs/d2b2faca242241df9e8eef67910a373c.sttp",
-      "length": 7778
+      "key": "packs/599128d9551683037cff08363782af52.sttp",
+      "length": 7979
     },
     {
-      "key": "packs/b75649dc1afb920d69efb1064a36619d.sttp",
-      "length": 7778
+      "key": "packs/0032a4927b6e250bf6aa9be401c680a1.sttp",
+      "length": 7941
     },
     {
-      "key": "packs/7f873a456dce56e9b128523df7769caf.sttp",
-      "length": 7783
+      "key": "packs/97209a04bce601f0ac451e849a6801f0.sttp",
+      "length": 7951
     },
     {
-      "key": "packs/5d6b6967f4f642611911b15a00734342.sttp",
-      "length": 7762
+      "key": "packs/2f713736c9c957de70f21998c158800a.sttp",
+      "length": 7963
     },
     {
-      "key": "packs/bdfa5b04df9929210c641f89533e2243.sttp",
-      "length": 7777
+      "key": "packs/0c57b74dbba33b1073031097b1b2dd68.sttp",
+      "length": 7950
     },
     {
-      "key": "packs/1d5dcd6459d9f61d1a00a53bdc03cab3.sttp",
-      "length": 7768
+      "key": "packs/fb61f8558d8ee42e5e15635343698d93.sttp",
+      "length": 7942
     },
     {
-      "key": "packs/2ab9f712f47370eb2c5a088d3301bb05.sttp",
-      "length": 7794
+      "key": "packs/eff1180247f3dc8a8fb557db91ab209d.sttp",
+      "length": 7960
     },
     {
-      "key": "packs/280643bdec47a683aa4d997e1e637eb1.sttp",
-      "length": 7777
+      "key": "packs/d3ecdff47a2f71597f8180028968802d.sttp",
+      "length": 7957
     },
     {
-      "key": "packs/2cfe31949c49eaff2a2ae18a36b0cdaf.sttp",
-      "length": 7781
+      "key": "packs/ba64028fcb43a2ac17ece61136f198c4.sttp",
+      "length": 7952
     },
     {
-      "key": "packs/2fbb2f46c4f4ccad39ae25bff5a9731a.sttp",
-      "length": 7783
+      "key": "packs/36361af6cce9623f294fda5dbfd6c08e.sttp",
+      "length": 7990
     },
     {
-      "key": "packs/d56c504867f78566b7e497affab73b0b.sttp",
-      "length": 7760
+      "key": "packs/708157922fa6872df980e2e0c4570564.sttp",
+      "length": 7965
     },
     {
-      "key": "packs/6739562bf3e004942f6137f1d3900609.sttp",
-      "length": 7772
+      "key": "packs/bf0c224c67937905c26be7cde814d7a2.sttp",
+      "length": 7944
     },
     {
-      "key": "packs/fff831d12c2033e3e538b56e25a13e04.sttp",
-      "length": 7784
+      "key": "packs/c1cdea87bdf9e699746f5199121109cf.sttp",
+      "length": 7979
     },
     {
-      "key": "packs/5c22fc47429b2a45994a456c790a8a3b.sttp",
-      "length": 7773
+      "key": "packs/19ce0be09992bbdb0bc63e5347c83c21.sttp",
+      "length": 7977
     },
     {
-      "key": "packs/8c62216452d1b5e4015c8717667e973f.sttp",
-      "length": 7769
+      "key": "packs/9ca3a733c05fedc08856e04ef37fe6de.sttp",
+      "length": 7969
     },
     {
-      "key": "packs/f2cc7659c7246a7dc9725c0158e2aa25.sttp",
-      "length": 7772
+      "key": "packs/5e8f2a07772d8bbc74aeb60baabdd4f7.sttp",
+      "length": 7955
     },
     {
-      "key": "packs/f04cb5b4bc02056e293ea9214426f484.sttp",
-      "length": 7774
+      "key": "packs/01969b179eeb6890f7bf07b8fb9192e4.sttp",
+      "length": 7961
+    },
+    {
+      "key": "packs/63fc33b4ac5317b953b4779b9ac3a370.sttp",
+      "length": 7982
+    },
+    {
+      "key": "packs/7f61a89bafc915aef613f8cd4dc149c4.sttp",
+      "length": 7955
+    },
+    {
+      "key": "packs/a717b82f2f19d9cb3b1eaa811aa4495a.sttp",
+      "length": 7979
+    },
+    {
+      "key": "packs/5da10d54247495bdaf5bd37790237594.sttp",
+      "length": 7972
+    },
+    {
+      "key": "packs/a060a3347fb2c077af9693e57929b5f2.sttp",
+      "length": 7975
+    },
+    {
+      "key": "packs/2b72fa5fd2a53bb244aaab73e2a1ea41.sttp",
+      "length": 7962
+    },
+    {
+      "key": "packs/555b879624838342f000effa98ffb7e2.sttp",
+      "length": 7969
+    },
+    {
+      "key": "packs/23271d53ac38a85c4d9f3597591a870c.sttp",
+      "length": 1598
     }
   ],
   "metadata": {
@@ -102,8 +135,8 @@
     },
     "min_zoom": 10,
     "max_zoom": 12,
-    "tile_count": 0,
-    "feature_count": 0,
+    "tile_count": 252,
+    "feature_count": 756,
     "layers": [
       "default"
     ],

@@ -58,63 +58,6 @@ import {
   GeometryType,
 } from './types.js';
 
-/** One layer extracted from the payload frame. */
-interface RawLayer {
-  name: string;
-  ipc: Uint8Array;
-}
-
-/** Top bit of the frame's leading u16: marks the 8-byte-aligned frame. */
-const ALIGNED_FRAME_FLAG = 0x8000;
-
-/** Parse the layer frame into its constituent Arrow IPC streams. */
-function parseLayerFrame(payload: Uint8Array): RawLayer[] {
-  const view = new DataView(
-    payload.buffer,
-    payload.byteOffset,
-    payload.byteLength,
-  );
-  let pos = 0;
-  const readU16 = () => {
-    const v = view.getUint16(pos, true);
-    pos += 2;
-    return v;
-  };
-  const readU32 = () => {
-    const v = view.getUint32(pos, true);
-    pos += 4;
-    return v;
-  };
-  const readBytes = (len: number) => {
-    if (pos + len > payload.byteLength) {
-      throw new Error('STT tile payload truncated');
-    }
-    const slice = payload.subarray(pos, pos + len);
-    pos += len;
-    return slice;
-  };
-
-  if (payload.byteLength < 2) {
-    throw new Error('STT tile payload too short for layer frame');
-  }
-  const rawCount = readU16();
-  const aligned = (rawCount & ALIGNED_FRAME_FLAG) !== 0;
-  const count = rawCount & ~ALIGNED_FRAME_FLAG;
-  const layers: RawLayer[] = [];
-  for (let i = 0; i < count; i++) {
-    const nameLen = readU16();
-    const name = new TextDecoder().decode(readBytes(nameLen));
-    const ipcLen = readU32();
-    // Aligned frames pad the IPC stream to an 8-byte boundary (relative to
-    // the payload start); the pad is derived, never stored. Legacy frames
-    // (flag unset) have no padding.
-    if (aligned) pos += (8 - (pos & 7)) & 7;
-    const ipc = readBytes(ipcLen);
-    layers.push({ name, ipc });
-  }
-  return layers;
-}
-
 // ─── Layer frame v2 (packed formatVersion 2, spec §5.2) ─────────────────────
 
 /** Leading u16 escape of the v2 sectioned frame (spec §5.2). */
@@ -799,59 +742,6 @@ interface ResolvedTileMeta {
 }
 
 /**
- * Resolve the per-tile metadata from a v1 layer's Arrow schema — the exact
- * reads `tableToBinaryFeatures` historically did inline, hoisted so v1 and
- * v2 converge on {@link ResolvedTileMeta} before extraction.
- */
-function resolveMetaFromSchema(table: Table): ResolvedTileMeta {
-  // Fast path: the builder can bake the global start-time min into schema
-  // metadata (`stt:time_offset_ms`), letting the extractor skip the min-scan
-  // pass over the whole start-time column. Absent (older tiles / builder not
-  // yet emitting it) → undefined → the extractor's min-scan fallback.
-  const baked = table.schema.metadata.get('stt:time_offset_ms');
-  const timeOffset =
-    baked != null && baked !== '' ? Number(BigInt(baked)) : undefined;
-
-  const qa = new Map<string, { o: number; s: number }>();
-  for (const field of table.schema.fields) {
-    const qaRaw = field.metadata.get(STT_QUANT_ATTR_META_KEY);
-    if (!qaRaw) continue;
-    try {
-      const parsed = JSON.parse(qaRaw);
-      qa.set(field.name, { o: parsed.o, s: parsed.s });
-    } catch (err) {
-      // Malformed affine — record identity (o=0,s=1) so the column decodes
-      // as raw fixed-point ints, mirroring the pre-resolve behavior.
-      warnMalformedQuantMetaOnce(
-        `${STT_QUANT_ATTR_META_KEY}:${field.name}`,
-        `[stt] malformed ${STT_QUANT_ATTR_META_KEY} affine JSON on property ` +
-          `column "${field.name}" — values will decode as raw fixed-point ints:`,
-        err,
-      );
-      qa.set(field.name, { o: 0, s: 1 });
-    }
-  }
-
-  // v3 layers carry the origin/step pair as schema metadata; v2 layers (and
-  // v3 layers with the i64 fallback) leave them absent, which we treat as
-  // (origin=0, step=1) so the delta-vs-absolute branch still produces
-  // correct numbers (the Int64 path ignores both).
-  return {
-    timeOffset,
-    vertexTimeOrigin: Number(
-      table.schema.metadata.get('stt:vertex_time_origin_ms') ?? 0,
-    ),
-    vertexTimeStep: Number(
-      table.schema.metadata.get('stt:vertex_time_step_ms') ?? 1,
-    ),
-    vertexValueBuckets: Number(
-      table.schema.metadata.get('stt:vertex_value_buckets') ?? 0,
-    ),
-    qa,
-  };
-}
-
-/**
  * Resolve the per-tile metadata from a v2 frame's `TILE_META` section.
  * Presence rules (spec §5.2.2): a key is present iff the feature is — an
  * absent `qa` column key means not-quantized, absent `t0` means no
@@ -1334,29 +1224,19 @@ export function decodeTile(
   options?: DecodeTileOptions,
 ): Tile {
   const tileKey = `${id.z}/${id.x}/${id.y}/${id.t}`;
-  const isV2 =
-    payload.byteLength >= 2 &&
-    (payload[0] | (payload[1] << 8)) === FRAME_V2_ESCAPE;
-  // Authority rule (spec §5.2): `manifest.formatVersion` is the
-  // discriminator; the frame escape is defense-in-depth. A mixed-version
-  // dataset is corrupt/misassembled and MUST fail loudly, not decode.
-  const declared = options?.formatVersion;
-  if (declared !== undefined) {
-    if (declared === 1 && isV2) {
-      throw new Error(
-        `tile ${tileKey}: v2 layer frame reached through a formatVersion-1 manifest ` +
-          '(mixed-version dataset — spec §5.2 authority rule)',
-      );
-    }
-    if (declared === 2 && !isV2) {
-      throw new Error(
-        `tile ${tileKey}: v1 layer frame reached through a formatVersion-2 manifest ` +
-          '(mixed-version dataset — spec §5.2 authority rule)',
-      );
-    }
+  // The frame escape is defense-in-depth against a payload that is not a
+  // layer frame at all (a truncated range read, a 404 body). The manifest's
+  // `formatVersion` remains the authoritative discriminator (spec §5.2).
+  if (
+    payload.byteLength < 2 ||
+    (payload[0] | (payload[1] << 8)) !== FRAME_V2_ESCAPE
+  ) {
+    throw new Error(
+      `tile ${tileKey}: payload is not a layer frame (missing the frame escape)`,
+    );
   }
 
-  if (isV2) {
+  {
     const rawLayers = parseLayerFrameV2(payload, tileKey, options?.templates);
     const layers: STTTileLayer[] = rawLayers.map((raw) => {
       const coreTable = tableFromIPC(raw.coreIpc);
@@ -1394,32 +1274,6 @@ export function decodeTile(
     });
     return { id, timeRange, layers };
   }
-
-  const rawLayers = parseLayerFrame(payload);
-  const layers: STTTileLayer[] = rawLayers.map((raw) => {
-    const table = tableFromIPC(raw.ipc);
-    return {
-      name: raw.name,
-      extent: 0, // coordinates are real lon/lat; no quantization extent
-      features: tableToBinaryFeatures(table, resolveMetaFromSchema(table)),
-      // Standard GeoArrow extension name (e.g. `geoarrow.point`). Surfaced
-      // so a GeoArrow-aware consumer can branch on it without looking at
-      // the Arrow schema directly.
-      geometryExtensionName: geometryExtensionName(table),
-      // Coordinate quantization (`stt:quant`) makes the layer no longer
-      // literal GeoArrow — the semantic signal `retainArrowIpc: 'auto'`
-      // keys on.
-      coordinatesQuantized: readQuantAffine(table) !== undefined,
-      // Hold the underlying Arrow Table so `toGeoArrowTable()` is a
-      // zero-copy hand-off into `@geoarrow/deck.gl-layers` / Lonboard.
-      arrowTable: table,
-      // Also hold the raw IPC bytes: the worker decode path strips the
-      // non-cloneable Table before postMessage, and these bytes are what
-      // `toGeoArrowTable()` rehydrates from on the main thread.
-      arrowIpc: raw.ipc,
-    };
-  });
-  return { id, timeRange, layers };
 }
 
 /**

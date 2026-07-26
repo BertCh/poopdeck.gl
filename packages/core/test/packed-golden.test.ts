@@ -24,6 +24,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
+import { OBJECT_MAGIC_LEN } from './helpers/packed-fixture';
 import { GeometryType } from '../src/types';
 import { bufferToArrayBuffer } from './helpers/fixtures';
 
@@ -137,23 +138,26 @@ describe('STT packed format (golden fixture)', () => {
     }
 
     // Dedup: k=0, k=4, k=9 are byte-identical → one shared blob at
-    // packId 0, offset 0.
+    // packId 0, at the first object-absolute blob offset.
     for (const k of [0, 4, 9]) {
       expect(byX.get(k)!.packId).toBe(0);
-      expect(byX.get(k)!.offset).toBe(0);
+      expect(byX.get(k)!.offset).toBe(OBJECT_MAGIC_LEN);
     }
     const e0 = byX.get(0)!;
     expect(byX.get(4)!.length).toBe(e0.length);
     expect(byX.get(9)!.length).toBe(e0.length);
 
-    // 2 packs: at least one entry lands in pack 1 (the cut to a second object),
-    // and every pack's offsets are pack-relative (each pack has an offset-0 run).
+    // 2 packs: at least one entry lands in pack 1 (the cut to a second object).
+    // Offsets are OBJECT-ABSOLUTE, so each pack's first blob starts right after
+    // that object's 8-byte magic prelude — not at 0.
     const packIds = new Set(index.tiles.map((t) => t.packId));
     expect(packIds).toEqual(new Set([0, 1]));
     for (const pid of packIds) {
-      expect(index.tiles.some((t) => t.packId === pid && t.offset === 0)).toBe(
-        true,
-      );
+      expect(
+        index.tiles.some(
+          (t) => t.packId === pid && t.offset === OBJECT_MAGIC_LEN,
+        ),
+      ).toBe(true);
     }
   });
 

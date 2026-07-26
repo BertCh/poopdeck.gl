@@ -12,16 +12,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import type { TileId } from '../src/types';
-import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import { packedFromGolden, packedFetch } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const DATASET = packedFromSingleFile(new Uint8Array(readFileSync(FIXTURE)));
+const DATASET = packedFromGolden();
 
 interface LoggedRequest {
   url: string;

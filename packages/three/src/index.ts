@@ -22,7 +22,7 @@
  * `@poopdeck.gl/maplibre` and `@poopdeck.gl/cesium` use, so one layer kind has
  * one spelling across every backend and nothing here shadows a deck.gl export
  * in an app that imports both. The unprefixed 0.5.x spellings survive as
- * deprecated aliases at the bottom of this file until 0.8.0.
+ * removed.
  */
 
 // ─── Projection ───────────────────────────────────────────────────────────────
@@ -224,7 +224,6 @@ export {
 export {
   STTPointCloudLayer,
   type STTPointCloudLayerOptions,
-  type SttPointPickable,
 } from './layers/point-cloud-layer.js';
 export {
   buildPointBuffers,
@@ -564,7 +563,6 @@ export {
   type SttPickInfo,
   type SttPickInfoBase,
   type SttBoxPickInfo,
-  type SttPointPickInfo,
   type PickBox,
   type SttPickable,
 } from './lib/box-pick.js';
@@ -598,143 +596,3 @@ export {
 
 // ─── Backend capability descriptor (renderer-abstraction Phase 5) ───────────────
 export { threeBackend } from './backend-descriptor.js';
-
-// ════════════════════════════════════════════════════════════════════════════
-//  DEPRECATED LAYER-CLASS ALIASES (0.6.0) — removal target: 0.8.0
-//
-//  Until 0.6.0 the layer classes here were UNPREFIXED, so six of them shadowed
-//  deck.gl's own exports of the same name (`ArcLayer`, `IconLayer`,
-//  `ColumnLayer`, `PolygonLayer`, `PointCloudLayer` from `@deck.gl/layers`;
-//  `TripsLayer` from `@deck.gl/geo-layers`) and four more shadowed
-//  `@poopdeck.gl/layers` (`FlowmapLayer`, `FlowCorridorLayer`, `H3SummaryLayer`,
-//  `QuadbinSummaryLayer`). Importing this package alongside deck — the normal
-//  case, since deck is the primary backend — meant whichever import came last
-//  silently won.
-//
-//  Every layer class now carries the `STT` prefix, the same convention
-//  `@poopdeck.gl/maplibre` and `@poopdeck.gl/cesium` use, so a layer kind has
-//  ONE spelling across all backends. The old names keep working (they are the
-//  identical class / type, not a copy) but are deprecated; the JSDoc below is
-//  attached to each export SPECIFIER, which is the form TypeScript actually
-//  honours — a `@deprecated` block above an `export … from` statement is
-//  silently ignored, so consumers get a real IDE strikethrough here.
-// ════════════════════════════════════════════════════════════════════════════
-
-export {
-  /** @deprecated Renamed to {@link STTSurfelLayer} in 0.6.0 (unprefixed layer names are removed in 0.8.0). */
-  STTSurfelLayer as SurfelLayer,
-  /** @deprecated Renamed to {@link STTSurfelLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTSurfelLayerOptions as SurfelLayerOptions,
-} from './layers/surfel-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTPointCloudLayer} in 0.6.0 — the old name shadowed `PointCloudLayer` from `@deck.gl/layers` (removed in 0.8.0). */
-  STTPointCloudLayer as PointCloudLayer,
-  /** @deprecated Renamed to {@link STTPointCloudLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTPointCloudLayerOptions as PointCloudLayerOptions,
-} from './layers/point-cloud-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTBoundingBoxLayer} in 0.6.0 (removed in 0.8.0). */
-  STTBoundingBoxLayer as BoundingBoxLayer,
-  /** @deprecated Renamed to {@link STTBoundingBoxLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTBoundingBoxLayerOptions as BoundingBoxLayerOptions,
-} from './layers/bounding-box-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTStaticPathLayer} in 0.6.0 (removed in 0.8.0). */
-  STTStaticPathLayer as StaticPathLayer,
-  /** @deprecated Renamed to {@link STTStaticPathLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTStaticPathLayerOptions as StaticPathLayerOptions,
-} from './layers/path-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTStaticPolygonLayer} in 0.6.0 (removed in 0.8.0). */
-  STTStaticPolygonLayer as StaticPolygonLayer,
-  /** @deprecated Renamed to {@link STTStaticPolygonLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTStaticPolygonLayerOptions as StaticPolygonLayerOptions,
-  /** @deprecated Renamed to {@link STTPolygonLayer} in 0.6.0 — the old name shadowed `PolygonLayer` from `@deck.gl/layers` (removed in 0.8.0). */
-  STTPolygonLayer as PolygonLayer,
-  /** @deprecated Renamed to {@link STTPolygonLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTPolygonLayerOptions as PolygonLayerOptions,
-} from './layers/polygon-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTEgoLayer} in 0.6.0 (removed in 0.8.0). */
-  STTEgoLayer as EgoLayer,
-  /** @deprecated Renamed to {@link STTEgoLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTEgoLayerOptions as EgoLayerOptions,
-} from './layers/ego-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTIsoLayer} in 0.6.0 (removed in 0.8.0). */
-  STTIsoLayer as IsoLayer,
-  /** @deprecated Renamed to {@link STTIsoLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTIsoLayerOptions as IsoLayerOptions,
-} from './layers/iso-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTWideLineLayer} in 0.6.0 (removed in 0.8.0). */
-  STTWideLineLayer as WideLineLayer,
-  /** @deprecated Renamed to {@link STTWideLineLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTWideLineLayerOptions as WideLineLayerOptions,
-} from './layers/wide-line-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTPathGeoLayer} in 0.6.0 (removed in 0.8.0). */
-  STTPathGeoLayer as PathGeoLayer,
-  /** @deprecated Renamed to {@link STTPathGeoLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTPathGeoLayerOptions as PathGeoLayerOptions,
-} from './layers/path-geo-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTOdLineLayer} in 0.6.0 (removed in 0.8.0). */
-  STTOdLineLayer as OdLineLayer,
-  /** @deprecated Renamed to {@link STTOdLineLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTOdLineLayerOptions as OdLineLayerOptions,
-} from './layers/od-line-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTTripsLayer} in 0.6.0 — the old name shadowed `TripsLayer` from `@deck.gl/geo-layers` (removed in 0.8.0). */
-  STTTripsLayer as TripsLayer,
-  /** @deprecated Renamed to {@link STTTripsLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTTripsLayerOptions as TripsLayerOptions,
-} from './layers/trips-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTTripHeadsLayer} in 0.6.0 (removed in 0.8.0). */
-  STTTripHeadsLayer as TripHeadsLayer,
-  /** @deprecated Renamed to {@link STTTripHeadsLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTTripHeadsLayerOptions as TripHeadsLayerOptions,
-} from './layers/trip-heads-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTArcLayer} in 0.6.0 — the old name shadowed `ArcLayer` from `@deck.gl/layers` (removed in 0.8.0). */
-  STTArcLayer as ArcLayer,
-  /** @deprecated Renamed to {@link STTArcLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTArcLayerOptions as ArcLayerOptions,
-} from './layers/arc-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTIconLayer} in 0.6.0 — the old name shadowed `IconLayer` from `@deck.gl/layers` (removed in 0.8.0). */
-  STTIconLayer as IconLayer,
-  /** @deprecated Renamed to {@link STTIconLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTIconLayerOptions as IconLayerOptions,
-} from './layers/icon-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTColumnLayer} in 0.6.0 — the old name shadowed `ColumnLayer` from `@deck.gl/layers` (removed in 0.8.0). */
-  STTColumnLayer as ColumnLayer,
-  /** @deprecated Renamed to {@link STTColumnLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTColumnLayerOptions as ColumnLayerOptions,
-} from './layers/column-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTQuadbinSummaryLayer} in 0.6.0 — the old name shadowed `@poopdeck.gl/layers` (removed in 0.8.0). */
-  STTQuadbinSummaryLayer as QuadbinSummaryLayer,
-  /** @deprecated Renamed to {@link STTQuadbinSummaryLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTQuadbinSummaryLayerOptions as QuadbinSummaryLayerOptions,
-} from './layers/quadbin-summary-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTH3SummaryLayer} in 0.6.0 — the old name shadowed `@poopdeck.gl/layers` (removed in 0.8.0). */
-  STTH3SummaryLayer as H3SummaryLayer,
-  /** @deprecated Renamed to {@link STTH3SummaryLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTH3SummaryLayerOptions as H3SummaryLayerOptions,
-} from './layers/h3-summary-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTFlowmapLayer} in 0.6.0 — the old name shadowed `@poopdeck.gl/layers` (removed in 0.8.0). */
-  STTFlowmapLayer as FlowmapLayer,
-  /** @deprecated Renamed to {@link STTFlowmapLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTFlowmapLayerOptions as FlowmapLayerOptions,
-} from './layers/flowmap-layer.js';
-export {
-  /** @deprecated Renamed to {@link STTFlowCorridorLayer} in 0.6.0 — the old name shadowed `@poopdeck.gl/layers` (removed in 0.8.0). */
-  STTFlowCorridorLayer as FlowCorridorLayer,
-  /** @deprecated Renamed to {@link STTFlowCorridorLayerOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTFlowCorridorLayerOptions as FlowCorridorLayerOptions,
-} from './layers/flow-corridor-layer.js';

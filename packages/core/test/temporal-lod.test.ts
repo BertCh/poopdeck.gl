@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { STTArchive } from '../src/archive';
+import { directoryObject, packObject } from './helpers/packed-fixture';
 import { encodeDirectory } from '../src/directory';
 import {
   packedFetch,
@@ -61,17 +62,9 @@ function buildSyntheticArchive(opts: {
     new Uint8Array(t.blobSize ?? 1).fill(i & 0xff),
   );
 
-  // One pack holding all blobs back-to-back; the directory's offsets are
-  // pack-relative (packId 0).
-  let cursor = 0;
-  const blobOffsets: number[] = [];
-  for (let i = 0; i < tileBlobs.length; i++) {
-    blobOffsets.push(cursor);
-    cursor += tileBlobs[i].byteLength;
-  }
-  const pack = new Uint8Array(cursor);
-  for (let i = 0; i < tileBlobs.length; i++)
-    pack.set(tileBlobs[i], blobOffsets[i]);
+  // One pack holding all blobs back-to-back; the directory records
+  // object-absolute offsets (packId 0).
+  const { bytes: pack, offsets: blobOffsets } = packObject(tileBlobs);
 
   // Build the v5 directory. `writeBucketColumn === false` simulates a tile with
   // no temporal-LOD tag (presence flag 0 → temporalBucketMs undefined).
@@ -94,15 +87,16 @@ function buildSyntheticArchive(opts: {
   );
 
   const objects = new Map<string, Uint8Array>();
+  const dirObject = directoryObject(indexBytes);
   objects.set('packs/p0.sttp', pack);
-  objects.set('index/dir.sttd', indexBytes);
+  objects.set('index/dir.sttd', dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression: 'none', // 1-byte raw dummy blobs (no zstd)
     directory: {
       key: 'index/dir.sttd',
-      length: indexBytes.byteLength,
+      length: dirObject.byteLength,
       directoryVersion: 5,
     },
     packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],

@@ -19,7 +19,7 @@
  * deck's stock extension over CPU rows, everything else drives this one over
  * binary columns). Two classes, same name, different `getFilterValue`
  * contract, is exactly the confusion the prefix removes. The unprefixed name
- * remains a deprecated alias on the barrel until 0.8.0.
+ * has been removed.
  *
  * ## Why not just pass deck.gl's `@deck.gl/extensions` `DataFilterExtension`?
  * Upstream sources its filter value by running a JS **function** accessor

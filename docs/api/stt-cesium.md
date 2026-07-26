@@ -44,7 +44,7 @@ window.CESIUM_BASE_URL =
 > are now `STT*Layer` — the same prefix `@poopdeck.gl/maplibre` and
 > `@poopdeck.gl/three` use, so one layer kind has one spelling on every backend
 > and the import path (not a word inside the symbol) says which renderer you
-> are on. The old names remain `@deprecated` aliases until 0.8.0. The camera and
+> are on. The old `Cesium*Layer` names have been removed. The camera and
 > clock bridges (`viewStateToCesiumView`, `attachCesiumClock`, `CesiumView`) are
 > unchanged — they are named after CesiumJS concepts, not STT layer kinds.
 

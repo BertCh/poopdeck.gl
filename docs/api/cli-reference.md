@@ -133,7 +133,7 @@ extent: shallow or wide-time → spatial-major, else 3D-Hilbert), `measured`
 or `morton3`. `morton3` is research-only; the auto and measured pickers never
 select it. The resolved order is recorded in `manifest.blobOrdering`. Better
 locality means fewer packs touched per viewport, and so fewer client range
-requests. `eager` is accepted for backward compatibility and maps to `auto`.
+requests.
 
 `--pack-size` trades cache granularity against object count: smaller is finer
 and more numerous, larger is coarser and fewer. Stay well under the CDN

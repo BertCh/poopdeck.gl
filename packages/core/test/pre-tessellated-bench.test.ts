@@ -32,6 +32,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { frameFromIpc } from './helpers/fixtures';
 import {
   Field,
   FixedSizeList,
@@ -188,16 +189,7 @@ function buildSyntheticPolygonTile(opts: {
   const table = new Table([batch]);
   const ipc = tableToIPC(table, 'stream');
 
-  // Layer frame: [u16 count][u16 nameLen][name][u32 ipcLen][ipc].
-  const name = new TextEncoder().encode('zones');
-  const frame = new Uint8Array(2 + 2 + name.length + 4 + ipc.length);
-  const view = new DataView(frame.buffer);
-  view.setUint16(0, 1, true);
-  view.setUint16(2, name.length, true);
-  frame.set(name, 4);
-  view.setUint32(4 + name.length, ipc.length, true);
-  frame.set(ipc, 4 + name.length + 4);
-  return { payload: frame, bytesIpc: ipc.length };
+  return { payload: frameFromIpc('zones', ipc), bytesIpc: ipc.length };
 }
 
 /**

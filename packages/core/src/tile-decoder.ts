@@ -31,8 +31,7 @@ export interface DecodeArgs {
    * Expected CRC-32C of `compressed` (from the archive directory). When set,
    * the decoder verifies it BEFORE decompressing — on the worker path the
    * check runs off the main thread — and rejects with a distinctive
-   * "crc32c mismatch" error on disagreement. Omitted when verification is
-   * disabled (`ArchiveOptions.verifyChecksums: false`), when the directory
+   * "crc32c mismatch" error on disagreement. Omitted when the directory
    * recorded no checksum, or when the input is already decompressed (OPFS
    * warm hits).
    */

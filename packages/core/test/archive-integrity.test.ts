@@ -4,7 +4,6 @@
  *  1. CRC-32C verification on the decode path — a corrupted blob (or a
  *     directory whose CRC disagrees with the bytes) rejects that tile's
  *     decode with the distinctive "crc32c mismatch" message; the
- *     `verifyChecksums: false` kill switch restores the old behavior.
  *  2. OPFS writes reuse the decoder's decompressed payload (no main-thread
  *     re-decompress on the default decoders).
  *  3. `estimateTileSize` deduplicates views by backing ArrayBuffer, so a
@@ -19,9 +18,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive, estimateTileSize } from '../src/archive';
+import { OBJECT_MAGIC_LEN, directoryObject } from './helpers/packed-fixture';
 import { decompressSync } from '../src/compression';
 import { blake3Hex128 } from '../src/blake3';
 import { crc32c } from '../src/crc32c';
@@ -35,19 +33,14 @@ import {
 } from '../src/types';
 import type { OpfsTileCache } from '../src/opfs-cache';
 import {
-  packedFromSingleFile,
+  packedFromGolden,
   packedFetch,
   type InMemoryPackedDataset,
 } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-
 /** A fresh, mutation-isolated dataset (pack bytes are copied at transcode). */
 function freshDataset(url: string): InMemoryPackedDataset {
-  return packedFromSingleFile(FIXTURE_BYTES, { manifestUrl: url });
+  return packedFromGolden({ manifestUrl: url });
 }
 
 /** The single pack object of a default (uncapped) transcode. */
@@ -72,12 +65,15 @@ function tamperDirectoryCrcs(ds: InMemoryPackedDataset): void {
   const manifest = JSON.parse(
     new TextDecoder().decode(ds.objects.get('manifest.json')!),
   );
-  const entries = decodeDirectory(ds.objects.get(manifest.directory.key)!);
+  const entries = decodeDirectory(
+    ds.objects.get(manifest.directory.key)!.subarray(OBJECT_MAGIC_LEN),
+  );
   const dir = encodeDirectory(
     entries.map((e) => ({ ...e, crc32c: (e.crc32c ^ 0xffffffff) >>> 0 })),
   );
-  ds.objects.set(manifest.directory.key, dir);
-  manifest.directory.length = dir.length;
+  const dirObject = directoryObject(dir);
+  ds.objects.set(manifest.directory.key, dirObject);
+  manifest.directory.length = dirObject.length;
   ds.objects.set(
     'manifest.json',
     new TextEncoder().encode(JSON.stringify(manifest)),
@@ -216,20 +212,6 @@ describe('CRC-32C verification (T1.4)', () => {
     await expect(archive.getTile(id)).rejects.toThrow(/crc32c mismatch/);
   });
 
-  it('verifyChecksums: false is the kill switch (decodes despite a wrong directory CRC)', async () => {
-    const ds = freshDataset('mem://crc-off/manifest.json');
-    tamperDirectoryCrcs(ds);
-    const archive = new STTArchive({
-      url: ds.manifestUrl,
-      fetch: packedFetch(ds),
-      verifyChecksums: false,
-    });
-    const { id } = await firstEntry(archive);
-    const tile = await archive.getTile(id);
-    expect(tile).not.toBeNull();
-    expect(tile!.layers[0].features.featureCount).toBeGreaterThan(0);
-  });
-
   it('getTiles surfaces a corrupt member as a per-tile null, not a batch failure', async () => {
     // The fixture dedups every entry onto one blob, so build a two-blob
     // dataset by duplicating its (decodable) blob at two offsets in one
@@ -240,7 +222,9 @@ describe('CRC-32C verification (T1.4)', () => {
     const srcManifest = JSON.parse(
       new TextDecoder().decode(src.objects.get('manifest.json')!),
     );
-    const e = decodeDirectory(src.objects.get(srcManifest.directory.key)!)[0];
+    const e = decodeDirectory(
+      src.objects.get(srcManifest.directory.key)!.subarray(OBJECT_MAGIC_LEN),
+    )[0];
     const blob = packOf(src).subarray(e.offset, e.offset + e.length);
     const PAD = 64;
     const stride = blob.length + PAD;
@@ -263,18 +247,19 @@ describe('CRC-32C verification (T1.4)', () => {
     }));
     const dir = encodeDirectory(entries);
     const objects = new Map<string, Uint8Array>();
-    objects.set('index/dir.sttd', dir);
+    const dirObject = directoryObject(dir);
+    objects.set('index/dir.sttd', dirObject);
     objects.set('packs/p0.sttp', pack);
     objects.set(
       'manifest.json',
       new TextEncoder().encode(
         JSON.stringify({
           format: 'stt-packed',
-          formatVersion: 1,
+          formatVersion: 2,
           compression: srcManifest.compression,
           directory: {
             key: 'index/dir.sttd',
-            length: dir.length,
+            length: dirObject.length,
             directoryVersion: 5,
           },
           packs: [{ key: 'packs/p0.sttp', length: pack.length }],

@@ -62,7 +62,6 @@ import { ThroughputEstimator, type ThroughputEstimate } from './throughput.js';
 import { forEachBufferView } from './tile-transferables.js';
 import {
   getSharedScheduler,
-  isSharedSchedulingEnabled,
   setSharedSchedulerSourceWeight,
 } from './shared-scheduler.js';
 import {
@@ -72,25 +71,17 @@ import {
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
-/** The frozen 0.3.x packed format: no object magic, v1 layer frames. */
-const PACKED_FORMAT_VERSION_V1 = 1;
 /**
- * The 2026-07 coordinated byte break (packed spec §5.2 / design doc
+ * The packed format this reader understands (packed spec §5.2 / design doc
  * `stt-packed-format-decisions.md`): `STTP`/`STTD` object magic with
- * object-absolute blob offsets, manifest-embedded `schemas` templates, and
- * the sectioned, template-referencing layer frame v2.
+ * object-absolute blob offsets, manifest-embedded `schemas` templates, and the
+ * sectioned, template-referencing layer frame.
+ *
+ * A closed enum in the manifest schema — conformance requires rejecting
+ * anything else at open, mirroring the Rust reader. The transitional 0.3.x
+ * format (formatVersion 1) was removed after the published fleet was migrated.
  */
-const PACKED_FORMAT_VERSION_V2 = 2;
-/**
- * Every `manifest.formatVersion` this reader understands. A closed enum in
- * the manifest schema — conformance requires rejecting anything else at
- * open, mirroring the Rust reader (`pack.rs`'s
- * `SUPPORTED_PACKED_FORMAT_VERSIONS`).
- */
-const SUPPORTED_PACKED_FORMAT_VERSIONS: readonly number[] = [
-  PACKED_FORMAT_VERSION_V1,
-  PACKED_FORMAT_VERSION_V2,
-];
+const PACKED_FORMAT_VERSION = 2;
 /**
  * Byte length of the v2 object magic prelude (`"STTD"`/`"STTP"` + u8
  * version(2) + 3 zero bytes). v2 directory reads skip it (blob offsets in
@@ -634,7 +625,7 @@ export class STTArchive {
    * §5.2). Set by `fetchManifest`; forwarded to every decode so a
    * mixed-version dataset fails loudly instead of misparsing.
    */
-  private formatVersion = PACKED_FORMAT_VERSION_V1;
+  private formatVersion = PACKED_FORMAT_VERSION;
   /**
    * v2 only: the schema-template registry built (and blake3-validated) from
    * `manifest.schemas` at open. ONE object shared by the inline decoder, the
@@ -746,8 +737,6 @@ export class STTArchive {
   private decoder?: TileDecoder;
   private decoderOption?: TileDecoder;
 
-  /** Verify each blob's directory CRC-32C before decode (see options). */
-  private verifyChecksums = true;
   /** Raw-IPC retention policy for decoded layers (see options). */
   private retainArrowIpc: boolean | 'auto' = 'auto';
 
@@ -788,9 +777,6 @@ export class STTArchive {
           transport(input, mergeRequestInit(loadFetch, init))) as typeof fetch;
       }
       this.decoderOption = options.decoder;
-      if (options.verifyChecksums === false) {
-        this.verifyChecksums = false;
-      }
       if (options.retainArrowIpc !== undefined) {
         this.retainArrowIpc = options.retainArrowIpc;
       }
@@ -929,32 +915,22 @@ export class STTArchive {
       // Conformance reader-MUST: reject unrecognized formatVersion /
       // directoryVersion, not just format — both are closed enums/consts in
       // the manifest schema, and the Rust reader rejects them too.
-      if (!SUPPORTED_PACKED_FORMAT_VERSIONS.includes(manifest.formatVersion)) {
+      if (manifest.formatVersion !== PACKED_FORMAT_VERSION) {
         throw new Error(
           `STT manifest: unsupported formatVersion ${JSON.stringify(manifest.formatVersion)} ` +
-            `(expected one of ${SUPPORTED_PACKED_FORMAT_VERSIONS.join(', ')})`,
+            `(expected ${PACKED_FORMAT_VERSION})`,
         );
       }
-      // formatVersion 2: build the schema-template registry from the
-      // embedded `schemas` table, hash-validating EVERY entry at open (spec
-      // §3.2) — a corrupt manifest fails loudly, dataset-level, before any
-      // tile fetch. An absent table is legal (self-contained inline-schema
-      // frames); a v1 manifest carrying one is not (spec §3 envelope rule).
-      if (manifest.formatVersion === PACKED_FORMAT_VERSION_V2) {
-        if (
-          manifest.schemas !== undefined &&
-          !Array.isArray(manifest.schemas)
-        ) {
-          throw new Error(
-            'STT manifest: schemas must be an array of {hash, data} entries',
-          );
-        }
-        this.templateRegistry = buildTemplateRegistry(manifest.schemas ?? []);
-      } else if (manifest.schemas !== undefined) {
+      // Build the schema-template registry from the embedded `schemas` table,
+      // hash-validating EVERY entry at open (spec §3.2) — a corrupt manifest
+      // fails loudly, dataset-level, before any tile fetch. An absent table is
+      // legal (self-contained inline-schema frames).
+      if (manifest.schemas !== undefined && !Array.isArray(manifest.schemas)) {
         throw new Error(
-          'STT manifest: formatVersion-1 manifests must not carry a schemas table (spec §3.2)',
+          'STT manifest: schemas must be an array of {hash, data} entries',
         );
       }
+      this.templateRegistry = buildTemplateRegistry(manifest.schemas ?? []);
       this.formatVersion = manifest.formatVersion;
       // Conformance reader-MUST: refuse a dataset declaring a capability this
       // reader does not implement (spec §3.1). A capability re-types EXISTING
@@ -1384,8 +1360,7 @@ export class STTArchive {
     // bytes (root frame + leaves) follow it, and `rootLength` keeps meaning
     // the root frame's at-rest length (spec §2.1) — so all paged math below
     // is unchanged once offsets are shifted by the prelude.
-    this.directoryDataStart =
-      this.formatVersion === PACKED_FORMAT_VERSION_V2 ? OBJECT_MAGIC_LEN : 0;
+    this.directoryDataStart = OBJECT_MAGIC_LEN;
 
     // Paged + large: fetch ONLY the root page (a prefix range GET), build the
     // page table, and leave the entry maps empty — leaves stream in on demand
@@ -1489,12 +1464,11 @@ export class STTArchive {
   }
 
   /**
-   * Validate + strip the v2 `STTD` object magic prelude (`"STTD"` +
-   * version 2 + 3 zero bytes) off directory bytes; v1 passes through
-   * untouched. Mirrors the Rust `pack::directory_codec_bytes`.
+   * Validate + strip the `STTD` object magic prelude (`"STTD"` + version 2 +
+   * 3 zero bytes) off directory bytes. Mirrors the Rust
+   * `pack::directory_codec_bytes`.
    */
   private stripDirectoryMagic(bytes: Uint8Array): Uint8Array {
-    if (this.formatVersion !== PACKED_FORMAT_VERSION_V2) return bytes;
     if (
       bytes.byteLength < OBJECT_MAGIC_LEN ||
       bytes[0] !== 0x53 || // 'S'
@@ -2015,8 +1989,7 @@ export class STTArchive {
       // Integrity (T1.4): the directory CRC-32C covers the compressed bytes;
       // verified in the decoder (off main thread on the worker path) before
       // decompression. `0` = "no checksum recorded" (see TileEntry.crc32c).
-      expectedCrc32c:
-        this.verifyChecksums && entry.crc32c ? entry.crc32c : undefined,
+      expectedCrc32c: entry.crc32c ? entry.crc32c : undefined,
       // Authority rule (spec §5.2): the manifest's declared version rides
       // every decode so a mixed-version dataset fails loudly by name.
       formatVersion: this.formatVersion,
@@ -2330,24 +2303,15 @@ export class STTArchive {
    * off (multi-source coordination, Phase 2 — integration; see
    * docs/roadmap/playback-and-loading.md §5).
    *
-   * TWO CLEANLY-SEPARATED PATHS, chosen by the kill-switch
-   * ({@link isSharedSchedulingEnabled}, default ON):
-   *
-   *  - **DISABLED (the fallback / rollback path):** the EXACT pre-Phase-2
-   *    per-instance cursor runner — `limit` runners pull from a shared `next++`
-   *    cursor so at most `maxConcurrentRequests` group fetches are ever in
-   *    flight for THIS archive. Behaviour is byte-for-byte unchanged from
-   *    before Phase 2.
-   *  - **ENABLED:** each group is `scheduler.schedule(...)`'d on the
-   *    process-shared {@link getSharedScheduler} under THIS archive's
-   *    `sourceId` (its url) + `schedulerWeight`, with a cross-source EDF
-   *    `getPriority` ({@link groupSchedulerPriority}). The global budget is
-   *    shared across all archives; a single archive still draws the whole budget
-   *    (DRR is work-conserving) so there is no single-source regression.
+   * Each group is `scheduler.schedule(...)`'d on the process-shared
+   * {@link getSharedScheduler} under THIS archive's `sourceId` (its url) +
+   * `schedulerWeight`, with a cross-source EDF `getPriority`
+   * ({@link groupSchedulerPriority}). The global budget is shared across all
+   * archives; a single archive still draws the whole budget (DRR is
+   * work-conserving) so there is no single-source regression.
    *
    * Supersession: the caller's `options.signal` (the tileset's per-batch
-   * AbortController) is honored in BOTH paths. In the scheduled path the
-   * caller-abort fires the scheduled request's `abort()` — cancelling it whether
+   * AbortController) is honored — the caller-abort fires the scheduled request's `abort()` — cancelling it whether
    * queued (dropped, frees nothing) or running (its scheduler signal fires) —
    * and that scheduler signal is the one passed into `executeGroup`, so retry /
    * timeout / raceAbort inside it stop promptly. Retry happens INSIDE
@@ -2367,26 +2331,6 @@ export class STTArchive {
   ): Promise<void> {
     if (groups.length === 0) return;
 
-    // ── Kill-switch DISABLED → legacy per-instance cursor runner (unchanged). ──
-    if (!isSharedSchedulingEnabled()) {
-      const limit = Math.max(1, this.maxConcurrentRequests);
-      if (groups.length <= limit) {
-        await Promise.all(groups.map((g) => executeGroup(g, options?.signal)));
-        return;
-      }
-      let next = 0;
-      const runner = async (): Promise<void> => {
-        for (;;) {
-          const i = next++;
-          if (i >= groups.length) return;
-          await executeGroup(groups[i], options?.signal);
-        }
-      };
-      await Promise.all(Array.from({ length: limit }, () => runner()));
-      return;
-    }
-
-    // ── Kill-switch ENABLED → route every group through the shared scheduler. ──
     const scheduler = getSharedScheduler();
     const callerSignal = options?.signal;
     const fetchPriority = options?.fetchPriority;
@@ -2755,11 +2699,10 @@ export class STTArchive {
         );
       };
 
-      // Dispatch the coalesced groups — through the process-shared scheduler
-      // when enabled (one slot per group, cross-source EDF + weighted-fair
-      // share), or the legacy per-instance cursor runner when the kill-switch is
-      // off. See runGroupFetches. The EDF distance term uses each group's
-      // members' tile timeStarts vs the threaded play-head.
+      // Dispatch the coalesced groups through the process-shared scheduler (one
+      // slot per group, cross-source EDF + weighted-fair share). See
+      // runGroupFetches. The EDF distance term uses each group's members' tile
+      // timeStarts vs the threaded play-head.
       jobs.push(
         this.runGroupFetches(
           groups,

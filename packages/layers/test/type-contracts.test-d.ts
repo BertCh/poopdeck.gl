@@ -168,7 +168,7 @@ new MyBaseLayer({ id: 'base', data: '', currentTime: 0, a: 1 });
 new MySummaryLayer({ ...h3Props, legendTitle: 'Cells' });
 
 // ---------------------------------------------------------------------------
-// 3. Deprecated rename aliases stay importable and identical
+// 3. The heatmap layer accepts its props and stays subclassable
 // ---------------------------------------------------------------------------
 
 const heatmapProps: AnimatedHeatmapLayerProps = {

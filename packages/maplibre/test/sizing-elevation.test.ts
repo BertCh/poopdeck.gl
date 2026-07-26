@@ -10,7 +10,6 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  DEPRECATED_ALTITUDE_SCALE,
   EARTH_CIRCUMFERENCE_M,
   EARTH_RADIUS_M,
   latFromMercatorY,
@@ -21,6 +20,12 @@ import {
   metersToPixelsAtLatitude,
   tileCenterLatitude,
 } from '../src/lib/projection';
+
+// The pre-D10 flat altitude→mercator-z factor, kept as a local literal purely
+// as the regression anchor for the correction (it is no longer exported —
+// nothing reads it). `HISTORICAL_FLAT_SCALE / mercatorZFromAltitude(1, 0)` =
+// 4.003, the "~4x too tall" the ecosystem audit measured.
+const HISTORICAL_FLAT_SCALE = 1e-7;
 
 // maplibre's earthCircumference, spelled out so a constant change here has to
 // be a deliberate edit to this literal too.
@@ -227,16 +232,16 @@ describe('metersToPixelsAtLatitude (metric sizing)', () => {
 });
 
 describe('D10 regression pin: the OLD 1e-7 altitudeScale was ~4× too tall', () => {
-  it('DEPRECATED_ALTITUDE_SCALE overstates equatorial height by 4.003×', () => {
-    expect(DEPRECATED_ALTITUDE_SCALE).toBe(1e-7);
-    const ratio = DEPRECATED_ALTITUDE_SCALE / mercatorZFromAltitude(1, 0);
+  it('HISTORICAL_FLAT_SCALE overstates equatorial height by 4.003×', () => {
+    expect(HISTORICAL_FLAT_SCALE).toBe(1e-7);
+    const ratio = HISTORICAL_FLAT_SCALE / mercatorZFromAltitude(1, 0);
     expect(ratio).toBeCloseTo(4.003, 3);
     expect(ratio).toBeGreaterThan(3.9);
     expect(ratio).toBeLessThan(4.1);
   });
 
   it('a 100 m building drawn with the fix is ~4× SHORTER — intentional', () => {
-    const old = 100 * DEPRECATED_ALTITUDE_SCALE;
+    const old = 100 * HISTORICAL_FLAT_SCALE;
     const fixed = mercatorZFromAltitude(100, 0);
     expect(fixed).toBeLessThan(old);
     expect(old / fixed).toBeCloseTo(4.003, 3);
@@ -247,7 +252,7 @@ describe('D10 regression pin: the OLD 1e-7 altitudeScale was ~4× too tall', () 
     // never right anywhere else — that latitude-blindness is the second half of
     // the D10 defect.
     const ratioAt = (lat: number): number =>
-      DEPRECATED_ALTITUDE_SCALE / mercatorZFromAltitude(1, lat);
+      HISTORICAL_FLAT_SCALE / mercatorZFromAltitude(1, lat);
     expect(ratioAt(0)).toBeCloseTo(4.003, 3);
     expect(ratioAt(45)).toBeCloseTo(2.831, 3);
     expect(ratioAt(75.5)).toBeCloseTo(1, 2);

@@ -1,16 +1,22 @@
 /**
  * Test helpers for the STT **packed format**.
  *
- * The committed `fixtures/sample.stt` is a single-file v4 archive (the old
- * canonical format). The reader now consumes the packed format (manifest +
- * `index/<hash>.sttd` + `packs/<hash>.sttp`). These helpers transcode a v4
- * single-file buffer into an in-memory packed dataset so the existing
- * cross-impl tests can keep exercising the real fixture's tiles through the
- * new reader, and expose a `fetch` shim that serves a packed dataset (whole
- * GET → 200, Range → 206) from in-memory objects.
+ * `packedFromGolden` re-cuts the committed `fixtures/packed-golden/` dataset
+ * (written by the Rust `make-golden-fixture` example, so it is real writer
+ * output) into an in-memory object map, with control over pack size and the
+ * directory key so tests can exercise coalescing, dedup and redeploy paths.
+ * `packedFetch` serves such a dataset (whole GET → 200, Range → 206).
+ *
+ * Objects carry their `STTP`/`STTD` magic prelude and record OBJECT-ABSOLUTE
+ * blob offsets, matching the writer (packed spec §9.2).
  */
 
+import { readFileSync } from 'node:fs';
+import { unzstdSync } from '../../src/compression';
+import { fileURLToPath } from 'node:url';
+
 import {
+  decodeDirectory,
   encodeDirectory,
   type DirectoryEncodeEntry,
 } from '../../src/directory';
@@ -20,6 +26,20 @@ function bufferToArrayBuffer(buf: Uint8Array): ArrayBuffer {
 }
 
 /** A minimal in-memory packed dataset: the three object kinds, keyed by path. */
+
+/** Byte length of an object magic prelude (tag + version + 3 reserved zeros). */
+export const OBJECT_MAGIC_LEN = 8;
+const PACK_MAGIC = 'STTP';
+const DIRECTORY_MAGIC = 'STTD';
+
+/** `"STTP"`/`"STTD"` + u8 version(2) + 3 zero bytes (packed spec §9.2). */
+function objectMagic(tag: string): Uint8Array {
+  const out = new Uint8Array(OBJECT_MAGIC_LEN);
+  out.set(new TextEncoder().encode(tag), 0);
+  out[4] = 2;
+  return out;
+}
+
 export interface InMemoryPackedDataset {
   /** Path → bytes for every object (`manifest.json`, `index/...`, `packs/...`). */
   objects: Map<string, Uint8Array>;
@@ -217,17 +237,19 @@ export function packedFromSingleFile(
   }
 
   // Cut blobs into packs of ≤ packTargetBytes (never split a blob).
+  // Offsets are OBJECT-ABSOLUTE (packed spec §9.2), so the first blob in a
+  // pack starts after that object's 8-byte `STTP` magic prelude.
   const placement = new Map<string, { packId: number; offset: number }>();
   const packBlobKeys: string[][] = [];
   let curPack: string[] = [];
-  let curOffset = 0;
+  let curOffset = OBJECT_MAGIC_LEN;
   let packId = 0;
   for (const k of blobOrder) {
     const len = blobBytes.get(k)!.length;
     if (curPack.length > 0 && curOffset + len > packTargetBytes) {
       packBlobKeys.push(curPack);
       curPack = [];
-      curOffset = 0;
+      curOffset = OBJECT_MAGIC_LEN;
       packId++;
     }
     placement.set(k, { packId, offset: curOffset });
@@ -240,10 +262,11 @@ export function packedFromSingleFile(
   const objects = new Map<string, Uint8Array>();
   const packRefs: Array<{ key: string; length: number }> = [];
   for (let p = 0; p < packBlobKeys.length; p++) {
-    let total = 0;
+    let total = OBJECT_MAGIC_LEN;
     for (const k of packBlobKeys[p]) total += blobBytes.get(k)!.length;
     const buf = new Uint8Array(total);
-    let o = 0;
+    buf.set(objectMagic(PACK_MAGIC), 0);
+    let o = OBJECT_MAGIC_LEN;
     for (const k of packBlobKeys[p]) {
       const b = blobBytes.get(k)!;
       buf.set(b, o);
@@ -274,7 +297,10 @@ export function packedFromSingleFile(
       coverTMin: e.coverTMin,
     };
   });
-  const dirBytes = encodeDirectory(encEntries);
+  const dirCodecBytes = encodeDirectory(encEntries);
+  const dirBytes = new Uint8Array(OBJECT_MAGIC_LEN + dirCodecBytes.length);
+  dirBytes.set(objectMagic(DIRECTORY_MAGIC), 0);
+  dirBytes.set(dirCodecBytes, OBJECT_MAGIC_LEN);
   // The directory key is content-addressed in production; tests can override it
   // to simulate a redeploy whose tiles changed (→ a new directory hash → a
   // distinct OPFS namespace).
@@ -285,7 +311,7 @@ export function packedFromSingleFile(
     compressionByte === 0 ? 'none' : compressionByte === 1 ? 'gzip' : 'zstd';
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression,
     directory: { key: dirKey, length: dirBytes.length, directoryVersion: 5 },
     packs: packRefs,
@@ -382,4 +408,197 @@ export function packedFetch(
       arrayBuffer: async () => bufferToArrayBuffer(slice),
     };
   }) as unknown as typeof fetch;
+}
+
+/**
+ * Assemble a pack object from its blobs: the 8-byte `STTP` prelude followed by
+ * the blobs back to back. Returns the object bytes plus each blob's
+ * OBJECT-ABSOLUTE offset (packed spec §9.2 — offsets include the prelude), which
+ * is what a directory entry records.
+ */
+export function packObject(blobs: Uint8Array[]): {
+  bytes: Uint8Array;
+  offsets: number[];
+} {
+  const total = OBJECT_MAGIC_LEN + blobs.reduce((n, b) => n + b.byteLength, 0);
+  const bytes = new Uint8Array(total);
+  bytes.set(objectMagic(PACK_MAGIC), 0);
+  const offsets: number[] = [];
+  let o = OBJECT_MAGIC_LEN;
+  for (const b of blobs) {
+    offsets.push(o);
+    bytes.set(b, o);
+    o += b.byteLength;
+  }
+  return { bytes, offsets };
+}
+
+/** Wrap encoded directory bytes in their `STTD` object prelude. */
+export function directoryObject(codecBytes: Uint8Array): Uint8Array {
+  const out = new Uint8Array(OBJECT_MAGIC_LEN + codecBytes.byteLength);
+  out.set(objectMagic(DIRECTORY_MAGIC), 0);
+  out.set(codecBytes, OBJECT_MAGIC_LEN);
+  return out;
+}
+
+/** Decoded shape of one golden pack/directory entry, as re-cut below. */
+interface GoldenSource {
+  compressionByte: number;
+  metadataJson: unknown;
+  entries: Array<{
+    zoom: number;
+    x: number;
+    y: number;
+    timeStart: number;
+    timeEnd: number;
+    length: number;
+    uncompressedSize: number;
+    featureCount: number;
+    hilbert: number;
+    crc32c: number;
+    temporalBucketMs?: number;
+    coverTMin?: number;
+    /** The blob bytes themselves, lifted out of their source pack. */
+    blob: Uint8Array;
+  }>;
+}
+
+/** Read the committed v2 golden dataset and lift out every blob. */
+function readGolden(dir = 'packed-golden'): GoldenSource {
+  const root = fileURLToPath(new URL(`../fixtures/${dir}/`, import.meta.url));
+  const manifest = JSON.parse(readFileSync(`${root}manifest.json`, 'utf8'));
+  const dirBytes = new Uint8Array(
+    readFileSync(`${root}${manifest.directory.key}`),
+  );
+  // Strip the STTD prelude, then inflate: the writer ships the directory
+  // zstd-compressed at rest (declared via `directory.encoding`).
+  const codec = dirBytes.subarray(OBJECT_MAGIC_LEN);
+  const entries = decodeDirectory(
+    manifest.directory.encoding === 'zstd' ? unzstdSync(codec) : codec,
+  );
+  const packs: Uint8Array[] = manifest.packs.map(
+    (p: { key: string }) => new Uint8Array(readFileSync(`${root}${p.key}`)),
+  );
+  return {
+    compressionByte: manifest.compression === 'zstd' ? 2 : 0,
+    metadataJson: manifest.metadata,
+    entries: entries.map((e) => ({
+      zoom: e.zoom,
+      x: e.x,
+      y: e.y,
+      timeStart: e.timeStart,
+      timeEnd: e.timeEnd,
+      length: e.length,
+      uncompressedSize: e.uncompressedSize,
+      featureCount: e.featureCount,
+      hilbert: e.hilbert ?? 0,
+      crc32c: e.crc32c ?? 0,
+      temporalBucketMs: e.temporalBucketMs,
+      coverTMin: e.coverTMin,
+      // Offsets are object-absolute, so they index straight into the pack.
+      blob: packs[e.packId].subarray(e.offset, e.offset + e.length),
+    })),
+  };
+}
+
+/**
+ * Build an in-memory packed dataset from the committed v2 golden fixture,
+ * re-cutting its blobs into packs of at most `packTargetBytes` (never splitting
+ * a blob). Identical blobs collapse to one physical copy, preserving the
+ * fixture's own dedup.
+ */
+export function packedFromGolden(
+  opts: {
+    manifestUrl?: string;
+    packTargetBytes?: number;
+    directoryKey?: string;
+    fixture?: string;
+  } = {},
+): InMemoryPackedDataset {
+  const manifestUrl = opts.manifestUrl ?? 'mem://data/sample/manifest.json';
+  const packTargetBytes = opts.packTargetBytes ?? Number.MAX_SAFE_INTEGER;
+  const src = readGolden(opts.fixture);
+
+  // Dedup identical blobs → one physical copy each.
+  const keyOf = (b: Uint8Array) => b.join(',');
+  const order: string[] = [];
+  const bytesByKey = new Map<string, Uint8Array>();
+  for (const e of src.entries) {
+    const k = keyOf(e.blob);
+    if (!bytesByKey.has(k)) {
+      order.push(k);
+      bytesByKey.set(k, e.blob);
+    }
+  }
+
+  // Cut into packs; offsets are object-absolute (after the STTP prelude).
+  const placement = new Map<string, { packId: number; offset: number }>();
+  const packKeys: string[][] = [];
+  let cur: string[] = [];
+  let curOffset = OBJECT_MAGIC_LEN;
+  let packId = 0;
+  for (const k of order) {
+    const len = bytesByKey.get(k)!.byteLength;
+    if (cur.length > 0 && curOffset + len > packTargetBytes) {
+      packKeys.push(cur);
+      cur = [];
+      curOffset = OBJECT_MAGIC_LEN;
+      packId++;
+    }
+    placement.set(k, { packId, offset: curOffset });
+    cur.push(k);
+    curOffset += len;
+  }
+  if (cur.length > 0) packKeys.push(cur);
+
+  const objects = new Map<string, Uint8Array>();
+  const packRefs: Array<{ key: string; length: number }> = [];
+  for (let p = 0; p < packKeys.length; p++) {
+    const { bytes } = packObject(packKeys[p].map((k) => bytesByKey.get(k)!));
+    const key = `packs/pack-${p}.sttp`;
+    objects.set(key, bytes);
+    packRefs.push({ key, length: bytes.byteLength });
+  }
+
+  const encEntries: DirectoryEncodeEntry[] = src.entries.map((e) => {
+    const pl = placement.get(keyOf(e.blob))!;
+    return {
+      zoom: e.zoom,
+      x: e.x,
+      y: e.y,
+      timeStart: e.timeStart,
+      timeEnd: e.timeEnd,
+      packId: pl.packId,
+      offset: pl.offset,
+      length: e.length,
+      uncompressedSize: e.uncompressedSize,
+      featureCount: e.featureCount,
+      hilbert: e.hilbert,
+      crc32c: e.crc32c,
+      temporalBucketMs: e.temporalBucketMs,
+      coverTMin: e.coverTMin,
+    };
+  });
+  const dirObject = directoryObject(encodeDirectory(encEntries));
+  const dirKey = opts.directoryKey ?? 'index/directory.sttd';
+  objects.set(dirKey, dirObject);
+
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(
+      JSON.stringify({
+        format: 'stt-packed',
+        formatVersion: 2,
+        compression: src.compressionByte === 0 ? 'none' : 'zstd',
+        directory: {
+          key: dirKey,
+          length: dirObject.byteLength,
+          directoryVersion: 5,
+        },
+        packs: packRefs,
+        metadata: src.metadataJson,
+      }),
+    ),
+  );
+  return { objects, manifestUrl };
 }

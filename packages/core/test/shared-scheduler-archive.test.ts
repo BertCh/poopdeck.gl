@@ -3,12 +3,9 @@
  * SharedRequestScheduler (multi-source coordination, Phase 2 — integration;
  * docs/roadmap/playback-and-loading.md §5).
  *
- * Proves the three non-negotiable Phase-2 contracts:
+ * Proves the two non-negotiable Phase-2 contracts:
  *   (a) the GLOBAL concurrency cap is never exceeded across BOTH archives;
- *   (b) neither archive starves the other (Deficit-Round-Robin fair share);
- *   (c) with the kill-switch DISABLED, a single archive takes the EXACT legacy
- *       per-instance cursor-runner path (its per-archive maxConcurrentRequests
- *       cap is honored, the shared global budget is irrelevant).
+ *   (b) neither archive starves the other (Deficit-Round-Robin fair share).
  *
  * Each archive is given K tiles spread one-per-pack with a zero coalesce gap, so
  * every tile becomes its own coalesced range-group = one scheduled unit. A
@@ -17,8 +14,6 @@
  */
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { crc32c } from '../src/crc32c';
 import { encodeDirectory } from '../src/directory';
@@ -27,14 +22,15 @@ import {
   resetSharedScheduler,
   getSharedScheduler,
 } from '../src/shared-scheduler';
-import { packedFromSingleFile } from './helpers/packed-fixture';
+import {
+  OBJECT_MAGIC_LEN,
+  packObject,
+  directoryObject,
+  packedFromGolden,
+} from './helpers/packed-fixture';
 import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-const DATASET = packedFromSingleFile(FIXTURE_BYTES);
+const DATASET = packedFromGolden();
 const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
   .filter((k) => k.startsWith('packs/'))
   .sort();
@@ -52,14 +48,9 @@ async function fixtureBlobAndMeta(): Promise<{
   const e = idx.tiles[0];
   const srcPack = DATASET.objects.get(DATASET_PACK_KEYS[e.packId])!;
   const blob = srcPack.subarray(e.offset, e.offset + e.length);
-  const hv = new DataView(bufferToArrayBuffer(FIXTURE_BYTES));
-  const metaOff = Number(hv.getBigUint64(22, true));
-  const metaLen = Number(hv.getBigUint64(30, true));
   const meta = JSON.parse(
-    new TextDecoder().decode(
-      FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen),
-    ),
-  );
+    new TextDecoder().decode(DATASET.objects.get('manifest.json')!),
+  ).metadata;
   return { blob, meta, e };
 }
 
@@ -79,8 +70,9 @@ function makeDataset(
   const entries: any[] = [];
   for (let i = 0; i < k; i++) {
     const key = `packs/p${i}.sttp`;
-    objects.set(key, blob.slice());
-    packRefs.push({ key, length: blob.length });
+    const { bytes: packBytes } = packObject([blob]);
+    objects.set(key, packBytes);
+    packRefs.push({ key, length: packBytes.length });
     entries.push({
       zoom: e.zoom,
       x: e.x,
@@ -88,7 +80,7 @@ function makeDataset(
       timeStart: i,
       timeEnd: i,
       packId: i,
-      offset: 0,
+      offset: OBJECT_MAGIC_LEN,
       length: blob.length,
       uncompressedSize: e.uncompressedSize,
       featureCount: e.featureCount,
@@ -99,14 +91,15 @@ function makeDataset(
     });
   }
   const dir = encodeDirectory(entries);
-  objects.set('index/dir.sttd', dir);
+  const dirObject = directoryObject(dir);
+  objects.set('index/dir.sttd', dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression: 'zstd',
     directory: {
       key: 'index/dir.sttd',
-      length: dir.length,
+      length: dirObject.length,
       directoryVersion: 5,
     },
     packs: packRefs,
@@ -479,56 +472,6 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
       expect(ra.every((t) => t !== null)).toBe(true);
       expect(rb.every((t) => t !== null)).toBe(true);
     }
-  });
-
-  it('(c) kill-switch DISABLED → single-archive path honors per-instance cap, unchanged', async () => {
-    const { blob, meta, e } = await fixtureBlobAndMeta();
-    const K = 8;
-    const PER_ARCHIVE_CAP = 2;
-    // Disable the shared scheduler: the archive must take its EXACT legacy
-    // per-instance cursor-runner path, bounded by maxConcurrentRequests — the
-    // global budget is irrelevant on this path.
-    configureSharedScheduler({ enabled: false, maxRequests: 24 });
-
-    const url = 'mem://solo/manifest.json';
-    const obj = makeDataset(K, blob, meta, e);
-    const shared = newShared();
-    const archive = new STTArchive({
-      url,
-      fetch: gatedFetch(obj, url, 'solo', shared),
-      coalesceGapBytes: 0,
-      maxConcurrentRequests: PER_ARCHIVE_CAP,
-    });
-    const ids = (await archive.getIndex()).tiles.map((t) => ({
-      z: t.zoom,
-      x: t.x,
-      y: t.y,
-      t: t.timeStart,
-    }));
-    const p = archive.getTiles(ids);
-
-    let finished = false;
-    p.finally(() => {
-      finished = true;
-    });
-    while (!finished) {
-      await flush();
-      // Legacy per-instance cap is the binding constraint, not the global 24.
-      expect(shared.inFlight).toBeLessThanOrEqual(PER_ARCHIVE_CAP);
-      const gate = shared.gates.shift();
-      if (gate) gate();
-    }
-    while (shared.gates.length > 0) {
-      shared.gates.shift()!();
-      await flush();
-    }
-
-    const r = await p;
-    expect(r.every((t) => t !== null)).toBe(true);
-    expect(shared.peak).toBeLessThanOrEqual(PER_ARCHIVE_CAP);
-    expect(shared.peak).toBe(PER_ARCHIVE_CAP); // it really filled the cap
-    // The shared scheduler was never touched on the disabled path.
-    expect(getSharedScheduler().getStats().active).toBe(0);
   });
 
   it('global budget is fully used by a SINGLE archive (no single-source regression)', async () => {

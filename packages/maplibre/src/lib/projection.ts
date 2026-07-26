@@ -155,7 +155,7 @@ export function metersPerMercatorUnit(latDeg: number): number {
  *
  * **Intentional visual change (campaign D10).** This REPLACES the historical
  * `DEFAULT_ALTITUDE_SCALE = 1e-7` flat factor, which is 4.003× larger than the
- * correct equatorial value ({@link DEPRECATED_ALTITUDE_SCALE}) — extrusions
+ * correct equatorial value (the pre-D10 flat `1e-7` factor) — extrusions
  * built on it stood ~4× too tall. Extruded polygons/columns therefore become
  * ~4× SHORTER, i.e. correct, once a layer switches to this function. Reviewers:
  * that shrink is the fix, not a regression.
@@ -222,20 +222,6 @@ export function metersToPixelsAtLatitude(
 ): number {
   return metersToMercatorUnits(meters, latDeg) * tileSize * Math.pow(2, zoom);
 }
-
-/**
- * The pre-D10 flat altitude→mercator-z factor, kept ONLY as the citable anchor
- * for the correction: `DEPRECATED_ALTITUDE_SCALE / mercatorZFromAltitude(1, 0)`
- * = 4.003, the "~4× too tall" the ecosystem audit measured.
- *
- * NOTHING reads it any more. `STTPolygonLayer.altitudeScale` defaults to `1`
- * and means a dimensionless exaggeration; the metres→mercator-z conversion is
- * this module's job. A new extruding layer (Wave M3's column kind) must build
- * on {@link mercatorZFromAltitude}, never re-adopt this value as a default.
- *
- * @deprecated Use {@link mercatorZFromAltitude} — latitude-correct, host-matched.
- */
-export const DEPRECATED_ALTITUDE_SCALE = 1e-7;
 
 /**
  * Per-axis parameters reconstructing a world mercator position from a

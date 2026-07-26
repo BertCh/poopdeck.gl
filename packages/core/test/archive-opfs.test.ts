@@ -11,25 +11,19 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { OpfsTileCache } from '../src/opfs-cache';
 import {
-  packedFromSingleFile,
+  packedFromGolden,
   type InMemoryPackedDataset,
 } from './helpers/packed-fixture';
 import { bufferToArrayBuffer, settle } from './helpers/fixtures';
 import { installShim, uninstallShim } from './helpers/opfs-shim';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 // The reader consumes the packed format; transcode the single-file fixture. The
 // OPFS fingerprint now derives from the manifest's content-addressed directory
 // key (stable across packs), NOT a per-response ETag.
-const DATASET = packedFromSingleFile(FIXTURE_BYTES, {
+const DATASET = packedFromGolden({
   manifestUrl: 'mem://data/sample/manifest.json',
 });
 
@@ -161,11 +155,11 @@ describe('STTArchive + OpfsTileCache integration', () => {
       // Two "deploys" of the SAME URL whose tiles changed → distinct
       // content-addressed directory keys → distinct OPFS fingerprints. (The
       // fingerprint is the manifest directory key, not a per-response ETag.)
-      const v1 = packedFromSingleFile(FIXTURE_BYTES, {
+      const v1 = packedFromGolden({
         manifestUrl: 'mem://sample/manifest.json',
         directoryKey: 'index/v1.sttd',
       });
-      const v2 = packedFromSingleFile(FIXTURE_BYTES, {
+      const v2 = packedFromGolden({
         manifestUrl: 'mem://sample/manifest.json',
         directoryKey: 'index/v2-redeployed.sttd',
       });

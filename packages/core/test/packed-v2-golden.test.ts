@@ -120,181 +120,8 @@ async function decodeAll(
   return out;
 }
 
-/** The v2 ↔ v1 same-source equivalence, per fixture pair. */
-async function expectPairEquivalent(
-  v2Name: string,
-  v1Name: string,
-): Promise<void> {
-  const v2 = openArchive(v2Name);
-  const v1 = openArchive(v1Name);
-
-  // Same logical directory: identical (z,x,y,t) → (span, featureCount).
-  const [i2, i1] = [await v2.getIndex(), await v1.getIndex()];
-  const describeEntries = (tiles: typeof i1.tiles) =>
-    tiles
-      .map(
-        (e) =>
-          `${e.zoom}/${e.x}/${e.y}/${e.timeStart}-${e.timeEnd}#${e.featureCount}`,
-      )
-      .sort();
-  expect(describeEntries(i2.tiles)).toEqual(describeEntries(i1.tiles));
-
-  // Same decoded features, tile by tile. v2 rows are stable-sorted by
-  // start_time (§5.2.3) while the frozen v1 writer keeps placement order,
-  // so records compare id-sorted.
-  const [d2, d1] = [await decodeAll(v2), await decodeAll(v1)];
-  expect([...d2.keys()].sort()).toEqual([...d1.keys()].sort());
-  for (const [key, records1] of d1) {
-    expect(d2.get(key), `tile ${key}`).toEqual(records1);
-  }
-}
-
 describe('STT packed formatVersion 2 (golden fixtures)', () => {
-  it('opens the v2 manifest: registry built, metadata folded, version surfaced', async () => {
-    const archive = openArchive('v2-golden');
-    const meta = await archive.getMetadata();
-    expect(meta.version).toBe(2);
-    expect(meta.name).toBe('v2-golden');
-  });
-
-  it('quantized points + numeric + two dictionary columns: v2 decode == v1 decode of the same source', async () => {
-    await expectPairEquivalent('v2-golden', 'v2-golden-v1');
-  });
-
-  it('trajectories with u16-delta vertex_time (TILE_META vt): v2 decode == v1 decode', async () => {
-    await expectPairEquivalent('v2-golden-tracks', 'v2-golden-tracks-v1');
-  });
-
-  it('rehydrates a worker-shaped v2 layer (core+props re-merge) in toGeoArrowTable', async () => {
-    // The worker decode path strips the non-cloneable Table and ships the
-    // spliced core + props IPC streams; simulate that shape from an
-    // inline-decoded tile and prove the lazy rehydrate re-merges them.
-    const { toGeoArrowTable } = await import('../src/tile');
-    const archive = openArchive('v2-golden-tracks'); // unquantized → IPC retained
-    const index = await archive.getIndex();
-    const e = index.tiles[0];
-    const tile = await archive.getTile({
-      z: e.zoom,
-      x: e.x,
-      y: e.y,
-      t: e.timeStart,
-    });
-    const layer = tile!.layers[0];
-    const direct = toGeoArrowTable(layer);
-    const workerShaped = { ...layer, arrowTable: undefined };
-    const rehydrated = toGeoArrowTable(workerShaped);
-    expect(rehydrated.numRows).toBe(direct.numRows);
-    expect(rehydrated.schema.fields.map((f) => f.name)).toEqual(
-      direct.schema.fields.map((f) => f.name),
-    );
-    // Property columns survive the re-merge (the v2 section split must be
-    // invisible to GeoArrow consumers).
-    expect(rehydrated.getChild('speed')).not.toBeNull();
-    // The TILE_META re-injection survives too: `layer.tileMeta` rides the
-    // worker boundary as plain JSON, so the rehydrated schema carries the
-    // SAME stt:* keys as the inline-decoded table (t0 + the vt pair here).
-    expect(Object.fromEntries(rehydrated.schema.metadata)).toEqual(
-      Object.fromEntries(direct.schema.metadata),
-    );
-    expect(rehydrated.schema.metadata.get('stt:time_offset_ms')).toBeDefined();
-    expect(
-      rehydrated.schema.metadata.get('stt:vertex_time_origin_ms'),
-    ).toBeDefined();
-    expect(
-      rehydrated.schema.metadata.get('stt:vertex_time_step_ms'),
-    ).toBeDefined();
-  });
-
-  it('re-injects TILE_META into the GeoArrow hand-off: v2 schema metadata == the v1 fixture (merge_v2_layer parity)', async () => {
-    const { toGeoArrowTable } = await import('../src/tile');
-    // retainArrowIpc: true — the quantized pair's layers otherwise drop
-    // their backing tables under the default 'auto' policy.
-    const open = (name: string): STTArchive => {
-      const ds = dataset(name);
-      return new STTArchive({
-        url: ds.manifestUrl,
-        fetch: packedFetch(ds),
-        retainArrowIpc: true,
-      });
-    };
-    const pairs: Array<[string, string]> = [
-      ['v2-golden', 'v2-golden-v1'], // per-field stt:qa (quantize-attrs-auto)
-      ['v2-golden-tracks', 'v2-golden-tracks-v1'], // stt:time_offset_ms + stt:vertex_time_*
-    ];
-    for (const [v2Name, v1Name] of pairs) {
-      const [v2, v1] = [open(v2Name), open(v1Name)];
-      const [i2, i1] = [await v2.getIndex(), await v1.getIndex()];
-      const key = (e: (typeof i1.tiles)[number]) =>
-        `${e.zoom}/${e.x}/${e.y}/${e.timeStart}`;
-      const v1ByKey = new Map(i1.tiles.map((e) => [key(e), e]));
-      expect(i2.tiles.length).toBeGreaterThan(0);
-      for (const e2 of i2.tiles) {
-        const e1 = v1ByKey.get(key(e2));
-        expect(e1, `v1 twin of tile ${key(e2)}`).toBeDefined();
-        const t2 = await v2.getTile({
-          z: e2.zoom,
-          x: e2.x,
-          y: e2.y,
-          t: e2.timeStart,
-        });
-        const t1 = await v1.getTile({
-          z: e1!.zoom,
-          x: e1!.x,
-          y: e1!.y,
-          t: e1!.timeStart,
-        });
-        const g2 = toGeoArrowTable(t2!.layers[0]);
-        const g1 = toGeoArrowTable(t1!.layers[0]);
-        // Schema-level metadata: the TILE_META-hoisted keys
-        // (stt:time_offset_ms / stt:vertex_time_* / stt:vertex_value_buckets)
-        // must be re-injected with the exact v1 strings, alongside the
-        // dataset-constant keys the templates already carry.
-        expect(
-          Object.fromEntries(g2.schema.metadata),
-          `tile ${key(e2)} (${v2Name}) schema metadata`,
-        ).toEqual(Object.fromEntries(g1.schema.metadata));
-        // Field-level metadata: per-field stt:qa (v1 JSON shape) plus the
-        // GeoArrow extension / stt:quant tags. Everything compares
-        // byte-exact EXCEPT the stt:qa affine numbers: the v2 wire's
-        // canonical-JSON floats sit ~1 ulp off the v1 strings' doubles, so
-        // Rust's own merge_v2_layer output has the same drift vs the v1
-        // fixture — qa compares numerically, same-key-set + same shape.
-        const fieldMeta = (t: typeof g1, dropQa: boolean) =>
-          Object.fromEntries(
-            t.schema.fields.map((f) => {
-              const m = Object.fromEntries(f.metadata);
-              if (dropQa) delete m['stt:qa'];
-              return [f.name, m];
-            }),
-          );
-        expect(
-          fieldMeta(g2, true),
-          `tile ${key(e2)} (${v2Name}) field metadata`,
-        ).toEqual(fieldMeta(g1, true));
-        for (const f1 of g1.schema.fields) {
-          const qa1 = f1.metadata.get('stt:qa');
-          const qa2 = g2.schema.fields
-            .find((f) => f.name === f1.name)
-            ?.metadata.get('stt:qa');
-          expect(
-            qa2 === undefined,
-            `tile ${key(e2)} field ${f1.name} stt:qa presence`,
-          ).toBe(qa1 === undefined);
-          if (!qa1 || !qa2) continue;
-          const [p1, p2] = [JSON.parse(qa1), JSON.parse(qa2)];
-          for (const k of ['o', 's'] as const) {
-            const tol = Math.max(Math.abs(p1[k]) * 1e-13, Number.MIN_VALUE);
-            expect(
-              Math.abs(p2[k] - p1[k]),
-              `tile ${key(e2)} field ${f1.name} qa.${k}`,
-            ).toBeLessThanOrEqual(tol);
-          }
-        }
-      }
-    }
-  });
-
-  it('marks v2 features time-sorted (§5.2.3) and leaves v1 unflagged', async () => {
+  it('marks features time-sorted (§5.2.3)', async () => {
     const v2 = openArchive('v2-golden');
     const i2 = await v2.getIndex();
     const e = i2.tiles[0];
@@ -307,17 +134,6 @@ describe('STT packed formatVersion 2 (golden fixtures)', () => {
     expect(tile!.layers[0].features.timesSorted).toBe(true);
     const startTimes = Array.from(tile!.layers[0].features.startTimes);
     expect(startTimes).toEqual([...startTimes].sort((a, b) => a - b));
-
-    const v1 = openArchive('v2-golden-v1');
-    const i1 = await v1.getIndex();
-    const e1 = i1.tiles[0];
-    const tile1 = await v1.getTile({
-      z: e1.zoom,
-      x: e1.x,
-      y: e1.y,
-      t: e1.timeStart,
-    });
-    expect(tile1!.layers[0].features.timesSorted).toBeUndefined();
   });
 
   it('decodes v2 through the root+leaf PAGED directory path (STTD magic + leaf offsets)', async () => {
@@ -462,15 +278,6 @@ describe('v2 manifest schemas validation (loud, dataset-level, at open)', () => 
     );
   });
 
-  it('rejects a formatVersion-1 manifest carrying a schemas table', async () => {
-    const archive = withManifest((m) => {
-      m.schemas = [{ hash: '0'.repeat(32), data: 'AAAA' }];
-    }, 'v2-golden-v1');
-    await expect(archive.getMetadata()).rejects.toThrow(
-      /must not carry a schemas table/,
-    );
-  });
-
   it('fails before any tile fetch: corrupt schemas block the index too', async () => {
     const archive = withManifest((m) => {
       m.schemas[0].data = '';
@@ -493,40 +300,5 @@ describe('v2 manifest schemas validation (loud, dataset-level, at open)', () => 
     await expect(
       archive.getTile({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart }),
     ).rejects.toThrow(new RegExp(`${dropped}.*not in the dataset's registry`));
-  });
-});
-
-describe('mixed-version datasets fail loudly (authority rule §5.2)', () => {
-  function withManifest(
-    mutate: (manifest: any) => void,
-    name: string,
-  ): STTArchive {
-    const ds = dataset(name);
-    const manifest = JSON.parse(
-      new TextDecoder().decode(ds.objects.get('manifest.json')!),
-    );
-    mutate(manifest);
-    ds.objects.set(
-      'manifest.json',
-      new TextEncoder().encode(JSON.stringify(manifest)),
-    );
-    return new STTArchive({ url: ds.manifestUrl, fetch: packedFetch(ds) });
-  }
-
-  it('v1 objects declared as formatVersion 2 → loud STTD-magic error at index load', async () => {
-    const archive = withManifest((m) => {
-      m.formatVersion = 2;
-    }, 'v2-golden-tracks-v1');
-    await expect(archive.getIndex()).rejects.toThrow(/missing STTD magic/);
-  });
-
-  it('v2 objects declared as formatVersion 1 → loud error (never misparse)', async () => {
-    const archive = withManifest((m) => {
-      m.formatVersion = 1;
-      delete m.schemas; // a v1 manifest may not carry the table at all
-    }, 'v2-golden-tracks');
-    // The v2 `.sttd` magic prelude is not a valid v1 directory — the open
-    // fails loudly at index decode rather than serving garbage entries.
-    await expect(archive.getIndex()).rejects.toThrow(/invalid zstd/);
   });
 });

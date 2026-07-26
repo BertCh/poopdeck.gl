@@ -23,6 +23,7 @@
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { STTArchive } from '../src/archive';
+import { OBJECT_MAGIC_LEN, directoryObject } from './helpers/packed-fixture';
 import { encodeDirectory, type DirectoryEncodeEntry } from '../src/directory';
 import {
   configureSharedScheduler,
@@ -114,7 +115,7 @@ function makePagedDataset(
       timeStart: i,
       timeEnd: i,
       packId: 0,
-      offset: 0,
+      offset: OBJECT_MAGIC_LEN,
       length: 1,
       uncompressedSize: 1,
       featureCount: 1,
@@ -151,17 +152,18 @@ function makePagedDataset(
   }
 
   const objects = new Map<string, Uint8Array>();
-  objects.set('index/dir.sttd', dir);
+  const dirObject = directoryObject(dir);
+  objects.set('index/dir.sttd', dirObject);
   // A trivial pack object so the manifest references something (unused here —
   // we only exercise the directory page fetches).
   objects.set('packs/p0.sttp', new Uint8Array([0]));
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression: 'none',
     directory: {
       key: 'index/dir.sttd',
-      length: dir.length,
+      length: dirObject.length,
       directoryVersion: 5,
       layout: 'paged',
       rootLength,

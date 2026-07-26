@@ -244,8 +244,7 @@ export type STTPosition3D = [number, number, number];
  * same type — deck's is broader (`Readonly<[number, number]> | Readonly<[number,
  * number, number]> | Readonly<Float32Array> | Readonly<Float64Array>`). Two
  * different types under one name in the packages an app imports together is the
- * collision worth spending a rename on. The 0.5.x spellings remain deprecated
- * aliases on the barrel until 0.8.0.
+ * collision worth spending a rename on.
  */
 export type STTPosition = STTPosition2D | STTPosition3D;
 
@@ -488,8 +487,7 @@ export interface TileMetaJson {
  * Named `STTTileLayer`, not `Layer`: `@deck.gl/core` exports a `Layer` CLASS
  * (the base every deck layer extends), and importing both into one module is a
  * hard duplicate-identifier error — which is why every consumer in this repo
- * had to write `import { STTTileLayer as TileLayer }`. `Layer` remains a deprecated
- * alias on the barrel until 0.8.0.
+ * had to write `import { STTTileLayer as TileLayer }`.
  */
 export interface STTTileLayer {
   name: string;
@@ -593,7 +591,7 @@ export interface TileEntry {
   uncompressedSize: number;
   /**
    * CRC-32C (Castagnoli) of the blob's compressed bytes, from the directory.
-   * Verified before decompression when `ArchiveOptions.verifyChecksums` is on.
+   * Verified before decompression.
    * `0` (the TS `encodeDirectory` default for synthetic archives) means "no
    * checksum recorded" and skips verification; `undefined` for hand-built
    * test entries behaves the same.
@@ -665,16 +663,6 @@ export interface ArchiveOptions {
   url: string;
   /** Custom fetch function (for adding auth headers, etc.) */
   fetch?: typeof fetch;
-  /**
-   * @deprecated Never read. The in-memory compressed-byte cache is always on
-   * (device-aware size); OPFS persistence is controlled by {@link opfsCache}.
-   */
-  cache?: boolean;
-  /**
-   * @deprecated Never read. The byte-cache budget is device-aware (512 MB
-   * desktop / 256 MB low-memory) and not configurable through this field.
-   */
-  maxCacheSize?: number;
   /** loaders.gl-style options; see {@link SttLoadOptions} for what is consumed. */
   loadOptions?: SttLoadOptions;
   /**
@@ -684,20 +672,6 @@ export interface ArchiveOptions {
    * browser — useful for debugging or environments that block workers.
    */
   decoder?: import('./tile-decoder.js').TileDecoder;
-  /**
-   * Verify each fetched blob's CRC-32C (from the directory) over its
-   * compressed bytes BEFORE decompression, on both the worker and inline
-   * decode paths. A mismatch rejects that tile's decode with a distinctive
-   * "crc32c mismatch" error through the normal per-tile error surface —
-   * corruption that preserves lengths (middlebox, bad cache) can no longer
-   * pass silently. Entries whose directory CRC is `0`/absent (synthetic test
-   * archives) and OPFS-decompressed warm hits (no compressed bytes to check)
-   * skip verification.
-   *
-   * **Defaults to `true`.** Pass `false` to restore the pre-verification
-   * behavior (the kill switch; the CRC cost is trivial next to zstd).
-   */
-  verifyChecksums?: boolean;
   /**
    * Whether decoded layers keep their raw Arrow IPC bytes (`STTTileLayer.arrowIpc` /
    * `STTTileLayer.arrowTable`) for lazy `toGeoArrowTable()` rehydration:
@@ -809,9 +783,7 @@ export interface ArchiveOptions {
    * contend; an idle archive's share is reclaimed (work-conserving), so a SINGLE
    * archive always gets the whole budget regardless of weight.
    *
-   * **Defaults to 1.** Has no effect when the shared scheduler is disabled (see
-   * `configureSharedScheduler`) — each archive then uses its own per-instance
-   * concurrency cap as before.
+   * **Defaults to 1.**
    */
   schedulerWeight?: number;
 }

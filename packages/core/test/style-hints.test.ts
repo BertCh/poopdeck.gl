@@ -18,6 +18,7 @@ import {
   suggestedDomainFor,
 } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
+import { directoryObject } from './helpers/packed-fixture';
 import type { StyleHints } from '../src/types';
 import {
   packedFetch,
@@ -213,14 +214,15 @@ function buildSyntheticArchive(metadata: unknown): InMemoryPackedDataset {
   ]);
   const objects = new Map<string, Uint8Array>();
   objects.set('packs/p0.sttp', pack);
-  objects.set('index/dir.sttd', indexBytes);
+  const indexBytesObject = directoryObject(indexBytes);
+  objects.set('index/dir.sttd', indexBytesObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression: 'none',
     directory: {
       key: 'index/dir.sttd',
-      length: indexBytes.byteLength,
+      length: indexBytesObject.byteLength,
       directoryVersion: 5,
     },
     packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],

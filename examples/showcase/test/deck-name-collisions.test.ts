@@ -16,13 +16,12 @@
  * importing `@poopdeck.gl/three` for real drags in `three/webgpu`, and the
  * hazard we care about is a name, which exists at parse time.
  *
- * Deprecated aliases are EXEMPT, because they are the soft-landing for the
- * rename and their whole job is to keep the colliding 0.5.x spelling resolvable
- * until 0.8.0. They are recognised by the `@deprecated` JSDoc tag on their
- * export specifier — the only placement TypeScript honours for a re-export
- * (a `@deprecated` block above an `export … from` statement is ignored, so it
- * would give consumers no IDE strikethrough either). Delete an alias and this
- * test simply stops exempting it.
+ * Any export still carrying a `@deprecated` JSDoc tag on its specifier is
+ * EXEMPT from the collision check — the tag is recognised on the export
+ * specifier, the only placement TypeScript honours for a re-export. The 0.6.0
+ * rename aliases that used to rely on this exemption have all been removed;
+ * see the "no 0.5.x name that collided" test below, which asserts they stay
+ * gone.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
@@ -202,10 +201,11 @@ describe('deck.gl export-name collisions', () => {
     });
   }
 
-  it('every 0.5.x name that DID collide is still resolvable as a deprecated alias', () => {
-    // The soft-landing half of the contract: renaming without leaving these
-    // behind would be a hard break, so assert they are present AND marked.
-    const expected: Record<string, string[]> = {
+  it('no 0.5.x name that collided with deck is exported any more', () => {
+    // The clean-break half of the contract. These names were renamed to their
+    // STT*-prefixed spellings and the transitional aliases have been removed —
+    // this guards against any of them being reintroduced and re-shadowing deck.
+    const removed: Record<string, string[]> = {
       'packages/three/src/index.ts': [
         'ArcLayer',
         'IconLayer',
@@ -220,17 +220,20 @@ describe('deck.gl export-name collisions', () => {
         'DataFilterExtensionOptions',
       ],
       'packages/core/src/index.ts': ['Layer', 'Position'],
+      'packages/maplibre/src/index.ts': [
+        'STTMaplibreLayer',
+        'STTMaplibreLayerOptions',
+      ],
     };
-    for (const [rel, names] of Object.entries(expected)) {
-      const byName = new Map(
-        exportedNames(path.join(REPO, rel)).map((e) => [e.name, e]),
+    for (const [rel, names] of Object.entries(removed)) {
+      const byName = new Set(
+        exportedNames(path.join(REPO, rel)).map((e) => e.name),
       );
       for (const name of names) {
-        const e = byName.get(name);
-        expect(e, `${rel} no longer exports ${name}`).toBeDefined();
-        expect(e!.deprecated, `${rel}: ${name} is not marked @deprecated`).toBe(
-          true,
-        );
+        expect(
+          byName.has(name),
+          `${rel} still exports the retired name ${name}`,
+        ).toBe(false);
       }
     }
   });

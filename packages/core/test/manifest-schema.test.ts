@@ -124,12 +124,12 @@ const schema: Schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 const golden = JSON.parse(readFileSync(GOLDEN_MANIFEST_PATH, 'utf8'));
 
 describe('packed-format manifest contract', () => {
-  it('the published schema is well-formed and covers formatVersion 1 and 2', () => {
+  it('the published schema is well-formed and pins formatVersion 2', () => {
     expect(schema.$schema).toContain('json-schema.org');
     expect(schema.properties.format.const).toBe('stt-packed');
-    // formatVersion is the closed [1, 2] enum — the authoritative
+    // formatVersion is the closed [2] enum — the authoritative
     // discriminator (packed spec §5.2); readers refuse anything else at open.
-    expect(schema.properties.formatVersion.enum).toEqual([1, 2]);
+    expect(schema.properties.formatVersion.enum).toEqual([2]);
     expect(schema.properties.directory.properties.directoryVersion.const).toBe(
       5,
     );
@@ -177,7 +177,7 @@ describe('packed-format manifest contract', () => {
     // Compile-time: the public type must be importable and structurally match.
     const m: PackedManifest = golden;
     expect(m.format).toBe('stt-packed');
-    expect(m.formatVersion).toBe(1);
+    expect(m.formatVersion).toBe(2);
     expect(m.directory.directoryVersion).toBe(5);
     // The Rust writer compresses the directory at rest and declares it.
     expect(m.directory.encoding).toBe('zstd');

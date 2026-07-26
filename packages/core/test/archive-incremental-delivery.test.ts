@@ -10,18 +10,19 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { decodeDirectory, encodeDirectory } from '../src/directory';
 import type { Tile, TileId } from '../src/types';
-import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import {
+  OBJECT_MAGIC_LEN,
+  directoryObject,
+  packObject,
+  packedFromGolden,
+  packedFetch,
+} from './helpers/packed-fixture';
 import type { InMemoryPackedDataset } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const BASE = packedFromSingleFile(new Uint8Array(readFileSync(FIXTURE)));
+const BASE = packedFromGolden();
 
 /**
  * Derive a two-tile / two-pack dataset from the transcoded fixture: tile B is
@@ -35,18 +36,26 @@ function twoPackDataset(): {
   const manifest = JSON.parse(
     new TextDecoder().decode(BASE.objects.get('manifest.json')!),
   );
-  const entries = decodeDirectory(BASE.objects.get(manifest.directory.key)!);
-  expect(entries.length).toBe(1);
-  const a = entries[0];
-  const packBytes = BASE.objects.get(manifest.packs[a.packId].key)!;
-  const blob = packBytes.subarray(a.offset, a.offset + a.length);
+  const entries = decodeDirectory(
+    BASE.objects.get(manifest.directory.key)!.subarray(OBJECT_MAGIC_LEN),
+  );
+  // Any single entry will do — this fixture only needs one real blob to
+  // duplicate into a second pack.
+  const src = entries[0];
+  const srcPack = BASE.objects.get(manifest.packs[src.packId].key)!;
+  const blob = srcPack.subarray(src.offset, src.offset + src.length);
 
-  const b = { ...a, x: a.x + 1, packId: 1, offset: 0 };
-  const dir = encodeDirectory([a, b]);
+  // Two single-blob pack objects, each with its own STTP prelude, so both
+  // entries sit at the same object-absolute offset.
+  const { bytes: packA, offsets: offA } = packObject([blob]);
+  const { bytes: packB } = packObject([blob]);
+  const a = { ...src, packId: 0, offset: offA[0] };
+  const b = { ...a, x: a.x + 1, packId: 1 };
+  const dir = directoryObject(encodeDirectory([a, b]));
 
   const objects = new Map<string, Uint8Array>();
-  objects.set('packs/pack-a.sttp', packBytes);
-  objects.set('packs/pack-b.sttp', blob);
+  objects.set('packs/pack-a.sttp', packA);
+  objects.set('packs/pack-b.sttp', packB);
   objects.set('index/directory.sttd', dir);
   objects.set(
     'manifest.json',
@@ -59,8 +68,8 @@ function twoPackDataset(): {
           length: dir.length,
         },
         packs: [
-          { key: 'packs/pack-a.sttp', length: packBytes.length },
-          { key: 'packs/pack-b.sttp', length: blob.length },
+          { key: 'packs/pack-a.sttp', length: packA.length },
+          { key: 'packs/pack-b.sttp', length: packB.length },
         ],
       }),
     ),

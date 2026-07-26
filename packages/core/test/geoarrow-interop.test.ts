@@ -5,28 +5,22 @@
  * `Table` that downstream consumers (`@geoarrow/deck.gl-layers`,
  * Lonboard) can use as-is.
  *
- * The fixture in `fixtures/sample.stt` is produced by the Rust example
+ * The fixture in `fixtures/packed-golden/` is produced by the Rust example
  * generator and is the closest analogue to what a real archive looks
  * like; using it gives the test teeth — a regression in either writer or
  * reader will fail here.
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { Field, FixedSizeList, Float, Precision } from 'apache-arrow';
 import { STTArchive } from '../src/archive';
 import { toGeoArrowTable, decodeTile } from '../src/tile';
 import { GeometryType } from '../src/types';
-import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import { packedFromGolden, packedFetch } from './helpers/packed-fixture';
 
 // The committed fixture is a single-file v4 archive; the reader now consumes
 // the packed format, so transcode it to an in-memory packed dataset once.
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-const DATASET = packedFromSingleFile(FIXTURE_BYTES);
+const DATASET = packedFromGolden();
 
 /** A fresh packed archive over the transcoded sample fixture. */
 function sampleArchive(): STTArchive {

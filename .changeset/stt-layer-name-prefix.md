@@ -11,26 +11,26 @@ deck.gl is the primary backend, so a real app imports `@deck.gl/*` and
 `@poopdeck.gl/*` into the same module constantly. Any name exported by both is
 therefore unwritable: TypeScript rejects the duplicate identifier, and in plain
 JS whichever import evaluates last wins. Through 0.5.x we shipped twelve such
-names. They are renamed; **the old spellings still work** as `@deprecated`
-aliases (the identical class/type, not a copy), so this release needs no code
-changes from you — you just get an IDE strikethrough pointing at the new name.
+names. They are renamed, and **the old spellings are gone** — this is a clean
+break rather than a deprecation window, taken while the project is still
+pre-1.0. Update any import of a name in the table below to its new spelling.
 
 **What collided, and what it is now**
 
-| Package | 0.5.x | 0.6.0 | Collided with |
-| --- | --- | --- | --- |
-| `@poopdeck.gl/three` | `ArcLayer` | `STTArcLayer` | `@deck.gl/layers` |
-| `@poopdeck.gl/three` | `IconLayer` | `STTIconLayer` | `@deck.gl/layers` |
-| `@poopdeck.gl/three` | `ColumnLayer` | `STTColumnLayer` | `@deck.gl/layers` |
-| `@poopdeck.gl/three` | `PolygonLayer` | `STTPolygonLayer` | `@deck.gl/layers` |
-| `@poopdeck.gl/three` | `PointCloudLayer` | `STTPointCloudLayer` | `@deck.gl/layers` |
-| `@poopdeck.gl/three` | `TripsLayer` | `STTTripsLayer` | `@deck.gl/geo-layers` |
+| Package               | 0.5.x                 | 0.6.0                    | Collided with         |
+| --------------------- | --------------------- | ------------------------ | --------------------- |
+| `@poopdeck.gl/three`  | `ArcLayer`            | `STTArcLayer`            | `@deck.gl/layers`     |
+| `@poopdeck.gl/three`  | `IconLayer`           | `STTIconLayer`           | `@deck.gl/layers`     |
+| `@poopdeck.gl/three`  | `ColumnLayer`         | `STTColumnLayer`         | `@deck.gl/layers`     |
+| `@poopdeck.gl/three`  | `PolygonLayer`        | `STTPolygonLayer`        | `@deck.gl/layers`     |
+| `@poopdeck.gl/three`  | `PointCloudLayer`     | `STTPointCloudLayer`     | `@deck.gl/layers`     |
+| `@poopdeck.gl/three`  | `TripsLayer`          | `STTTripsLayer`          | `@deck.gl/geo-layers` |
 | `@poopdeck.gl/layers` | `DataFilterExtension` | `STTDataFilterExtension` | `@deck.gl/extensions` |
-| `@poopdeck.gl/core` | `Layer` | `STTTileLayer` | `@deck.gl/core` |
-| `@poopdeck.gl/core` | `Position` | `STTPosition` | `@deck.gl/core` |
+| `@poopdeck.gl/core`   | `Layer`               | `STTTileLayer`           | `@deck.gl/core`       |
+| `@poopdeck.gl/core`   | `Position`            | `STTPosition`            | `@deck.gl/core`       |
 
 `DataFilterExtension` was the sharpest of these: deck's class and ours are
-*different implementations with different contracts* (deck runs a JS
+_different implementations with different contracts_ (deck runs a JS
 `getFilterValue` accessor per row; ours binds a baked binary column named by
 `filterProperty`) — and `@poopdeck.gl/layers` imports both, because the heatmap
 and hexagon composites drive deck's stock extension over CPU rows. Same name,
@@ -67,12 +67,13 @@ word inside the symbol — tells you which renderer you are on:
 - `Cesium*` camera/clock bridges (`CesiumView`, `attachCesiumClock`, …), which
   are named after CesiumJS concepts, not STT layer kinds.
 
-**Removal schedule and the one real break**
+**Breaking changes**
 
-The deprecated aliases are removed in **0.8.0**. Nothing was removed in this
-release — every name a 0.5.x app can import still resolves.
+Every 0.5.x spelling in the table above has been removed; import the `STT*`
+name instead. A test (`deck-name-collisions.test.ts`) asserts none of them can
+be reintroduced and re-shadow deck.
 
-The one non-additive change: `STTDataFilterExtension.extensionName` is now
+Also non-additive: `STTDataFilterExtension.extensionName` is now
 `'STTDataFilterExtension'` (was `'DataFilterExtension'`), and the renamed
 classes report their new names via `constructor.name`. Only code that compares
 those strings is affected.

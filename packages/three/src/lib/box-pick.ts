@@ -53,18 +53,6 @@ export interface SttBoxPickInfo extends SttPickInfoBase {
 }
 
 /**
- * A hit on a GPU-instanced point-cloud feature.
- *
- * @deprecated The point-cloud-only pick info was generalised into the
- * kind-tagged {@link SttIdPickInfo} (the GPU picking catalog — see
- * `./id-pick.ts`); this is now just its `'point'` narrowing, retained so a
- * consumer that declared `SttPointPickInfo` and reads `.index` / `.object` /
- * `.coordinate` / `.tileId` keeps compiling. New code should narrow on
- * `SttIdPickInfo` (which also carries `tileKey` / `featureIndex`).
- */
-export type SttPointPickInfo = SttIdPickInfo & { kind: 'point' };
-
-/**
  * Any hit surfaced by the pick controller: a CPU box hit ({@link SttBoxPickInfo})
  * or a GPU id-buffer hit on any instanced kind ({@link SttIdPickInfo} — point,
  * column, arc, …), discriminated by `kind`.

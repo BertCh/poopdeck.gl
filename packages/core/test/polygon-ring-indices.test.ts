@@ -29,6 +29,7 @@ import {
   tableToIPC,
 } from 'apache-arrow';
 import { decodeTile } from '../src/tile';
+import { frameFromIpc } from './helpers/fixtures';
 import { GeometryType, type TileId } from '../src/types';
 
 /**
@@ -125,15 +126,7 @@ function buildMultiRingPolygonTile(): Uint8Array {
   });
   const ipc = tableToIPC(new Table([new RecordBatch(schema, structData)]));
 
-  const name = new TextEncoder().encode('zones');
-  const frame = new Uint8Array(2 + 2 + name.length + 4 + ipc.length);
-  const view = new DataView(frame.buffer);
-  view.setUint16(0, 1, true);
-  view.setUint16(2, name.length, true);
-  frame.set(name, 4);
-  view.setUint32(4 + name.length, ipc.length, true);
-  frame.set(ipc, 4 + name.length + 4);
-  return frame;
+  return frameFromIpc('zones', ipc);
 }
 
 const tileId: TileId = { z: 0, x: 0, y: 0, t: 0 };

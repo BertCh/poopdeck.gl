@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://poopdeck.gl/spec/manifest.schema.json",
   "title": "STT packed-format manifest",
-  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 1 and 2). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
+  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 2). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
   "type": "object",
   "required": [
     "format",
@@ -18,9 +18,17 @@
       "$comment": "formatVersion-1 manifests MUST NOT carry the `schemas` table (v2-only; the Rust reader rejects it).",
       "if": {
         "required": ["formatVersion"],
-        "properties": { "formatVersion": { "const": 1 } }
+        "properties": {
+          "formatVersion": {
+            "const": 1
+          }
+        }
       },
-      "then": { "not": { "required": ["schemas"] } }
+      "then": {
+        "not": {
+          "required": ["schemas"]
+        }
+      }
     }
   ],
   "properties": {
@@ -29,11 +37,11 @@
       "const": "stt-packed"
     },
     "formatVersion": {
-      "description": "Packed format version — the AUTHORITATIVE discriminator (stt-packed-format.md §5.2 authority rule). 1 = the frozen 0.3.x layout (no object magic, v1 layer frames, no `schemas` table). 2 = the 2026-07 coordinated byte break (STTP/STTD object magic with object-absolute blob offsets, manifest-embedded `schemas` templates, sectioned layer frame v2). Distinct from the directory codec version (see `directory.directoryVersion`, v5 under both) and the tile-payload encoding. Readers MUST refuse values outside this enum at open.",
-      "enum": [1, 2]
+      "description": "Packed format version \u2014 the AUTHORITATIVE discriminator (stt-packed-format.md \u00a75.2 authority rule): STTP/STTD object magic with object-absolute blob offsets, manifest-embedded `schemas` templates, and the sectioned layer frame. Distinct from the directory codec version (see `directory.directoryVersion`) and the tile-payload encoding. Readers MUST refuse values outside this enum at open.",
+      "enum": [2]
     },
     "schemas": {
-      "description": "formatVersion 2 ONLY (v1 manifests MUST NOT carry the key): the dataset's Arrow IPC schema templates, embedded (stt-packed-format.md §3.2). Each entry is the raw template bytes (stream start through the end of the Schema message) base64-encoded, addressed by their blake3-128 hash — the 16-byte reference v2 layer frames carry. Entries MUST be sorted by `hash` and deduped (byte-reproducible manifests). Readers MUST validate blake3_128(data) == hash for every entry at open, failing the whole dataset loudly on any mismatch, then resolve frame references against the resulting registry.",
+      "description": "formatVersion 2 ONLY (v1 manifests MUST NOT carry the key): the dataset's Arrow IPC schema templates, embedded (stt-packed-format.md \u00a73.2). Each entry is the raw template bytes (stream start through the end of the Schema message) base64-encoded, addressed by their blake3-128 hash \u2014 the 16-byte reference v2 layer frames carry. Entries MUST be sorted by `hash` and deduped (byte-reproducible manifests). Readers MUST validate blake3_128(data) == hash for every entry at open, failing the whole dataset loudly on any mismatch, then resolve frame references against the resulting registry.",
       "type": "array",
       "items": {
         "type": "object",
@@ -53,20 +61,22 @@
       }
     },
     "capabilities": {
-      "description": "OPTIONAL required-to-understand feature declarations (see stt-packed-format.md §3.1). Each entry names a feature the writer used that RE-TYPES existing tile columns, so a reader that does not implement it would silently misdecode; a reader MUST refuse a dataset declaring a capability outside the set it implements (loud failure at open). The current registry is the top-level `x-stt-capability-registry` array of this schema — the single machine-readable source both reference implementations pin their constants against in CI. Values are deliberately open-ended strings — future registry entries are added by spec revision (extending `x-stt-capability-registry`) without invalidating old manifests, and readers enforce their OWN implemented set, not this schema. Additive columns (triangles, vector groups, ...) never need a capability. Absent = none used (the shape of every pre-capabilities manifest; writers omit the key rather than emit an empty array).",
+      "description": "OPTIONAL required-to-understand feature declarations (see stt-packed-format.md \u00a73.1). Each entry names a feature the writer used that RE-TYPES existing tile columns, so a reader that does not implement it would silently misdecode; a reader MUST refuse a dataset declaring a capability outside the set it implements (loud failure at open). The current registry is the top-level `x-stt-capability-registry` array of this schema \u2014 the single machine-readable source both reference implementations pin their constants against in CI. Values are deliberately open-ended strings \u2014 future registry entries are added by spec revision (extending `x-stt-capability-registry`) without invalidating old manifests, and readers enforce their OWN implemented set, not this schema. Additive columns (triangles, vector groups, ...) never need a capability. Absent = none used (the shape of every pre-capabilities manifest; writers omit the key rather than emit an empty array).",
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "compression": {
       "description": "Per-blob compression codec. Every tile blob is compressed independently (no shared zstd dictionary), so a streaming reader can decode any blob in isolation. The format is zstd-only: `zstd` is the default and only real codec (it beats gzip on both ratio and browser-side decode speed, so no writer has ever emitted gzip), and `none` exists only for already-incompressible blobs. The canonical reader (Rust `PackedReader`) rejects any value outside this set.",
       "enum": ["zstd", "none"]
     },
     "blobOrdering": {
-      "description": "OPTIONAL. The concrete space-filling blob byte-ordering the writer resolved and laid down (`--blob-ordering`, see stt-packed-format.md §5). Informational: it records how the on-disk blob byte order was chosen so a tool need not re-infer it from the (packId, offset) layout; a reader indexes by (z, x, y, t) regardless and does not depend on it. Always a concrete order — never `auto`/`measured`, which resolve at build. Absent on pre-2026-07 archives (writers omit the key rather than emit a default, so pre-field manifests stay byte-identical).",
+      "description": "OPTIONAL. The concrete space-filling blob byte-ordering the writer resolved and laid down (`--blob-ordering`, see stt-packed-format.md \u00a75). Informational: it records how the on-disk blob byte order was chosen so a tool need not re-infer it from the (packId, offset) layout; a reader indexes by (z, x, y, t) regardless and does not depend on it. Always a concrete order \u2014 never `auto`/`measured`, which resolve at build. Absent on pre-2026-07 archives (writers omit the key rather than emit a default, so pre-field manifests stay byte-identical).",
       "enum": ["spatial", "time-major", "hilbert3", "morton3"]
     },
     "directory": {
-      "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index). The object is either a single whole-load buffer (default) or a paged container — root page + leaf pages — selected by `layout`. Either way the leaf codec is v5; `layout`, not `directoryVersion`, discriminates the container shape.",
+      "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index). The object is either a single whole-load buffer (default) or a paged container \u2014 root page + leaf pages \u2014 selected by `layout`. Either way the leaf codec is v5; `layout`, not `directoryVersion`, discriminates the container shape.",
       "type": "object",
       "required": ["key", "length", "directoryVersion"],
       "properties": {
@@ -76,16 +86,16 @@
           "pattern": "^index/[0-9a-f]{32}\\.sttd$"
         },
         "length": {
-          "description": "Directory object length in bytes — the at-rest object, i.e. the compressed length when `encoding` is set. Readers validate the fetched body against it before any decode.",
+          "description": "Directory object length in bytes \u2014 the at-rest object, i.e. the compressed length when `encoding` is set. Readers validate the fetched body against it before any decode.",
           "type": "integer",
           "minimum": 0
         },
         "directoryVersion": {
-          "description": "Directory (leaf) codec version. The packed format emits v5 (per-run pack_id column + pack-relative offsets) under BOTH formatVersion 1 and 2 (v2 wraps the same codec bytes in the 8-byte STTD magic prelude). Unchanged by the paged container.",
+          "description": "Directory (leaf) codec version. The packed format emits v5 (per-run pack_id column + object-absolute offsets), wrapped in the 8-byte STTD magic prelude. Unchanged by the paged container.",
           "const": 5
         },
         "encoding": {
-          "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a zstd frame (for a paged directory: EACH page — root + every leaf — is its own zstd frame). Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
+          "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a zstd frame (for a paged directory: EACH page \u2014 root + every leaf \u2014 is its own zstd frame). Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
           "enum": ["zstd"]
         },
         "layout": {
@@ -103,7 +113,7 @@
           "minimum": 0
         },
         "pageEntries": {
-          "description": "Paged only: nominal entries-per-leaf-page used at build (informational; the sim-validated sweet spot is 1024–4096).",
+          "description": "Paged only: nominal entries-per-leaf-page used at build (informational; the sim-validated sweet spot is 1024\u20134096).",
           "type": "integer",
           "minimum": 1
         }
@@ -135,7 +145,7 @@
       "type": "object",
       "properties": {
         "style_hints": {
-          "description": "OPTIONAL build-time style hints (additive; written by `stt-build --style-hints`). Per-property statistics plus archive-level rendering DEFAULTS a renderer may adopt and a user can always override. Old readers are unaffected — absent means no hints.",
+          "description": "OPTIONAL build-time style hints (additive; written by `stt-build --style-hints`). Per-property statistics plus archive-level rendering DEFAULTS a renderer may adopt and a user can always override. Old readers are unaffected \u2014 absent means no hints.",
           "type": "object",
           "required": ["version", "properties"],
           "properties": {
@@ -144,7 +154,7 @@
               "const": 1
             },
             "properties": {
-              "description": "Per-property statistics. NUMERIC properties carry the percentile fields plus `suggested_domain` (`cardinality` absent); CATEGORICAL (string) properties carry ONLY `name` + `cardinality` — the numeric fields are absent from the JSON, not null-filled.",
+              "description": "Per-property statistics. NUMERIC properties carry the percentile fields plus `suggested_domain` (`cardinality` absent); CATEGORICAL (string) properties carry ONLY `name` + `cardinality` \u2014 the numeric fields are absent from the JSON, not null-filled.",
               "type": "array",
               "items": {
                 "type": "object",
@@ -183,9 +193,11 @@
                     "type": "number"
                   },
                   "suggested_domain": {
-                    "description": "Suggested render domain `[min, p97]`, each endpoint rounded OUTWARD to 2 significant figures. p97 (not max) encodes the project's manual 'domain clamps at ~p97' tuning convention — a single outlier must not dim the whole ramp (numeric only).",
+                    "description": "Suggested render domain `[min, p97]`, each endpoint rounded OUTWARD to 2 significant figures. p97 (not max) encodes the project's manual 'domain clamps at ~p97' tuning convention \u2014 a single outlier must not dim the whole ramp (numeric only).",
                     "type": "array",
-                    "items": { "type": "number" },
+                    "items": {
+                      "type": "number"
+                    },
                     "minItems": 2,
                     "maxItems": 2
                   },

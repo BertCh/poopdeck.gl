@@ -157,14 +157,6 @@ export interface STTPointCloudLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_FALLBACK: RGBA = [150, 160, 175, 220];
 
-/**
- * @deprecated The point-cloud pick interface generalised into the kind-agnostic
- * {@link SttIdPickable} (the GPU picking catalog — see `../lib/id-pick.ts`).
- * Retained as an alias so external importers of `SttPointPickable` keep
- * compiling; `STTPointCloudLayer` implements `SttIdPickable` directly.
- */
-export type SttPointPickable = SttIdPickable;
-
 export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
   readonly id: string;
   readonly object = new Mesh();

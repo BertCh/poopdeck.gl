@@ -185,7 +185,7 @@ export interface DirectoryEntry {
   /**
    * CRC-32C (Castagnoli) of the blob's compressed bytes, as written by the
    * Rust encoder (`crc32c_tag(&compressed)`). Verified by the decode path
-   * before decompression when `ArchiveOptions.verifyChecksums` is on. `0`
+   * before decompression. `0`
    * means "no checksum recorded" — the `encodeDirectory` default for
    * synthetic test archives (a real CRC of 0 is a 2⁻³² coincidence, and the
    * consequence is merely a skipped verification, never a false failure).

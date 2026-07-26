@@ -6,23 +6,20 @@
  * (conformance reader-MUSTs), and clear errors for malformed or non-packed
  * manifests. Two fixtures feed this: a hand-built minimal single-tile dataset
  * (`buildPackedDataset`) for the parse/error cases, and the transcoded real
- * Rust fixture (`packedFromSingleFile`) for the version-gate cases. The full
+ * Rust fixture (`packedFromGolden`) for the version-gate cases. The full
  * Rust↔TS decode contract lives in `archive.test.ts` (transcoded fixture) and
  * `packed-golden.test.ts` (real Rust-produced packed dataset).
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
-import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import {
+  directoryObject,
+  packedFromGolden,
+  packedFetch,
+} from './helpers/packed-fixture';
 import { bufferToArrayBuffer } from './helpers/fixtures';
-
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
 
 /**
  * Build a minimal in-memory packed dataset (one tile, one pack, no compression)
@@ -53,14 +50,15 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
   ]);
   const objects = new Map<string, Uint8Array>();
   objects.set('packs/p0.sttp', blob);
-  objects.set('index/dir.sttd', dir);
+  const dirObject = directoryObject(dir);
+  objects.set('index/dir.sttd', dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression: 'none',
     directory: {
       key: 'index/dir.sttd',
-      length: dir.length,
+      length: dirObject.length,
       directoryVersion: 5,
     },
     packs: [{ key: 'packs/p0.sttp', length: blob.length }],
@@ -122,7 +120,7 @@ describe('packed-format manifest', () => {
     const meta = await archive.getMetadata();
     expect(meta.name).toBe('test');
     // `version` surfaces the manifest schema version (formatVersion).
-    expect(meta.version).toBe(1);
+    expect(meta.version).toBe(2);
     expect(meta.minZoom).toBe(5);
     expect(meta.temporalBucketMs).toBe(1000);
   });
@@ -189,17 +187,18 @@ describe('packed-format manifest', () => {
     ]);
     const objects = new Map<string, Uint8Array>();
     objects.set('packs/p0.sttp', blob);
-    objects.set('index/dir.sttd', dir);
+    const dirObject = directoryObject(dir);
+    objects.set('index/dir.sttd', dirObject);
     objects.set(
       'manifest.json',
       new TextEncoder().encode(
         JSON.stringify({
           format: 'stt-packed',
-          formatVersion: 1,
+          formatVersion: 2,
           compression: 'none',
           directory: {
             key: 'index/dir.sttd',
-            length: dir.length,
+            length: dirObject.length,
             directoryVersion: 5,
           },
           packs: [{ key: 'packs/p0.sttp', length: blob.length }],
@@ -250,7 +249,7 @@ describe('packed-format manifest', () => {
 describe('manifest version gates (conformance reader-MUST)', () => {
   /** The fixture dataset with its manifest JSON rewritten through `mutate`. */
   function datasetWithManifest(mutate: (manifest: any) => void): STTArchive {
-    const dataset = packedFromSingleFile(FIXTURE_BYTES);
+    const dataset = packedFromGolden();
     const manifest = JSON.parse(
       new TextDecoder().decode(dataset.objects.get('manifest.json')!),
     );
@@ -328,13 +327,13 @@ describe('manifest version gates (conformance reader-MUST)', () => {
       m.capabilities = ['coord-quant', 'attr-quant', 'elevation-fold'];
     });
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(1);
+    expect(meta.version).toBe(2);
   });
 
-  it('accepts the golden formatVersion=1 / directoryVersion=5 manifest', async () => {
+  it('accepts the golden formatVersion=2 / directoryVersion=5 manifest', async () => {
     const archive = datasetWithManifest(() => {});
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(1);
+    expect(meta.version).toBe(2);
     const index = await archive.getIndex();
     expect(index.tiles.length).toBeGreaterThan(0);
   });

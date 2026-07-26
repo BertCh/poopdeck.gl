@@ -10,27 +10,21 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import { decompress, decompressSync, unzstdSync } from '../src/compression';
 import { Compression } from '../src/types';
 import { decodeDirectory } from '../src/directory';
-import { packedFromSingleFile } from './helpers/packed-fixture';
-
-const FIXTURE_BYTES = new Uint8Array(
-  readFileSync(
-    fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url)),
-  ),
-);
+import { OBJECT_MAGIC_LEN, packedFromGolden } from './helpers/packed-fixture';
 
 /** A real (Rust-produced) zstd tile blob + its declared decompressed size. */
 function firstZstdBlob(): { blob: Uint8Array; uncompressedSize: number } {
-  const ds = packedFromSingleFile(FIXTURE_BYTES);
+  const ds = packedFromGolden();
   const manifest = JSON.parse(
     new TextDecoder().decode(ds.objects.get('manifest.json')!),
   );
-  const e = decodeDirectory(ds.objects.get(manifest.directory.key)!)[0];
+  const e = decodeDirectory(
+    ds.objects.get(manifest.directory.key)!.subarray(OBJECT_MAGIC_LEN),
+  )[0];
   const pack = ds.objects.get(manifest.packs[e.packId].key)!;
   return {
     blob: pack.subarray(e.offset, e.offset + e.length),

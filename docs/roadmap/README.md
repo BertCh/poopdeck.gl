@@ -108,8 +108,9 @@ claims are corrected — so this is closer to a straight switch than it was.
 crates.io `max_version` is **0.4.0**; npm is at **0.5.0**; the workspace is
 `0.5.0`. Origin tags stop at `v0.4.0`, and cargo-dist builds binaries **on tag
 push**, so the prebuilt binaries the crate README advertises do not exist for
-0.5.0. Separately, the `STT*` layer rename landed with deprecated aliases and a
-changeset, and wants a **0.6.0** bump. Operational constraint recorded in
+0.5.0. Separately, the `STT*` layer rename landed as a clean break (the
+transitional aliases have since been removed) with a changeset, and wants a
+**0.6.0** bump. Operational constraint recorded in
 [shipping.md](./shipping.md): `cargo publish` stalls on HTTP/2 upload from the
 author's network — publish from another one.
 

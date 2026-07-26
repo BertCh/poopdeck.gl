@@ -12,7 +12,7 @@
  * emits and prove the decoder inverts it.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   Field,
   FixedSizeList,
@@ -126,27 +126,18 @@ describe('numeric attribute quantization decode', () => {
     }
   });
 
-  it('warns ONCE on a malformed stt:qa affine, then falls back to raw ints', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const zq = [3, 7, 11];
-      const coords = [0, 0, 1, 1, 2, 2];
-      const decode = () =>
-        decodeTile(
-          buildPointTileWithQuantZ(coords, zq, 0, 1, '{not json'),
-          tileId,
-        );
-      const f = decode().layers[0].features;
-      // Fallback: identity affine (o=0, s=1) — raw fixed-point values.
-      expect(Array.from(f.numericProps.z)).toEqual(zq);
-      // A corrupt archive decodes many tiles — the warning must not repeat.
-      decode();
-      const qaWarns = warn.mock.calls.filter((c) =>
-        String(c[0]).includes('stt:qa'),
-      );
-      expect(qaWarns).toHaveLength(1);
-    } finally {
-      warn.mockRestore();
-    }
+  it('hard-errors on a malformed quantization affine (never misdecodes)', () => {
+    // Under the sectioned frame the affines ride TILE_META, and a malformed
+    // one is a LOUD failure rather than a silent identity-affine fallback:
+    // falling back would surface raw fixed-point grid indices as if they were
+    // real values, which is a wrong map with no error anywhere.
+    const zq = [3, 7, 11];
+    const coords = [0, 0, 1, 1, 2, 2];
+    expect(() =>
+      decodeTile(
+        buildPointTileWithQuantZ(coords, zq, 0, 1, '{not json'),
+        tileId,
+      ),
+    ).toThrow(/malformed TILE_META.*'qa' affine/);
   });
 });

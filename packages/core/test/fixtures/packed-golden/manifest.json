@@ -1,21 +1,22 @@
 {
   "format": "stt-packed",
-  "formatVersion": 1,
+  "formatVersion": 2,
   "compression": "zstd",
+  "blobOrdering": "spatial",
   "directory": {
-    "key": "index/0ce7c4f65fffff081ce9ad186cd054b7.sttd",
-    "length": 169,
+    "key": "index/a65cffcbd31b587999fbdf991dedca98.sttd",
+    "length": 186,
     "directoryVersion": 5,
     "encoding": "zstd"
   },
   "packs": [
     {
-      "key": "packs/2001de6e7eed8cd1990277adc2a30e1f.sttp",
-      "length": 3864
+      "key": "packs/7ac95dd395d11d8545c0e40442f32286.sttp",
+      "length": 3936
     },
     {
-      "key": "packs/1f8fa7dfe873347b06d8172a9b15778a.sttp",
-      "length": 1668
+      "key": "packs/58a8f73e754c5120cb57e13b3ecd9bc4.sttp",
+      "length": 3982
     }
   ],
   "metadata": {
@@ -34,8 +35,8 @@
     },
     "min_zoom": 10,
     "max_zoom": 10,
-    "tile_count": 0,
-    "feature_count": 0,
+    "tile_count": 12,
+    "feature_count": 36,
     "layers": [
       "default"
     ],

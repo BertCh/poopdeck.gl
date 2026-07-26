@@ -18,119 +18,42 @@
  */
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
+import {
+  packedFromGolden,
+  OBJECT_MAGIC_LEN,
+  directoryObject,
+  packObject,
+} from './helpers/packed-fixture';
 import { crc32c } from '../src/crc32c';
-import { encodeDirectory } from '../src/directory';
+import { decodeDirectory, encodeDirectory } from '../src/directory';
 import {
   configureSharedScheduler,
   resetSharedScheduler,
 } from '../src/shared-scheduler';
 import { bufferToArrayBuffer, flush } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-
 /**
- * Pull the fixture's first decodable blob + its metadata once, by parsing the
- * v4 header/directory directly (same offsets shared-scheduler-archive.test.ts
- * uses) — this test only needs ONE real decodable blob to reuse across
- * synthetic tiles, not the fixture's own tile layout.
+ * Pull one decodable blob + the dataset metadata from the committed v2 golden
+ * fixture — this test only needs ONE real blob to reuse across synthetic tiles,
+ * not the fixture's own tile layout.
  */
 async function fixtureBlobAndMeta(): Promise<{
   blob: Uint8Array;
   meta: any;
   e: any;
 }> {
-  const hv = new DataView(bufferToArrayBuffer(FIXTURE_BYTES));
-  const indexOffset = Number(hv.getBigUint64(6, true));
-  const indexLength = Number(hv.getBigUint64(14, true));
-  const metaOff = Number(hv.getBigUint64(22, true));
-  const metaLen = Number(hv.getBigUint64(30, true));
-  const meta = JSON.parse(
-    new TextDecoder().decode(
-      FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen),
-    ),
+  const ds = packedFromGolden();
+  const manifest = JSON.parse(
+    new TextDecoder().decode(ds.objects.get('manifest.json')!),
   );
-  // Decode just enough of the v4 directory to grab one entry's (offset, length,
-  // zoom, featureCount, uncompressedSize) — reuse the blob at that slice.
-  const dir = FIXTURE_BYTES.subarray(indexOffset, indexOffset + indexLength);
-  let pos = 0;
-  const uvarint = (): bigint => {
-    let r = 0n,
-      s = 0n;
-    for (;;) {
-      const b = dir[pos++];
-      r |= BigInt(b & 0x7f) << s;
-      if ((b & 0x80) === 0) break;
-      s += 7n;
-    }
-    return r;
-  };
-  const ivarint = (): bigint => {
-    const v = uvarint();
-    return (v >> 1n) ^ -(v & 1n);
-  };
-  const version = dir[pos++];
-  if (version !== 4) throw new Error('expected v4 fixture directory');
-  const n = Number(uvarint());
-  const runCount = Number(uvarint());
-  let pz = 0n,
-    ph = 0n,
-    px = 0n,
-    py = 0n,
-    pt = 0n;
-  const keys: Array<{ zoom: number; featureCount: number }> = new Array(n);
-  for (let i = 0; i < n; i++) {
-    pz += ivarint();
-    ph += ivarint();
-    px += ivarint();
-    py += ivarint();
-    pt += ivarint();
-    ivarint(); // duration
-    const fc = Number(uvarint());
-    const bp = uvarint();
-    if (bp !== 0n) uvarint(); // temporalBucketMs
-    keys[i] = { zoom: Number(pz), featureCount: fc };
-  }
-  let cursor = 0;
-  let expected = 0n;
-  let first: {
-    offset: number;
-    length: number;
-    uncompressedSize: number;
-    zoom: number;
-    featureCount: number;
-  } | null = null;
-  for (let r = 0; r < runCount; r++) {
-    const runLen = Number(uvarint());
-    const offFlag = uvarint();
-    const offset = offFlag === 0n ? expected : uvarint();
-    const length = Number(uvarint());
-    const unc = Number(uvarint());
-    pos += 4; // crc32c
-    for (let k = 0; k < runLen; k++) {
-      if (!first) {
-        first = {
-          offset: Number(offset),
-          length,
-          uncompressedSize: unc,
-          zoom: keys[cursor].zoom,
-          featureCount: keys[cursor].featureCount,
-        };
-      }
-      cursor++;
-    }
-    expected = offset + BigInt(length);
-  }
-  const blob = FIXTURE_BYTES.subarray(
-    first!.offset,
-    first!.offset + first!.length,
+  const entries = decodeDirectory(
+    ds.objects.get(manifest.directory.key)!.subarray(OBJECT_MAGIC_LEN),
   );
-  return { blob, meta, e: first };
+  const first = entries[0];
+  const pack = ds.objects.get(manifest.packs[first.packId].key)!;
+  const blob = pack.subarray(first.offset, first.offset + first.length);
+  return { blob, meta: manifest.metadata, e: first };
 }
 
 /** Web-Mercator tile-center lon/lat, computed independently of archive.ts's own formula. */
@@ -165,8 +88,10 @@ function makeSpatialDataset(
   const entries: any[] = [];
   tiles.forEach((t, i) => {
     const key = `packs/x${t.x}.sttp`;
-    objects.set(key, blob.slice());
-    packRefs.push({ key, length: blob.length });
+    const { bytes: packBytes } = packObject([blob]);
+
+    objects.set(key, packBytes);
+    packRefs.push({ key, length: packBytes.length });
     entries.push({
       zoom,
       x: t.x,
@@ -174,7 +99,7 @@ function makeSpatialDataset(
       timeStart,
       timeEnd: timeStart,
       packId: i,
-      offset: 0,
+      offset: OBJECT_MAGIC_LEN,
       length: blob.length,
       uncompressedSize: e.uncompressedSize,
       featureCount: e.featureCount,
@@ -184,14 +109,15 @@ function makeSpatialDataset(
     });
   });
   const dir = encodeDirectory(entries);
-  objects.set('index/dir.sttd', dir);
+  const dirObject = directoryObject(dir);
+  objects.set('index/dir.sttd', dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 1,
+    formatVersion: 2,
     compression: 'zstd',
     directory: {
       key: 'index/dir.sttd',
-      length: dir.length,
+      length: dirObject.length,
       directoryVersion: 5,
     },
     packs: packRefs,

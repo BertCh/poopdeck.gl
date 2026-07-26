@@ -63,7 +63,7 @@
  *   - the v5 GLOBE prelude takes METRES while its transition FALLBACK term
  *     wants mercator-z again.
  * Both branches come from the ONE `shaders/globe-elevation.glsl.ts` kernel.
- * Never re-adopt the pre-D10 flat `1e-7` factor (`DEPRECATED_ALTITUDE_SCALE`).
+ * Never re-adopt the pre-D10 flat `1e-7` factor.
  *
  * ── Globe ───────────────────────────────────────────────────────────────────
  * A summary cell at low zoom is HUGE (an H3 res-2 hexagon spans hundreds of

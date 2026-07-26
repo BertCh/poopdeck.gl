@@ -451,9 +451,8 @@ same `1/(circumference·cos lat)` factor scales all three axes).
 
 **BREAKING:** `STTPolygonLayer.altitudeScale` now defaults to `1` and means a
 **dimensionless exaggeration**; the metres→mercator-z conversion is the projection
-module's job, not the caller's. The old constant survives only as
-`DEPRECATED_ALTITUDE_SCALE`, read by nothing, kept as the citable anchor for the
-4.003 figure. **Reviewers: extrusions getting ~4× shorter is the fix, not a
+module's job, not the caller's. The old `1e-7` constant has been removed; the
+4.003 figure is now anchored by a local literal in the maplibre sizing tests. **Reviewers: extrusions getting ~4× shorter is the fix, not a
 regression.**
 
 Measured granularity of the per-tile approximation (`altitudeScale` reaches the

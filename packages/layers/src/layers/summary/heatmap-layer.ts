@@ -1,7 +1,7 @@
 /**
  * AnimatedHeatmapLayer — animated density heatmap built on CANONICAL deck.gl.
  * (Renamed from `HeatmapLayer`, which shadowed `@deck.gl/aggregation-layers`'
- * HeatmapLayer; the old name remains exported as a deprecated alias.)
+ * HeatmapLayer; the old name is no longer exported.)
  *
  * This is a thin composite over `@deck.gl/aggregation-layers`'
  * {@link DeckHeatmapLayer}, the standard deck.gl heatmap. That layer does the

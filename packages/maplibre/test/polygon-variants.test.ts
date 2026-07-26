@@ -32,12 +32,17 @@ import {
   lngLatToMercator,
   mercatorZFromAltitude,
   tileCenterLatitude,
-  DEPRECATED_ALTITUDE_SCALE,
 } from '../src/lib/projection';
 import { TIME_WINDOW_GLSL } from '../src/shaders/time-window.glsl';
 import { expandFilterValues } from '../src/shaders/data-filter.glsl';
 import { makeMockGl, makeMockMap } from './mock-gl';
 import { makePolygonTile } from './fixtures';
+
+// The pre-D10 flat altitude→mercator-z factor, kept as a local literal purely
+// as the regression anchor for the correction (it is no longer exported —
+// nothing reads it). `HISTORICAL_FLAT_SCALE / mercatorZFromAltitude(1, 0)` =
+// 4.003, the "~4x too tall" the ecosystem audit measured.
+const HISTORICAL_FLAT_SCALE = 1e-7;
 
 const baseOpts = {
   url: 'mem://test.stt',
@@ -776,12 +781,12 @@ describe('polygon elevation reconciliation (D10)', () => {
       extruded: true,
       elevation: 1000,
     });
-    const equatorial = DEPRECATED_ALTITUDE_SCALE / mercatorZFromAltitude(1, 0);
+    const equatorial = HISTORICAL_FLAT_SCALE / mercatorZFromAltitude(1, 0);
     expect(equatorial).toBeCloseTo(4.003, 3);
     // Away from the equator the mercator stretch scales the correction by
     // cos(lat) — this fixture tile (z2/y1) is centred near 41°N.
     const lat = tileCenterLatitude(tile.id.z, tile.id.y);
-    expect(DEPRECATED_ALTITUDE_SCALE / cache.mercatorZScale).toBeCloseTo(
+    expect(HISTORICAL_FLAT_SCALE / cache.mercatorZScale).toBeCloseTo(
       equatorial * Math.cos((lat * Math.PI) / 180),
       6,
     );

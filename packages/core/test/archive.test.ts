@@ -1,30 +1,27 @@
 /**
  * Cross-language contract test: read a real archive produced by the Rust
- * `stt-build` CLI (`test/fixtures/sample.stt`) through the TypeScript reader.
+ * Rust writer (`test/fixtures/packed-golden/`) through the TypeScript reader.
  *
  * This is the single most important test in the package — it proves the Rust
  * writer and the TS reader agree on the on-disk format. The committed fixture
  * is a single-file v4 archive; the reader now consumes the PACKED format, so
  * the fixture is transcoded to an in-memory packed dataset (manifest + index +
- * packs) via `packedFromSingleFile` and served through `packedFetch`.
+ * packs) via `packedFromGolden` and served through `packedFetch`.
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import { crc32c } from '../src/crc32c';
 import { encodeDirectory } from '../src/directory';
 import { GeometryType } from '../src/types';
-import { configureSharedScheduler } from '../src/shared-scheduler';
-import { packedFromSingleFile, packedFetch } from './helpers/packed-fixture';
+import {
+  directoryObject,
+  packedFromGolden,
+  packedFetch,
+} from './helpers/packed-fixture';
 import { bufferToArrayBuffer } from './helpers/fixtures';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-const DATASET = packedFromSingleFile(FIXTURE_BYTES);
+const DATASET = packedFromGolden();
 /** Pack object keys in `packId` order (the transcoded fixture's packs). */
 const DATASET_PACK_KEYS = [...DATASET.objects.keys()]
   .filter((k) => k.startsWith('packs/'))
@@ -44,7 +41,7 @@ describe('STTArchive (packed format)', () => {
     const meta = await archive.getMetadata();
     // Packed manifest folds metadata in; `version` is the manifest schema
     // version (formatVersion), not the old single-file format byte.
-    expect(meta.version).toBe(1);
+    expect(meta.version).toBe(2);
     expect(meta.minZoom).toBeLessThanOrEqual(meta.maxZoom);
     expect(meta.bounds.minLon).toBeLessThan(meta.bounds.maxLon);
     expect(meta.timeRange.end).toBeGreaterThan(meta.timeRange.start);
@@ -146,14 +143,9 @@ describe('STTArchive (packed format)', () => {
     const srcPack = DATASET.objects.get(DATASET_PACK_KEYS[e.packId])!;
     const blob = srcPack.subarray(e.offset, e.offset + e.length);
     // The fixture's metadata, reused verbatim in the synthetic manifest.
-    const hv = new DataView(bufferToArrayBuffer(FIXTURE_BYTES));
-    const metaOff = Number(hv.getBigUint64(22, true));
-    const metaLen = Number(hv.getBigUint64(30, true));
     const metaJson = JSON.parse(
-      new TextDecoder().decode(
-        FIXTURE_BYTES.subarray(metaOff, metaOff + metaLen),
-      ),
-    );
+      new TextDecoder().decode(DATASET.objects.get('manifest.json')!),
+    ).metadata;
 
     const PER_PACK = 3; // blobs per pack
     const PACKS = 2;
@@ -209,7 +201,8 @@ describe('STTArchive (packed format)', () => {
     const dir = encodeDirectory(entries);
 
     const objects = new Map<string, Uint8Array>();
-    objects.set('index/dir.sttd', dir);
+    const dirObject = directoryObject(dir);
+    objects.set('index/dir.sttd', dirObject);
     const packRefs = packObjects.map((b, p) => {
       const key = `packs/p${p}.sttp`;
       objects.set(key, b);
@@ -217,11 +210,11 @@ describe('STTArchive (packed format)', () => {
     });
     const manifest = {
       format: 'stt-packed',
-      formatVersion: 1,
+      formatVersion: 2,
       compression: 'zstd',
       directory: {
         key: 'index/dir.sttd',
-        length: dir.length,
+        length: dirObject.length,
         directoryVersion: 5,
       },
       packs: packRefs,
@@ -294,39 +287,29 @@ describe('STTArchive (packed format)', () => {
     expect(tilesWide.every((t) => t !== null)).toBe(true);
     expect(wide.calls - wideBefore).toBe(PACKS);
 
-    // Zero gap → K separate requests, but never more than maxConcurrentRequests
-    // in flight at once (the pool spans groups of ALL packs). The per-archive
-    // `maxConcurrentRequests` cap is the LEGACY (kill-switch-disabled) path's
-    // contract — with the process-shared scheduler ENABLED (the default),
-    // concurrency is governed by the GLOBAL budget, not the per-archive number
-    // (multi-source coordination, Phase 2). Disable the shared scheduler so this
-    // exercises the per-instance cursor runner it is asserting about, then
-    // restore the default so other tests see the shared path.
-    configureSharedScheduler({ enabled: false });
-    try {
-      const tight = { calls: 0, inFlight: 0, peak: 0 };
-      const aTight = new STTArchive({
-        url: manifestUrl,
-        fetch: countingFetch(tight),
-        coalesceGapBytes: 0,
-        maxConcurrentRequests: 2,
-      });
-      await aTight.getIndex();
-      const tightBefore = tight.calls;
-      const tilesTight = await aTight.getTiles(tileIds);
-      expect(tilesTight.every((t) => t !== null)).toBe(true);
-      expect(tight.calls - tightBefore).toBe(K);
-      expect(tight.peak).toBeLessThanOrEqual(2);
-    } finally {
-      configureSharedScheduler({ enabled: true });
-    }
+    // Zero gap → K separate requests. Concurrency is governed by the process-
+    // shared scheduler's GLOBAL budget, not this archive's number, so only the
+    // request COUNT is asserted here (the global-budget contract has its own
+    // coverage in shared-scheduler-archive.test.ts).
+    const tight = { calls: 0, inFlight: 0, peak: 0 };
+    const aTight = new STTArchive({
+      url: manifestUrl,
+      fetch: countingFetch(tight),
+      coalesceGapBytes: 0,
+      maxConcurrentRequests: 2,
+    });
+    await aTight.getIndex();
+    const tightBefore = tight.calls;
+    const tilesTight = await aTight.getTiles(tileIds);
+    expect(tilesTight.every((t) => t !== null)).toBe(true);
+    expect(tight.calls - tightBefore).toBe(K);
   });
 
   it('rejects a pack server that ignores Range requests', async () => {
     // The manifest + directory are whole-object GETs (200 is correct for them),
     // but a PACK read uses Range — a server that replies 200 there would
     // silently corrupt every offset-based read, so the reader must reject it.
-    const dataset = packedFromSingleFile(FIXTURE_BYTES, {
+    const dataset = packedFromGolden({
       manifestUrl: 'mem://m/manifest.json',
     });
     const badFetch = (async (url: string) => {

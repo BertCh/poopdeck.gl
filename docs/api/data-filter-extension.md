@@ -4,8 +4,9 @@
 > `@deck.gl/extensions`' own `DataFilterExtension`, which is a **different**
 > class with a different `getFilterValue` contract — and `@poopdeck.gl/layers`
 > imports both (the heatmap and hexagon composites drive deck's stock extension
-> over CPU rows). `DataFilterExtension`, `DataFilterExtensionProps` and
-> `DataFilterExtensionOptions` remain `@deprecated` aliases until 0.8.0.
+> over CPU rows). The unprefixed `DataFilterExtension`,
+> `DataFilterExtensionProps` and `DataFilterExtensionOptions` spellings have
+> been removed.
 
 The `STTDataFilterExtension` is a deck.gl layer extension that GPU range-filters features by a single baked numeric column. A feature is rendered when its `filterValue` falls inside a `[min, max]` range and hidden otherwise, with optional soft fading at the edges — the CPU only updates one uniform block per `draw()`. It is the general-column sibling of the `TimeFilterExtension` (which is a hand-built data filter specialized to the time window): both bind a per-feature numeric attribute and gate the feature in the vertex shader.
 

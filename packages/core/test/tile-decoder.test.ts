@@ -38,7 +38,8 @@ import {
  * count `0`. `decodeTile` parses it to a tile with `layers: []`, so the inline
  * decode path can run end-to-end without a real Arrow IPC stream.
  */
-const EMPTY_FRAME = Uint8Array.from([0, 0]);
+// A zero-layer frame: the 0xFFFF escape, frame version, flags, count 0.
+const EMPTY_FRAME = buildV2Frame([]);
 /** `EMPTY_FRAME` bytes as a standalone ArrayBuffer (what `DecodeArgs.compressed` wants). */
 const emptyFrameBuffer = (): ArrayBuffer => EMPTY_FRAME.slice().buffer;
 

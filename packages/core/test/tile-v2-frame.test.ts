@@ -33,7 +33,6 @@ import {
 } from 'apache-arrow';
 import { decodeTile, type TemplateRegistry } from '../src/tile';
 import { GeometryType, type TileId } from '../src/types';
-import { frameFromIpc } from './helpers/fixtures';
 import {
   buildV2Frame,
   REF_KIND_INLINE,
@@ -585,31 +584,5 @@ describe('layer frame v2: malformed frames', () => {
     expect(() => decodeTile(frame, tileId)).toThrow(
       /row counts disagree: 3 vs 2/,
     );
-  });
-});
-
-describe('layer frame v2: authority rule (§5.2)', () => {
-  it('hard-errors on a v2 frame reached through a v1-declared manifest', () => {
-    expect(() =>
-      decodeTile(inlineFrame(1), tileId, undefined, { formatVersion: 1 }),
-    ).toThrow(/v2 layer frame reached through a formatVersion-1 manifest/);
-  });
-
-  it('hard-errors on a v1 frame reached through a v2-declared manifest', () => {
-    const v1Frame = frameFromIpc('default', coreIpc(1));
-    expect(() =>
-      decodeTile(v1Frame, tileId, undefined, { formatVersion: 2 }),
-    ).toThrow(/v1 layer frame reached through a formatVersion-2 manifest/);
-  });
-
-  it('decodes normally when the declared version matches the frame', () => {
-    expect(
-      decodeTile(inlineFrame(1), tileId, undefined, { formatVersion: 2 })
-        .layers,
-    ).toHaveLength(1);
-    const v1Frame = frameFromIpc('default', coreIpc(1));
-    expect(
-      decodeTile(v1Frame, tileId, undefined, { formatVersion: 1 }).layers,
-    ).toHaveLength(1);
   });
 });

@@ -20,21 +20,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { STTArchive } from '../src/archive';
 import type { TileId } from '../src/types';
 import {
-  packedFromSingleFile,
+  packedFromGolden,
   packedFetch,
   type PackedFetchLog,
 } from './helpers/packed-fixture';
 
-const FIXTURE = fileURLToPath(
-  new URL('./fixtures/sample.stt', import.meta.url),
-);
-const FIXTURE_BYTES = new Uint8Array(readFileSync(FIXTURE));
-const DATASET = packedFromSingleFile(FIXTURE_BYTES);
+const DATASET = packedFromGolden();
 
 /** Is this request a Range request against a pack object? */
 function isPackRange(url: string, init?: RequestInit): boolean {

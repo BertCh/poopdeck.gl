@@ -145,8 +145,7 @@ export type { ChevronFlowExtensionOptions } from './extensions/chevron-flow-exte
 // the same name: through 0.5.x this shadowed `@deck.gl/extensions`' own
 // `DataFilterExtension` in any app importing both — and this very package
 // imports both (the heatmap/hexagon composites drive deck's stock extension
-// over CPU rows). The unprefixed spellings survive as deprecated aliases at
-// the bottom of this file.
+// over CPU rows). The unprefixed spellings have been removed.
 export { STTDataFilterExtension } from './extensions/data-filter-extension.js';
 // Collision-based de-cluttering for STT layers. NOTE the name is deliberately
 // NOT prefixed: this re-exports deck.gl's OWN `CollisionFilterExtension` class
@@ -254,29 +253,3 @@ export type {
   CollisionFilterOptions,
   CollisionFilterProps,
 } from './extensions/collision-filter-extension.js';
-
-// ════════════════════════════════════════════════════════════════════════════
-//  DEPRECATED ALIASES (0.6.0) — removal target: 0.8.0
-//
-//  `DataFilterExtension` and its two prop/option types were renamed to
-//  `STTDataFilterExtension*`; the old spellings shadowed `@deck.gl/extensions`.
-//  The JSDoc sits on the export SPECIFIER, the only form TypeScript honours
-//  for a re-export (a `@deprecated` block above `export … from` is ignored),
-//  so callers get a real IDE strikethrough.
-//
-//  Everything else in this barrel keeps its 0.5.x name on purpose:
-//   • the `Animated*` layer family never collided with deck (the prefix IS the
-//     "time-animated variant of deck's X" signal, and it is already unique);
-//   • `CollisionFilterExtension` IS deck's own class re-exported — same object,
-//     nothing to shadow;
-//   • `SpatioTemporalLayer`, `FlowmapLayer`, `H3SummaryLayer` and friends have
-//     no deck counterpart.
-// ════════════════════════════════════════════════════════════════════════════
-export {
-  /** @deprecated Renamed to {@link STTDataFilterExtension} in 0.6.0 — the old name shadowed `DataFilterExtension` from `@deck.gl/extensions`, which is a DIFFERENT class (removed in 0.8.0). */
-  STTDataFilterExtension as DataFilterExtension,
-  /** @deprecated Renamed to {@link STTDataFilterExtensionProps} in 0.6.0 (removed in 0.8.0). */
-  type STTDataFilterExtensionProps as DataFilterExtensionProps,
-  /** @deprecated Renamed to {@link STTDataFilterExtensionOptions} in 0.6.0 (removed in 0.8.0). */
-  type STTDataFilterExtensionOptions as DataFilterExtensionOptions,
-} from './extensions/data-filter-extension.js';

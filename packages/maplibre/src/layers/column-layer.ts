@@ -48,7 +48,7 @@
  *   - the v5 GLOBE prelude takes METRES (`spherePos * (1 + elev/GLOBE_RADIUS)`)
  *     while its transition FALLBACK term wants mercator-z again — so the globe
  *     branch feeds each side its own unit from the same two values.
- * Never re-adopt the pre-D10 flat `1e-7` factor (`DEPRECATED_ALTITUDE_SCALE`).
+ * Never re-adopt the pre-D10 flat `1e-7` factor.
  *
  * ── Feature surface ─────────────────────────────────────────────────────────
  *  - `timeFilterMode` — window (default) / wake / cumulative / trail, compiled

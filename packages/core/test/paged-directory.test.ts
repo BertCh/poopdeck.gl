@@ -32,9 +32,12 @@ import {
 import { unzstdSync } from '../src/compression';
 import type { BoundingBox, TimeRange } from '../src/types';
 import {
+  directoryObject,
   loadPackedDatasetFromDisk,
+  OBJECT_MAGIC_LEN,
+  packObject,
   packedFetch,
-  packedFromSingleFile,
+  packedFromGolden,
   type InMemoryPackedDataset,
   type PackedFetchLog,
 } from './helpers/packed-fixture';
@@ -155,10 +158,11 @@ describe('paged directory: cross-impl + differential', () => {
     expect(pagedManifest.directory.pageCount).toBe(32); // 252 tiles / 8 per page
     expect(pagedManifest.directory.encoding).toBe('zstd');
 
-    // Decode the root frame the same way the reader does (zstd-framed prefix).
+    // Decode the root frame the same way the reader does: skip the object's
+    // 8-byte STTD prelude, then take the zstd-framed root prefix.
     const rootFrame = paged.objects
       .get(PAGED_DIR_KEY)!
-      .subarray(0, PAGED_ROOT_LEN);
+      .subarray(OBJECT_MAGIC_LEN, OBJECT_MAGIC_LEN + PAGED_ROOT_LEN);
     const root = decodePagedRoot(unzstdSync(rootFrame));
     expect(root.pages.length).toBe(32);
     expect(root.pageEntries).toBe(8);
@@ -208,12 +212,15 @@ describe('paged directory: cross-impl + differential', () => {
       FULL_TIME,
     );
     expect(ids).toEqual([]);
-    // Only the root page region was fetched — no leaf bytes.
-    expect(directoryBytesFetched(log)).toBe(PAGED_ROOT_LEN);
+    // Only the root page region was fetched — no leaf bytes. The reader's
+    // prefix GET covers the object prelude plus the root frame.
+    expect(directoryBytesFetched(log)).toBe(OBJECT_MAGIC_LEN + PAGED_ROOT_LEN);
     for (const r of log.ranges) {
       if (r.path !== PAGED_DIR_KEY) continue;
       const start = Number(/bytes=(\d+)-/.exec(r.range)![1]);
-      expect(start, 'no leaf range fetched').toBeLessThan(PAGED_ROOT_LEN);
+      expect(start, 'no leaf range fetched').toBeLessThan(
+        OBJECT_MAGIC_LEN + PAGED_ROOT_LEN,
+      );
     }
   });
 
@@ -226,7 +233,7 @@ describe('paged directory: cross-impl + differential', () => {
       FULL_TIME,
     );
     const fetched = directoryBytesFetched(log);
-    expect(fetched).toBeGreaterThan(PAGED_ROOT_LEN); // root + some leaves
+    expect(fetched).toBeGreaterThan(OBJECT_MAGIC_LEN + PAGED_ROOT_LEN); // root + some leaves
     expect(fetched).toBeLessThan(PAGED_DIR_LEN); // not the whole directory
   });
 
@@ -298,10 +305,8 @@ describe('paged directory: cross-impl + differential', () => {
 // activity-window semantics.
 //
 // The Rust fixture generator emits coverTMin == timeStart, so this shape is
-// built synthetically: a real decodable blob lifted from `sample.stt`, wrapped
+// built synthetically: a real decodable blob lifted from `packed-golden/`, wrapped
 // in a hand-encoded two-leaf paged directory.
-
-const SAMPLE = fileURLToPath(new URL('./fixtures/sample.stt', import.meta.url));
 
 /** Encode a paged-directory root page (mirrors `decodePagedRoot`'s layout). */
 function encodePagedRootBytes(pages: PageDescriptor[]): Uint8Array {
@@ -352,10 +357,10 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
     leaf0Length: number;
   } {
     // A real decodable blob (+ its directory facts) from the sample fixture.
-    const sample = packedFromSingleFile(
-      new Uint8Array(nodeFs.readFileSync(SAMPLE)),
-    );
-    const e = decodeDirectory(sample.objects.get('index/directory.sttd')!)[0];
+    const sample = packedFromGolden();
+    const e = decodeDirectory(
+      sample.objects.get('index/directory.sttd')!.subarray(OBJECT_MAGIC_LEN),
+    )[0];
     const srcPack = sample.objects.get('packs/pack-0.sttp')!;
     const blob = srcPack.subarray(e.offset, e.offset + e.length);
     const sampleManifest = JSON.parse(
@@ -364,7 +369,7 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
 
     const blobFields = {
       packId: 0,
-      offset: 0,
+      offset: OBJECT_MAGIC_LEN,
       length: e.length,
       uncompressedSize: e.uncompressedSize,
       featureCount: e.featureCount,
@@ -427,22 +432,24 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
 
     const dirKey = 'index/dir.sttd';
     const objects = new Map<string, Uint8Array>();
-    objects.set(dirKey, sttd);
-    objects.set('packs/p0.sttp', blob);
+    const sttdObject = directoryObject(sttd);
+    const { bytes: packBytes } = packObject([blob]);
+    objects.set(dirKey, sttdObject);
+    objects.set('packs/p0.sttp', packBytes);
     const manifest = {
       format: 'stt-packed',
-      formatVersion: 1,
+      formatVersion: 2,
       compression: sampleManifest.compression,
       directory: {
         key: dirKey,
-        length: sttd.length,
+        length: sttdObject.length,
         directoryVersion: 5,
         layout: 'paged',
         rootLength: root.length,
         pageCount: 2,
         pageEntries: 1,
       },
-      packs: [{ key: 'packs/p0.sttp', length: blob.length }],
+      packs: [{ key: 'packs/p0.sttp', length: packBytes.length }],
       metadata: sampleManifest.metadata,
     };
     objects.set(
@@ -474,14 +481,16 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
     expect(tile!.layers[0].features.featureCount).toBeGreaterThan(0);
 
     // The fix widens only the TEMPORAL axis: the spatially distant decoy leaf
-    // must stay pruned by its bbox. Leaf 1 starts at rootLength + leaf0Length;
+    // must stay pruned by its bbox. Leaf 1 starts after the object prelude +
+    // rootLength + leaf0Length;
     // no directory range may reach into it.
-    const leaf1Start = rootLength + leaf0Length;
+    const leaf1Start = OBJECT_MAGIC_LEN + rootLength + leaf0Length;
     let fetchedLeafBytes = false;
     for (const r of log.ranges) {
       if (r.path !== dirKey) continue;
       const m = /bytes=(\d+)-(\d+)/.exec(r.range)!;
-      if (Number(m[1]) >= rootLength) fetchedLeafBytes = true;
+      if (Number(m[1]) >= OBJECT_MAGIC_LEN + rootLength)
+        fetchedLeafBytes = true;
       expect(Number(m[2]), 'decoy leaf must stay bbox-pruned').toBeLessThan(
         leaf1Start,
       );
@@ -518,10 +527,10 @@ describe('paged directory: point query near the dataset start does not fetch eve
     rootLength: number;
     leafOffsets: number[]; // rel offsets of each leaf (root-relative)
   } {
-    const sample = packedFromSingleFile(
-      new Uint8Array(nodeFs.readFileSync(SAMPLE)),
-    );
-    const e = decodeDirectory(sample.objects.get('index/directory.sttd')!)[0];
+    const sample = packedFromGolden();
+    const e = decodeDirectory(
+      sample.objects.get('index/directory.sttd')!.subarray(OBJECT_MAGIC_LEN),
+    )[0];
     const srcPack = sample.objects.get('packs/pack-0.sttp')!;
     const blob = srcPack.subarray(e.offset, e.offset + e.length);
     const sampleManifest = JSON.parse(
@@ -542,7 +551,7 @@ describe('paged directory: point query near the dataset start does not fetch eve
           timeStart: t0,
           timeEnd: t0 + BUCKET - 1,
           packId: 0,
-          offset: 0,
+          offset: OBJECT_MAGIC_LEN,
           length: e.length,
           uncompressedSize: e.uncompressedSize,
           featureCount: e.featureCount,
@@ -578,22 +587,24 @@ describe('paged directory: point query near the dataset start does not fetch eve
 
     const dirKey = 'index/dir.sttd';
     const objects = new Map<string, Uint8Array>();
-    objects.set(dirKey, sttd);
-    objects.set('packs/p0.sttp', blob);
+    const sttdObject = directoryObject(sttd);
+    const { bytes: packBytes } = packObject([blob]);
+    objects.set(dirKey, sttdObject);
+    objects.set('packs/p0.sttp', packBytes);
     const manifest = {
       format: 'stt-packed',
-      formatVersion: 1,
+      formatVersion: 2,
       compression: sampleManifest.compression,
       directory: {
         key: dirKey,
-        length: sttd.length,
+        length: sttdObject.length,
         directoryVersion: 5,
         layout: 'paged',
         rootLength: root.length,
         pageCount: N_LEAVES,
         pageEntries: 1,
       },
-      packs: [{ key: 'packs/p0.sttp', length: blob.length }],
+      packs: [{ key: 'packs/p0.sttp', length: packBytes.length }],
       // Base bucket = 1 s (and no temporal-LOD tiers), so the sound upper
       // prune is `tMin <= id.t + 1000`.
       metadata: { ...sampleManifest.metadata, temporal_bucket_ms: BUCKET },
@@ -633,7 +644,7 @@ describe('paged directory: point query near the dataset start does not fetch eve
       const m = /bytes=(\d+)-(\d+)/.exec(r.range)!;
       const [start, end] = [Number(m[1]), Number(m[2])];
       for (let i = 0; i < N_LEAVES; i++) {
-        const abs = rootLength + leafOffsets[i];
+        const abs = OBJECT_MAGIC_LEN + rootLength + leafOffsets[i];
         if (start <= abs && abs <= end) fetched.add(i);
       }
     }

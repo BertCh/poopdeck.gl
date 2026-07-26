@@ -182,9 +182,8 @@ the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appe
 > exports of the same names in any app importing both — and deck is the
 > primary backend, so that is the normal case. Every layer class now carries
 > the `STT` prefix, matching `@poopdeck.gl/maplibre` and `@poopdeck.gl/cesium`,
-> so one layer kind has one spelling on every backend. The old names still
-> resolve as `@deprecated` aliases (same class, IDE strikethrough) and are
-> removed in 0.8.0. The deck column below keeps deck's own `Animated*` names —
+> so one layer kind has one spelling on every backend. The old unprefixed
+> names have been removed. The deck column below keeps deck's own `Animated*` names —
 > those never collided and did not change.
 
 | Class                    | Geometry                         | Deck equivalent                                                  | Notes                                                                                                                                                                                                                                                                                                      |

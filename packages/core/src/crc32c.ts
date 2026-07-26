@@ -50,8 +50,7 @@ export function verifyCrc32c(bytes: Uint8Array, expected: number): void {
     throw new Error(
       `STT tile crc32c mismatch: computed ${hex(actual)} over ${bytes.length} ` +
         `compressed bytes, directory says ${hex(expected >>> 0)} — the blob was ` +
-        'corrupted in transit or at rest (set ArchiveOptions.verifyChecksums: ' +
-        'false to bypass verification)',
+        'corrupted in transit or at rest',
     );
   }
 }
