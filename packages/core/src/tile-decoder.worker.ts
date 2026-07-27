@@ -47,8 +47,8 @@ interface CancelRequest {
 
 /**
  * The dataset's v2 schema-template registry, structured-cloned from the pool
- * wrapper. Sent as the FIRST message after every spawn/respawn (packed v2
- * design §4.4), so it is always present before any v2 decode request.
+ * wrapper. Sent as the FIRST message after every spawn/respawn, so it is
+ * always present before any v2 decode request.
  */
 interface TemplatesMessage {
   type: 'templates';

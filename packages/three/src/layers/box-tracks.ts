@@ -4,21 +4,72 @@
 
 /**
  * Pure (Three-free) CPU keyframe pooling + interpolation for tracked object
- * boxes — the port of deck's `AnimatedBoundingBoxLayer` pooling/sampling. The
- * objects archive carries ONE point feature per object per keyframe (a snapshot:
- * `track_id`, `category`, `heading`, `length/width/height`, optional `speed`);
- * this groups them by `track_id` (rebased to absolute epoch-ms, sorted) and, per
- * frame, binary-searches + lerps each active track to one box pose. The layer
- * turns the pose into oriented line/mesh geometry.
+ * boxes. The engine moved to the framework-free kernel `@poopdeck.gl/core`
+ * (`render/track-kernel.ts`) — see docs/roadmap/renderer-architecture.md: CPU
+ * logic lives in exactly one place. This module stays as a thin adapter so every
+ * three importer of `./box-tracks` (and every consumer of the package-root
+ * `buildTrackIndex`/`sampleTrack`/`sampleTracks`/`Track`) keeps resolving
+ * unchanged.
+ *
+ * ── WHY THIS FILE WAS A PROBLEM ──────────────────────────────────────────────
+ * It used to be a 344-line FORK of that kernel, carrying its own
+ * `SINGLETON_HOLD_MS = 400` (the kernel ships 600), no `maxGapMs` integrity
+ * guard and no `angleUnit` — while three's OWN icon and point-cloud layers
+ * already pooled through the core kernel. One package, two track pools, drifting
+ * apart. `test/box-tracks.test.ts` holds the differentials (sampling AND
+ * pooling) against a hand transcription of the pre-shim fork that prove the
+ * de-fork changed no behaviour.
+ *
+ * ── THE ONE PRESERVED DIVERGENCE ─────────────────────────────────────────────
+ * `SINGLETON_HOLD_MS` stays three-local at 400 and is PASSED to the kernel as
+ * `TrackSampleConfig.singletonHoldMs`, so a lone (un-interpolatable) AV box
+ * still lingers for ±200 ms rather than the kernel's ±300. Aligning the two is a
+ * behaviour change on a published export and gets its own commit + browser
+ * check; it is not something a de-fork should smuggle in.
  */
 
-import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { resolveCategoryColor } from '@poopdeck.gl/core/style';
+import type {
+  Sample,
+  Tile,
+  Track,
+  TrackFieldConfig,
+  TrackSampleConfig,
+} from '@poopdeck.gl/core';
+import {
+  buildTrackIndex as buildCoreTrackIndex,
+  sampleTrack as sampleCoreTrack,
+} from '@poopdeck.gl/core';
 import type { RGBA } from '../lib/color.js';
 
 /** Held-box window (ms) for a track with a single (un-interpolatable) keyframe. */
 export const SINGLETON_HOLD_MS = 400;
 
+/**
+ * The interpolation primitives are core's BY IDENTITY (not re-implementations):
+ * `lerpAngle`'s ±π shortest-arc normalization and `lerpDim`'s NaN fallback are
+ * exactly what this module used to define, and the package root re-exports these
+ * bindings. Sharing the function objects is what makes a future drift impossible
+ * rather than merely unlikely.
+ */
+export { lerp, lerpAngle, lerpDim } from '@poopdeck.gl/core';
+
+/** One tracked object's pooled keyframes (the kernel's `Track`, unchanged). */
+export type { Track } from '@poopdeck.gl/core';
+
+/**
+ * One interpolated box pose at the playhead. The kernel calls it `Sample`; the
+ * name `BoxSample` is this package's published spelling. Structurally identical
+ * apart from the kernel's two OPTIONAL motion-extrapolation flags, which are
+ * never set on this path (no `motion` config is passed).
+ */
+export type { Sample as BoxSample } from '@poopdeck.gl/core';
+
+/**
+ * Which columns to pool from. Structurally a {@link TrackFieldConfig} with
+ * three's own `RGBA` in the colour slots; kept as its own declaration because it
+ * is a published type of `@poopdeck.gl/three` and aliasing it onto the kernel's
+ * would widen `colorMapping` to `| null | undefined` for every existing caller.
+ */
 export interface BoxTrackOptions {
   trackIdProperty: string;
   colorProperty: string; // '' = none
@@ -38,93 +89,67 @@ export interface BoxDefaults {
   height: number;
   fadeIn: number;
   fadeOut: number;
+  /**
+   * Hold window (ms) for a single-keyframe track.
+   * @default SINGLETON_HOLD_MS (400) — three's value, NOT the kernel's 600.
+   */
+  singletonHoldMs?: number;
 }
 
-export interface Track {
-  trackId: string;
-  times: number[];
-  lon: number[];
-  lat: number[];
-  alt: number[];
-  heading: number[];
-  length: number[];
-  width: number[];
-  height: number[];
-  speed: number[];
-  color: RGBA;
-  label: string;
-  category: string;
-  singleton: boolean;
+/**
+ * A column name that cannot exist in a tile, standing in for "no such column".
+ *
+ * The kernel DEFAULTS an empty column name to the conventional one
+ * (`cfg.trackIdProperty || 'track_id'`, and likewise for label/heading/length/
+ * width/height/speed) — which contradicts its own `TrackFieldConfig` doc
+ * ("'' ⇒ each snapshot is its own held instance"). The fork had no such
+ * defaulting: an empty name simply found no column, so ids went synthetic and
+ * numeric columns read NaN. Routing empty names to a guaranteed-absent name
+ * reproduces that exactly, and keeps the de-fork behaviour-preserving over the
+ * WHOLE input domain rather than only over the names `STTBoundingBoxLayer`
+ * happens to emit (all non-empty). Fixing the kernel's defaulting instead would
+ * change the icon and point-cloud glide paths, which pass '' today and rely on
+ * whatever they currently get.
+ */
+const NO_SUCH_COLUMN = '\u0000<none>';
+
+function column(name: string): string {
+  return name === '' ? NO_SUCH_COLUMN : name;
 }
 
-export interface BoxSample {
-  lon: number;
-  lat: number;
-  alt: number;
-  heading: number;
-  length: number;
-  width: number;
-  height: number;
-  speed: number;
-  alpha: number;
-  track: Track;
+/** {@link BoxTrackOptions} → the kernel's pooling config. */
+function trackFields(opts: BoxTrackOptions): TrackFieldConfig {
+  return {
+    trackIdProperty: column(opts.trackIdProperty),
+    // NOT passed through `column`: the kernel already treats '' as "no category"
+    // by skipping the read entirely, which is what the fork did.
+    colorProperty: opts.colorProperty,
+    labelProperty: column(opts.labelProperty),
+    headingProperty: column(opts.headingProperty),
+    lengthProperty: column(opts.lengthProperty),
+    widthProperty: column(opts.widthProperty),
+    heightProperty: column(opts.heightProperty),
+    speedProperty: column(opts.speedProperty),
+    colorMapping: opts.colorMapping,
+    colorMappingDefault: opts.colorMappingDefault,
+  };
 }
 
-export function lerp(a: number, b: number, f: number): number {
-  return a + (b - a) * f;
-}
-
-/** Shortest-arc angular interpolation (radians); NaN endpoints degrade gracefully. */
-export function lerpAngle(a: number, b: number, f: number): number {
-  if (!Number.isFinite(a)) return b;
-  if (!Number.isFinite(b)) return a;
-  const twoPi = Math.PI * 2;
-  let d = (b - a) % twoPi;
-  if (d > Math.PI) d -= twoPi;
-  else if (d < -Math.PI) d += twoPi;
-  return a + d * f;
-}
-
-/** Lerp a dimension that may be NaN (absent column) — fall back to a default. */
-export function lerpDim(
-  a: number,
-  b: number,
-  f: number,
-  fallback: number,
-): number {
-  const af = Number.isFinite(a);
-  const bf = Number.isFinite(b);
-  if (af && bf) return lerp(a, b, f);
-  if (af) return a;
-  if (bf) return b;
-  return fallback;
-}
-
-function readCategorical(
-  binary: BinaryFeatures,
-  prop: string,
-  i: number,
-): string {
-  const cat = binary.categoricalProps[prop];
-  if (cat) {
-    const idx = cat.indices[i];
-    return idx === 0xffff ? '' : (cat.categories[idx] ?? '');
-  }
-  const num = binary.numericProps[prop];
-  if (num) {
-    const v = num[i];
-    return Number.isFinite(v) ? String(v) : '';
-  }
-  return '';
-}
-
-function resolveColor(
-  category: string,
-  mapping: Record<string, RGBA>,
-  fallback: RGBA,
-): RGBA {
-  const c = resolveCategoryColor(category, mapping, fallback);
-  return [c[0], c[1], c[2], c[3] ?? 255];
+/** {@link BoxDefaults} → the kernel's per-frame sampling config. */
+function sampleConfig(defaults: BoxDefaults): TrackSampleConfig {
+  return {
+    defaultLength: defaults.length,
+    defaultWidth: defaults.width,
+    defaultHeight: defaults.height,
+    fadeInDuration: defaults.fadeIn,
+    fadeOutDuration: defaults.fadeOut,
+    singletonHoldMs: defaults.singletonHoldMs ?? SINGLETON_HOLD_MS,
+    // Spelled out rather than left to the kernel's defaults: the fork had
+    // NEITHER knob, so these two values are what "unchanged behaviour" means
+    // here — never interpolate-hold across a data hole, heading in radians.
+    maxGapMs: Infinity,
+    angleUnit: 'rad',
+  };
 }
 
 /** Pool every loaded tile's object snapshots into a `track_id`-keyed, sorted index. */
@@ -132,121 +157,10 @@ export function buildTrackIndex(
   tiles: Tile[],
   opts: BoxTrackOptions,
 ): Map<string, Track> {
-  const tracks = new Map<string, Track>();
-  let synthetic = 0;
-
-  for (const tile of tiles) {
-    for (const tileLayer of tile.layers) {
-      const binary = tileLayer.features;
-      const count = binary.featureCount;
-      if (count === 0) continue;
-
-      const dims = binary.positionDimensions ?? 2;
-      const positions = binary.positions;
-      const starts = binary.startTimes;
-      const offset = binary.timeOffset;
-      const trackCol = binary.categoricalProps[opts.trackIdProperty];
-      const heading = binary.numericProps[opts.headingProperty] ?? null;
-      const length = binary.numericProps[opts.lengthProperty] ?? null;
-      const width = binary.numericProps[opts.widthProperty] ?? null;
-      const height = binary.numericProps[opts.heightProperty] ?? null;
-      const speed = binary.numericProps[opts.speedProperty] ?? null;
-
-      for (let i = 0; i < count; i++) {
-        let key: string;
-        if (trackCol) {
-          const idx = trackCol.indices[i];
-          key =
-            idx === 0xffff
-              ? `∅${synthetic++}`
-              : (trackCol.categories[idx] ?? `∅${synthetic++}`);
-        } else {
-          key = `∅${synthetic++}`;
-        }
-
-        let track = tracks.get(key);
-        if (!track) {
-          const category = opts.colorProperty
-            ? readCategorical(binary, opts.colorProperty, i)
-            : '';
-          track = {
-            trackId: trackCol ? key : '',
-            times: [],
-            lon: [],
-            lat: [],
-            alt: [],
-            heading: [],
-            length: [],
-            width: [],
-            height: [],
-            speed: [],
-            color: resolveColor(
-              category,
-              opts.colorMapping,
-              opts.colorMappingDefault,
-            ),
-            label: readCategorical(binary, opts.labelProperty, i),
-            category,
-            singleton: false,
-          };
-          tracks.set(key, track);
-        }
-
-        const b = i * dims;
-        track.times.push(starts[i] + offset);
-        track.lon.push(positions[b]);
-        track.lat.push(positions[b + 1]);
-        track.alt.push(dims > 2 ? positions[b + 2] : 0);
-        track.heading.push(heading ? heading[i] : NaN);
-        track.length.push(length ? length[i] : NaN);
-        track.width.push(width ? width[i] : NaN);
-        track.height.push(height ? height[i] : NaN);
-        track.speed.push(speed ? speed[i] : NaN);
-      }
-    }
-  }
-
-  for (const track of tracks.values()) {
-    const n = track.times.length;
-    if (n > 1) {
-      const order = Array.from({ length: n }, (_, k) => k).sort(
-        (a, b) => track.times[a] - track.times[b],
-      );
-      reorder(track, order);
-      dedupeByTime(track);
-    }
-    track.singleton = track.times.length < 2;
-  }
-
-  return tracks;
-}
-
-const PARALLEL_KEYS = [
-  'times',
-  'lon',
-  'lat',
-  'alt',
-  'heading',
-  'length',
-  'width',
-  'height',
-  'speed',
-] as const;
-
-function reorder(track: Track, order: number[]): void {
-  for (const k of PARALLEL_KEYS) {
-    const arr = track[k];
-    track[k] = order.map((idx) => arr[idx]);
-  }
-}
-
-function dedupeByTime(track: Track): void {
-  const t = track.times;
-  const keep: number[] = [];
-  for (let i = 0; i < t.length; i++) {
-    if (i === 0 || t[i] !== t[i - 1]) keep.push(i);
-  }
-  if (keep.length !== t.length) reorder(track, keep);
+  // The kernel additionally reports `hasSpeedColumn` / `trackIdMissing` /
+  // `totalSnapshots` for telemetry; the box layer emits none, so only the index
+  // itself crosses back (the published return type is the Map).
+  return buildCoreTrackIndex(tiles, trackFields(opts)).tracks;
 }
 
 /** Interpolate one track's box pose at absolute `now`, or null when inactive. */
@@ -254,79 +168,8 @@ export function sampleTrack(
   track: Track,
   now: number,
   defaults: BoxDefaults,
-): BoxSample | null {
-  const { times } = track;
-  const n = times.length;
-  if (n === 0) return null;
-
-  const first = times[0];
-  const last = times[n - 1];
-  const pad = track.singleton ? SINGLETON_HOLD_MS / 2 : 0;
-  if (now < first - pad || now > last + pad) return null;
-
-  let lo: number;
-  let hi: number;
-  let frac: number;
-  if (n === 1) {
-    lo = hi = 0;
-    frac = 0;
-  } else {
-    const c = now < first ? first : now > last ? last : now;
-    lo = 0;
-    hi = n - 1;
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1;
-      if (times[mid] <= c) lo = mid;
-      else hi = mid;
-    }
-    const denom = times[hi] - times[lo];
-    frac = denom > 0 ? (c - times[lo]) / denom : 0;
-  }
-
-  const length = lerpDim(
-    track.length[lo],
-    track.length[hi],
-    frac,
-    defaults.length,
-  );
-  const width = lerpDim(track.width[lo], track.width[hi], frac, defaults.width);
-  const height = lerpDim(
-    track.height[lo],
-    track.height[hi],
-    frac,
-    defaults.height,
-  );
-  const speedLo = track.speed[lo];
-  const speedHi = track.speed[hi];
-  const speed =
-    Number.isFinite(speedLo) || Number.isFinite(speedHi)
-      ? lerpDim(speedLo, speedHi, frac, 0)
-      : NaN;
-
-  let alpha = 1;
-  if (defaults.fadeIn > 0) {
-    const age = now - first;
-    if (age < defaults.fadeIn)
-      alpha *= Math.max(0, Math.min(1, age / defaults.fadeIn));
-  }
-  if (defaults.fadeOut > 0) {
-    const remaining = last - now;
-    if (remaining < defaults.fadeOut)
-      alpha *= Math.max(0, Math.min(1, remaining / defaults.fadeOut));
-  }
-
-  return {
-    lon: lerp(track.lon[lo], track.lon[hi], frac),
-    lat: lerp(track.lat[lo], track.lat[hi], frac),
-    alt: lerp(track.alt[lo], track.alt[hi], frac),
-    heading: lerpAngle(track.heading[lo], track.heading[hi], frac),
-    length,
-    width,
-    height,
-    speed,
-    alpha,
-    track,
-  };
+): Sample | null {
+  return sampleCoreTrack(track, now, sampleConfig(defaults));
 }
 
 /** All active box poses at `now` (one per active track). */
@@ -334,10 +177,13 @@ export function sampleTracks(
   index: Map<string, Track>,
   now: number,
   defaults: BoxDefaults,
-): BoxSample[] {
-  const out: BoxSample[] = [];
+): Sample[] {
+  // Config built ONCE per frame, not once per track: this runs over every
+  // resident track on every `setTime`.
+  const cfg = sampleConfig(defaults);
+  const out: Sample[] = [];
   for (const track of index.values()) {
-    const s = sampleTrack(track, now, defaults);
+    const s = sampleCoreTrack(track, now, cfg);
     if (s) out.push(s);
   }
   return out;

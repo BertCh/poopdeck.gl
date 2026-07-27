@@ -36,6 +36,26 @@ export type {
 } from './types.js';
 export { Compression, GeometryType } from './types.js';
 
+// ─── Tile identity ──────────────────────────────────────────────────────────
+// The only producers of a tile's string identity. Every key folds the
+// temporal-LOD tier in, so a LOD tile cannot alias the base tile it shares
+// `z/x/y/t` with. `tileKey`'s output reaches the OPFS cache, making its
+// format a persistence contract. `tileLayerKey` composes it with a layer name
+// for the in-memory per-(tile, layer) registries every renderer keeps, and is
+// exported so no backend re-derives that spelling and drifts from the rest.
+export { tileKey, tileEntryKey, tileCellKey } from './tile-key.js';
+// Camera-derived viewport boxes are made safe in exactly ONE place, shared by
+// all four backends — see `docs/roadmap/tile-loading-3d-2026-07.md` §4.1.
+export {
+  normalizeViewportBounds,
+  boundsFromCorners,
+  MAX_SEAM_SPAN_DEG,
+  type NormalizedViewportBounds,
+  type ViewportBoundsIssue,
+} from './geo/viewport-bounds.js';
+export type { TileKey, TileEntryKey, TileCellKey } from './tile-key.js';
+export { tileLayerKey } from './render/track-kernel.js';
+
 // ─── Default color palettes (pure data, shared by every renderer) ────────────
 // The single source of truth for the categorical / heatmap defaults; imported
 // by both @poopdeck.gl/layers (deck) and @poopdeck.gl/maplibre so the two
@@ -55,9 +75,9 @@ export {
 // ─── Track kernel (CPU motion-glide engine, framework-free) ─────────────────
 // Pool-by-id + per-frame interpolation for "one smooth-moving instance per
 // tracked object" rendering (motion glide, trip heads, AV boxes/meshes).
-// Hoisted here from @poopdeck.gl/layers so deck, maplibre/mapbox, three and
-// Cesium share ONE implementation (campaign D7); the deck package re-exports
-// this module from `src/lib/track-kernel.ts` for source compatibility.
+// Lives here, not in @poopdeck.gl/layers, so deck, maplibre/mapbox, three and
+// Cesium share ONE implementation; the deck package re-exports this module
+// from `src/lib/track-kernel.ts` for source compatibility.
 export {
   buildTrackIndex,
   sampleTrack,
@@ -84,6 +104,58 @@ export type {
   TrackIndexResult,
 } from './render/track-kernel.js';
 
+// ─── Motion modes (opt-in interpolation/extrapolation vocabulary) ────────────
+// `TrackSampleConfig.motion` selects HOW a pose moves between keyframes and
+// whether it may be predicted past the last one: 'linear' (the shipped
+// lerp, byte for byte), 'velocity' (continue on the entity's own speed +
+// course), 'great-circle' (slerp the bracket). Speed and angle units are
+// declared per config because none of them travel with the archive. The
+// spherical geodesy the modes rest on is exported from `@poopdeck.gl/core/geo`.
+// See docs/roadmap/renderer-architecture.md §2.15.
+export {
+  MOTION_MODES,
+  resolveMotionConfig,
+  deriveMotionState,
+  toMps,
+  toCompassDeg,
+  fromCompassDeg,
+} from './render/track-kernel.js';
+export type {
+  MotionMode,
+  MotionConfig,
+  ResolvedMotionConfig,
+  MotionState,
+  CourseConvention,
+  SpeedUnit,
+} from './render/track-kernel.js';
+export {
+  SPHERE_RADIUS_M,
+  wrapLonDeg,
+  shortestLonDeltaDeg,
+  haversineMeters,
+  initialBearingDeg,
+  destinationPoint,
+  interpolateGreatCircle,
+  greatCircleCourseDeg,
+  type LonLat,
+} from './geo/spherical.js';
+
+// ─── Viewport cell budget (3D tile-selection cost cap) ──────────────────────
+// A four-corner viewport box around a strongly pitched frustum inflates faster
+// than the frame it bounds (832 cells at pitch 85 / z8 against ~12 flat). This
+// spends the excess as ONE COARSER ZOOM rather than as hundreds of fetches,
+// keeping the selection complete — see docs/roadmap/tile-loading-3d-2026-07.md
+// §4.4. Deliberately NOT under `./geo`: it is built on `archive.ts`'s own tile
+// arithmetic, and `./geo` is the framework-free projection kernel three and
+// Cesium import — it must not pull the archive reader in behind it.
+export {
+  DEFAULT_VIEWPORT_CELL_BUDGET,
+  DEFAULT_CELL_BUDGET_HYSTERESIS,
+  viewportCellCount,
+  fitZoomToCellBudget,
+  type CellBudgetOptions,
+} from './tile-budget.js';
+
 // ─── Archive / tileset / tile decoding ──────────────────────────────────────
 export {
   STTArchive,
@@ -99,15 +171,39 @@ export type {
   ManifestPackRef,
   ManifestSchemaTemplate,
 } from './archive.js';
-export { SpatiotemporalTileset } from './spatiotemporal-tileset.js';
+export { SpatioTemporalTileset } from './spatiotemporal-tileset.js';
 export type {
   BufferedRunway,
   OverviewPreloadResult,
-  SpatiotemporalTileHeader,
-  SpatiotemporalTilesetOptions,
+  SpatioTemporalTileHeader,
+  SpatioTemporalTilesetOptions,
   TileBatchHooks,
   TileTier,
 } from './spatiotemporal-tileset.js';
+
+// ─── Deprecated spelling aliases (`Spatiotemporal*` → `SpatioTemporal*`) ─────
+// The project noun was published two ways: `SpatioTemporal` (capital T) in
+// `@poopdeck.gl/layers` and `Spatiotemporal` (lowercase t) here. `SpatioTemporal`
+// won: it matches the product name "SpatioTemporal Tiles" used throughout the
+// docs and at the top of this file, and it matches the more-referenced public
+// class (the docs name `SpatioTemporalLayer` 64 times vs `SpatiotemporalTileset`
+// 33). The old spellings stay exported so published consumers keep compiling.
+/**
+ * @deprecated Use {@link SpatioTemporalTileset}. The `Spatiotemporal` spelling
+ * is kept only for backward compatibility and will be removed in a future major.
+ */
+export { SpatioTemporalTileset as SpatiotemporalTileset } from './spatiotemporal-tileset.js';
+export type {
+  /**
+   * @deprecated Use {@link SpatioTemporalTilesetOptions}.
+   */
+  SpatioTemporalTilesetOptions as SpatiotemporalTilesetOptions,
+  /**
+   * @deprecated Use {@link SpatioTemporalTileHeader}.
+   */
+  SpatioTemporalTileHeader as SpatiotemporalTileHeader,
+} from './spatiotemporal-tileset.js';
+
 export { decodeTile, getFeatureProperties, toGeoArrowTable } from './tile.js';
 // Packed formatVersion-2 decode plumbing: the schema-template registry built
 // from `manifest.schemas` at open (spec §3.2) and the decodeTile options that

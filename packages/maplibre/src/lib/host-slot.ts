@@ -1,5 +1,5 @@
 /**
- * Mapbox host detection + Standard-style slot support (campaign D5).
+ * Mapbox host detection + Standard-style slot support.
  *
  * The maplibre and mapbox custom-layer surfaces are near-identical — the same
  * `render(gl, matrix, …)` positional signature, the same premultiplied-alpha
@@ -13,17 +13,17 @@
  *
  * This module owns the two pieces the base layer needs to honour that split:
  * the {@link MapboxSlot} vocabulary and an {@link isMapboxHost} heuristic. It
- * NEVER imports or vendors mapbox-gl (proprietary — campaign §2 mapbox
- * hygiene): the host check is purely structural / duck-typed, and mapbox is a
+ * NEVER imports or vendors mapbox-gl (it is proprietary): the host check is
+ * purely structural / duck-typed, and mapbox is a
  * structural optional peer at most (no `mapbox-gl` dependency is added; the
  * documented floor is mapbox-gl >=3.9.1, below which custom layers crash
  * `queryRenderedFeatures`). maplibre stays the default, CI-tested target.
  *
- * Scope (D5): mercator only. Mapbox globe would require hand-rolled ECEF from
+ * Scope: mercator only. Mapbox globe would require hand-rolled ECEF from
  * the positional render params and is deferred; a mapbox user at globe zooms
  * sees the basemap's own globe→mercator transition cover most practical zooms.
  * The slot governs 2D stacking, which is orthogonal to projection, so slot
- * support ships now regardless.
+ * support holds regardless.
  */
 
 /** The three Standard-style slots a mapbox custom layer may target. */

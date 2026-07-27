@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
 import { fakeTile, flush as tick } from './helpers/fixtures';
 
@@ -77,7 +77,7 @@ function makeGatedTileset(opts: {
     },
   );
 
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -166,8 +166,16 @@ describe('getVisibleTiles: finer-descendant stand-in on zoom-out', () => {
     tileset.finalize();
   });
 
-  it("does not apply under the 'no-overlap' refinement strategy", async () => {
-    const { tileset, zoomOut } = makeGatedTileset({
+  it("applies under 'no-overlap' too — it cannot overlap anything", async () => {
+    // This assertion is INVERTED from what it pinned before 2026-07-26
+    // (docs/roadmap/tile-loading-3d-2026-07.md F4). The stand-in was gated off
+    // for 'no-overlap' on the reading that the strategy means "show exactly
+    // the requested zoom", but what 'no-overlap' exists to prevent is a parent
+    // and its children being DRAWN ON TOP OF EACH OTHER — and a descendant of
+    // a cell that has no tile of its own overlaps nothing. All ten storm4d
+    // tilesets run 'no-overlap', so with the gate in place one scroll notch
+    // across an integer zoom blanked every layer at once.
+    const { tileset, resolvePending, zoomOut } = makeGatedTileset({
       refinementStrategy: 'no-overlap',
       immediateTile: FINE,
       coarseTile: COARSE,
@@ -185,8 +193,119 @@ describe('getVisibleTiles: finer-descendant stand-in on zoom-out', () => {
       timeWindow: 100,
     });
     await settle();
-    // 'no-overlap' shows exactly the requested zoom, nothing else, ever.
-    expect(tileset.getVisibleTiles()).toEqual([]);
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([FINE]);
+
+    // And it is strictly a stand-in: the moment the requested zoom arrives,
+    // 'no-overlap' is back to exactly one tile.
+    resolvePending(COARSE);
+    await settle();
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([COARSE]);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * The zoom-IN mirror: a resident ANCESTOR stands in for a needed primary cell
+ * that has not arrived. Same "pure reuse of what is already resident" contract
+ * as the descendant pass, with one extra rule — an ancestor covers 4^depth
+ * primary cells, so it may only draw when NONE of them is already loaded.
+ */
+describe('getVisibleTiles: resident-ancestor stand-in on zoom-in', () => {
+  /**
+   * z6 (25, 50) is the depth-2 ancestor of both z8 (100, 200) and z8
+   * (101, 200) — two siblings under one coarse tile, which is what the
+   * overlap guard needs to be exercised.
+   */
+  const SIBLING: TileId = { z: 8, x: 101, y: 200, t: 0 };
+
+  function makeZoomInTileset(opts: { fineTiles: TileId[] }) {
+    const pending = new Map<string, () => void>();
+    const k = (id: TileId) => `${id.z}/${id.x}/${id.y}/${id.t}`;
+    let fineAvailable = false;
+    const resolveNow = new Set<string>();
+
+    const getTileData = (id: TileId): Promise<Tile> => {
+      if (id.z === COARSE.z || resolveNow.has(k(id))) {
+        return Promise.resolve(fakeTile(id));
+      }
+      return new Promise<Tile>((resolve) => {
+        pending.set(k(id), () => resolve(fakeTile(id)));
+      });
+    };
+
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: false,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: 1000,
+      getAvailableTiles: async (_b: BoundingBox, z: number) => {
+        if (z === COARSE.z) return [COARSE];
+        if (z === 8) return fineAvailable ? opts.fineTiles : [];
+        return [];
+      },
+      // Deliberately NO getTileDataBatch: `Promise.all` over a gated sibling
+      // would wedge the tile that is supposed to land, and this fixture's
+      // whole point is one z8 cell arriving while the other does not.
+      getTileData,
+    });
+
+    return {
+      tileset,
+      zoomIn: () => {
+        fineAvailable = true;
+      },
+      /** Let this fine tile resolve immediately when it is next requested. */
+      unblock: (id: TileId) => resolveNow.add(k(id)),
+    };
+  }
+
+  it('shows the resident coarse tile while the finer primary streams in', async () => {
+    const { tileset, zoomIn } = makeZoomInTileset({ fineTiles: [FINE] });
+
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: COARSE.z,
+      time: 0,
+      timeWindow: 100,
+    });
+    await settle();
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([COARSE]);
+
+    // One scroll notch in. The z8 primary is gated, and under 'no-overlap' the
+    // needed set holds nothing else — without the ancestor pass the frame goes
+    // completely blank.
+    zoomIn();
+    tileset.update({ bounds: BOUNDS, zoom: FINE.z, time: 0, timeWindow: 100 });
+    await settle();
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([COARSE]);
+
+    tileset.finalize();
+  });
+
+  it('refuses to draw an ancestor over a primary cell that has already loaded', async () => {
+    const { tileset, zoomIn, unblock } = makeZoomInTileset({
+      fineTiles: [FINE, SIBLING],
+    });
+    unblock(SIBLING); // one of the two z8 cells lands, the other does not
+
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: COARSE.z,
+      time: 0,
+      timeWindow: 100,
+    });
+    await settle();
+
+    zoomIn();
+    tileset.update({ bounds: BOUNDS, zoom: FINE.z, time: 0, timeWindow: 100 });
+    await settle();
+
+    // COARSE covers both z8 cells, and one of them is on screen in its own
+    // right — drawing the coarse copy on top would render those features
+    // twice, which is exactly what 'no-overlap' is configured to avoid.
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([SIBLING]);
 
     tileset.finalize();
   });

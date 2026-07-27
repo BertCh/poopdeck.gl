@@ -51,7 +51,7 @@ heavy optional context layers may use narrower spans (per-source spans already s
 | Level II download/cache/decode, all sweeps + all moments decodable                                                         | ✅ exists                                | `crates/stt-generate/src/datasets/storms.rs`, `nexrad-*` crates                                         |
 | 4/3-earth beam model returning per-gate `GeoPoint3D` **with altitude_meters**                                              | ✅ exists (altitude currently discarded) | `crates/stt-generate/src/geo.rs:224-238`                                                                |
 | Geometry-native Z for POINTS (`--point-elevation-column`, quantized, zero-copy, `positionDimensions:3`)                    | ✅ exists + tested                       | `crates/stt-build/src/build_options.rs:159`, `packages/core/test/point-3d-geometry.test.ts`             |
-| Dense point-cloud rendering (deck `AnimatedPointCloudLayer`/`AnimatedPointLayer` 3D, three `SttPointCloudLayer`)           | ✅ exists (AV LiDAR proven)              | `packages/layers/src/layers/core/animated-point-*.ts`, `packages/three/src/layers/point-cloud-layer.ts` |
+| Dense point-cloud rendering (deck `AnimatedPointCloudLayer`/`AnimatedPointLayer` 3D, three `STTPointCloudLayer`)           | ✅ exists (AV LiDAR proven)              | `packages/layers/src/layers/core/animated-point-*.ts`, `packages/three/src/layers/point-cloud-layer.ts` |
 | Additive home-zoom LOD for Waymo-class clouds                                                                              | ✅ exists                                | `--min/max-zoom-field`, `lidarLod`, `streaming-tile-source.ts`                                          |
 | Extruded polygons (`extruded`, `getElevation`, wireframe)                                                                  | ✅ exists                                | `animated-polygon-layer.ts:132-165`                                                                     |
 | Per-feature path altitude (`elevationProperty` on paths)                                                                   | ✅ exists                                | `animated-path-layer.ts:174-211`                                                                        |
@@ -192,16 +192,25 @@ deck ramp gap: v1 uses categorical bands (proven `storm-radar` pattern; ~14 dBZ 
 - C5: three-backend variant (native ramps, globe/atmosphere cinematics).
 - C6: Rust port of the volume generator.
 
-## 7. Open design questions (resolve in A0/A3)
+## 7. Design questions — all five resolved by the shipped build
 
-1. GLM flashes have **no altitude** (2D instrument): render at ground under the volume, or
-   lift to nominal anvil height (~10 km) as declared stylization? (Leaning: ground + glow.)
-2. `AnimatedPointCloudLayer` (lit, constant size) vs `AnimatedPointLayer` (billboard,
-   radius-by-value, splat) for the volume — A0 decides on look + fps.
-3. Volume archive zoom range (z4–9 like storms? tighter z5–10?) and whether home-zoom
-   additive LOD is needed at all for a 150 km crop.
-4. Warning-prism height: fixed 12 km vs echo-top-derived.
-5. Exact window trim if the 1.2 GB gate fails (17:30–03:00 → 18:00–00:00 fallback).
+Kept as answers, not questions: the §9 contract and the shipped archives settle every
+one. Nothing here is open.
+
+1. **GLM flashes render at GROUND**, reusing the existing additive splat treatment — no
+   fabricated anvil altitude. A 2D instrument does not get a made-up third dimension in a
+   demo whose entire claim is that the altitude axis is real (§9.1, closing note).
+2. **`AnimatedPointLayer` billboard** carries the volume (`elevationProperty: 'alt_m'`),
+   not `AnimatedPointCloudLayer` — §10 records it as the shipped choice.
+3. **Volume zoom range is z4–9**, and home-zoom additive LOD was NOT needed: the
+   generator bakes a stratified `--min-zoom-field` pyramid instead (strongest-echo gate
+   per 3D cell, deepest tier lossless), which supersedes the "rebuild at `--min-zoom 6`"
+   idea. See demos-and-datasets §4.1.
+4. **Warning prisms are a fixed ~12 km extrusion** (§8 of the FE plan), not echo-top
+   derived — the prism is a legibility device for the VTEC clock, and tying it to echo
+   top would make two different quantities share one visual channel.
+5. **No window trim was needed.** The shipped timeRange is the full
+   `17:30Z → 03:00Z`; the 1.2 GB gate held.
 
 ## 8. Risks
 
@@ -353,7 +362,7 @@ Renderer counterparts (general fixes, landed with this amendment):
   (every zoom carries every feature — 18.3M gates per level on the volume), so
   deck's best-available parent fallback fetched + decoded + drew up to 4 extra
   complete copies of the visible data per bucket.
-- `SpatiotemporalTileset.getVisibleTiles` pass-2 parent-cover scan is now
+- `SpatioTemporalTileset.getVisibleTiles` pass-2 parent-cover scan is now
   clamped to the viewport's primary-zoom tile range: a parent larger than the
   viewport could never be "covered" by its (never-loaded) out-of-viewport
   children and rendered forever on top of the streamed primary tiles.
@@ -450,9 +459,10 @@ between `dbz_level` and `alt_band` in place.
 
 - `storm4d-isolines` is **local-only** (`LOCAL_ONLY_DATASETS`) until r2-sync
   lands it — it is the composite's governor, so an un-gated deploy 404-stalls
-  the whole demo.
+  the whole demo. Rides the fleet republish (**B2** in the
+  [roadmap README](./README.md)); the gate is holding correctly meanwhile.
 - Browser verify (aesthetics: sheet density, whether the cloud-top canopy fights
-  the thin lines, the fade timing at 288× playback).
+  the thin lines, the fade timing at 288× playback) — part of **L2**.
 - Counted out for v1: **velocity iso-lines**. Contouring dealiased velocity on
   the same grid is a one-flag change, but the toggle would have to swap the
   FEATURE SET rather than a color column (a dBZ ring colored by velocity is

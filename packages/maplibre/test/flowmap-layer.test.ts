@@ -41,7 +41,7 @@ import {
 } from '../src/layers/flowmap-layer';
 import { normalizeRenderArgs } from '../src/lib/host-adapter';
 import { bucketPositionAt, deriveFlowAxis } from '../src/lib/flow-kernel';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 
 const baseOpts = {
   url: 'mem://test.stt',
@@ -892,9 +892,8 @@ describe('render()', () => {
     wireMock(layer, gl);
     const map = makeMockMap();
     layer.map = map;
-    layer.tileset = { update: vi.fn() };
     const tile = makeFlowTile();
-    layer.loadedTiles = new Map([['2/1/1/' + TIME_OFFSET, tile]]);
+    publishVisibleTiles(layer, tile);
     return { layer, gl, map, tile };
   }
 
@@ -922,7 +921,7 @@ describe('render()', () => {
     // is no longer drawn → reaped.
     const other = makeFlowTile();
     other.id = { z: 2, x: 5, y: 5, t: TIME_OFFSET };
-    layer.loadedTiles = new Map([['2/5/5/' + TIME_OFFSET, other]]);
+    publishVisibleTiles(layer, other);
     layer.render(gl, new Float32Array(16).fill(2));
     expect(gl.deleteTexture.mock.calls.length).toBeGreaterThan(deletedBefore);
     expect(layer.liveCaches.has(cache)).toBe(false);

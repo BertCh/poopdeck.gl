@@ -90,7 +90,10 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
 
   // Active option for summary-tier weight toggles (e.g. pickup vs dropoff).
   // Reset to the dataset's first option whenever the dataset changes.
-  const summaryToggleOptions = selectedDataset.summaryToggleWeights;
+  const summaryToggleOptions =
+    'summaryToggleWeights' in selectedDataset
+      ? selectedDataset.summaryToggleWeights
+      : undefined;
   const [summaryToggleId, setSummaryToggleId] = useState<string | undefined>(
     summaryToggleOptions?.[0]?.id,
   );
@@ -320,10 +323,18 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     if (useGlobe) return { globe: selectedDataset.initialViewState };
     // maxPitch is a MapState view-state constraint (not a controller option):
     // cube demos want to look down the time axis from above the 60° default.
+    // The fallback is 70, not 85: at deck's default `altitude: 1.5` the top
+    // screen ray clears the horizon at pitch 71.57°, `unproject` then returns
+    // a ground point behind the camera, and the viewport lon/lat box the tile
+    // loader selects against inverts — zero tiles on the latitude axis, a
+    // near-whole-world column span on the longitude axis
+    // (docs/roadmap/tile-loading-3d-2026-07.md §1/§4). The chassis repairs a
+    // bad box now; this ceiling keeps every timeHeight demo out of the band in
+    // the first place. Raising it back needs §4 read first.
     return selectedDataset.timeHeight
       ? {
           ...selectedDataset.initialViewState,
-          maxPitch: selectedDataset.timeHeight.maxPitch ?? 85,
+          maxPitch: selectedDataset.timeHeight.maxPitch ?? 70,
         }
       : selectedDataset.initialViewState;
   }, [selectedDataset, useGlobe]);

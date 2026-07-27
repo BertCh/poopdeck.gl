@@ -20,7 +20,7 @@
 
 import { Mesh, InstancedBufferAttribute, InstancedBufferGeometry } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import {
   createPointMaterial,
@@ -55,7 +55,7 @@ export interface STTTripHeadsLayerOptions {
 
 const DEFAULT_COLOR: RGBA = [253, 128, 93, 255];
 
-export class STTTripHeadsLayer extends BaseSttLayer {
+export class STTTripHeadsLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -100,7 +100,7 @@ export class STTTripHeadsLayer extends BaseSttLayer {
     this.object.material = this.bundle.material;
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.projection = ctx.projection;
     this.index = buildTripIndex(tiles, ctx.projection, ctx.timeOrigin);

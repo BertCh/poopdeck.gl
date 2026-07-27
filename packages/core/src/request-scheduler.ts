@@ -10,7 +10,8 @@
  * THE PROBLEM. A story or demo may composite several STT datasets of arbitrary,
  * mixed intensity. Today each `STTArchive` runs its own pool of up to 24
  * concurrent range requests, so N archives open ~24·N connections and fight for
- * bandwidth with no shared budget, priority, or fairness (§2.5). This module is
+ * bandwidth with no shared budget, priority, or fairness
+ * (docs/roadmap/playback-and-loading.md §2). This module is
  * the single authority that hands out a *fixed global concurrency budget* across
  * all sources by dynamic priority and weighted-fair share.
  *
@@ -22,7 +23,8 @@
  * slot on completion OR failure, a priority callback consulted as slots open,
  * `priority < 0` cancels) married to Cesium priority semantics: priority is a
  * unit-less value where a LOWER numeric value means HIGHER priority — the direct
- * analog of "time-to-playhead" replacing Cesium's "distance-from-camera" (§2.8).
+ * analog of "time-to-playhead" replacing Cesium's "distance-from-camera"
+ * (docs/roadmap/playback-and-loading.md §2).
  *
  * ─── Dispatch model ──────────────────────────────────────────────────────────
  *

@@ -124,6 +124,13 @@ export class STTBatchedPolylineLayer {
 
   /** Replace the rendered polylines (replace-all, like `STTPointLayer.setTiles`). */
   setPolylines(build: PolylineBuild): void {
+    // Bail on an empty build BEFORE destroying the standing primitive: selection
+    // reports an empty visible set for the frames between a viewport change and
+    // the first decoded tile of the new set, and tearing down first turns that
+    // transient into a blank frame (the "tiles in view flash out" symptom). The
+    // held-over lines stay geographically correct — the camera has moved on from
+    // them, it is not being shown something false.
+    if (build.polylines.length === 0) return;
     if (this.primitive) {
       this.scene.primitives.remove(this.primitive); // destroys the primitive
       this.primitive = null;
@@ -131,7 +138,6 @@ export class STTBatchedPolylineLayer {
     this.entries = [];
     this.attrsCached = false;
     this.timeOrigin = build.timeOrigin;
-    if (build.polylines.length === 0) return;
 
     const instances: GeometryInstance[] = [];
     for (const p of build.polylines) {

@@ -13,16 +13,22 @@
 STT has three independently-versioned axes (§9 of the packed spec). An
 implementation declares conformance per axis:
 
-| axis                | current                                  | governed by                                                                                       |
-| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Packed **format**   | `formatVersion: 2` (default; `1` frozen) | [packed-format §3, §6](./stt-packed-format.md) + [`manifest.schema.json`](./manifest.schema.json) |
-| **Directory** codec | `directoryVersion: 5`                    | [packed-format §4, §4.1](./stt-packed-format.md)                                                  |
-| **Tile payload**    | Arrow IPC + GeoArrow                     | [data-format.md](../architecture/data-format.md) + [time-model.md](./time-model.md)               |
+| axis                | current                                            | governed by                                                                                       |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Packed **format**   | `formatVersion: 2` only (`1` withdrawn 2026-07-26) | [packed-format §3, §6](./stt-packed-format.md) + [`manifest.schema.json`](./manifest.schema.json) |
+| **Directory** codec | `directoryVersion: 5`                              | [packed-format §4, §4.1](./stt-packed-format.md)                                                  |
+| **Tile payload**    | Arrow IPC + GeoArrow                               | [data-format.md](../architecture/data-format.md) + [time-model.md](./time-model.md)               |
 
 A **conformant reader** opens any dataset these specs permit (both directory
-layouts, both layer-frame shapes, both `vertex_time` encodings, unknown
-additive fields). A **conformant writer** emits only datasets a conformant
-reader can open, with the integrity and self-description guarantees below.
+layouts, every `vertex_time` width, both `TILE_META` time forms, quantized
+and raw per-vertex value columns, unknown additive columns and fields). A
+**conformant writer** emits only datasets a conformant reader can open, with
+the integrity and self-description guarantees below.
+
+> **`formatVersion` 1 is out of scope for conformance.** Read support was
+> withdrawn on 2026-07-26 ([packed-format §9.1](./stt-packed-format.md#91-stability--versioning-promise));
+> a reader that opens a v1 dataset is not more conformant, and a writer
+> cannot emit one. Everything below is v2.
 
 ## 2. The portable conformance kit
 
@@ -44,73 +50,109 @@ against three things that must agree
 2. the TypeScript reader type (`@poopdeck.gl/core` `PackedManifest`),
 3. a committed golden manifest (below).
 
-The schema encodes the format's evolution rules directly: `format`,
-`formatVersion`, and `directory.directoryVersion` are strict `const`s;
-`directory.encoding` is an enum that is _not_ required (pre-encoding manifests
-omit it); pack/index keys are `pattern`-checked to the blake3-128 hex shape; and
-every envelope level permits unknown fields (additive evolution). The contract
-test also asserts five **negative** cases drift loudly (wrong format, wrong
-version, missing `packs`, bad key pattern, bad directory version) and that
-**unknown fields validate** at every level.
+The schema encodes the format's evolution rules directly: `format` and
+`directory.directoryVersion` are strict `const`s, `formatVersion` is the
+closed enum `[2]`; `directory.encoding` is an enum that is _not_ required
+(pre-encoding manifests omit it); pack/index keys are `pattern`-checked to
+the blake3-128 hex shape; and every envelope level permits unknown fields
+(additive evolution). The contract test also asserts five **negative** cases
+drift loudly (wrong format, wrong version, missing `packs`, bad key pattern,
+bad directory version) and that **unknown fields validate** at every level.
+
+It additionally carries the **machine-readable capability registry** as the
+top-level `x-stt-capability-registry` array — the single source of truth
+both reference implementations pin their constant lists against
+(`crates/stt-core/tests/capability_registry.rs` for Rust
+`KNOWN_CAPABILITIES`; the same TS contract test for
+`KNOWN_MANIFEST_CAPABILITIES`), so a registry addition on either side fails
+CI until the schema and both readers agree. Current entries: `attr-quant`,
+`coord-quant`, `elevation-fold`, `time-delta`, `vertex-value-quant`.
 
 ### 2.2 Committed golden fixtures
 
 Tiny, deterministic, byte-stable datasets live under
 `packages/core/test/fixtures/` and are read by the TS reader tests to prove
 cross-implementation agreement — the genuine **Rust writes → TS reads** cases.
-Each row states the `formatVersion` the fixture is emitted at, because that is
-_not_ uniform: the reader-behavior fixtures predate v2 and are still written at
-`formatVersion: 1`, and only the `v2-golden*` family covers the default.
+All of them are `formatVersion: 2`; there is no longer any other version to
+emit.
 
-| fixture                                      | `formatVersion` | exercises                                                                                                                                                                                                                                                                                                              |
-| -------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packed-golden/`                             | 1               | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting                                                                                                                                                                                |
-| `paged-golden/` + `paged-golden-single/`     | 1               | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return _byte-identical_ results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches                                                                          |
-| `v2-golden/` + `v2-golden-v1/`               | 2 and 1         | the **v2 ⇄ v1 decode differential** for points: one source, one set of tiling flags, only `--format-version` differs, so v2's manifest-level `schemas` templates must decode _equal_ to the self-contained v1 build (coord-quant, per-tile `qa` affines, numeric + two dictionary columns with nulls, paged directory) |
-| `v2-golden-tracks/` + `v2-golden-tracks-v1/` | 2 and 1         | the same differential for trajectories: `List<UInt16>` `vertex_time` with the `vt` TILE_META affine, unquantized Float64 coordinates, single (whole-load) directory                                                                                                                                                    |
-| `sample.stt` (frozen legacy v4 fixture)      | —               | a test helper transcodes it to an in-memory packed dataset, then the packed reader decodes its tiles (geometry, numeric + categorical properties, dictionary null-bitmap). Not written by the current Rust toolchain — the single-file writer was removed                                                              |
+| fixture                                  | exercises                                                                                                                                                                                                                                                                               |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packed-golden/`                         | manifest folding, v5 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting. Self-contained frames (inline schemas, no `schemas` table)                                                                                     |
+| `paged-golden/` + `paged-golden-single/` | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return _byte-identical_ results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches                                           |
+| `v2-golden/`                             | the real `stt-build` writer on points: manifest-level `schemas` templates, coord-quant, per-tile `qa` affines, numeric + two dictionary columns with nulls, paged directory                                                                                                             |
+| `v2-golden-tracks/`                      | the same for trajectories: delta `vertex_time` with the `vt` TILE_META affine, unquantized Float64 coordinates, single (whole-load) directory                                                                                                                                           |
+| `legacy-shape/` (4 datasets)             | the **frozen back-compat corpus**: tile blobs lifted verbatim from shipped archives written BEFORE the 2026-07-26 payload change — absolute `Int64` times, raw `List<Float32>` vertex values with NaN holes, `List<UInt16>` and absolute `vertex_time`, no `st`/`et`/`vq` keys anywhere |
 
 They are **committed, not regenerated per build**, so they double as a
-regression corpus. Two generators, because the two families are produced by
-different halves of the toolchain:
+regression corpus. `legacy-shape/` in particular must **never** be
+regenerated: its whole purpose is to be old bytes, and its first test walks
+the raw frames asserting `st`/`et`/`vq` are absent in every tile so the
+corpus cannot silently drift into testing the new path.
+
+Two generators, because the families are produced by different halves of the
+toolchain:
 
 ```bash
 # packed-golden/, paged-golden/, paged-golden-single/ — hand-built payloads
-# through stt-core's PackWriter, pinned to formatVersion 1.
+# through stt-core's PackWriter.
 cargo run -p stt-core --example make-golden-fixture
 
-# v2-golden*/ — the real stt-build writer, each dataset built twice from one
-# synthetic DuckDB source (needs `--features duckdb`).
+# v2-golden*/ — the real stt-build writer, from one synthetic DuckDB source
+# (needs `--features duckdb`).  ⚠ CURRENTLY BROKEN: the script still passes
+# the removed `--format-version` flag and still builds the deleted `-v1`
+# sibling dirs. The committed fixtures predate the 2026-07-26 payload change
+# and are deliberately left stale — the TS tests only decode and validate
+# them (no byte pins), so old-encoder bytes are exactly the back-compat case
+# the reader must handle.
 packages/core/scripts/make-v2-golden.sh
 ```
 
 The first generator (`crates/stt-core/examples/make-golden-fixture.rs`) uses
 `BlobOrdering::SpatialMajor` (not `Auto`) so content hashes are stable across
 regenerations, and builds each distinct payload once + clones it for the dedup
-cases. Its `--v2` flag writes a version-coherent v2 copy into sibling `*-v2/`
-dirs; that output is **not committed and nothing reads it** (see the gap
-below). Builds are byte-reproducible, so re-running either generator is a
-no-op diff unless the writer's bytes intentionally changed.
+cases. Builds are byte-reproducible, so re-running it is a no-op diff unless
+the writer's bytes intentionally changed.
+
+> **Known writer-conformance gap in `make-golden-fixture`.** It builds its
+> manifest through `PackWriter` directly rather than through
+> `EncoderSettings::required_capabilities()`, so its output uses the compact
+> time encoding (`TILE_META.st`/`et`, on by default) while omitting the
+> `time-delta` declaration from `manifest.capabilities`. Per §3 that is a
+> **non-conformant writer**: a reader lacking the feature would silently
+> misdecode instead of refusing at open. Harmless in-repo (the only consumer
+> is the current TS reader) but it must not be copied as an example.
 
 #### Byte-exact writer pins
 
 Decoding a fixture proves reader agreement. Pinning a fixture's _bytes_ proves
-the writer did not drift. **Both format versions now carry that second pin**,
-each a `single/` and a `paged/` dataset plus an `expected-hashes.json`:
+the writer did not drift.
 
-| version           | fixtures                                    | asserted by                          |
-| ----------------- | ------------------------------------------- | ------------------------------------ |
-| 1 (frozen legacy) | `crates/stt-core/tests/fixtures/v1-golden/` | `crates/stt-core/tests/v1_golden.rs` |
-| 2 (**default**)   | `crates/stt-core/tests/fixtures/v2-golden/` | `crates/stt-core/tests/v2_golden.rs` |
+| version                  | fixtures                                                                                                     | asserted by                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| 2 (**the only version**) | `crates/stt-core/tests/fixtures/v2-golden/` — a `single/` and a `paged/` dataset plus `expected-hashes.json` | `crates/stt-core/tests/v2_golden.rs` |
 
-The v2 pin was added 2026-07-24 and closed a structural inversion worth naming,
-because it is the failure mode this whole section exists to prevent: the
-**frozen legacy** format was byte-pinned while the **current default** was not.
-The `v2-golden*` fixtures under `packages/core/test/` had given v2
-decode-equivalence coverage the whole time — which catches a reader that stops
-understanding the bytes, but not a _writer_ that starts emitting different ones.
-An encoder change that still round-tripped cleanly would have turned the v1 pin
-red and left v2 silently green.
+The v2 pin was added 2026-07-24 and closed a structural inversion worth
+naming, because it is the failure mode this section exists to prevent: for a
+while the **frozen legacy** format was byte-pinned while the **current
+default** was not. The `v2-golden*` fixtures under `packages/core/test/` had
+given v2 decode-equivalence coverage the whole time — which catches a reader
+that stops understanding the bytes, but not a _writer_ that starts emitting
+different ones. An encoder change that still round-tripped cleanly would have
+turned the v1 pin red and left v2 silently green. The v1 pin
+(`tests/fixtures/v1-golden/` + `tests/v1_golden.rs`) was deleted with v1
+support on 2026-07-26; v2 is now the only pin, which is why it must be
+regenerated **only** alongside an intentional, reviewed encoder change:
+
+```bash
+cargo test -p stt-core --test v2_golden -- --ignored regenerate_v2_golden
+```
+
+`v2_golden.rs` also carries a value assertion, not just a hash one: it
+decodes the committed fixture and asserts both time columns come back as
+non-null absolute `Int64` anchored at the corpus base. A regressed compact-
+time re-inflation still _decodes_ — it just reports times near zero — so only
+a value assertion catches it.
 
 ### 2.3 The reference validator
 
@@ -142,8 +184,9 @@ the packed format is accepted), and runs, by cost tier:
   property column types (`check_tile_schema`);
 - **quantization gate** — an `Int32`-leaf `geometry` column MUST carry
   `stt:quant` (otherwise a naïve reader misdecodes grid indices as degrees);
-- **vertex-time metadata sanity** — a `List<UInt16>` `vertex_time` column MUST
-  carry parseable `stt:vertex_time_origin_ms` / `stt:vertex_time_step_ms`;
+- **vertex-time metadata sanity** — a delta `vertex_time` column (`List<UInt16>`
+  **or** `List<UInt32>`) MUST carry parseable `stt:vertex_time_origin_ms` /
+  `stt:vertex_time_step_ms`, and an absolute `List<Int64>` one MUST NOT;
 - **CRS84 tagging** — a missing/non-CRS84 `ARROW:extension:metadata` on an
   unquantized `geometry` field is warned (the writer MUST of §3);
 - **interval sanity** — every feature satisfies `end_time >= start_time`;
@@ -156,7 +199,32 @@ the packed format is accepted), and runs, by cost tier:
 - **feature-count match** — decoded row count equals the directory's
   `feature_count`;
 - **producer-drift detection** — distinct per-tile schema signatures are tallied
-  and the first disagreeing pair reported.
+  and the first disagreeing pair reported. Integer-**width** drift on one
+  column (`UInt16` ⇄ `UInt32` ⇄ `Int32` ⇄ `Int64`) is classified _adaptive_
+  and passes, as is the presence-vs-absence of a documented **optional
+  reserved** column (`vertex_time`, `vertex_value`, `vertex_value_matrix`,
+  `triangles`, `part_offsets`) — each is emitted per tile, iff that tile's data
+  needs it, which is the format's design and not a producer defect. A
+  **property** column appearing in one tile and absent in another, or any
+  column changing type family, is _structural_ and errors.
+
+The validator sees the payload **after** re-inflation, so the compact time
+forms and per-vertex value quantization are invisible to it by construction —
+what it checks is the canonical decoded shape. It does check the two columns
+those changes added to the wire directly: `vertex_time` at all three widths,
+and `part_offsets` as a reserved `List<UInt32>` column.
+
+> **Why the drift check is asymmetric.** A per-tile encoding _choice_ and a
+> producer that changed mid-build look identical to a schema comparison, so
+> the classifier can only distinguish them by knowing which variation the
+> format sanctions. Two are sanctioned — integer width, and optional-reserved
+> presence — and both are properties the reference readers already branch on.
+> Everything else errors. This is why the attribute quantizer's sole refusal
+> keys off value _magnitude_ (a property of the column's domain) rather than
+> span or distribution (properties of the tile's sample): a sample-dependent
+> refusal would flip a column between `Float64` and an integer leaf from tile
+> to tile, which is a type-family change and correctly errors here. An earlier
+> revision of that quantizer did exactly this and was reverted.
 
 For a **paged** directory it additionally runs `verify_paged_structure`: every
 leaf descriptor's bounds (geo bbox, zoom range, `[t_min, t_max]`) **cover** the
@@ -179,14 +247,29 @@ self-description (`stt:quant` / vertex-time metadata), summary cell-id, and
 These Rust/TS test suites lock the spec to the code so the _spec itself_ can't
 drift; an external implementer reads them as worked examples:
 
-- `crates/stt-core/tests/v1_golden.rs` — the byte-exact writer pin for
-  `formatVersion: 1` against `crates/stt-core/tests/fixtures/v1-golden/` (both
-  directory shapes, every object plus the manifest). **`formatVersion: 2` has
-  no counterpart yet** — see the open gap in §2.2.
+- `crates/stt-core/tests/v2_golden.rs` — the byte-exact writer pin against
+  `crates/stt-core/tests/fixtures/v2-golden/` (both directory shapes, every
+  object plus the manifest), plus a decode-and-assert-values pass over the
+  committed bytes.
+- `crates/stt-core/tests/capability_registry.rs` — pins Rust
+  `KNOWN_CAPABILITIES` against the schema's `x-stt-capability-registry`
+  (§2.1); `packages/core/test/manifest-schema.test.ts` pins the TS constant
+  against the same array.
 - `crates/spatiotemporal-tiles/tests/validate_cli.rs` — end-to-end tests of the
   reference validator: each builds a tiny packed dataset with `PackWriter`,
   runs the compiled `stt-validate` binary over it with `--json`, and asserts on
-  the parsed report.
+  the parsed report. `every_encoder_payload_shape_passes_the_validator` builds
+  one archive carrying a two-part holed polygon (`part_offsets`), a 3-day
+  track (`UInt32` `vertex_time`) and quantized vertex values, then re-decodes
+  it to prove each shape really reached the wire — a clean report proves
+  nothing if the corpus stopped producing the shape.
+- `packages/core/test/legacy-shape-backcompat.test.ts` — decodes the frozen
+  pre-2026-07-26 corpus (§2.2) through the current TS reader and pins exact
+  time / vertex-value / offset arrays.
+- `packages/core/test/compact-times.test.ts` and
+  `packages/core/test/vertex-value-quant-and-parts.test.ts` — the TS side of
+  the `st`/`et`/`vq`/`part_offsets` contracts, including the malformed-
+  `TILE_META` rejections.
 - `crates/stt-core/tests/spec_conformance.rs` — round-trips point / line /
   polygon / pre-tessellated-polygon layers and asserts the exact documented Arrow
   schema (column names, types, nullability, GeoArrow extension names, the
@@ -210,11 +293,17 @@ drift; an external implementer reads them as worked examples:
 A conformant writer **MUST**:
 
 - emit a `manifest.json` valid against [`manifest.schema.json`](./manifest.schema.json)
-  (`format: "stt-packed"`, `formatVersion: 1 | 2`, `directory.directoryVersion: 5`);
+  (`format: "stt-packed"`, `formatVersion: 2`, `directory.directoryVersion: 5`);
 - declare every required-to-understand feature it used in
   `manifest.capabilities` (registry: `coord-quant`, `attr-quant`,
-  `elevation-fold` — [packed-format §3.1](./stt-packed-format.md#31-required-to-understand-capabilities-capabilities)),
-  omitting the key when none were used; additive columns are never declared;
+  `elevation-fold`, `time-delta`, `vertex-value-quant` —
+  [packed-format §3.1](./stt-packed-format.md#31-required-to-understand-capabilities-capabilities)),
+  omitting the key when none were used; additive columns
+  (`triangles`, `part_offsets`, vector groups, …) are never declared.
+  **Note that `time-delta` applies to a default build** — the compact time
+  forms are on unless suppressed, so a writer that emits them without
+  declaring the capability is non-conformant even though it "changed
+  nothing";
 - **content-address** every pack and directory object by blake3-128 (32 hex
   chars) and name each file by its hash;
 - emit a v5 directory: delta + zig-zag varint key columns, blob-run RLE, the
@@ -224,9 +313,19 @@ A conformant writer **MUST**:
   `geoarrow.{point,linestring,polygon}` (and, unquantized, the CRS84
   `ARROW:extension:metadata`);
 - write a **CRC32C** of each compressed blob into its directory entry;
-- align each Arrow IPC stream to 8 bytes when the layer-frame aligned flag
-  (`0x8000`) is set (and write no padding when it is unset);
+- pad every frame section to an 8-byte boundary with a **derived** (never
+  stored) pad, and write every Arrow IPC stream at **8-byte buffer
+  alignment** — not arrow-rs' 64-byte default, which reproduces neither STT's
+  content addresses nor its payload sizes
+  ([packed-format §5.2](./stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing));
 - ship **no shared zstd dictionary** — each blob is an independent zstd frame;
+- emit `triangles` **all-or-nothing per layer**: once any feature in a layer
+  carries baked indices, every feature in it MUST carry a non-empty list
+  (all three reference renderers bind the column as one whole-layer index
+  buffer and draw nothing for an empty slice);
+- emit `part_offsets` iff some feature in a polygon layer is multi-part, with
+  feature-local ring indices starting at `0` and strictly increasing —
+  absence means every feature is single-part;
 - follow the [time model](./time-model.md): Unix-ms UTC, one start-anchored
   bucket per feature, strictly-increasing multiple LOD levels.
 
@@ -246,6 +345,21 @@ A conformant **formatVersion-2** writer additionally **MUST**
   `stt:vertex_time_step_ms`, `stt:vertex_value_buckets`) into each frame's
   canonical-JSON `TILE_META` section (sorted keys, no whitespace, a key
   present iff its feature is);
+- if it uses the compact time forms, obey
+  [§5.2.4](./stt-packed-format.md#524-compact-feature-times-st--et--capability-time-delta)
+  exactly: `st: "u32"` only alongside a `t0` anchor, forms selected per layer
+  only when **every** feature fits `u32` under checked arithmetic,
+  `et: "zero"` only when every duration is 0 (and then the `end_time` column
+  omitted, not zero-filled), and an empty layer always taking the absolute
+  pair;
+- if it quantizes a per-vertex value column, obey
+  [§5.2.6](./stt-packed-format.md#526-per-tile-column-width-selections):
+  `TILE_META.vq` keys drawn from the closed set, finite values clamped into
+  `[0, 0xFFFE]` so none collides with the `0xFFFF` NaN sentinel, and the two
+  degenerate affines pinned as specified so the bytes stay reproducible;
+- emit the frame-only encodings (`st`/`et`/`vq`) **only inside a frame** —
+  a layer serialized standalone has no `TILE_META` to discriminate them and
+  MUST use the canonical shapes;
 - emit v2 frames per the §5.2 layout: `0xFFFF` escape, `frame_version 2`,
   `flags 0`, per-layer ref kinds (inline section or 16-byte template hash),
   ascending-tag TOC with exact at-rest lengths, derived 8-byte pads; tails
@@ -253,8 +367,9 @@ A conformant **formatVersion-2** writer additionally **MUST**
   carries one DictionaryBatch per dictionary column);
 - stable-sort each layer's rows by `start_time` after feature-id assignment
   and declare `TILE_META.sorted: true`;
-- never mix frame and manifest versions (a v1 frame in a v2 dataset — or
-  vice versa — is non-conformant; readers hard-error on it).
+- never mix frame and manifest versions: every payload in a
+  `formatVersion: 2` dataset opens with the `0xFFFF` escape, and readers
+  hard-error on anything else rather than guessing at an older frame shape.
 
 A conformant writer **SHOULD**:
 
@@ -290,9 +405,17 @@ A conformant reader **MUST**:
   shortcut;
 - validate the fetched directory body length against `directory.length` before
   decoding, and unwrap `directory.encoding` when set;
-- accept **both** layer-frame shapes (aligned `0x8000` + padding, and unaligned);
-- accept **both** `vertex_time` encodings (`List<UInt16>` deltas with
-  `origin`/`step` schema metadata, and absolute `List<Int64>`);
+- accept **all three** `vertex_time` encodings — `List<UInt16>` and
+  `List<UInt32>` deltas (both carrying `origin`/`step`, v2: `TILE_META.vt`)
+  and absolute `List<Int64>` — keying "is it a delta?" off the metadata and
+  "how wide?" off the Arrow leaf type, never off the leaf type alone;
+- accept a quantized `<prop>` column at **either** integer leaf (`UInt16`,
+  `Int32`) and reconstruct through the per-tile `stt:qa` affine, without
+  caching the affine or the leaf width across tiles;
+- **ignore unknown reserved-looking columns** rather than mis-publishing them
+  as properties (`part_offsets` is the current example: a reader that has
+  never heard of it must not surface `List<UInt32>` ring indices as a numeric
+  property);
 - **coalesce range reads per pack** (a range must not bridge two pack objects);
 - prune by time with `time_end >= w_start AND (cover_t_min ?? time_start) <= w_end`,
   falling back to `time_start` when `cover_t_min` is absent.
@@ -312,10 +435,23 @@ A conformant reader that accepts **formatVersion 2** additionally **MUST**:
   section length, verifying both template and batch section begin with the
   `0xFFFFFFFF` continuation marker (stray zeros silently EMPTY a tile in
   arrow-rs — the guard converts that to a loud error);
-- source the per-tile metadata from `TILE_META` (ignoring unknown keys),
-  and skip unknown section tags via their TOC length;
+- source the per-tile metadata from `TILE_META` (ignoring unknown **keys**),
+  and skip unknown section tags via their TOC length — while treating an
+  unrecognized **value** of a key it does know (`st`, `et`) as a hard decode
+  error, never a fallback;
 - support **both** v2 schema modes: template-hash references and
-  self-contained inline schema sections.
+  self-contained inline schema sections;
+- re-inflate the compact time forms to absolute non-null `Int64` before any
+  consumer sees the batch — including **synthesizing** the `end_time` column
+  at the index right after `start_time` when `et == "zero"` — and reject the
+  malformed combinations §5.2.4 lists (`st` without `t0`, `st: "u32"` on a
+  non-`UInt32` column, `et: "zero"` alongside a present `end_time`,
+  `et: "dur32"` without one, length disagreement);
+- dequantize a `TILE_META.vq` column back to `Float32`, mapping the `0xFFFF`
+  sentinel to `NaN`, and reject a `vq` key outside the closed set, naming an
+  absent column, or naming a column whose leaf is not `UInt16`;
+- read `part_offsets` when present as feature-local ring indices, and treat
+  its **absence** as "every feature is single-part".
 
 A conformant reader **SHOULD**:
 
@@ -329,13 +465,18 @@ A conformant reader **SHOULD**:
 
 ```bash
 cargo test -p stt-core spec_conformance                     # payload schema lock
-cargo test -p stt-core --test v1_golden                     # v1 writer byte pin
+cargo test -p stt-core --test v2_golden                     # writer byte pin
+cargo test -p stt-core --test capability_registry           # registry ⇄ schema pin
+cargo test -p spatiotemporal-tiles --test cli_reference_doc # CLI surface ⇄ docs
 cargo test -p spatiotemporal-tiles --test validate_cli      # validator behavior
-cargo run  -p stt-core --example make-golden-fixture        # regenerate the v1 reader fixtures
-packages/core/scripts/make-v2-golden.sh                     # regenerate the v2 ⇄ v1 fixtures
+cargo run  -p stt-core --example make-golden-fixture        # regenerate the reader fixtures
 pnpm --filter @poopdeck.gl/core test                        # manifest contract + golden-fixture reads
 stt-validate <your-dataset>                                 # validate your own output
 ```
+
+(`packages/core/scripts/make-v2-golden.sh` is listed in §2.2 for
+completeness but does not currently run — it still passes the removed
+`--format-version` flag.)
 
 `stt-validate` is a `[[bin]]` of the `spatiotemporal-tiles` crate, not a
 package — `cargo test -p stt-validate` has never resolved.

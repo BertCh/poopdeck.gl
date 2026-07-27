@@ -32,7 +32,7 @@ import {
   type MapboxSlot,
 } from '../src/lib/host-slot';
 import { DEFAULT_FOV_RADIANS } from '../src/lib/host-adapter';
-import { makeMockGl } from './mock-gl';
+import { makeMockGl, publishVisibleTiles } from './mock-gl';
 import { MockMap } from './mock-map';
 import { makePointTile } from './fixtures';
 
@@ -269,7 +269,7 @@ describe('mapbox v3 render signature → legacy (mercator) dispatch', () => {
     const layer = makeLayer();
     map.addLayer(layer);
     await tick(); // let initTileset resolve
-    layer.loadedTiles.set('2/1/1/0', makePointTile());
+    publishVisibleTiles(layer, makePointTile());
     return { gl, map, layer };
   }
 

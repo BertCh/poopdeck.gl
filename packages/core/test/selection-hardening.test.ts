@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 import { BUCKET_MS, fakeTile, settle } from './helpers/fixtures';
 
@@ -38,7 +38,7 @@ describe('coverage-index spatial debounce', () => {
         { z, x: 0, y: 0, t: 0 },
       ],
     );
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,
@@ -102,7 +102,7 @@ describe('selectAndLoadTiles generation guard', () => {
       });
 
     const loaded: TileId[] = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,
@@ -163,7 +163,7 @@ describe('selection failure surfacing', () => {
       },
     );
     const errors: Array<{ message: string; id: TileId }> = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,
@@ -218,7 +218,7 @@ describe('prefetch stale-plan guard', () => {
       return [{ z, x: 0, y: 0, t: 0 }];
     };
     const loaded: TileId[] = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,

@@ -112,6 +112,41 @@ describe('TimeController', () => {
     expect(tc.isPlaying()).toBe(true);
   });
 
+  it('setLoop flips the boundary behaviour live, without moving the playhead', () => {
+    // Backs the transport bar's loop toggle: flipping it mid-playback must
+    // only change what happens at the NEXT boundary crossing.
+    const tc = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      loop: false,
+      timeRange: { start: 0, end: 100 },
+    });
+    expect(tc.getLoop()).toBe(false);
+    tc.play();
+    harness.advance(50);
+    const before = tc.getTime();
+    tc.setLoop(true);
+    expect(tc.getLoop()).toBe(true);
+    expect(tc.getTime()).toBe(before); // the toggle itself is inert
+    harness.advance(70); // crosses the end -> now wraps instead of ending
+    expect(tc.getTime()).toBeLessThan(100);
+    expect(tc.isPlaying()).toBe(true);
+  });
+
+  it('setLoop(false) makes the next boundary crossing end instead of wrap', () => {
+    const tc = new TimeController({
+      initialTime: 0,
+      speed: 1,
+      loop: true,
+      timeRange: { start: 0, end: 100 },
+    });
+    tc.play();
+    tc.setLoop(false);
+    harness.advance(250);
+    expect(tc.getTime()).toBe(100);
+    expect(tc.isPlaying()).toBe(false);
+  });
+
   it('bounces and reverses direction at the end of range (no teleport)', () => {
     const tc = new TimeController({
       initialTime: 90,

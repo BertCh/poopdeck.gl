@@ -42,6 +42,8 @@ export { GlobeProjection } from './projection/globe.js';
 export {
   viewStateToCamera,
   cameraToViewState,
+  intersectSurface,
+  surfaceRadius,
   type ViewState,
   type ViewStateCameraOptions,
 } from './projection/view-state.js';
@@ -53,7 +55,7 @@ export {
 
 // ─── Renderer bootstrap ───────────────────────────────────────────────────────
 export {
-  createSttRenderer,
+  createSTTRenderer,
   createHighLimitDevice,
   isWebGPUAvailable,
   resolveBackend,
@@ -139,48 +141,48 @@ export { PaletteUniforms } from './tsl/palette.js';
 
 // ─── Engine core ──────────────────────────────────────────────────────────────
 export {
-  SttScene,
-  type SttSceneOptions,
+  STTScene,
+  type STTSceneOptions,
   type AddLayerOptions,
 } from './scene/stt-three-scene.js';
 // ─── Atmosphere (opt-in, WebGPU-only physically-based sky / sun / day-night) ────
 export {
-  createSttAtmosphere,
+  createSTTAtmosphere,
   computeWorldToEcef,
   geodeticToEcef,
   enuBasisEcef,
   resolveSunDate,
   resolveAtmosphereOptions,
-  type SttAtmosphere,
+  type STTAtmosphere,
   type AtmosphereOptions,
   type ResolvedAtmosphereOptions,
-  type CreateSttAtmosphereOptions,
+  type CreateSTTAtmosphereOptions,
 } from './scene/atmosphere.js';
 // ─── OGC 3D Tiles (opt-in: real terrain / Google Photorealistic / Cesium Ion) ───
 export {
-  createStt3DTiles,
+  createSTT3DTiles,
   resolveTilesSource,
-  resolveStt3DTilesOptions,
+  resolveSTT3DTilesOptions,
   ecefToWorldMatrix,
   alignTilesGroup,
-  type Stt3DTilesSource,
+  type STT3DTilesSource,
   type ResolvedTilesSource,
-  type Stt3DTilesOptions,
-  type ResolvedStt3DTilesOptions,
-  type CreateStt3DTilesOptions,
-  type Stt3DTiles,
+  type STT3DTilesOptions,
+  type ResolvedSTT3DTilesOptions,
+  type CreateSTT3DTilesOptions,
+  type STT3DTiles,
 } from './scene/tiles-3d.js';
 export {
-  createSttGlobeControls,
-  type CreateSttGlobeControlsOptions,
-  type SttGlobeControls,
+  createSTTGlobeControls,
+  type CreateSTTGlobeControlsOptions,
+  type STTGlobeControls,
 } from './scene/globe-controls.js';
 export {
-  SttTileSource,
-  type SttTileSourceOptions,
+  STTTileSource,
+  type STTTileSourceOptions,
   type LoadedSource,
 } from './scene/tile-source.js';
-// `SttScene` builds the ground for you from its `ground` option; the `makeGround`
+// `STTScene` builds the ground for you from its `ground` option; the `makeGround`
 // factory itself is authoring-only (`@poopdeck.gl/three/internal`).
 export { type GroundOptions } from './scene/ground.js';
 export {
@@ -188,11 +190,13 @@ export {
   rigModeFor,
   resolveCanvasProjection,
   globeControlLimits,
+  groundControlLimits,
+  MAX_GROUND_PITCH_DEG,
   type RigMode,
 } from './scene/projection-rig.js';
-// The layer CONTRACT. `BaseSttLayer`, the class you extend to implement it, is
+// The layer CONTRACT. `BaseSTTLayer`, the class you extend to implement it, is
 // authoring-only (`@poopdeck.gl/three/internal`).
-export { type SttLayer, type SttLayerContext } from './layers/layer.js';
+export { type STTLayer, type STTLayerContext } from './layers/layer.js';
 
 // ─── Surfels (hero) ───────────────────────────────────────────────────────────
 export {
@@ -560,28 +564,28 @@ export {
   rayObbHit,
   pickBoxes,
   type Vec3,
-  type SttPickInfo,
-  type SttPickInfoBase,
-  type SttBoxPickInfo,
+  type STTPickInfo,
+  type STTPickInfoBase,
+  type STTBoxPickInfo,
   type PickBox,
-  type SttPickable,
+  type STTPickable,
 } from './lib/box-pick.js';
 // GPU id-buffer picking catalog: the kind-agnostic contract every instanced
-// layer implements to become pickable (SttIdPickable + SttIdPickInfo), the pure
-// merged-index → SttIdPickInfo resolution seam (resolveIdPick), the provenance
+// layer implements to become pickable (STTIdPickable + STTIdPickInfo), the pure
+// merged-index → STTIdPickInfo resolution seam (resolveIdPick), the provenance
 // tile-key helpers, and the auto-registration test (isIdPickable).
 export {
   resolveIdPick,
   isIdPickable,
   featureTileKey,
   parseIdTileKey,
-  type SttIdPickInfo,
-  type SttIdPickable,
-  type SttIdPickKind,
+  type STTIdPickInfo,
+  type STTIdPickable,
+  type STTIdPickKind,
   type ResolveIdPickParams,
 } from './lib/id-pick.js';
-// Lower-level point index → SttPickResult resolution (predates the catalog;
-// resolveIdPick is the general path new kinds use).
+// Lower-level point index → SttPickResult resolution. `resolveIdPick` above is
+// the general path every kind uses; this one is point-only.
 export {
   resolvePointPick,
   parsePointTileKey,
@@ -591,8 +595,91 @@ export {
 // ─── Playback governor registration ────────────────────────────────────────────
 export {
   createCompleteBufferSource,
-  type SttSourceRegistry,
+  type STTSourceRegistry,
 } from './lib/source-registry.js';
 
-// ─── Backend capability descriptor (renderer-abstraction Phase 5) ───────────────
+// ─── Backend capability descriptor ─────────────────────────────────────────────
 export { threeBackend } from './backend-descriptor.js';
+
+// ─── Deprecated spelling aliases (`Stt*` → `STT*`) ─────────────────────────────
+// `STT` is the canonical spelling of the acronym across this package and the
+// sibling `@poopdeck.gl/maplibre` / `@poopdeck.gl/cesium` backends, matching the
+// product name "SpatioTemporal Tiles". The `Stt*` spellings below are aliases
+// kept exported so published consumers keep compiling; they will be removed in a
+// future major.
+export {
+  /** @deprecated Use {@link createSTTRenderer}. */
+  createSTTRenderer as createSttRenderer,
+} from './renderer/webgpu-renderer.js';
+export {
+  /** @deprecated Use {@link STTScene}. */
+  STTScene as SttScene,
+  /** @deprecated Use {@link STTSceneOptions}. */
+  type STTSceneOptions as SttSceneOptions,
+} from './scene/stt-three-scene.js';
+export {
+  /** @deprecated Use {@link createSTTAtmosphere}. */
+  createSTTAtmosphere as createSttAtmosphere,
+  /** @deprecated Use {@link STTAtmosphere}. */
+  type STTAtmosphere as SttAtmosphere,
+  /** @deprecated Use {@link CreateSTTAtmosphereOptions}. */
+  type CreateSTTAtmosphereOptions as CreateSttAtmosphereOptions,
+} from './scene/atmosphere.js';
+export {
+  /** @deprecated Use {@link createSTT3DTiles}. */
+  createSTT3DTiles as createStt3DTiles,
+  /** @deprecated Use {@link resolveSTT3DTilesOptions}. */
+  resolveSTT3DTilesOptions as resolveStt3DTilesOptions,
+  /** @deprecated Use {@link STT3DTiles}. */
+  type STT3DTiles as Stt3DTiles,
+  /** @deprecated Use {@link STT3DTilesSource}. */
+  type STT3DTilesSource as Stt3DTilesSource,
+  /** @deprecated Use {@link STT3DTilesOptions}. */
+  type STT3DTilesOptions as Stt3DTilesOptions,
+  /** @deprecated Use {@link ResolvedSTT3DTilesOptions}. */
+  type ResolvedSTT3DTilesOptions as ResolvedStt3DTilesOptions,
+  /** @deprecated Use {@link CreateSTT3DTilesOptions}. */
+  type CreateSTT3DTilesOptions as CreateStt3DTilesOptions,
+} from './scene/tiles-3d.js';
+export {
+  /** @deprecated Use {@link createSTTGlobeControls}. */
+  createSTTGlobeControls as createSttGlobeControls,
+  /** @deprecated Use {@link STTGlobeControls}. */
+  type STTGlobeControls as SttGlobeControls,
+  /** @deprecated Use {@link CreateSTTGlobeControlsOptions}. */
+  type CreateSTTGlobeControlsOptions as CreateSttGlobeControlsOptions,
+} from './scene/globe-controls.js';
+export {
+  /** @deprecated Use {@link STTTileSource}. */
+  STTTileSource as SttTileSource,
+  /** @deprecated Use {@link STTTileSourceOptions}. */
+  type STTTileSourceOptions as SttTileSourceOptions,
+} from './scene/tile-source.js';
+export {
+  /** @deprecated Use {@link STTLayer}. */
+  type STTLayer as SttLayer,
+  /** @deprecated Use {@link STTLayerContext}. */
+  type STTLayerContext as SttLayerContext,
+} from './layers/layer.js';
+export {
+  /** @deprecated Use {@link STTPickInfo}. */
+  type STTPickInfo as SttPickInfo,
+  /** @deprecated Use {@link STTPickInfoBase}. */
+  type STTPickInfoBase as SttPickInfoBase,
+  /** @deprecated Use {@link STTBoxPickInfo}. */
+  type STTBoxPickInfo as SttBoxPickInfo,
+  /** @deprecated Use {@link STTPickable}. */
+  type STTPickable as SttPickable,
+} from './lib/box-pick.js';
+export {
+  /** @deprecated Use {@link STTIdPickInfo}. */
+  type STTIdPickInfo as SttIdPickInfo,
+  /** @deprecated Use {@link STTIdPickable}. */
+  type STTIdPickable as SttIdPickable,
+  /** @deprecated Use {@link STTIdPickKind}. */
+  type STTIdPickKind as SttIdPickKind,
+} from './lib/id-pick.js';
+export {
+  /** @deprecated Use {@link STTSourceRegistry}. */
+  type STTSourceRegistry as SttSourceRegistry,
+} from './lib/source-registry.js';

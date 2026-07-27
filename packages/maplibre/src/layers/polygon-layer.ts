@@ -14,9 +14,9 @@
  * arrive without pre-baked triangles are still treated as one ring, since STT
  * does not yet emit a `holeIndices` field for the runtime-earcut path.
  *
- * Host projection (campaign D3/D4): every program is built per shader variant
- * through the base `getOrCreateProgram` cache. Legacy hosts (maplibre ≤v4,
- * mapbox) keep the historical `uMatrix` shaders byte-for-byte; v5+ hosts get
+ * Host projection: every program is built per shader variant through the base
+ * `getOrCreateProgram` cache. Legacy hosts (maplibre ≤v4, mapbox) compile the
+ * plain `uMatrix` shaders; v5+ hosts get
  * the map-injected prelude prepended and project through `projectTile` (flat
  * fills + strokes, 2d — the host owns z for horizon clipping on globe) /
  * `projectTileFor3D` (extruded prisms). On GLOBE frames the baked geometry is
@@ -45,8 +45,8 @@
  *     METRES and draws side walls down to ground. Pair with
  *     `map.setPitch(...)` to actually see the relief.
  *
- * ── Wave M2 feature parity ──────────────────────────────────────────────────
- *   - **Time modes (D8).** All four modes (`window`/`wake`/`cumulative`/
+ * ── Feature parity ──────────────────────────────────────────────────────────
+ *   - **Time modes.** All four modes (`window`/`wake`/`cumulative`/
  *     `trail`) via `timeFilterMode`. Selection is COMPILE-TIME: the vertex
  *     source carries exactly one mode's kernel, and the program-cache key
  *     carries the mode so two modes can never share a program.
@@ -56,11 +56,11 @@
  *     The branch compiles only when `filterProperty` is set; polygons have no
  *     size hook, so `filterTransformSize` is inert here (deck's
  *     SolidPolygonLayer / PathLayer ignore it upstream too).
- *   - **Elevation (D10).** `elevation` is METRES and the layer converts with
+ *   - **Elevation.** `elevation` is METRES and the layer converts with
  *     latitude-correct `mercatorZFromAltitude` at each tile's centre latitude;
- *     `altitudeScale` survives as a dimensionless exaggeration MULTIPLIER
- *     (default 1). See {@link STTPolygonLayerOptions.altitudeScale}.
- *   - **Picking (D11).** `drawPickTile` paints fill triangles and (when
+ *     `altitudeScale` is a dimensionless exaggeration MULTIPLIER (default 1).
+ *     See {@link STTPolygonLayerOptions.altitudeScale}.
+ *   - **Picking.** `drawPickTile` paints fill triangles and (when
  *     stroked) outline quads with each feature's encoded pick id, under the
  *     SAME visibility gates as the visual pass — an invisible polygon is
  *     unpickable.
@@ -71,7 +71,7 @@ import { GeometryType, DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import { tessellateFeature } from '@poopdeck.gl/core/geometry';
 import { buildElevatedProjection } from '../shaders/globe-elevation.glsl.js';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   expandPickIdColors,
   resolveTrailFade,
   type STTBaseLayerOptions,
@@ -99,6 +99,9 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS,
+  resolveTimeUniformLocations,
+  type TimeUniformLocations,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -106,11 +109,10 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   expandFilterValues,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
+  resolveDataFilterUniformLocations,
+  type DataFilterUniformLocations,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 
@@ -120,7 +122,7 @@ const DEFAULT_POLY_PALETTE: ReadonlyArray<RGBA8> = DEFAULT_POLYGON_PALETTE;
 
 /**
  * The four animated time-filter modes this layer compiles — the package-wide
- * {@link STTTimeFilterMode} under this layer's historical name.
+ * {@link STTTimeFilterMode} under this layer's own name.
  */
 export type PolygonTimeFilterMode = STTTimeFilterMode;
 
@@ -159,23 +161,19 @@ export interface STTPolygonLayerOptions
    * Per-feature extrusion height in METRES. Either a constant or the name of a
    * numeric property on the tile's features. Default 0.
    *
-   * The metres→mercator-z conversion is the layer's job (campaign D10): it
-   * resolves per tile at that tile's centre latitude, so the same building is
-   * the same height in Oslo and in Quito.
+   * The metres→mercator-z conversion is the layer's job: it resolves per tile
+   * at that tile's centre latitude, so the same building is the same height in
+   * Oslo and in Quito.
    */
   elevation?: number | string;
   /**
    * Dimensionless exaggeration MULTIPLIER on {@link elevation}. Default 1
    * (true scale). 3 makes every prism three times as tall.
    *
-   * **Behaviour change (campaign D10).** This prop used to be the raw
-   * elevation-units→mercator-z factor, defaulting to `1e-7` — a flat,
-   * latitude-blind approximation 4.003× larger than the correct equatorial
-   * value, which is why extrusions stood ~4× too tall. The conversion is now
-   * done from the tile's latitude by `mercatorZFromAltitude` (`lib/projection.ts`)
-   * and this prop only exaggerates on top. An app that used to pass
-   * `altitudeScale: 1e-7` with metre elevations must now drop the prop
-   * entirely (or pass an exaggeration factor).
+   * This is NOT a unit conversion: the metres→mercator-z factor comes from the
+   * tile's own latitude via `mercatorZFromAltitude` (`lib/projection.ts`), and
+   * this prop only exaggerates on top of it. Passing a raw conversion factor
+   * here (e.g. `1e-7`) collapses every prism to nothing.
    */
   altitudeScale?: number;
   /**
@@ -237,24 +235,13 @@ export interface PolygonShaderConfig extends ShaderInjection {
 /** The four draw passes, each with its own compiled program. */
 type PolygonPass = 'fill' | 'stroke' | 'pick-fill' | 'pick-stroke';
 
-/** Per-mode uniform declarations, in the historical order for `window`. */
-const MODE_UNIFORMS: Readonly<Record<PolygonTimeFilterMode, string>> = {
-  window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-  wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-`,
-  cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-  trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-};
+/**
+ * Per-mode uniform declarations. The wake block declares the alpha uniforms
+ * ALONE: a polygon has no size hook, so `uWakeTailScale` would name a taper
+ * this layer cannot apply.
+ */
+const MODE_UNIFORMS: Readonly<Record<PolygonTimeFilterMode, string>> =
+  TIME_MODE_UNIFORM_DECLS;
 
 /** Per-mode kernel from the shared time-filter GLSL module. */
 const MODE_KERNEL: Readonly<Record<PolygonTimeFilterMode, string>> = {
@@ -279,8 +266,8 @@ const MODE_ALPHA: Readonly<Record<PolygonTimeFilterMode, string>> = {
 
 // The DataFilter declaration snippets open with a blank line (they splice at
 // end-of-line elsewhere); these builders splice at line START, so drop it. The
-// function kernels keep theirs — a blank line between GLSL functions is what
-// the historical sources already look like.
+// function kernels keep theirs — a blank line between GLSL functions is the
+// formatting the rest of the emitted source uses.
 const FILTER_ATTRIBUTE_DECL = DATA_FILTER_ATTRIBUTE_GLSL.slice(1);
 const FILTER_UNIFORM_DECLS = DATA_FILTER_UNIFORMS_GLSL.slice(1);
 
@@ -304,8 +291,9 @@ const filterApplyBlock = (on: boolean): string =>
 
 /**
  * Variant-aware fill vertex source. Legacy frames (empty prelude) in the
- * DEFAULT configuration (`window`, no filter, visual) emit the historical
- * `uMatrix` shader VERBATIM — pinned byte-for-byte by the variants test.
+ * DEFAULT configuration (`window`, no filter, visual) emit the plain `uMatrix`
+ * shader with no optional slot filled — pinned byte-for-byte by the variants
+ * test.
  * Prelude frames (maplibre v5+) project through the injected functions
  * instead: `projectTile` for flat fills (2d: the prelude owns z, giving
  * horizon clipping on globe) and `projectTileFor3D` for extruded prisms, with
@@ -320,7 +308,7 @@ export const buildFillVertexSource = (cfg: PolygonShaderConfig): string => {
   const pick = cfg.pick === true;
   const usesPrelude = cfg.prelude !== '';
   // Every slot below is either empty or newline-terminated, so the DEFAULT
-  // legacy configuration reproduces the historical source exactly.
+  // legacy configuration reproduces that plain source exactly.
   const preludeBlock = usesPrelude ? `${cfg.prelude}\n${cfg.define}\n` : '';
   const colorAttr = pick
     ? '  attribute vec3 aIdColor;     // per-vertex encoded pick id (UNSIGNED_BYTE normalized)\n'
@@ -410,7 +398,7 @@ const ID_FS_SOURCE = `
  * fill, so they are 2d content — prelude frames project through `projectTile`
  * (the prelude owns z for horizon clipping) and the screen-space expansion,
  * which happens post-projection, is identical across variants. The default
- * legacy configuration emits the historical shader VERBATIM.
+ * legacy configuration emits the plain `uMatrix` shader verbatim.
  * Exported for string-level variant tests.
  */
 export const buildStrokeVertexSource = (cfg: PolygonShaderConfig): string => {
@@ -469,30 +457,8 @@ const STROKE_FS_SOURCE = `
   }
 `;
 
-/**
- * Mode-uniform locations. Only the active mode's members resolve to a real
- * location; the rest are null, which `gl.uniform1f` ignores.
- */
-interface TimeUniformLocs {
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-}
-
-/** DataFilter uniform locations; all null when the filter branch is absent. */
-interface FilterUniformLocs {
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
-}
-
-interface PolygonProgramHandles extends TimeUniformLocs, FilterUniformLocs {
+interface PolygonProgramHandles
+  extends TimeUniformLocations, DataFilterUniformLocations {
   program: WebGLProgram;
   aMercator: number;
   aTime: number;
@@ -513,7 +479,8 @@ interface PolygonProgramHandles extends TimeUniformLocs, FilterUniformLocs {
   uColor: WebGLUniformLocation | null;
 }
 
-interface StrokeProgramHandles extends TimeUniformLocs, FilterUniformLocs {
+interface StrokeProgramHandles
+  extends TimeUniformLocations, DataFilterUniformLocations {
   program: WebGLProgram;
   aCorner: number;
   aPosA: number;
@@ -535,11 +502,11 @@ interface PolygonGpuCache extends TileGpuCache {
   /**
    * Full-mercator-square subdivision granularity baked into this cache
    * (0 = unrefined — every mercator host). GLOBE frames refine fill triangles,
-   * wall bands and stroke edges to it at build time (D4).
+   * wall bands and stroke edges to it at build time.
    */
   subdivisionGranularity: number;
   /**
-   * Metres → mercator-z at this tile's centre latitude (D10), resolved once at
+   * Metres → mercator-z at this tile's centre latitude, resolved once at
    * build time so the draw path pays no transcendentals per frame. The legacy
    * (`uMatrix`) shader and the v5 MERCATOR prelude both consume `elevation *
    * uAltitudeScale` as mercator-z, so this is folded into that uniform there;
@@ -608,7 +575,7 @@ function refineRing(
 // where it was introduced and where its tests import it from.
 export { expandPickIdColors };
 
-export class STTPolygonLayer extends STTBaseLayer {
+export class STTPolygonLayer extends STTFilterableLayer {
   private polyOpts: {
     color: [number, number, number, number];
     fillColorProperty?: string;
@@ -625,7 +592,7 @@ export class STTPolygonLayer extends STTBaseLayer {
     wakeLength: number;
     trailLength: number;
     fadeTrail: number;
-  } & STTDataFilterOptions;
+  };
 
   /**
    * Compiled time-filter mode — constant for the layer's lifetime, and part of
@@ -635,10 +602,6 @@ export class STTPolygonLayer extends STTBaseLayer {
   private readonly timeMode: PolygonTimeFilterMode;
   /** True when a `filterProperty` was configured, so the filter branch compiles. */
   private readonly filterCompiled: boolean;
-  /** Reusable DataFilter uniform payload — resolved in place, never per-draw allocated. */
-  private readonly filterUniforms = createDataFilterUniforms();
-  /** One warning per layer for a categorical (non-range-filterable) filter column. */
-  private filterCategoricalWarned = false;
 
   /**
    * True while the host is on (or transitioning to) the globe — the ONLY case
@@ -674,18 +637,12 @@ export class STTPolygonLayer extends STTBaseLayer {
       lineWidth: opts.lineWidth ?? 1,
       extruded: opts.extruded ?? false,
       elevation: opts.elevation ?? 0,
-      // D10: a dimensionless exaggeration now — the metres→mercator-z factor
-      // is resolved per tile from its own latitude.
+      // A dimensionless exaggeration: the metres→mercator-z factor is
+      // resolved per tile from its own latitude.
       altitudeScale: opts.altitudeScale ?? 1,
       wakeLength: opts.wakeLength ?? 0,
       trailLength: opts.trailLength ?? 0,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     const mode = opts.timeFilterMode ?? 'window';
     // deck's precedence enters the wake branch only for `wakeLength > 0` and
@@ -733,34 +690,6 @@ export class STTPolygonLayer extends STTBaseLayer {
     if (this.polyOpts.extruded === extruded) return;
     this.polyOpts.extruded = extruded;
     this.rebuildTileCaches();
-  }
-
-  /**
-   * Move the DataFilter range at runtime (the slider case). Uniform-only: the
-   * filter attribute is already uploaded, so no tile rebuild and no relink.
-   * `null` idles the filter and every feature renders. Passing `softRange`
-   * explicitly (including `null`) replaces the soft margin; omitting it leaves
-   * the configured one alone.
-   */
-  setFilterRange(
-    range: DataFilterRange | null,
-    softRange?: DataFilterRange | null,
-  ): void {
-    this.polyOpts.filterRange = range;
-    if (softRange !== undefined) this.polyOpts.filterSoftRange = softRange;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin alone. Uniform-only. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.polyOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every feature unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.polyOpts.filterEnabled = enabled;
-    this.map?.triggerRepaint();
   }
 
   protected acceptsGeometry(type: GeometryType): boolean {
@@ -861,8 +790,8 @@ export class STTPolygonLayer extends STTBaseLayer {
       uExtruded: gl.getUniformLocation(program, 'uExtruded'),
       uUseFeatureColor: gl.getUniformLocation(program, 'uUseFeatureColor'),
       uColor: gl.getUniformLocation(program, 'uColor'),
-      ...this.resolveTimeUniformLocs(gl, program),
-      ...this.resolveFilterUniformLocs(gl, program),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
     };
   }
 
@@ -895,42 +824,8 @@ export class STTPolygonLayer extends STTBaseLayer {
       uViewport: gl.getUniformLocation(program, 'uViewport'),
       uWidth: gl.getUniformLocation(program, 'uWidth'),
       uColor: gl.getUniformLocation(program, 'uColor'),
-      ...this.resolveTimeUniformLocs(gl, program),
-      ...this.resolveFilterUniformLocs(gl, program),
-    };
-  }
-
-  private resolveTimeUniformLocs(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    program: WebGLProgram,
-  ): TimeUniformLocs {
-    return {
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-    };
-  }
-
-  private resolveFilterUniformLocs(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    program: WebGLProgram,
-  ): FilterUniformLocs {
-    return {
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
     };
   }
 
@@ -1002,21 +897,15 @@ export class STTPolygonLayer extends STTBaseLayer {
     // categorical column resolves to hasColumn=false, which the uniform
     // resolver turns into `enabled: 0` — the tile renders UNFILTERED rather
     // than blank.
-    const filterColumn = extractFilterColumn(f, this.polyOpts.filterProperty);
-    if (filterColumn.categorical && !this.filterCategoricalWarned) {
-      this.filterCategoricalWarned = true;
-      console.warn(
-        `[${this.id}] filterProperty "${this.polyOpts.filterProperty}" is a ` +
-          'categorical column; range filtering needs a numeric one — rendering unfiltered.',
-      );
-    }
+    const filterColumn = extractFilterColumn(f, this.filterOpts.filterProperty);
+    if (filterColumn.categorical) this.warnCategoricalFilterOnce();
 
-    // Globe correctness (D4): GLOBE frames get long edges refined to the
-    // host's subdivision granularity so chords don't horizon-clip (base
-    // helper: per-tile granularity × 2^z per the lib/globe.ts convention).
-    // Mercator bakes no subdivision — both `uMatrix` and the v5 mercator
-    // `projectTile` are affine in mercator, so chords are already exact and
-    // the geometry stays byte-identical to the historical path.
+    // Globe correctness: GLOBE frames get long edges refined to the host's
+    // subdivision granularity so chords don't horizon-clip (base helper:
+    // per-tile granularity × 2^z per the lib/globe.ts convention). Mercator
+    // bakes no subdivision — both `uMatrix` and the v5 mercator `projectTile`
+    // are affine in mercator, so chords are already exact and the baked
+    // geometry is the raw, unrefined vertex set.
     const granularity = this.frameIsGlobe
       ? this.tileSubdivisionGranularity(tile.id.z)
       : 0;
@@ -1341,7 +1230,7 @@ export class STTPolygonLayer extends STTBaseLayer {
       timeOffset: f.timeOffset,
       use32BitIndices: use32,
       subdivisionGranularity: granularity,
-      // D10: metres → mercator-z at THIS tile's centre latitude, resolved once.
+      // Metres → mercator-z at THIS tile's centre latitude, resolved once.
       mercatorZScale: mercatorZFromAltitude(
         1,
         tileCenterLatitude(tile.id.z, tile.id.y),
@@ -1356,7 +1245,7 @@ export class STTPolygonLayer extends STTBaseLayer {
   }
 
   /**
-   * Elevation scale for one tile (D10), keyed by the host's projection.
+   * Elevation scale for one tile, keyed by the host's projection.
    *
    * Both the legacy `uMatrix` shader AND the v5 MERCATOR prelude consume
    * `aMercator.z * uAltitudeScale` as MERCATOR-Z — maplibre's
@@ -1381,7 +1270,7 @@ export class STTPolygonLayer extends STTBaseLayer {
   /** Upload the active mode's time uniforms (the others resolve to null). */
   private setTimeUniforms(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: TimeUniformLocs,
+    h: TimeUniformLocations,
     ctx: DrawContext,
     cache: TileGpuCache,
     fadeIn: number,
@@ -1414,24 +1303,18 @@ export class STTPolygonLayer extends STTBaseLayer {
    * Upload the DataFilter uniforms for this tile. No-op when no filter branch
    * was compiled. `hasColumn: false` (tile without the column) resolves to
    * `enabled: 0`, i.e. an UNFILTERED tile — never a blank one.
+   *
+   * The handles carry no `uFilterTransformSize`, so the size transform is
+   * never written: a polygon has no size hook (deck's SolidPolygonLayer /
+   * PathLayer ignore it upstream too).
    */
   private setFilterUniforms(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: FilterUniformLocs,
+    h: DataFilterUniformLocations,
     cache: PolygonGpuCache,
   ): void {
     if (!this.filterCompiled) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.polyOpts,
-      cache.hasFilterColumn,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    // `transformSize` is intentionally unset: a polygon has no size hook
-    // (deck's SolidPolygonLayer / PathLayer ignore it upstream too).
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
+    this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn);
   }
 
   protected drawTile(
@@ -1577,7 +1460,7 @@ export class STTPolygonLayer extends STTBaseLayer {
   }
 
   /**
-   * Draw this polygon tile into the id-pick FBO (D11), painting feature `i`
+   * Draw this polygon tile into the id-pick FBO, painting feature `i`
    * the flat colour `encodePickId(idBase + i)`. Both passes of the visual
    * draw are reproduced under the SAME gates — `filled`/`stroked`, the
    * projection variant, the extrusion branch, the time mode and the

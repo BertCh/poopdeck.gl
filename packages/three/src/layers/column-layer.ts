@@ -28,7 +28,7 @@ import {
 } from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -53,8 +53,8 @@ import type { RGBA } from '../lib/color.js';
 import { makePaletteTexture } from '../tsl/palette.js';
 import {
   resolveIdPick,
-  type SttIdPickInfo,
-  type SttIdPickable,
+  type STTIdPickInfo,
+  type STTIdPickable,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
@@ -139,7 +139,7 @@ export interface STTColumnLayerOptions extends ThreeTimeWindowOptions {
   // ThreeTimeWindowOptions.
 }
 
-export class STTColumnLayer extends BaseSttLayer implements SttIdPickable {
+export class STTColumnLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -200,7 +200,7 @@ export class STTColumnLayer extends BaseSttLayer implements SttIdPickable {
     return { property: mode.property, palette };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     const cat = this.resolveCategoryPalette();
@@ -348,10 +348,10 @@ export class STTColumnLayer extends BaseSttLayer implements SttIdPickable {
 
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback)
-   * to a normalised {@link SttIdPickInfo} (`kind: 'column'`), or `null` for a
+   * to a normalised {@link STTIdPickInfo} (`kind: 'column'`), or `null` for a
    * miss. Pure — the unit-tested seam; call it directly with a decoded index.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -398,7 +398,7 @@ export class STTColumnLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.object.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

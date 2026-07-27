@@ -64,9 +64,16 @@ const Arrow: React.FC = () => (
 /* ── 1. The self-tuning loop ──────────────────────────────────────────── */
 
 const LOOP: { t: string; d: string; accent?: boolean }[] = [
-  { t: 'analyze', d: 'profile source · zoom + bucket + advice', accent: true },
-  { t: 'stt-build --auto', d: 'folds the safe recommendations in' },
-  { t: 'inspect', d: 'per-column compressed cost of the build' },
+  {
+    t: 'analyze · recommend',
+    d: 'profile source · zoom + bucket + advice',
+    accent: true,
+  },
+  {
+    t: 'stt-build --auto',
+    d: 'basic = zoom + bucket · encode = + byte levers',
+  },
+  { t: 'inspect · order-audit', d: 'per-column cost · range-read cost' },
   { t: 'doctor · diff', d: 'audit + before/after · CI gates', accent: true },
 ];
 
@@ -129,7 +136,9 @@ const TuneLoop: React.FC = () => (
       loop that runs entirely at build time — nothing here touches the serve
       path. <span className="font-mono">analyze</span> picks the zoom range and
       temporal bucket and runs the advisors;{' '}
-      <span className="font-mono">--auto</span> folds the safe ones in; then{' '}
+      <span className="font-mono">--auto</span> folds the safe ones in (bare, it
+      only fills zoom + bucket; <span className="font-mono">--auto encode</span>{' '}
+      also applies the non-lossy byte levers); then{' '}
       <span className="font-mono">inspect</span>,{' '}
       <span className="font-mono">diff</span> and{' '}
       <span className="font-mono">doctor</span> turn the manual tuning passes
@@ -245,35 +254,41 @@ interface Advice {
 
 const REVERSIBLE: Advice[] = [
   {
-    flag: '--zstd-level 19',
-    why: 'decode-free win at rest',
+    flag: '--publish',
+    why: 'decode-free win at rest (zstd 19)',
     projected: '−14% (measured)',
     confidence: 'high',
   },
   {
-    flag: '--temporal-lod 1d@8,30d@4',
-    why: 'long-tail time span',
-    projected: 'fewer low-zoom fetches',
-    confidence: 'medium',
-  },
-  {
     flag: '--blob-ordering spatial',
     why: 'time-deep, few cells',
-    projected: '~3× fewer requests',
+    projected: 'measured-best over 4 812 tiles',
+    confidence: 'high',
+  },
+  {
+    flag: '--pack-size 128',
+    why: 'estimated archive ~7 GiB',
+    projected: '~56 objects instead of ~112',
     confidence: 'medium',
   },
 ];
 const LOSSY: Advice[] = [
   {
-    flag: '--quantize-coords 0.1',
+    flag: '--quantize-coords 1',
     why: 'coords dominate the bytes',
     projected: '−31% (measured)',
     confidence: 'high',
   },
   {
-    flag: '--quantize-attr',
+    flag: '--quantize-attrs-auto',
     why: 'raw f64 property columns',
     projected: '−9% (measured)',
+    confidence: 'medium',
+  },
+  {
+    flag: '--maximum-tile-features 20k',
+    why: 'p99 tile is 12× the median',
+    projected: 'drops features to fit',
     confidence: 'medium',
   },
 ];
@@ -401,8 +416,11 @@ const FirewallFigure: React.FC = () => (
           style={{ color: 'var(--ink-500)' }}
         >
           Byte-level, undone on decode. Folded into{' '}
-          <span className="font-mono">--auto</span> and appended to the
-          pasteable command, in advisor order.
+          <span className="font-mono">--auto encode</span> and appended to the
+          pasteable command, in advisor order. Advice that carries a real
+          tradeoff (spatial ordering hurts pan) is flagged{' '}
+          <span className="font-mono">suggestion_only</span> and steps out of
+          both.
         </p>
         <div className="mt-2.5 space-y-1.5">
           {REVERSIBLE.map((a) => (
@@ -595,12 +613,13 @@ const StyleHintsFigure: React.FC = () => (
       className="mt-1 text-[11px] leading-relaxed"
       style={{ color: 'var(--ink-500)' }}
     >
-      <span className="font-mono">--style-hints</span> profiles the source at
-      build time and bakes a self-describing block into{' '}
-      <span className="font-mono">manifest.json</span> — property ranges and
-      percentiles, categorical cardinality, a suggested playback duration and
-      the layer kind — so a client can pick a colour ramp and a clock without
-      the author writing any config.
+      Every non-streaming build already bakes the cheap signals into{' '}
+      <span className="font-mono">manifest.json</span> — the dominant layer kind
+      and a suggested playback duration — so a client can open a strange archive
+      and pick a clock with no config.{' '}
+      <span className="font-mono">--style-hints</span> adds the expensive part:
+      a full per-property profile with percentiles and a suggested colour
+      domain.
     </p>
     <div className="mt-3 overflow-x-auto">
       <pre
@@ -612,20 +631,23 @@ const StyleHintsFigure: React.FC = () => (
           fontFamily: MONO,
         }}
       >{`"style_hints": {
-  "layer_kind": "trips",
-  "suggested_playback_ms": 86400000,
-  "properties": {
-    "speed_kmh":  { "kind": "numeric", "min": 0, "p50": 14.2, "p95": 31.6, "max": 58 },
-    "route_id":   { "kind": "categorical", "cardinality": 214 }
-  }
+  "version": 1,
+  "layer_hint": "trips",              // always baked
+  "suggested_playback_seconds": 45,   // always baked
+  "properties": [                     // --style-hints only
+    { "name": "speed_kmh", "min": 0, "p50": 14.2, "p95": 31.6,
+      "p97": 34.0, "p99": 41.8, "max": 58, "suggested_domain": [0, 34] },
+    { "name": "route_id", "cardinality": 214 }
+  ]
 }`}</pre>
     </div>
     <p
       className="mt-2 text-[11px] leading-relaxed"
       style={{ color: 'var(--ink-500)' }}
     >
-      Values are sampled at a deterministic stride (capped per property), so the
-      block is byte-identical across rebuilds of the same input — safe to
+      The domain clamps at p97, not max — one outlier must not dim the whole
+      ramp. Values are sampled at a deterministic stride (capped per property),
+      so the block is byte-identical across rebuilds of the same input, safe to
       content-address alongside everything else.
     </p>
   </Card>

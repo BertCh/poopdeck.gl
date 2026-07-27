@@ -30,13 +30,21 @@
  * per-vertex expansion AnimatedPolygonLayer needs for its non-instanced fill
  * model. The numeric column rides zero-copy when present.
  *
- * Categorical fill colors lift to the GPU via CategoryColorExtension when
- * `fillColor`/`getFillColor` names a categorical column — the per-feature
- * `instanceCategoryIndex` path, identical to AnimatedPointLayer. A `colorMapping`
- * (explicit `{ category: Color }`) instead CPU-expands a stable per-feature RGBA
- * buffer (a category string can't hash to a palette slot on the GPU), matching
- * AnimatedPointLayer. A baked numeric column can also drive a GPU
- * STTDataFilterExtension range filter (`filterProperty`/`filterRange`).
+ * Categorical fill colors resolve on the CPU into a per-feature RGBA
+ * `getFillColor` buffer whenever the columns are EXTRUDED (the default), and
+ * lift to the GPU CategoryColorExtension only for flat disks
+ * (`extruded: false`). The split is forced by the shader: ColumnLayer computes
+ * lighting BEFORE `DECKGL_FILTER_COLOR` — gouraud into `vColor` in the vertex
+ * stage, phong into `fragColor` under `flatShading` — and the extension's hook
+ * REPLACES rgb (`color = vec4(palette.rgb, palette.a * color.a)`), so a GPU
+ * palette write on an extruded column discards the lit color and every bar
+ * renders as a flat single-tone silhouette. AnimatedPointLayer can use the GPU
+ * path unconditionally because its markers are unlit; AnimatedPointCloudLayer
+ * (lit, like this one) makes the same CPU choice. A `colorMapping` (explicit
+ * `{ category: Color }`) always CPU-expands, extruded or not — a category
+ * string can't hash to a palette slot on the GPU. A baked numeric column can
+ * also drive a GPU STTDataFilterExtension range filter
+ * (`filterProperty`/`filterRange`).
  *
  * There is no cumulative-slab path: columns are an overview/aggregate primitive
  * (a few thousand bars at low zoom), so the per-tile-sublayer count never climbs
@@ -70,17 +78,22 @@ import {
   colorListDigest,
   colorMappingDigest,
   inheritedPropsDigest,
-  structuralDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
 import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
+import { GeometryType, tileLayerKey } from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -100,6 +113,13 @@ export interface _AnimatedColumnLayerProps {
 
   /**
    * Disk radius in units specified by {@link radiusUnits}.
+   *
+   * DEFAULT DIVERGENCE: deck.gl's own `ColumnLayer` defaults `radius` to
+   * **1000**; this layer defaults to **100**, sized for the point archives it
+   * renders (a metro-scale bar chart, not a continental hex grid). Porting a
+   * deck config that relied on the upstream default therefore yields columns
+   * 10× narrower — pass `radius` explicitly. This is the ONLY value in the
+   * column surface that diverges from upstream.
    * @default 100
    */
   radius?: number;
@@ -129,6 +149,11 @@ export interface _AnimatedColumnLayerProps {
 
   /**
    * Extrude the columns into 3D. When `false` they render as flat disks.
+   *
+   * Also selects how a categorical {@link fillColor} is resolved: extruded
+   * columns are LIT, so the palette is CPU-expanded into a per-feature RGBA
+   * buffer; flat disks take the GPU CategoryColorExtension path. Toggling this
+   * therefore re-prepares tiles (same colors either way).
    * @default true
    */
   extruded?: boolean;
@@ -191,8 +216,10 @@ export interface _AnimatedColumnLayerProps {
 
   /**
    * Fill color — constant {@link Color}, or property name for categorical
-   * coloring (GPU lookup via CategoryColorExtension, same path as the point
-   * layer's fillColor).
+   * coloring. Extruded columns (the default) CPU-expand the palette into a
+   * per-feature RGBA buffer so the bars stay LIT; flat disks
+   * (`extruded: false`) take the cheaper GPU lookup via
+   * CategoryColorExtension. See the class docstring for why the split exists.
    * @default [255, 140, 0, 255]
    */
   fillColor?: Color | string;
@@ -360,6 +387,63 @@ export interface _AnimatedColumnLayerProps {
 export type AnimatedColumnLayerProps = _AnimatedColumnLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Where each own prop lands, and therefore whether editing it has to throw
+ * away the per-tile sublayer cache. `'sublayer'` values are frozen into a
+ * cached ColumnLayer at construction and ride {@link computeLayerPropsKey};
+ * `'prepare'` values reach the GPU only through a tile's baked attributes,
+ * which `computeStyleKey()` covers and the prepared-object identity check
+ * turns into a sublayer rebuild.
+ *
+ * The {@link PropEffects} annotation makes the table total: a prop added to
+ * {@link _AnimatedColumnLayerProps} without an entry here fails to compile,
+ * which is the only thing standing between an unclassified prop and a stale
+ * sublayer nobody notices until they look at the map.
+ */
+const COLUMN_PROP_EFFECTS: PropEffects<_AnimatedColumnLayerProps> = {
+  diskResolution: 'sublayer',
+  radius: 'sublayer',
+  angle: 'sublayer',
+  vertices: 'sublayer',
+  offset: 'sublayer',
+  coverage: 'sublayer',
+  extruded: 'sublayer',
+  wireframe: 'sublayer',
+  filled: 'sublayer',
+  stroked: 'sublayer',
+  flatShading: 'sublayer',
+  radiusUnits: 'sublayer',
+  elevation: 'sublayer',
+  getElevation: 'sublayer',
+  elevationScale: 'sublayer',
+  fillColor: 'sublayer',
+  getFillColor: 'sublayer',
+  // Categorical fill resolves entirely inside prepareTile — the palette, the
+  // explicit mapping and its unknown-category fallback are baked into the
+  // tile's getFillColor / instanceCategoryIndex buffers, never read while
+  // constructing a sublayer (which takes the resolved palette off the prepared
+  // tile). All three ride computeStyleKey().
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+  filterProperty: 'sublayer',
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+  lineColor: 'sublayer',
+  getLineColor: 'sublayer',
+  lineWidth: 'sublayer',
+  getLineWidth: 'sublayer',
+  lineWidthUnits: 'sublayer',
+  lineWidthScale: 'sublayer',
+  lineWidthMinPixels: 'sublayer',
+  lineWidthMaxPixels: 'sublayer',
+  material: 'sublayer',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+  reducedMotion: 'sublayer',
+};
+
 // Default color palette for categorical data (matches AnimatedPolygonLayer's
 // opaque tableau ramp — columns are usually fully opaque so lighting reads).
 const DEFAULT_PALETTE: Color[] = [
@@ -408,11 +492,6 @@ interface PreparedTile {
   features: BinaryFeatures;
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
-}
-
 /**
  * Pad a 2D Float64Array of positions [x0,y0, x1,y1, ...] into a 3D buffer
  * [x0,y0,0, x1,y1,0, ...] for ColumnLayer's size-3 getPosition attribute. The
@@ -425,6 +504,42 @@ function padPositionsTo3D(src: Float64Array, count: number): Float64Array {
     out[i * 3] = src[i * 2];
     out[i * 3 + 1] = src[i * 2 + 1];
     // out[i * 3 + 2] = 0; (already zero-initialized)
+  }
+  return out;
+}
+
+/**
+ * CPU-expand the index-driven {@link _AnimatedColumnLayerProps.colorPalette}
+ * into a per-feature RGBA buffer, using the EXACT slot semantics
+ * CategoryColorExtension applies on the GPU: {@link categoryIndicesToFloat32}
+ * folds the NULL sentinel onto the trailing default slot and clamps palette
+ * overflow onto the last real entry (warning once), and
+ * {@link appendNullCategorySlot} supplies that trailing slot. Flipping
+ * `extruded` therefore only moves WHERE the lookup happens — never what color
+ * a feature gets.
+ */
+function expandPaletteColors(
+  indices: Uint16Array,
+  count: number,
+  palette: readonly Color[],
+  fallback: Color | undefined,
+): Uint8Array {
+  const slots = appendNullCategorySlot(palette, fallback);
+  const lastSlot = slots[slots.length - 1];
+  const resolved = categoryIndicesToFloat32(
+    indices,
+    count,
+    palette.length,
+    'AnimatedColumnLayer',
+  );
+  const out = new Uint8Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    const c = slots[resolved[i]] ?? lastSlot;
+    const o = i * 4;
+    out[o] = c[0];
+    out[o + 1] = c[1];
+    out[o + 2] = c[2];
+    out[o + 3] = c[3] ?? 255;
   }
   return out;
 }
@@ -453,6 +568,8 @@ export class AnimatedColumnLayer<
   static defaultProps: DefaultProps<AnimatedColumnLayerProps> = {
     ...SpatioTemporalLayer.defaultProps,
     diskResolution: { type: 'number', value: 20, min: 4 },
+    // Deliberate divergence from deck's ColumnLayer default of 1000 — see the
+    // `radius` prop doc.
     radius: { type: 'number', value: 100, min: 0 },
     angle: { type: 'number', value: 0 },
     vertices: { type: 'object', value: null, optional: true, compare: true },
@@ -608,7 +725,7 @@ export class AnimatedColumnLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy prop.
    * Same value domain as the legacy props (constant or column name).
    */
@@ -677,60 +794,40 @@ export class AnimatedColumnLayer<
    * this changes we throw away the entire sublayer cache.
    */
   private computeLayerPropsKey(): string {
-    const fillColor = this.fillColorValue();
-    const elevation = this.elevationValue();
-    const lineColor = this.lineColorValue();
-    return [
-      this.props.diskResolution,
-      this.props.radius,
-      this.props.angle,
-      structuralDigest(this.props.vertices),
-      structuralDigest(this.props.offset),
-      this.props.coverage,
-      this.props.extruded,
-      this.props.wireframe,
-      this.props.filled,
-      this.props.stroked,
-      this.props.flatShading,
-      this.props.radiusUnits,
-      this.props.elevationScale,
-      this.props.lineWidth,
-      this.props.lineWidthUnits,
-      this.props.lineWidthScale,
-      this.props.lineWidthMinPixels,
-      this.props.lineWidthMaxPixels,
-      Array.isArray(lineColor) ? lineColor.join(',') : '',
-      structuralDigest(this.props.material),
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
-      // props, _subLayerProps overrides…) plus the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      // Time-as-height (space-time cube) — forwarded to TimeFilterExtension.
-      // A uniform-only edit, so a scale/origin/reduced-motion change rebuilds
-      // the cached sublayers (whose props carry the values) rather than
-      // re-preparing tiles.
-      this.effectiveTimeHeightScale(),
-      this.props.timeHeightOrigin,
-      this.props.reducedMotion,
-      // fillColor/elevation constant branches only — the property-driven path
-      // lives in `prepared` and is keyed via preparedKey.
-      Array.isArray(fillColor) ? fillColor.join(',') : '',
-      typeof elevation === 'number' ? elevation : 0,
-      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
-      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
-      // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedColumnLayerProps>(
+      this.props,
+      COLUMN_PROP_EFFECTS,
+      {
+        // Values the sublayer is actually built from. Each upstream-named alias
+        // wins over its legacy prop, so keying the legacy prop raw would leave
+        // every cached sublayer at the old value when only the alias changes.
+        overrides: {
+          fillColor: this.fillColorValue(),
+          elevation: this.elevationValue(),
+          lineColor: this.lineColorValue(),
+          lineWidth: this.lineWidthValue(),
+          // Resolves to a column NAME; a function-valued prop is ignored, and
+          // keying it raw would clear the cache on every render for a caller
+          // who passes a fresh function that changes nothing.
+          filterProperty: this.filterPropertyValue(),
+        },
+        extra: [
+          // Composite props that getSubLayerProps bakes into every sublayer
+          // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
+          // props, _subLayerProps overrides…) plus the user's updateTriggers.
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          // Inherited time props the sublayers carry. Uniform-only edits, so
+          // they rebuild the cached sublayers (whose props hold the values)
+          // rather than re-preparing tiles.
+          this.props.timeWindow,
+          // reducedMotion forces the space-time-cube lift to 0, so the key has
+          // to track the EFFECTIVE scale, not the raw prop.
+          this.effectiveTimeHeightScale(),
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   renderLayers(): Layer[] {
@@ -750,7 +847,7 @@ export class AnimatedColumnLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -827,6 +924,10 @@ export class AnimatedColumnLayer<
     // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
     // covering the unset↔set toggle that adds/removes STTDataFilterExtension).
     const filterProp = this.filterPropertyValue() ?? '';
+    // `extruded` SELECTS the categorical-color branch (CPU-expanded RGBA when
+    // lit, GPU category index when flat), so it changes the prepared attributes
+    // and must re-prepare the tile — not just rebuild the sublayer.
+    const extruded = this.props.extruded !== false ? 1 : 0;
     // Palette identity matters only when fillColor is a column name. Digests
     // are memoized per object reference (style-digest.ts), so this stays a
     // WeakMap lookup per tile, not a re-serialization.
@@ -834,7 +935,7 @@ export class AnimatedColumnLayer<
       fillColorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(
+    }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|x${extruded}|f${filterProp}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
   }
@@ -847,8 +948,20 @@ export class AnimatedColumnLayer<
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0) return null;
+    // ColumnLayer is instanced AT POINTS: `positions` is indexed by FEATURE.
+    // A linestring/polygon tile would silently bunch every bar onto the first
+    // few paths' leading vertices — warn once and skip instead.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.Point],
+        'AnimatedColumnLayer',
+        tileLayer.name,
+      )
+    )
+      return null;
     const styleKey = this.computeStyleKey();
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -889,19 +1002,26 @@ export class AnimatedColumnLayer<
 
     let gpuPalette: Color[] | null = null;
 
-    // Property-driven (categorical) fill color. Two paths:
+    // Property-driven (categorical) fill color. Three paths:
     //  - `colorMapping` set → CPU branch: a category STRING can't be hashed to a
     //    palette slot on the GPU, so expand the explicit map into a per-feature
     //    RGBA `getFillColor` buffer via the shared helper. Stable per-category:
     //    a category always draws its assigned color regardless of tile index.
-    //  - otherwise → GPU branch: hand category indices to the
-    //    CategoryColorExtension (the index-driven `colorPalette` path).
+    //  - EXTRUDED (the default) → CPU branch as well, this time over the
+    //    index-driven `colorPalette`. ColumnLayer lights the column BEFORE
+    //    DECKGL_FILTER_COLOR (gouraud into `vColor`, or phong into `fragColor`
+    //    under flatShading), and the extension's hook REPLACES rgb — so a GPU
+    //    palette write would discard the lit color and flatten every bar into a
+    //    single-tone silhouette. Riding `instanceFillColors` keeps the lighting.
+    //  - flat disks (`extruded: false`) → GPU branch: hand category indices to
+    //    the CategoryColorExtension. Nothing is lit there, so the palette write
+    //    is exactly what we want and the per-tile RGBA expansion is skipped.
     if (fillColorProp) {
       const cat = binary.categoricalProps[fillColorProp];
       if (cat) {
+        const palette = this.props.colorPalette ?? DEFAULT_PALETTE;
+        const fallback = this.props.colorMappingDefault as Color | undefined;
         if (this.props.colorMapping) {
-          const fallback =
-            this.props.colorMappingDefault ?? ([0, 0, 0, 0] as Color);
           attributes.getFillColor = {
             value: coreExpandCategoricalColors(
               binary,
@@ -911,10 +1031,16 @@ export class AnimatedColumnLayer<
                   string,
                   RGBA255
                 >,
-                colorMappingDefault: fallback as RGBA255,
+                colorMappingDefault: (fallback ?? [0, 0, 0, 0]) as RGBA255,
               },
               'u8',
             ) as Uint8Array,
+            size: 4,
+            normalized: true,
+          };
+        } else if (this.props.extruded !== false) {
+          attributes.getFillColor = {
+            value: expandPaletteColors(cat.indices, count, palette, fallback),
             size: 4,
             normalized: true,
           };
@@ -923,15 +1049,12 @@ export class AnimatedColumnLayer<
             value: categoryIndicesToFloat32(
               cat.indices,
               count,
-              (this.props.colorPalette ?? DEFAULT_PALETTE).length,
+              palette.length,
               'AnimatedColumnLayer',
             ),
             size: 1,
           };
-          gpuPalette = appendNullCategorySlot(
-            this.props.colorPalette ?? DEFAULT_PALETTE,
-            this.props.colorMappingDefault as Color | undefined,
-          );
+          gpuPalette = appendNullCategorySlot(palette, fallback);
         }
       }
     }

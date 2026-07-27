@@ -170,6 +170,12 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
           targetPlaybackSeconds={dataset.targetPlaybackSeconds ?? 30}
           autoSpeed={playback.autoSpeed}
           onAutoSpeedSelect={playback.onAutoSpeedSelect}
+          ended={playback.ended}
+          loop={playback.loop}
+          onLoopToggle={playback.onLoopToggle}
+          // NO keyboardShortcuts: this is a scrolling page, so it deliberately
+          // does not mount usePlaybackHotkeys — advertising keys that do
+          // nothing here would be worse than saying nothing.
         />
       </div>
     </div>

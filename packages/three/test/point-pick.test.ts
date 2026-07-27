@@ -10,7 +10,7 @@
  *    `resolvePointPick` / `parsePointTileKey` join a merged index back to a
  *    feature's props, coordinate, and tileId.
  *  - HOVER/CLICK — the tail that turns a GPU id-buffer readback into an
- *    `SttIdPickInfo`. We exercise the WHOLE pure chain: merged buffers →
+ *    `STTIdPickInfo`. We exercise the WHOLE pure chain: merged buffers →
  *    `buildIdColors` (the exact per-instance id the id material paints) →
  *    `decodeId` (what `GpuPicker` reads back from a texel) → the generalised
  *    `resolveIdPick` (kind `'point'`). The GPU render +
@@ -243,7 +243,7 @@ describe('parsePointTileKey', () => {
   });
 });
 
-describe('end-to-end id readback → SttIdPickInfo (pure chain, kind:"point")', () => {
+describe('end-to-end id readback → STTIdPickInfo (pure chain, kind:"point")', () => {
   it('resolves every merged instance through encode → decode → resolveIdPick', () => {
     const buf = buildPointBuffers([tileA, tileB], proj, 0, OPTS);
     expect(buf.count).toBe(5);

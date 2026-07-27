@@ -67,7 +67,7 @@ window.CESIUM_BASE_URL =
 | `timeFilterAlphaGlsl`                                                                        | function            | Emits the generated GLSL ES 3.00 time-filter alpha expression, for a future GPU-`Appearance` path                                                                      |
 
 There is no shared base layer or archive-owning helper like MapLibre's
-`STTBaseLayer` — the app wires `STTArchive` + `SpatiotemporalTileset` itself
+`STTBaseLayer` — the app wires `STTArchive` + `SpatioTemporalTileset` itself
 and feeds tiles to the layer (see [How it works](#how-it-works)). Every layer
 class has the same surface: `setTiles(tiles)`, `setTime(absoluteMs)`,
 `pick(cssX, cssY)`, `dispose()`.
@@ -129,7 +129,7 @@ options and behaviour are unchanged.
 ```ts
 import { Viewer } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
-import { STTArchive, SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { STTArchive, SpatioTemporalTileset } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import { STTPointLayer, applyViewStateToCamera } from '@poopdeck.gl/cesium';
 
@@ -158,7 +158,7 @@ applyViewStateToCamera(viewer.camera, {
 const archive = new STTArchive({ url: '/data/earthquakes/manifest.json' });
 const meta = await archive.getMetadata();
 
-const tileset = new SpatiotemporalTileset({
+const tileset = new SpatioTemporalTileset({
   minZoom: meta.minZoom,
   maxZoom: meta.maxZoom,
   temporalBucketMs: meta.temporalBucketMs,
@@ -341,9 +341,11 @@ export interface CesiumViewOptions {
 }
 
 interface CesiumView {
+  // NOTE: longitude/latitude are the LOOK-AT TARGET, not the camera position.
   longitude: number;
   latitude: number;
-  height: number; // camera altitude above the surface, metres
+  range: number; // camera→target distance, metres (HeadingPitchRange.range)
+  height: number; // camera altitude above the target's tangent plane = range × cos(pitch)
   headingRad: number;
   pitchRad: number;
   rollRad: number;
@@ -358,8 +360,17 @@ so the two functions round-trip.
 
 The one function in the package that touches a live Cesium `Camera` — it
 converts `v` via `viewStateToCesiumView` and calls
-`camera.setView({ destination, orientation })` with a `Cartesian3` /
-`HeadingPitchRoll` built from the result.
+`camera.lookAt(target, new HeadingPitchRange(heading, pitch, range))`, then
+releases the camera back to the normal globe controls with
+`camera.lookAtTransform(Matrix4.IDENTITY)`.
+
+It deliberately does **not** use `camera.setView({ destination })`. In Cesium
+`destination` is the CAMERA POSITION, never a look-at target, so passing
+`ViewState.longitude`/`latitude` there framed ground 0.5–2 camera-heights away
+from the requested point on every pitched view — the whole dataset sat off to
+one side. `lookAt` is what makes `ViewState.longitude`/`latitude` mean the same
+thing here as on the other three backends. See
+[tile-loading-3d-2026-07.md](../roadmap/tile-loading-3d-2026-07.md) RC6.
 
 ## Render-loop clock
 
@@ -447,7 +458,7 @@ does not use it yet; it recomputes and writes alpha per point on the CPU in
 1. The `STTPointLayer` constructor adds an (initially empty)
    `PointPrimitiveCollection` to `scene.primitives`. There's no
    archive-owning base class — the app constructs its own `STTArchive` and
-   `SpatiotemporalTileset` (wired via `makeTilesetCallbacks` from
+   `SpatioTemporalTileset` (wired via `makeTilesetCallbacks` from
    `@poopdeck.gl/core/tileset-adapter`), exactly as it would for any other
    STT backend.
 2. Whenever the tileset's resident tile set changes, the app calls
@@ -490,7 +501,7 @@ does not use it yet; it recomputes and writes alpha per point on the CPU in
   `STTBaseLayer` (which owns `onAdd`/streaming/buffer-change forwarding), the
   Cesium package gives you the primitives (`STTPointLayer`,
   `attachCesiumClock`, the camera bridge) and expects the host app to wire
-  `STTArchive` + `SpatiotemporalTileset` + `makeTilesetCallbacks` itself, as
+  `STTArchive` + `SpatioTemporalTileset` + `makeTilesetCallbacks` itself, as
   shown in [Quick start](#quick-start).
 - **CPU-side time filtering.** `setTime` loops every feature on the CPU and
   writes a colour per changed feature (point `Color`s, polyline batch-table

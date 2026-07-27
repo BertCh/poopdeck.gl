@@ -78,7 +78,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | Property             | Type                               | Default            | Description                                                                                                                                                                                                                                                                                                                                                                      |
 | :------------------- | :--------------------------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `radiusScale`        | `number`                           | `1`                | Global multiplier for point radii.                                                                                                                                                                                                                                                                                                                                               |
-| `radiusUnits`        | `'pixels' \| 'meters' \| 'common'` | `'pixels'`         | Units for radius.                                                                                                                                                                                                                                                                                                                                                                |
+| `radiusUnits`        | `'pixels' \| 'meters' \| 'common'` | `'pixels'`         | Units for radius. **Diverges from upstream `ScatterplotLayer`'s `'meters'`** — see [Deliberate default drift](#deliberate-default-drift).                                                                                                                                                                                                                                        |
 | `radiusMinPixels`    | `number`                           | `0`                | Minimum on-screen radius in pixels.                                                                                                                                                                                                                                                                                                                                              |
 | `radiusMaxPixels`    | `number`                           | `MAX_SAFE_INTEGER` | Maximum on-screen radius in pixels.                                                                                                                                                                                                                                                                                                                                              |
 | `filled`             | `boolean`                          | `true`             | Fill the marker.                                                                                                                                                                                                                                                                                                                                                                 |
@@ -104,25 +104,40 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Data Accessors
 
-| Property              | Type                               | Default              | Description                                                          |
-| :-------------------- | :--------------------------------- | :------------------- | :------------------------------------------------------------------- |
-| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill: constant RGBA, or a property name for categorical coloring.    |
-| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. When set, it wins.         |
-| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name.                  |
-| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius`.                               |
-| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).          |
-| `strokeWidth`         | `number \| string`                 | `1`                  | Outline width: constant, or a numeric property name.                 |
-| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth`.                          |
-| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).  |
-| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. Forces the CPU palette path.   |
-| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent).    |
-| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB from three numeric columns (each 0–255).               |
-| `colorVectorColumn`   | `string \| null`                   | `null`               | Per-point RGBA from one interleaved `FixedSizeList<UInt8,4>` column. |
-| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Transform applied to the `radius` value before GPU upload.           |
+| Property              | Type                               | Default              | Description                                                                                                                                                                                                       |
+| :-------------------- | :--------------------------------- | :------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill: constant RGBA, or a property name for categorical coloring. **Drifts from upstream** — see below.                                                                                                           |
+| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. When set, it wins. Unset here, so `fillColor` wins unless you opt in; with neither set the effective constant is `[255, 128, 0, 255]`, not upstream's `[0, 0, 0, 255]`. |
+| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name. **Drifts from upstream** — see below.                                                                                                                         |
+| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius`. Unset here, so `radius` wins unless you opt in; with neither set the effective constant is `5`, not upstream's `1`.                                                        |
+| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                                                                                                                                                       |
+| `strokeWidth`         | `number \| string`                 | `1`                  | Outline width: constant, or a numeric property name.                                                                                                                                                              |
+| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth`.                                                                                                                                                                       |
+| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).                                                                                                                                               |
+| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. Forces the CPU palette path.                                                                                                                                                |
+| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent).                                                                                                                                                 |
+| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB from three numeric columns (each 0–255).                                                                                                                                                            |
+| `colorVectorColumn`   | `string \| null`                   | `null`               | Per-point RGBA from one interleaved `FixedSizeList<UInt8,4>` column.                                                                                                                                              |
+| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Transform applied to the `radius` value before GPU upload.                                                                                                                                                        |
 
 **Accessor aliases.** The upstream `get*` names accept a constant or a
 property-column **name** — not a function accessor, since binary tiles cannot run
 per-feature JS. A function warns once and falls back to the plain prop.
+
+### Deliberate default drift
+
+Three defaults intentionally differ from upstream `ScatterplotLayer`. Porting a
+deck config that relied on the upstream values will look different until these
+are passed explicitly.
+
+| Property                     | STT default          | deck default     | Why                                                                                                                                |
+| :--------------------------- | :------------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| `radiusUnits`                | `'pixels'`           | `'meters'`       | STT points are overwhelmingly event markers, not ground footprints; a pixel radius keeps them legible across the whole zoom range. |
+| `radius` / `getRadius`       | `5`                  | `1`              | `5` in the pixel units above is a legible marker; `1 px` is a near-invisible speck.                                                |
+| `fillColor` / `getFillColor` | `[255, 128, 0, 255]` | `[0, 0, 0, 255]` | Opaque black is invisible on the dark basemaps these demos use.                                                                    |
+
+Note that `lineWidthUnits` does **not** drift — it keeps deck's `'meters'`,
+which is why it differs from `radiusUnits` in this same layer.
 
 **Color precedence.** `colorVectorColumn` wins over everything, then
 `rgbColorColumns`, then `colorMapping`/`colorPalette`, then a constant
@@ -194,6 +209,13 @@ positions in the first place.
 
 ## Architecture & performance
 
+- **Geometry-kind guard**: tile layers whose `geometryType` is not `Point` are
+  skipped with one named console warning. `geometryType` is the only thing that
+  distinguishes a point tile from a linestring tile once the columns are
+  decoded — this layer would otherwise read the first `featureCount` _vertices_
+  of a flattened vertex run as one position per feature: no error, no blank map,
+  just points silently bunched along the first few paths. Tiles predating the
+  geometry-kind tag are trusted, not rejected.
 - **Per-tile binary sublayers**: each visible (tile, layer) pair produces one
   `ScatterplotLayer` using deck.gl's binary `data: { length, attributes }`
   shape, with positions/times referenced DIRECTLY from the tile's Arrow

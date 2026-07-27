@@ -593,12 +593,16 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getPath.value).toBe(tile.layers[0].features.positions);
   });
 
-  it('sets positionFormat:"XY" so 2D flat paths are not misread as XYZ', () => {
-    // makePathTile produces 2D positions. Without an explicit positionFormat
-    // PathLayer defaults to 'XYZ' and would slice flat [lon0, lat0, …] into
-    // garbage 3-tuples — same bug as the trips layer.
+  it('declares the 2D stride on getPath.size (not via positionFormat)', () => {
+    // makePathTile produces 2D positions. `Tesselator.updateGeometry` derives
+    // positionSize from `geometryBuffer.size` FIRST and only falls back to
+    // `positionFormat` when the descriptor has no `size` — and this layer always
+    // sets it, so the descriptor is what keeps flat [lon0, lat0, …] from being
+    // sliced into garbage 3-tuples. The inert positionFormat pass-through is
+    // gone.
     const built = buildSublayerForTile(bigPathTile(5, 4));
-    expect(built.props.positionFormat).toBe('XY');
+    expect(built.props.data.attributes.getPath.size).toBe(2);
+    expect(built.props.positionFormat).toBeUndefined();
   });
 
   it('expands categorical color PER-VERTEX (not a per-feature GPU index buffer)', () => {
@@ -621,7 +625,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     });
     const attrs = built.props.data.attributes;
     expect(attrs.instanceCategoryIndex).toBeUndefined();
-    expect(built.props.useCategoryColor).toBe(false);
+    // The path family has no GPU category path at all: CategoryColorExtension
+    // is not installed, so no useCategoryColor prop is passed either.
+    expect(built.props.useCategoryColor).toBeUndefined();
     expect(attrs.getColor).toBeDefined();
     expect(attrs.getColor.value).toBeInstanceOf(Uint8Array);
     expect(attrs.getColor.value.length).toBe(32 * 4); // one RGBA per vertex
@@ -734,7 +740,8 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
 
     const attrs = built.props.data.attributes;
     expect(attrs.instanceCategoryIndex).toBeUndefined();
-    expect(built.props.useCategoryColor).toBe(false);
+    // No GPU category path on this family — see the note above.
+    expect(built.props.useCategoryColor).toBeUndefined();
     expect(attrs.getColor).toBeDefined();
 
     // The mapping is projected onto the tile's category dictionary, then expanded
@@ -811,7 +818,9 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.getPath.value).toBeInstanceOf(Float64Array);
     expect(attrs.getPath.value).not.toBe(tile.layers[0].features.positions);
     expect(attrs.getPath.value.length).toBe(12 * 3);
-    expect(built.props.positionFormat).toBe('XYZ');
+    // The XYZ stride is declared on the descriptor, which is what deck reads;
+    // there is no positionFormat pass-through (it would be inert).
+    expect(built.props.positionFormat).toBeUndefined();
 
     // z per feature = mapping[band] × scale, applied to every vertex of the
     // feature. Feature 0 (d1) → 0; feature 3 (d5, verts 9..11) → 18 × 2 = 36.
@@ -840,7 +849,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     });
     const attrs = built.props.data.attributes;
     expect(attrs.getPath.size).toBe(3);
-    expect(built.props.positionFormat).toBe('XYZ');
+    expect(built.props.positionFormat).toBeUndefined();
     const pos = attrs.getPath.value;
     expect(pos[2]).toBe(0); // feature 0 (z_layer 0)
     expect(pos[4 * 3 + 2]).toBe(5); // feature 1 (z_layer 2.5 × 2), first vertex idx 4
@@ -855,7 +864,7 @@ describe('AnimatedPathLayer per-tile sublayer architecture (v3)', () => {
     const attrs = built.props.data.attributes;
     expect(attrs.getPath.size).toBe(2);
     expect(attrs.getPath.value).toBe(tile.layers[0].features.positions);
-    expect(built.props.positionFormat).toBe('XY');
+    expect(built.props.positionFormat).toBeUndefined();
   });
 
   it('re-prepares the tile when elevationScale changes (rebuilds the 3D buffer)', () => {

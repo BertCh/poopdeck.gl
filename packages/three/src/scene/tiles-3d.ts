@@ -6,7 +6,7 @@
  * OGC 3D Tiles for the STT Three engine — real terrain, Google Photorealistic
  * Tiles, and Cesium Ion assets streamed by `3d-tiles-renderer` and co-registered
  * with STT's ECEF globe world. **Opt-in, default-OFF**: nothing here runs unless a
- * host calls {@link createStt3DTiles}, so no existing scene changes.
+ * host calls {@link createSTT3DTiles}, so no existing scene changes.
  *
  * `3d-tiles-renderer` is renderer-agnostic — it adds a standard `THREE.Group` of
  * `Mesh`es (`tiles.group`) to the scene and you pump `tiles.update()` each frame.
@@ -31,7 +31,7 @@
  * ⚠ **The globe projection MUST use the `'wgs84'` datum** to co-register. STT's
  * `GlobeProjection` DEFAULTS to `'sphere'` (a sphere of `radius`, not the WGS84
  * ellipsoid), which mis-registers against the tiles' ellipsoid by up to ~20 km at
- * mid-latitudes. {@link createStt3DTiles} warns (once) if it sees the sphere datum.
+ * mid-latitudes. {@link createSTT3DTiles} warns (once) if it sees the sphere datum.
  */
 
 import { Matrix4 } from 'three';
@@ -52,7 +52,7 @@ import { computeWorldToEcef } from './atmosphere.js';
  *  - `{ ion }` — a Cesium Ion asset (assetId `1` = Cesium World Terrain, `2` = Bing
  *    aerial, `96188` = OSM buildings, …) keyed by an Ion access token.
  */
-export type Stt3DTilesSource =
+export type STT3DTilesSource =
   | { url: string }
   | { google: { apiToken: string; autoRefreshToken?: boolean } }
   | {
@@ -63,7 +63,7 @@ export type Stt3DTilesSource =
       };
     };
 
-/** {@link Stt3DTilesSource} normalized to a discriminated, defaults-filled shape. */
+/** {@link STT3DTilesSource} normalized to a discriminated, defaults-filled shape. */
 export type ResolvedTilesSource =
   | { kind: 'url'; url: string }
   | { kind: 'google'; apiToken: string; autoRefreshToken: boolean }
@@ -75,18 +75,18 @@ export type ResolvedTilesSource =
     };
 
 /**
- * Validate + normalize a {@link Stt3DTilesSource} into the plugin/URL wiring the
+ * Validate + normalize a {@link STT3DTilesSource} into the plugin/URL wiring the
  * factory needs. Pure + total (throws on a malformed source), so the source →
  * plugin decision is unit-testable without importing `3d-tiles-renderer`.
  */
 export function resolveTilesSource(
-  source: Stt3DTilesSource,
+  source: STT3DTilesSource,
 ): ResolvedTilesSource {
   if ('google' in source) {
     const { apiToken, autoRefreshToken } = source.google;
     if (!apiToken)
       throw new Error(
-        'createStt3DTiles: a { google } source requires an apiToken',
+        'createSTT3DTiles: a { google } source requires an apiToken',
       );
     return {
       kind: 'google',
@@ -98,11 +98,11 @@ export function resolveTilesSource(
     const { apiToken, assetId, autoRefreshToken } = source.ion;
     if (!apiToken)
       throw new Error(
-        'createStt3DTiles: an { ion } source requires an apiToken',
+        'createSTT3DTiles: an { ion } source requires an apiToken',
       );
     if (assetId === undefined || assetId === null || assetId === '') {
       throw new Error(
-        'createStt3DTiles: an { ion } source requires an assetId',
+        'createSTT3DTiles: an { ion } source requires an assetId',
       );
     }
     return {
@@ -114,16 +114,16 @@ export function resolveTilesSource(
   }
   if ('url' in source && source.url) return { kind: 'url', url: source.url };
   throw new Error(
-    'createStt3DTiles: source must be one of { url } | { google } | { ion }',
+    'createSTT3DTiles: source must be one of { url } | { google } | { ion }',
   );
 }
 
 // ─── Option resolution (pure) ───────────────────────────────────────────────────
 
 /** Opt-in 3D-tiles knobs (each defaults to a sensible value once tiles are on). */
-export interface Stt3DTilesOptions {
+export interface STT3DTilesOptions {
   /** The tileset source (url / google / ion). */
-  source: Stt3DTilesSource;
+  source: STT3DTilesSource;
   /** Cross-fade tiles in/out as LOD changes (TilesFadePlugin). @default true */
   fade?: boolean;
   /** Recompress vertex attributes to compact types (TileCompressionPlugin). @default true */
@@ -146,8 +146,8 @@ export interface Stt3DTilesOptions {
   dracoDecoderPath?: string;
 }
 
-/** {@link Stt3DTilesOptions} with every knob concretely resolved (source excluded). */
-export interface ResolvedStt3DTilesOptions {
+/** {@link STT3DTilesOptions} with every knob concretely resolved (source excluded). */
+export interface ResolvedSTT3DTilesOptions {
   fade: boolean;
   compression: boolean;
   errorTarget: number;
@@ -157,13 +157,13 @@ export interface ResolvedStt3DTilesOptions {
 }
 
 /**
- * Fill the {@link Stt3DTilesOptions} defaults (fade + compression on, SSE target
+ * Fill the {@link STT3DTilesOptions} defaults (fade + compression on, SSE target
  * 16 — matching `3d-tiles-renderer`'s own default). Pure, so option resolution is
  * unit-testable.
  */
-export function resolveStt3DTilesOptions(
-  opts: Stt3DTilesOptions,
-): ResolvedStt3DTilesOptions {
+export function resolveSTT3DTilesOptions(
+  opts: STT3DTilesOptions,
+): ResolvedSTT3DTilesOptions {
   return {
     fade: opts.fade ?? true,
     compression: opts.compression ?? true,
@@ -217,7 +217,7 @@ function warnIfSphereDatum(projection: Projection): void {
     warnedSphereDatum = true;
     // eslint-disable-next-line no-console
     console.warn(
-      '[stt-three] createStt3DTiles: 3D Tiles are WGS84-ellipsoid ECEF, but this ' +
+      '[stt-three] createSTT3DTiles: 3D Tiles are WGS84-ellipsoid ECEF, but this ' +
         'GlobeProjection uses the "sphere" datum — tiles will mis-register with STT ' +
         'globe data by up to ~20 km at mid-latitudes. Build the projection with ' +
         '`new GlobeProjection(anchor, radius, { datum: "wgs84" })` to co-register.',
@@ -227,8 +227,8 @@ function warnIfSphereDatum(projection: Projection): void {
 
 // ─── Live tileset factory (browser-verify; dynamic-imports 3d-tiles-renderer) ────
 
-/** Options for {@link createStt3DTiles}. */
-export interface CreateStt3DTilesOptions extends Stt3DTilesOptions {
+/** Options for {@link createSTT3DTiles}. */
+export interface CreateSTT3DTilesOptions extends STT3DTilesOptions {
   /** The active renderer (WebGPU or the WebGL2 fallback). */
   renderer: WebGPURenderer;
   /** The scene the tileset group is added to (and drawn as part of). */
@@ -245,7 +245,7 @@ export interface CreateStt3DTilesOptions extends Stt3DTilesOptions {
  * by the host's normal `render`, so it composes with the atmosphere pipeline for
  * free. `dispose()` removes the group and frees all tiles + plugins.
  */
-export interface Stt3DTiles {
+export interface STT3DTiles {
   /** The tileset's `THREE.Group` (already added to the scene, aligned to STT world). */
   readonly group: Group;
   /** The underlying vanilla `TilesRenderer` — register more plugins, add listeners, tune. */
@@ -270,11 +270,11 @@ export interface Stt3DTiles {
  * standard meshes). Live tile fetching/rendering needs network + a GPU + (for
  * google/ion) an API token, so it is browser-verified, not tested here.
  */
-export async function createStt3DTiles(
-  opts: CreateStt3DTilesOptions,
-): Promise<Stt3DTiles> {
+export async function createSTT3DTiles(
+  opts: CreateSTT3DTilesOptions,
+): Promise<STT3DTiles> {
   const { renderer, scene, camera, projection } = opts;
-  const cfg = resolveStt3DTilesOptions(opts);
+  const cfg = resolveSTT3DTilesOptions(opts);
   const src = resolveTilesSource(opts.source);
 
   const [

@@ -16,16 +16,12 @@
  */
 
 import type { Tile, TileId, BoundingBox, TemporalLodLevel } from './types.js';
-import { estimateTileSize } from './archive.js';
+import { tileKey, type TileKey } from './tile-key.js';
+import { estimateTileSize, tileXSpanForLonRange, wrapLon } from './archive.js';
+import { PrefetchPolicy } from './prefetch-policy.js';
+import { normalizeViewportBounds } from './geo/viewport-bounds.js';
 
 const DEBUG = false;
-
-/**
- * Number of consecutive frames a reversed time-delta must persist before the
- * prefetch direction actually flips. Prevents a single backward scrub frame
- * from inverting the prefetch direction (direction hysteresis).
- */
-const DIRECTION_FLIP_THRESHOLD = 3;
 
 /**
  * Safety cap on how many priority tiles go into a single coalesced batch. The
@@ -38,119 +34,11 @@ const DIRECTION_FLIP_THRESHOLD = 3;
 const MAX_COALESCE_BATCH = 1024;
 
 /**
- * Prefetch dispatches in small time-ordered SLICES instead of one giant
- * batch — the streaming-video segment model (hls.js/Shaka fetch a few seconds
- * of media at a time, strictly in playback order). Slices are sized in BYTES
- * from the measured network throughput so one slice ≈ this many ms of
- * download. Two properties fall out:
- *
- * - The "hostage window" is bounded: a tile the play head reaches while its
- *   slice is in flight waits ≈ one slice, not an unbounded 1024-tile batch.
- * - The nearest-future tiles (the queue is drained nearest-first) land and
- *   render first; a flush (seek / pan / direction flip) wastes at most one
- *   slice of bandwidth.
- *
- * One slice is in flight at a time; its finally-handler dispatches the next,
- * so the pipeline stays busy with at most ~1 RTT of idle between slices —
- * and every slice boundary is a fresh chance for priority work to dispatch
- * first (late commitment, the Cesium RequestScheduler principle).
- */
-const PREFETCH_SLICE_TARGET_REAL_MS = 1000;
-/**
- * Slice-size floor: below this, coalescing degrades (byte-adjacent tiles get
- * split across slices for no scheduling benefit) and per-slice overhead
- * (planning pass + range-request RTTs) dominates on slow links.
- */
-const PREFETCH_SLICE_MIN_BYTES = 1 * 1024 * 1024;
-/**
- * Slice-size ceiling: bounds the memory burst and the worst-case hostage
- * window on very fast links, where TARGET_REAL_MS alone would allow huge
- * slices.
- */
-const PREFETCH_SLICE_MAX_BYTES = 16 * 1024 * 1024;
-/**
- * Slice size before the throughput estimator has a sample (cold start):
- * moderate, so the first slice both seeds the estimator and can't flood a
- * link that turns out to be slow.
- */
-const PREFETCH_SLICE_COLD_BYTES = 4 * 1024 * 1024;
-/**
  * Per-tile byte guess when the directory size lookup is unavailable
  * (`getTileByteSize` unset or the id is unknown). Turns the byte budget into
  * an effective count cap (e.g. cold 4 MiB / 64 KiB = 64 tiles).
  */
 const PREFETCH_UNKNOWN_TILE_BYTES = 64 * 1024;
-
-/**
- * How far ahead to prefetch during animation, expressed in REAL playback time
- * (ms). Converted to sim-time via the measured animation speed, so a fast scrub
- * (e.g. 43 years in 60 s) prefetches a large *contiguous* span of buckets that
- * coalesces into a few range requests — instead of the old fixed 30 sim-second
- * lookahead, which a fast animation outruns every frame (→ a request per frame).
- */
-const PREFETCH_LOOKAHEAD_REAL_MS = 8000;
-/**
- * Hard ceiling on the prefetch horizon, expressed in temporal buckets. At very
- * fast playback the horizon terms below balloon in SIM time — a full year in
- * 120 s runs at ~2.6e5 sim-ms per real-ms, so `windowAhead` (prefetchAhead ×
- * prefetchSteps) reaches ~60 days and even the `speed × LOOKAHEAD` term reaches
- * ~24 days. Each prefetch pass then walks the directory over that whole slice
- * and sorts ~1-2k candidate tile ids ON THE MAIN THREAD, ~twice per second, per
- * tileset — a documented FPS sink (see the enumerate-every-bucket note below).
- * Bounding the horizon caps the per-pass walk+sort. Only fast demos hit it;
- * normal-speed playback stays well under the cap, and the resident-window
- * SELECTION (not prefetch) still loads cumulative "draw-and-persist" datasets
- * in full. NB the cap is NOT a pure constant: the governor's buffered-runway
- * gates are speed-scaled, so the applied cap is
- * `max(MAX_PREFETCH_BUCKETS × bucketMs, speed × PREFETCH_CAP_FLOOR_REAL_MS)`
- * — a fixed 64-bucket ceiling alone is BELOW the gates at fast playback
- * (year-in-120s with 2 h buckets consumes ~36.5 buckets/s; the resume gate
- * alone needs ~146 buckets), which would stall the gate it exists to feed.
- */
-const MAX_PREFETCH_BUCKETS = 64;
-/**
- * Wall-clock floor (ms) for the prefetch cap. The playback governor's gates
- * are speed-scaled: the start gate wants ~2 s of wall-clock runway buffered
- * and the resume-after-stall gate 2× that (see PlaybackGovernor's
- * startGateWallMs/resumeFactor defaults). If the capped horizon can't cover
- * the resume gate, one throughput dip ends in the full start-wait freeze and
- * then permanent degraded creep. 5 s = 4 s resume gate + 1 s margin; with the
- * 50% reload fraction the steady-state floor (~2.5 s wall) stays above the
- * 2 s start gate.
- */
-const PREFETCH_CAP_FLOOR_REAL_MS = 5000;
-/**
- * Re-issue the wide prefetch only after the play head has consumed this fraction
- * of the previously prefetched span. Keeps the debounced scheduler from
- * re-coalescing the same chunk ~4×/second; the wide load then happens roughly
- * once per `(1 - fraction) × LOOKAHEAD` of real time.
- */
-const PREFETCH_RELOAD_FRACTION = 0.5;
-
-/**
- * Pressure-adaptive prefetch horizon (Shaka's "shrink the goal" ladder):
- * degrade the speculative lookahead under memory pressure instead of letting
- * the cache thrash. The self-regulation loop: a full cache forces the
- * over-limit eviction pass into the protected runway (a tier-C/D eviction —
- * the thrash signal) → `prefetchPressureScale` decays by
- * {@link PRESSURE_SCALE_DECAY} (floored at {@link PRESSURE_SCALE_MIN}) →
- * the next prefetch plan reaches ahead by a shorter horizon and enqueues
- * fewer speculative tiles → the cache drops back under its limits → after
- * {@link PRESSURE_RECOVERY_QUIET_MS} of wall-clock with no runway eviction,
- * the scale recovers by {@link PRESSURE_SCALE_RECOVERY_STEP} back toward 1 —
- * rate-limited to one step per {@link PRESSURE_RECOVERY_STEP_INTERVAL_MS} of
- * WALL time (recovery paced by plan frequency rebounds floor→1 in ~2 s and
- * oscillates). While pressured (scale < 1) the scaled horizon is floored at
- * `max(bucketMs, timeWindow, speed × PREFETCH_CAP_FLOOR_REAL_MS)` so the
- * resident window keeps loading and the governor's speed-scaled gates stay
- * satisfiable — the ladder shrinks speculation, never the playhead's own
- * data. At scale 1 the ladder is a strict no-op (byte-identical horizon).
- */
-const PRESSURE_SCALE_MIN = 0.25;
-const PRESSURE_SCALE_DECAY = 0.7;
-const PRESSURE_SCALE_RECOVERY_STEP = 0.1;
-const PRESSURE_RECOVERY_QUIET_MS = 5000;
-const PRESSURE_RECOVERY_STEP_INTERVAL_MS = 1000;
 
 /**
  * Real-time margin (ms) for SPEED-AWARE seek detection in `update()`: a time
@@ -182,27 +70,6 @@ const SEEK_DETECTION_REAL_MS = 1000;
  * viewport; only the (destructive) flush is debounced.
  */
 const SPATIAL_FLUSH_TOLERANCE = 1 / 8;
-
-/**
- * Fraction of the tile-count cache budget the forward prefetch runway may
- * occupy in a single pass.
- *
- * The steady-state "thousands of tiny requests" failure is a cache THRASH, not
- * a data problem: the lookahead is sized in SIM-TIME (speed × LOOKAHEAD), so a
- * fast playback (drifters: ~43 yr in 60 s ⇒ ~14.6 years / ~760 weekly buckets
- * ahead) enqueues far more tiles than the LRU holds. They are evicted before
- * the play head arrives, and the priority path then re-fetches each one
- * individually — and because the leading-edge bucket of each spatial cell is
- * byte-scattered from its neighbours, those re-fetches don't coalesce, so they
- * land as a flood of tiny single-tile requests.
- *
- * Capping the prefetch working set to a fraction of the cache keeps the runway
- * RESIDENT, so the play head hits cache instead of re-fetching. Paired with
- * temporal ordering (nearest upcoming bucket first), a finite budget always
- * covers the IMMINENT future rather than a spatially-arbitrary slice of a
- * multi-year span.
- */
-const PREFETCH_CACHE_FRACTION = 0.5;
 
 /**
  * Default byte ceiling for PARENT-fallback tiles. Above this, a coarse
@@ -239,9 +106,9 @@ const PARENT_FALLBACK_LEVELS = 4;
 const DEFAULT_SCRUB_ZOOM_DROP = 2;
 
 /**
- * Bound on how many zoom levels finer {@link SpatiotemporalTileset.getVisibleTiles}'s
+ * Bound on how many zoom levels finer {@link SpatioTemporalTileset.getVisibleTiles}'s
  * zoom-out stand-in pass will search for an already-resident descendant tile
- * (see {@link SpatiotemporalTileset.collectLoadedDescendants}). Mirrors
+ * (see {@link SpatioTemporalTileset.collectLoadedDescendants}). Mirrors
  * `PARENT_FALLBACK_LEVELS`'s reasoning in spirit but capped tighter — the
  * search is a pure `this.tiles` lookup (no fetch), yet still O(4^depth) per
  * missing cell, so 2 levels (16 lookups) caps the worst case while covering
@@ -251,7 +118,7 @@ const CHILD_LOOKAHEAD_LEVELS = 2;
 
 /**
  * Real-time lookahead (ms) used to size the DEFAULT probe horizon of
- * {@link SpatiotemporalTileset.getBufferedRunway}: the horizon covers at
+ * {@link SpatioTemporalTileset.getBufferedRunway}: the horizon covers at
  * least `|animationSpeed| × 10 s` of sim-time, i.e. ten wall-seconds of
  * playback at the current speed.
  */
@@ -259,6 +126,104 @@ const RUNWAY_HORIZON_REAL_MS = 10_000;
 
 /** Default cap on the number of ranges returned by `getBufferedRanges`. */
 const DEFAULT_MAX_BUFFERED_RANGES = 64;
+
+/**
+ * How many times a NEEDED tile may FAIL to produce data before the readiness
+ * APIs stop waiting on it.
+ *
+ * This is a READINESS budget, not a retry budget — the two used to be the same
+ * number and that was the defect. A tile whose batch resolves `null` (the
+ * archive's retries and its per-tile fallback both failed) used to be left
+ * `{isLoaded: false, isLoading: false, isCancelled: false}` — still in
+ * `neededTileKeys`, in NO queue, and invisible to the only site that enqueues
+ * needed tiles, because the exact-bounds `selectKey` fast path short-circuits
+ * every identical `update()`. Measured: zero re-requests across 30 identical
+ * updates; only a playhead nudge healed it. The first fix bounded the revival
+ * at three attempts AND latched `isFailed` one-way for the header's lifetime,
+ * which was strictly worse: all three attempts land inside ~1.5 s, a NEEDED
+ * tile's header is never replaced (eviction hard-excludes `neededTileKeys`),
+ * so a 1.5-second network blip blanked that region for the rest of the session
+ * and no pan, seek or wait healed it.
+ *
+ * So the two jobs are now split. {@link SpatioTemporalTileHeader.isFailed} is
+ * still latched here and still STICKY — once a tile has failed this many times
+ * the readiness APIs write it off permanently, because a hole that keeps
+ * counting as missing pins the buffered runway at zero and the playback
+ * governor never lets the clock advance again, and un-writing-it-off on every
+ * retry would re-pin the runway once per backoff window. Whether the tile is
+ * ever FETCHED again is a separate question, answered by
+ * {@link FAILED_TILE_RETRY_COOLDOWN_MS}'s backoff ladder.
+ */
+const FAILED_TILE_MAX_ATTEMPTS = 3;
+
+/**
+ * Base wall-clock spacing (ms) between a settle-without-data and the retry it
+ * schedules. Each further settle DOUBLES the wait, up to
+ * {@link FAILED_TILE_RETRY_MAX_BACKOFF_MS}.
+ *
+ * Exponential backoff rather than a flat cooldown or a hard give-up, because
+ * the two constraints pull in opposite directions and only a decaying rate
+ * satisfies both:
+ *
+ * - "heals after a blip, with no user action": the ladder's first four rungs
+ *   (0.5 / 1 / 2 / 4 s) are all spent inside the first ~8 seconds, so a
+ *   dropped connection, a 502 from a cold edge node, or a re-issued range
+ *   request recovers about as fast as a flat 500 ms cooldown would — and
+ *   crucially it keeps going afterwards, where the one-way latch stopped.
+ * - "does not re-fetch a genuinely-absent tile at ~1 Hz forever": the ladder
+ *   reaches the ceiling after ~8 settles, so the steady-state cost of a tile
+ *   the origin will never serve is one probe per minute. Those probes are
+ *   re-enqueued at priority and therefore COALESCE — every written-off tile in
+ *   the viewport rides one batch, so the cost is per-minute, not per-tile.
+ *
+ * The ladder is deliberately NOT reset by camera activity: it lives on the
+ * header, and the header outlives every pan and seek that keeps the tile
+ * needed. Resetting on selection is what let the camera, rather than the
+ * tile's own history, decide the request rate.
+ */
+const FAILED_TILE_RETRY_COOLDOWN_MS = 500;
+
+/**
+ * Ceiling on the {@link FAILED_TILE_RETRY_COOLDOWN_MS} backoff ladder: one
+ * probe per minute per permanently-absent tile. A ceiling rather than a hard
+ * stop because "absent" is not knowable from the client — a 404 during a
+ * fleet republish, an R2 object still propagating, an offline tab coming back
+ * — and a hard stop means the only cure is a page reload.
+ */
+const FAILED_TILE_RETRY_MAX_BACKOFF_MS = 60_000;
+
+/**
+ * Settles — of ANY kind, aborts included — after which a tile stops counting
+ * as missing for readiness, even though it keeps being retried.
+ *
+ * The abort exemption above is what stops a flaky transport from writing off
+ * good tiles, but on its own it is UNBOUNDED, and that re-opens the exact
+ * constraint {@link FAILED_TILE_MAX_ATTEMPTS} exists to hold: a transport that
+ * aborts EVERY request (a dead origin behind a proxy that stalls rather than
+ * refuses, a request timeout that always fires) never advances `attempts`,
+ * never latches `isFailed`, and so pins the buffered runway at zero forever —
+ * playback gated behind a tile that will never arrive. Aborts are not evidence
+ * about the tile, but an unbounded number of them is evidence about the
+ * session.
+ *
+ * Sized off the ladder rather than picked: at 8 settles the backoff has just
+ * reached its 60 s ceiling (0.5 + 1 + 2 + 4 + 8 + 16 + 32 ≈ 64 s of trying),
+ * so this fires only once a tile has been unreachable for over a minute — far
+ * past any blip, and still short of the user giving up on the frame. Retries
+ * continue at the ceiling regardless; only the readiness accounting changes.
+ */
+const FAILED_TILE_READINESS_WRITEOFF_SETTLES = 8;
+
+/**
+ * How many zoom levels COARSER than the primary {@link
+ * SpatioTemporalTileset.getVisibleTiles}'s stand-in pass will search for an
+ * already-resident ANCESTOR tile to cover a needed-but-unloaded primary cell.
+ * The mirror of {@link CHILD_LOOKAHEAD_LEVELS} (zoom-out) for the zoom-IN
+ * gesture, and capped for the same reason: the search is a pure `this.tiles`
+ * lookup, but each level up must also verify that NO primary cell under that
+ * ancestor is already loaded (4^depth lookups) before it may draw.
+ */
+const ANCESTOR_LOOKBACK_LEVELS = 2;
 
 /**
  * Minimum spacing (ms of wall time) between `onBufferChange` invocations —
@@ -283,7 +248,7 @@ const WORLD_BOUNDS: BoundingBox = {
 };
 
 /**
- * Default byte budget for {@link SpatiotemporalTileset.preloadOverviewTier}.
+ * Default byte budget for {@link SpatioTemporalTileset.preloadOverviewTier}.
  * The overview tier is meant to be a TINY always-resident storyboard; when
  * the coarsest tiles across the full time range cost more than this, the
  * preload is rejected (some datasets have enormous coarse tiles — satellites
@@ -327,7 +292,7 @@ export interface BufferedRunway {
 /** Per-bucket needed-tile records inside the coverage index. */
 interface CoverageBucket {
   /** Registry keys (`z/x/y/t`) of the tiles addressed at this bucket. */
-  keys: string[];
+  keys: TileKey[];
   /** Compressed byte length per tile (0 when `getTileByteSize` is unwired). */
   bytes: number[];
 }
@@ -355,7 +320,7 @@ interface CoverageIndex {
    * timer (rather than under real memory pressure) silently un-buffers time
    * the player was told is ready.
    */
-  keySet: Set<string>;
+  keySet: Set<TileKey>;
   /**
    * `[first bucket start, last bucket end]` of the viewport's available
    * data, or `null` when the viewport has no tiles at any time.
@@ -371,7 +336,7 @@ interface OverviewState {
   /** Latched once `resolve` has been called. */
   settled: boolean;
   /** Registry keys of pinned tiles whose fetch hasn't reached a final state. */
-  pendingKeys: Set<string>;
+  pendingKeys: Set<TileKey>;
   /** Directory byte sum of the candidate tiles. */
   bytes: number;
   /** Candidate tile count. */
@@ -391,7 +356,7 @@ function lowerBound(arr: number[], x: number): number {
 }
 
 /**
- * The result of a {@link SpatiotemporalTileset.preloadOverviewTier} attempt —
+ * The result of a {@link SpatioTemporalTileset.preloadOverviewTier} attempt —
  * the data player's analog of a video storyboard (thumbnail strip): a tiny,
  * always-resident coarse tier covering the full dataset time range so a
  * scrub always has SOMETHING to render via the parent-zoom fallback.
@@ -427,7 +392,7 @@ export interface OverviewPreloadResult {
 type RequestTier = 'priority' | 'prefetch' | 'overview';
 
 /**
- * Optional per-batch hooks for {@link SpatiotemporalTilesetOptions.getTileDataBatch}.
+ * Optional per-batch hooks for {@link SpatioTemporalTilesetOptions.getTileDataBatch}.
  * Mirrors the archive's `TileRequestOptions` incremental-delivery contract
  * without importing it (the batch callback may be backed by anything).
  */
@@ -439,7 +404,8 @@ export interface TileBatchHooks {
   /**
    * Current play-head time (sim-ms) for the process-shared request scheduler's
    * cross-source earliest-deadline-first priority (multi-source coordination,
-   * Phase 2 §2.8). The tileset populates it from its current viewport time so a
+   * docs/roadmap/playback-and-loading.md §5). The tileset populates it from
+   * its current viewport time so a
    * batch implementation backed by `STTArchive.getTiles` can forward it as
    * `TileRequestOptions.playheadTime`, letting the scheduler rank range-groups
    * by distance-to-playhead comparably ACROSS archives that share this
@@ -461,14 +427,64 @@ export interface TileBatchHooks {
 }
 
 /**
- * Web-Mercator lon → slippy tile x at `zoom`, clamped into [0, 2^zoom − 1]
- * (a viewport can extend past the antimeridian / poles; the clamp keeps the
- * cover-scan range valid). Mirrors archive.ts's private lonToTileX.
+ * Viewport tile-x coverage at `zoom`, as ONE or TWO ascending `[x0, x1]`
+ * column intervals inside `[0, 2^zoom − 1]`.
+ *
+ * A viewport that straddles the antimeridian — either UNWRAPPED
+ * (`WebMercatorViewport.unproject` reports `{minLon: 174, maxLon: 184}` at
+ * lon 179) or CROSSING (`minLon > maxLon`) — covers columns at BOTH edges of
+ * the world, which no single interval can express. The wrap-aware span comes
+ * from {@link tileXSpanForLonRange} (the same primitive the archive's
+ * `boundsToTiles` scan uses, so selection and this render-side cover check
+ * can never disagree); it is split here at the world edge.
+ *
+ * A non-crossing viewport yields exactly one interval, identical to the old
+ * `[lonToTileClamped(minLon), lonToTileClamped(maxLon)]` pair.
  */
-function lonToTileClamped(lon: number, zoom: number): number {
+function viewportTileXIntervals(
+  bounds: BoundingBox,
+  zoom: number,
+): Array<[number, number]> {
   const n = 1 << zoom;
-  const x = Math.floor(((lon + 180) / 360) * n);
-  return Math.max(0, Math.min(n - 1, x));
+  const { start, count } = tileXSpanForLonRange(
+    bounds.minLon,
+    bounds.maxLon,
+    zoom,
+  );
+  if (count <= 0) return [];
+  const end = start + count - 1;
+  if (end <= n - 1) return [[start, end]];
+  // The span ran off the east edge: the remainder re-enters at column 0.
+  return [
+    [start, n - 1],
+    [0, end - n],
+  ];
+}
+
+/**
+ * Longitude extent of a viewport, in degrees, for a possibly seam-crossing box.
+ *
+ * `minLon > maxLon` is the antimeridian-CROSSING encoding, whose naive
+ * `maxLon − minLon` is NEGATIVE — and every spatial tolerance in the selection
+ * path is a fraction of the viewport extent, so a negative span made the
+ * tolerance collapse to zero: each pass then read as a "significant" spatial
+ * change and flushed the prefetch runway. UNWRAPPED bounds (`maxLon > 180`,
+ * what `WebMercatorViewport.unproject` actually returns) need no correction —
+ * their span is already positive and correct.
+ */
+function lonSpanOf(bounds: BoundingBox): number {
+  const span = bounds.maxLon - bounds.minLon;
+  return span >= 0 ? span : span + 360;
+}
+
+/**
+ * Longitude centre of a viewport, seam-crossing aware. Anchored at `minLon`
+ * (never the `(min + max) / 2` midpoint, which lands on the far side of the
+ * globe for a crossing box) so it stays continuous as an unwrapped viewport —
+ * `[168, 188]` → `[170, 190]` → the crossing `[172, -168]` — drifts east.
+ */
+function lonCenterOf(bounds: BoundingBox): number {
+  return bounds.minLon + lonSpanOf(bounds) / 2;
 }
 
 /** Web-Mercator lat → slippy tile y at `zoom`, clamped into [0, 2^zoom − 1]. */
@@ -482,7 +498,7 @@ function latToTileClamped(lat: number, zoom: number): number {
 }
 
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
-function setsEqual(a: Set<string>, b: Set<string>): boolean {
+function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   if (a === b) return true;
   if (a.size !== b.size) return false;
   for (const k of a) {
@@ -508,10 +524,10 @@ export type TileTier = 'raw' | 'summary' | 'auto';
  * Scrub-time LOD degradation — the "motion tier" served while the user drags
  * the timeline (docs/roadmap/playback-and-loading.md §5–6). Both axes default
  * OFF (the kill switch): with this option absent, {@link
- * SpatiotemporalTileset.setInteractive} stores the interactive bit and
+ * SpatioTemporalTileset.setInteractive} stores the interactive bit and
  * changes nothing else, so today's behavior is byte-identical.
  *
- * The degraded tier is PREVIEW-ONLY (the plan's G7 contract): tile
+ * The degraded tier is PREVIEW-ONLY: tile
  * SELECTION degrades while interactive, but the readiness/buffer APIs
  * (`getBufferedRunway` / `getBufferedRanges` / `estimateCost`) and the
  * prefetch planner keep measuring/warming the FINE base tier, so a
@@ -520,7 +536,7 @@ export type TileTier = 'raw' | 'summary' | 'auto';
  */
 export interface ScrubLodOptions {
   /**
-   * SPATIAL axis (plan P1): while interactive, drop the requested (primary)
+   * SPATIAL axis: while interactive, drop the requested (primary)
    * zoom by {@link spatialZoomDrop} so selection targets coarser tiles —
    * usually ones the parent-fallback path already fetched.
    * @default false
@@ -536,12 +552,12 @@ export interface ScrubLodOptions {
   spatialZoomDrop?: number;
 
   /**
-   * TEMPORAL axis (plan P2): while interactive, route selection through the
+   * TEMPORAL axis: while interactive, route selection through the
    * archive's temporal-LOD pyramid — the coarsest level covering the
    * requested zoom (the `pickTemporalLodForZoom` snap) — instead of the
    * base-bucket tiles. No-ops cleanly unless the archive was built with
-   * `--temporal-lod` AND both {@link SpatiotemporalTilesetOptions.temporalLodLevels}
-   * and {@link SpatiotemporalTilesetOptions.getAvailableTemporalLodTiles}
+   * `--temporal-lod` AND both {@link SpatioTemporalTilesetOptions.temporalLodLevels}
+   * and {@link SpatioTemporalTilesetOptions.getAvailableTemporalLodTiles}
    * are wired (capability detection). Zooms dispatched to the summary tier
    * keep using it — summary is already a reduced tier.
    * @default false
@@ -549,7 +565,7 @@ export interface ScrubLodOptions {
   temporal?: boolean;
 }
 
-export interface SpatiotemporalTilesetOptions {
+export interface SpatioTemporalTilesetOptions {
   /** Maximum concurrent tile requests */
   maxRequests?: number;
 
@@ -628,7 +644,7 @@ export interface SpatiotemporalTilesetOptions {
 
   /**
    * Scrub-time LOD degradation policy (see {@link ScrubLodOptions}).
-   * Absent/empty = the kill switch: {@link SpatiotemporalTileset.setInteractive}
+   * Absent/empty = the kill switch: {@link SpatioTemporalTileset.setInteractive}
    * becomes stored state only and behavior is identical to today.
    */
   scrubLod?: ScrubLodOptions;
@@ -727,7 +743,7 @@ export interface SpatiotemporalTilesetOptions {
   onBufferChange?: (runway: BufferedRunway) => void;
 
   /**
-   * Network throughput probe used by {@link SpatiotemporalTileset.estimateTimeToReadyMs}
+   * Network throughput probe used by {@link SpatioTemporalTileset.estimateTimeToReadyMs}
    * to convert pending bytes into an honest ETA. Wire
    * `STTArchive.getThroughputEstimate` here (the consuming layer does this).
    * `bytesPerMs` is `null` until the estimator has at least one sample.
@@ -736,12 +752,24 @@ export interface SpatiotemporalTilesetOptions {
 
   /**
    * Loader-side fair-share weight setter, forwarded by
-   * {@link SpatiotemporalTileset.setBandwidthWeight} (the governor's
+   * {@link SpatioTemporalTileset.setBandwidthWeight} (the governor's
    * bandwidth re-balancing hook). Wire `STTArchive.setSchedulerWeight` here
    * so a weight change re-shares this source's queued work in the
    * process-shared request scheduler immediately.
    */
   setSchedulerWeight?: (weight: number) => void;
+
+  /**
+   * Loader-side concurrency setter, forwarded by
+   * {@link SpatioTemporalTileset.setOptions} whenever {@link maxRequests}
+   * changes. Wire `STTArchive.setMaxConcurrentRequests` here so the knob
+   * reaches the RANGE COALESCER's own in-flight cap — the tileset's
+   * `maxRequests` only bounds its per-tile / prefetch fan-out, and the
+   * coalesced batch path (the one that actually moves the bytes) is bounded
+   * by the archive. Without this the archive keeps the cap it was
+   * CONSTRUCTED with and a post-mount `maxRequests` change is half-applied.
+   */
+  setMaxConcurrentRequests?: (maxConcurrentRequests: number) => void;
 
   /** Callback when tile loads */
   onTileLoad?: (tile: Tile) => void;
@@ -761,7 +789,78 @@ export interface SpatiotemporalTilesetOptions {
   onTileError?: (error: Error, tileId: TileId) => void;
 }
 
-export interface SpatiotemporalTileHeader {
+/**
+ * Fill in every default, so `this.options` is `Required<>` and no read site
+ * has to repeat a fallback. Shared by the constructor and
+ * {@link SpatioTemporalTileset.setOptions} — which is the whole point: a
+ * post-construction change must land on exactly the value a fresh
+ * construction would have produced, so the two can never drift.
+ *
+ * IDEMPOTENT on an already-normalized bag (every default is a `??`, and no
+ * normalized value is `undefined`), which is what lets `setOptions` re-run it
+ * over `{...current, ...partial}` and leave the untouched keys — including
+ * the `onTile*` callback identities — exactly as they were.
+ */
+function normalizeTilesetOptions(
+  options: SpatioTemporalTilesetOptions,
+): Required<SpatioTemporalTilesetOptions> {
+  return {
+    // Concurrency budget for the single-tile / prefetch paths. The COALESCED
+    // priority path no longer caps its batch by this (it sends the whole
+    // viewport×window working set in one globally-coalesced request and lets
+    // the archive bound in-flight HTTP requests internally), so this is now
+    // only the per-tile + prefetch fan-out ceiling. 24 keeps us under an
+    // object store's per-connection stream cap (R2 ~75) with HTTP/2/3
+    // multiplexing.
+    maxRequests: options.maxRequests ?? 24,
+    debounceTime: options.debounceTime ?? 0,
+    maxCacheSize: options.maxCacheSize ?? 2000,
+    maxCacheByteSize: options.maxCacheByteSize ?? 2 * 1024 * 1024 * 1024,
+    minZoom: options.minZoom ?? 0,
+    maxZoom: options.maxZoom ?? 14,
+    temporalBucketMs: options.temporalBucketMs ?? 3600 * 1000,
+    refinementStrategy: options.refinementStrategy ?? 'best-available',
+    lodMode: options.lodMode ?? 'parent-fallback',
+    enablePrefetch: options.enablePrefetch ?? true,
+    // Defaults sized for a few real-time seconds of buffer. See the
+    // matching tuning notes in SpatioTemporalLayer.defaultProps.
+    prefetchAhead: options.prefetchAhead ?? 30000,
+    prefetchSteps: options.prefetchSteps ?? 4,
+    tier: options.tier ?? 'auto',
+    summaryZoomRange: options.summaryZoomRange ?? null,
+    // Scrub-LOD (motion tier): all axes default OFF — the kill switch.
+    scrubLod: options.scrubLod ?? null,
+    temporalLodLevels: options.temporalLodLevels ?? null,
+    getAvailableTemporalLodTiles: options.getAvailableTemporalLodTiles ?? null,
+    getAvailableTiles: options.getAvailableTiles,
+    getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
+    getTileData: options.getTileData,
+    getTileDataBatch: options.getTileDataBatch ?? null,
+    getTileByteSize: options.getTileByteSize ?? null,
+    maxParentTileBytes:
+      options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
+    onBufferChange: options.onBufferChange ?? null,
+    getThroughput: options.getThroughput ?? null,
+    setSchedulerWeight: options.setSchedulerWeight ?? null,
+    setMaxConcurrentRequests: options.setMaxConcurrentRequests ?? null,
+    onTileLoad: options.onTileLoad ?? (() => {}),
+    onTileUnload: options.onTileUnload ?? (() => {}),
+    onTileError: options.onTileError ?? ((err) => console.error(err)),
+  } as Required<SpatioTemporalTilesetOptions>;
+}
+
+/**
+ * The scrub-LOD axes as a comparable scalar (`'<spatial><temporal><drop>'`).
+ * {@link SpatioTemporalTileset.setOptions} compares THIS rather than the
+ * object identity so an equal-but-fresh `scrubLod={{spatial: true}}` literal
+ * — which React hands down on every render — is correctly a no-op.
+ */
+function scrubAxes(cfg: ScrubLodOptions | null | undefined): string {
+  if (!cfg) return '';
+  return `${cfg.spatial === true}|${cfg.temporal === true}|${cfg.spatialZoomDrop ?? ''}`;
+}
+
+export interface SpatioTemporalTileHeader {
   id: TileId;
   tile: Tile | null;
   isLoaded: boolean;
@@ -776,6 +875,44 @@ export interface SpatiotemporalTileHeader {
    * in cache accounting. Set by `preloadOverviewTier()`.
    */
   isPinned?: boolean;
+  /**
+   * How many times a fetch for this tile FAILED — counted at settle, never at
+   * dispatch, and never for an ABORT (supersession, a prefetch flush, a
+   * transport-level timeout). Feeds only the readiness write-off at
+   * {@link FAILED_TILE_MAX_ATTEMPTS}; the retry schedule is
+   * {@link retrySettles}'s job.
+   */
+  attempts?: number;
+  /**
+   * How many times a fetch for this tile settled without data and scheduled a
+   * revival — aborts INCLUDED. Drives the exponential backoff ladder (see
+   * {@link FAILED_TILE_RETRY_COOLDOWN_MS}) and nothing else. Aborts are exempt
+   * from the readiness budget but must still slow the retry rate down, or a
+   * transport that aborts every request (a per-request timeout against a dead
+   * origin) becomes a 2 Hz fetch loop that no cap ever stops.
+   */
+  retrySettles?: number;
+  /**
+   * Wall-clock ms before which this tile must not be dispatched again. THE
+   * dispatch gate — every enqueue and every start path consults it through
+   * `isQuarantined`. Expiring is the point: it is what lets a hole heal on its
+   * own after the network recovers.
+   */
+  retryAfter?: number;
+  /**
+   * Latched once {@link attempts} reaches {@link FAILED_TILE_MAX_ATTEMPTS},
+   * and then STICKY for the header's lifetime: the readiness APIs
+   * (`getBufferedRunway` / `getBufferedRanges` / `estimateCost`) stop counting
+   * this tile as missing, because a permanent hole that counts as missing pins
+   * the buffered runway at zero and the playback governor never lets the clock
+   * advance again.
+   *
+   * Deliberately NOT a fetch gate (it was, and that was the bug): retries keep
+   * going on the backoff ladder long after this latches, and clearing the
+   * latch for each of those retries would re-pin the runway once per backoff
+   * window — a stutter every 60 s instead of one clean write-off.
+   */
+  isFailed?: boolean;
 }
 
 /**
@@ -785,14 +922,14 @@ export interface SpatiotemporalTileHeader {
  * - LRU cache eviction
  * - Temporal + spatial tile selection
  */
-export class SpatiotemporalTileset {
-  options: Required<SpatiotemporalTilesetOptions>;
+export class SpatioTemporalTileset {
+  options: Required<SpatioTemporalTilesetOptions>;
 
   // Tile registry
-  private tiles: Map<string, SpatiotemporalTileHeader> = new Map();
+  private tiles: Map<TileKey, SpatioTemporalTileHeader> = new Map();
 
   // Active requests tracking
-  private activeRequests: Set<string> = new Set();
+  private activeRequests: Set<TileKey> = new Set();
 
   // Viewport state
   private currentViewport: {
@@ -818,43 +955,15 @@ export class SpatiotemporalTileset {
     runwayEvictions: 0,
   };
 
-  // Animation state for prefetching
-  private animationSpeed: number = 0;
+  /**
+   * Playback state + speculative-loading decisions: direction hysteresis, the
+   * pressure ladder, the run-ahead cap and the horizon/slice sizing. The
+   * tileset supplies measurements and performs all the I/O the policy's
+   * answers imply; the policy itself never fetches or schedules.
+   */
+  private readonly prefetch = new PrefetchPolicy();
+
   private lastUpdateTime: number = 0;
-  private isAnimating: boolean = false;
-
-  /**
-   * Interactive/motion bit (scrub-LOD P0): true while the user is actively
-   * scrubbing the timeline (the PlaybackGovernor broadcasts its drag bracket
-   * here via {@link setInteractive}). Stored state only unless a
-   * {@link ScrubLodOptions} axis is enabled.
-   */
-  private interactive: boolean = false;
-
-  // Prefetch direction hysteresis. `prefetchDirection` is the committed
-  // direction (+1 forward / -1 backward); `pendingFlipCount` counts how many
-  // consecutive frames pointed the opposite way.
-  private prefetchDirection: 1 | -1 = 1;
-  private pendingFlipCount: number = 0;
-  /** End of the last prefetched span in sim-time (throttle runway anchor). */
-  private lastPrefetchEndTime?: number;
-
-  /**
-   * Pressure-adaptive prefetch horizon scale ∈ [{@link PRESSURE_SCALE_MIN}, 1].
-   * Decayed by tier-C/D (runway) evictions, recovered by quiet prefetch plans
-   * — see the PRESSURE_* constants for the full self-regulation loop.
-   */
-  private prefetchPressureScale = 1;
-  /** Wall time of the last recovery step (rate-limits the ladder's rebound).
-   * -Infinity so the first eligible step is never suppressed at epoch 0. */
-  private lastPressureRecoveryAt = -Infinity;
-  /** Wall time of the last tier-C/D (runway) eviction (0 = never). */
-  private lastRunwayEvictionAt = 0;
-  /**
-   * Governor-imposed forward run-ahead cap in sim-ms, `null` = uncapped.
-   * See {@link setPrefetchRunAheadLimit}.
-   */
-  private prefetchRunAheadLimitMs: number | null = null;
 
   // Running byte total of decoded tiles held in `this.tiles`. Maintained
   // incrementally so eviction never re-sums every frame.
@@ -881,14 +990,6 @@ export class SpatiotemporalTileset {
    * IDENTICAL params; it cannot order two concurrent different-param passes.
    */
   private selectGeneration = 0;
-  /**
-   * Monotonic stamp for the async `prefetchFutureTiles` pass, mirroring
-   * {@link selectGeneration}: a pass captures it before its awaited
-   * directory queries and bails afterwards if a newer pass — or a
-   * `flushPrefetch()` (seek, spatial move, direction flip) — superseded it,
-   * so a stale plan can't enqueue tiles for the wrong playhead/direction.
-   */
-  private prefetchGeneration = 0;
 
   // Separate queues for priority management
   private priorityQueue: TileId[] = []; // High priority - current time tiles
@@ -903,12 +1004,7 @@ export class SpatiotemporalTileset {
    */
   private priorityQueueDirty = false;
 
-  // Prefetch wall-clock debounce. Without this, every tick of the time
-  // controller that crosses the tileset update threshold triggers a full
-  // prefetchFutureTiles() pass — building thousands of getAvailableTiles
-  // queries each time. We coalesce to one pass per ~250ms wall-clock.
-  private static readonly PREFETCH_DEBOUNCE_MS = 250;
-  private lastPrefetchAt = 0;
+  /** Pending deferred prefetch pass; the policy decides when it may fire. */
   private prefetchPendingTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Buffer model state (WS-A) ──────────────────────────────────────────
@@ -946,7 +1042,7 @@ export class SpatiotemporalTileset {
    */
   private inflightPrefetch = new Set<{
     controller: AbortController;
-    keys: string[];
+    keys: TileKey[];
   }>();
 
   /**
@@ -959,7 +1055,7 @@ export class SpatiotemporalTileset {
    */
   private inflightPriority = new Set<{
     controller: AbortController;
-    keys: string[];
+    keys: TileKey[];
   }>();
 
   // ── Overview (storyboard) tier state (WS-C4) ─────────────────────────────
@@ -975,63 +1071,233 @@ export class SpatiotemporalTileset {
   /** One-shot warn latch for "pinned overview alone exceeds cache limits". */
   private warnedPinnedOverCacheLimit = false;
 
+  /**
+   * One-shot warn latch for "update() was handed a non-finite viewport box".
+   * One-shot because the producing bug is per-camera-path, not per-frame: a
+   * renderer that emits one NaN box emits sixty a second.
+   */
+  private warnedRejectedViewport = false;
+
+  /**
+   * Needed tiles whose fetch settled without data and are waiting out their
+   * per-header backoff (`retryAfter`) before being re-enqueued. Drained by a
+   * SINGLE shared timer ({@link retryTimer}) — one timer per failure would be
+   * one timer per hole in a bad network minute.
+   */
+  private retryKeys: Set<TileKey> = new Set();
+
+  /** The single pending failed-tile retry timer, or null when none is due. */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Wall-clock time {@link retryTimer} is set to fire at. Held separately so
+   * `scheduleRetrySweep` can tell whether the pending timer already fires
+   * early enough for a newly-added key — re-arming on every settle would
+   * either push the sweep later than the earliest due tile (holes heal late)
+   * or churn a timer per settle during a bad network minute.
+   */
+  private retryDueAt: number | null = null;
+
   // Currently needed tile keys - computed during selectAndLoadTiles()
   // This is the authoritative set of tiles that should be visible for current viewport/time
   // getVisibleTiles() just returns loaded tiles from this set - O(k) not O(n)
-  private neededTileKeys: Set<string> = new Set();
+  private neededTileKeys: Set<TileKey> = new Set();
 
   // Version tracking for cache invalidation
   private neededTilesVersion: number = 0;
 
-  constructor(options: SpatiotemporalTilesetOptions) {
-    this.options = {
-      // Concurrency budget for the single-tile / prefetch paths. The COALESCED
-      // priority path no longer caps its batch by this (it sends the whole
-      // viewport×window working set in one globally-coalesced request and lets
-      // the archive bound in-flight HTTP requests internally), so this is now
-      // only the per-tile + prefetch fan-out ceiling. 24 keeps us under an
-      // object store's per-connection stream cap (R2 ~75) with HTTP/2/3
-      // multiplexing.
-      maxRequests: options.maxRequests ?? 24,
-      debounceTime: options.debounceTime ?? 0,
-      maxCacheSize: options.maxCacheSize ?? 2000,
-      maxCacheByteSize: options.maxCacheByteSize ?? 2 * 1024 * 1024 * 1024,
-      minZoom: options.minZoom ?? 0,
-      maxZoom: options.maxZoom ?? 14,
-      temporalBucketMs: options.temporalBucketMs ?? 3600 * 1000,
-      refinementStrategy: options.refinementStrategy ?? 'best-available',
-      lodMode: options.lodMode ?? 'parent-fallback',
-      enablePrefetch: options.enablePrefetch ?? true,
-      // Defaults sized for a few real-time seconds of buffer. See the
-      // matching tuning notes in SpatioTemporalLayer.defaultProps.
-      prefetchAhead: options.prefetchAhead ?? 30000,
-      prefetchSteps: options.prefetchSteps ?? 4,
-      tier: options.tier ?? 'auto',
-      summaryZoomRange: options.summaryZoomRange ?? null,
-      // Scrub-LOD (motion tier): all axes default OFF — the kill switch.
-      scrubLod: options.scrubLod ?? null,
-      temporalLodLevels: options.temporalLodLevels ?? null,
-      getAvailableTemporalLodTiles:
-        options.getAvailableTemporalLodTiles ?? null,
-      getAvailableTiles: options.getAvailableTiles,
-      getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
-      getTileData: options.getTileData,
-      getTileDataBatch: options.getTileDataBatch ?? null,
-      getTileByteSize: options.getTileByteSize ?? null,
-      maxParentTileBytes:
-        options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
-      onBufferChange: options.onBufferChange ?? null,
-      getThroughput: options.getThroughput ?? null,
-      setSchedulerWeight: options.setSchedulerWeight ?? null,
-      onTileLoad: options.onTileLoad ?? (() => {}),
-      onTileUnload: options.onTileUnload ?? (() => {}),
-      onTileError: options.onTileError ?? ((err) => console.error(err)),
-    } as Required<SpatiotemporalTilesetOptions>;
+  constructor(options: SpatioTemporalTilesetOptions) {
+    this.options = normalizeTilesetOptions(options);
 
     // A wired onBufferChange implies the caller wants live buffer reports,
     // so start maintaining the coverage index from the first update().
     if (options.onBufferChange) {
       this.bufferTrackingEnabled = true;
+    }
+  }
+
+  /**
+   * Apply an option change AFTER construction — the STT analog of upstream
+   * `Tileset2D.setOptions`, which `TileLayer.updateState` calls on every
+   * `propsChanged` pass. Without it every option here is frozen at build time
+   * and a post-mount `tier` toggle or `maxCacheSize` cut silently does
+   * nothing (the consuming layer had to warn instead).
+   *
+   * CONTRACT — a key PRESENT in `options` lands in exactly the state the
+   * constructor would have given it, including `undefined`, which resets that
+   * key to its default (`{scrubLod: undefined}` is how you switch the motion
+   * tier back off). A key ABSENT from `options` is untouched. `this.options`
+   * is mutated in place, so any reference a consumer captured stays live.
+   *
+   * Changing an option is not enough on its own — several of them feed
+   * DERIVED state that would otherwise go stale, so this re-derives:
+   *
+   * - `tier` / `summaryZoomRange` / `getAvailableSummaryTiles` decide which
+   *   directory a zoom is enumerated from, so the coverage index (built from
+   *   the same tier-dispatched call) is dropped and selection re-runs.
+   * - `lodMode` / `refinementStrategy` / `minZoom` / `maxZoom` change WHICH
+   *   zoom levels are selected and how parents are composited, so selection
+   *   re-runs, the prefetch plan is re-anchored, and the render epoch bumps
+   *   (`getVisibleTiles` output changes even when the needed set doesn't).
+   * - `maxCacheSize` / `maxCacheByteSize` evict IMMEDIATELY down to the new
+   *   bound through the normal tiered policy, not at the next natural pass.
+   * - `maxRequests` re-dispatches the queues and, when
+   *   {@link SpatioTemporalTilesetOptions.setMaxConcurrentRequests} is wired,
+   *   reaches the archive's range coalescer (its own in-flight cap).
+   * - `debounceTime` re-arms an already-pending debounce at the new delay.
+   * - `enablePrefetch` / `prefetchAhead` / `prefetchSteps` re-plan the runway.
+   *
+   * TILE-CACHE DECISION — a `tier` or `lodMode` change does NOT invalidate
+   * resident tiles. Both are SELECTION policies: they change which tile
+   * addresses the viewport asks for, never what the bytes at a given address
+   * are. The raw and summary tiers share one directory entry per
+   * `(z, x, y, t)` — `getSummaryTileIdsInBounds` literally delegates to
+   * `getTileIdsInBounds` — and both LOD modes address the ordinary pyramid,
+   * so a resident tile is exactly as valid after the change as before, and
+   * dropping the cache would blank the map for a full round-trip to re-fetch
+   * identical bytes. (Contrast the temporal-LOD tier, whose payloads DO
+   * differ at a shared address — which is why `tileKey` stamps it with
+   * `@bucketMs`. A custom `getAvailableSummaryTiles` returning different
+   * payloads at a raw tile's address must stamp a discriminator the same
+   * way; without one it would alias, here and in the byte caches below.)
+   * Consumers that really are swapping datasets call {@link clear}.
+   */
+  setOptions(options: Partial<SpatioTemporalTilesetOptions>): void {
+    const prev = { ...this.options };
+    // Re-normalize the MERGED bag so a present-but-undefined key falls back
+    // to the constructor's default and an absent one keeps its current
+    // (already-normalized, hence idempotent under `??`) value.
+    const next = normalizeTilesetOptions({
+      ...this.options,
+      ...options,
+    } as SpatioTemporalTilesetOptions);
+    // Mutate in place: `options` is a public field consumers may hold.
+    Object.assign(this.options, next);
+
+    const changed = (key: keyof SpatioTemporalTilesetOptions): boolean =>
+      !Object.is(prev[key], this.options[key]);
+
+    // Which tiles the viewport asks for.
+    const selectionChanged =
+      changed('tier') ||
+      changed('summaryZoomRange') ||
+      changed('getAvailableSummaryTiles') ||
+      changed('getAvailableTemporalLodTiles') ||
+      changed('temporalLodLevels') ||
+      changed('lodMode') ||
+      changed('refinementStrategy') ||
+      changed('minZoom') ||
+      changed('maxZoom') ||
+      changed('getAvailableTiles') ||
+      changed('maxParentTileBytes') ||
+      changed('getTileByteSize') ||
+      // scrubLod only bites while interactive, but the axes are compared
+      // structurally so an equal-but-fresh object literal is a no-op.
+      scrubAxes(prev.scrubLod) !== scrubAxes(this.options.scrubLod);
+
+    // What `getVisibleTiles` composites from an UNCHANGED needed set.
+    const compositionChanged =
+      changed('lodMode') || changed('refinementStrategy');
+
+    // The tier the coverage index (and every readiness API on top of it) was
+    // enumerated from. `lodMode`/`refinementStrategy` don't qualify: the
+    // index keys off `getZoomLevelsToLoad(zoom)[0]`, which is the clamped
+    // display zoom under every strategy.
+    const coverageStale =
+      changed('tier') ||
+      changed('summaryZoomRange') ||
+      changed('getAvailableSummaryTiles') ||
+      changed('getAvailableTiles') ||
+      changed('temporalBucketMs');
+
+    const prefetchStale =
+      changed('prefetchAhead') ||
+      changed('prefetchSteps') ||
+      changed('temporalBucketMs') ||
+      selectionChanged;
+
+    if (coverageStale) {
+      // Drop the index rather than trusting a slice enumerated from the old
+      // tier; the next selection pass rebuilds it (signature check is free).
+      this.coverageIndex = null;
+      this.coverageBuildSignature = null;
+    }
+
+    // A newly-wired onBufferChange means the caller now wants live buffer
+    // reports — same implication the constructor draws.
+    if (this.options.onBufferChange && !prev.onBufferChange) {
+      this.ensureBufferTracking();
+    }
+
+    // Cache limits: evict down to the NEW bound now, through the existing
+    // playhead-relative tiered policy (never a special-cased LRU), so a cut
+    // is honored immediately instead of at the next natural eviction. Only
+    // when we are actually over — calling it while under limits would run
+    // the wall-clock grace sweep, which is a selection-pass concern.
+    if (changed('maxCacheSize') || changed('maxCacheByteSize')) {
+      if (this.options.maxCacheSize > prev.maxCacheSize) {
+        // Headroom returned: let the pinned-overview warning fire again.
+        this.warnedPinnedOverCacheLimit = false;
+      }
+      if (
+        this.loadedTileCount > this.options.maxCacheSize ||
+        this.currentCacheBytes > this.options.maxCacheByteSize
+      ) {
+        this.evictUnusedTiles(this.neededTileKeys);
+      }
+    }
+
+    // Concurrency: forward to the loader's own in-flight cap (the archive's
+    // range coalescer) when wired, then re-dispatch — a RAISED budget should
+    // start using its new slots now, not at the next tile arrival.
+    if (changed('maxRequests')) {
+      this.options.setMaxConcurrentRequests?.(this.options.maxRequests);
+      void this.processRequestQueue();
+    }
+
+    // An already-armed debounce is still counting down at the OLD delay;
+    // re-arm it so the new value governs this pending selection too.
+    if (changed('debounceTime') && this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+      if (this.options.debounceTime === 0) {
+        void this.selectAndLoadTiles();
+      } else {
+        this.debounceTimer = setTimeout(() => {
+          void this.selectAndLoadTiles();
+        }, this.options.debounceTime);
+      }
+    }
+
+    if (changed('enablePrefetch') && !this.options.enablePrefetch) {
+      // Turned off: drop the queued + in-flight lookahead immediately
+      // (flushPrefetch also re-anchors the runway and clears the selection
+      // fast-path, so the re-plan below is a no-op in this direction).
+      this.flushPrefetch();
+    } else if (prefetchStale || changed('enablePrefetch')) {
+      // Re-plan WITHOUT flushing: tiles already fetched stay resident and
+      // in-flight lookahead runs to completion — the same stance
+      // `setPrefetchRunAheadLimit` takes on a lowered horizon. Clearing the
+      // anchor (and the wall-clock coalescing window, which an explicit
+      // option change should not have to wait out) makes the next pass
+      // re-plan against the new horizon immediately; bumping the generation
+      // drops any plan still awaiting its directory slice under the old one.
+      this.prefetch.invalidatePlan();
+      this.prefetch.clearDebounce();
+      if (this.options.enablePrefetch && this.currentViewport) {
+        this.schedulePrefetch();
+      }
+    }
+
+    if (compositionChanged) {
+      // getVisibleTiles() composites differently from the SAME needed set, so
+      // wake the consumer's render path even if selection settles unchanged.
+      this.frameNumber++;
+    }
+
+    if (selectionChanged) {
+      this.lastSelectKey = ''; // defeat the identical-params fast path
+      void this.selectAndLoadTiles();
     }
   }
 
@@ -1075,43 +1341,24 @@ export class SpatiotemporalTileset {
   }
 
   /**
-   * Update the committed prefetch direction with hysteresis.
-   *
-   * A single frame whose time delta points opposite to the committed direction
-   * does NOT flip prefetch — the opposite sign must persist for
-   * {@link DIRECTION_FLIP_THRESHOLD} consecutive frames. This stops a stray
-   * backward scrub frame from inverting (and invalidating) the prefetch queue.
+   * Feed one observed sim-time delta to the policy's direction hysteresis and
+   * act on a flip: the prefetched span (queued AND in flight) is now behind
+   * the play head — dead weight the in-flight supersession exemption would
+   * otherwise let run to completion. Flushing it also resets the runway anchor
+   * so the next prefetch re-plans immediately in the new direction.
    */
   private updatePrefetchDirection(simTimeDelta: number): void {
-    if (simTimeDelta === 0) return; // No movement: keep current direction.
-
-    const observed: 1 | -1 = simTimeDelta > 0 ? 1 : -1;
-    if (observed === this.prefetchDirection) {
-      this.pendingFlipCount = 0;
-      return;
-    }
-
-    this.pendingFlipCount++;
-    if (this.pendingFlipCount >= DIRECTION_FLIP_THRESHOLD) {
-      this.prefetchDirection = observed;
-      this.pendingFlipCount = 0;
-      // Direction reversed: the prefetched span (queued AND in flight) is now
-      // behind the play head — dead weight the in-flight supersession
-      // exemption would otherwise let run to completion. Flush it; that also
-      // resets the runway anchor so the next prefetch re-plans immediately
-      // in the new direction.
-      this.flushPrefetch();
-    }
+    if (this.prefetch.observeTimeDelta(simTimeDelta)) this.flushPrefetch();
   }
 
   /** Current committed prefetch direction (+1 forward, -1 backward). */
   getPrefetchDirection(): 1 | -1 {
-    return this.prefetchDirection;
+    return this.prefetch.direction;
   }
 
   /** Most recent estimated animation speed (sim-ms per real-ms). */
   getAnimationSpeed(): number {
-    return this.animationSpeed;
+    return this.prefetch.animationSpeed;
   }
 
   /**
@@ -1125,34 +1372,20 @@ export class SpatiotemporalTileset {
         speed,
         enablePrefetch: this.options.enablePrefetch,
       });
-    const wasAnimating = this.isAnimating;
-    this.isAnimating = isAnimating;
-    this.animationSpeed = speed;
+    const { wasAnimating, directionFlipped } = this.prefetch.setAnimationState(
+      isAnimating,
+      speed,
+    );
 
-    // A signed speed is an AUTHORITATIVE direction signal (e.g. a ping-pong
-    // controller reversing at a boundary), so commit it immediately and bypass
-    // the observed-delta hysteresis in updatePrefetchDirection() — that
-    // hysteresis only exists to ignore stray single-frame scrubs, not a known
-    // reversal. Without this, prefetch keeps aiming the old way for a few
-    // frames after the reverse and the play head loads into un-prefetched
-    // buckets reactively → a flash. Flush the old-direction runway (queued
-    // and in flight — it's behind the head now) so the next prefetch
-    // re-plans in the new direction at once.
-    if (speed !== 0) {
-      const dir: 1 | -1 = speed > 0 ? 1 : -1;
-      if (dir !== this.prefetchDirection) {
-        this.prefetchDirection = dir;
-        this.pendingFlipCount = 0;
-        this.flushPrefetch();
-      }
-    }
+    // A signed speed commits a new direction outright (see the policy). Flush
+    // the old-direction runway — queued and in flight, all of it behind the
+    // head now — so the next prefetch re-plans the new direction at once.
+    if (directionFlipped) this.flushPrefetch();
 
     if (this.currentViewport) {
       if (isAnimating && this.options.enablePrefetch) {
-        // When animation starts, schedule prefetch (debounced). This used to
-        // call prefetchFutureTiles() directly, which combined with the
-        // selectAndLoadTiles() prefetch above produced two back-to-back fans
-        // of thousands of queries.
+        // Debounced, not direct: a direct pass here would combine with the
+        // selectAndLoadTiles() prefetch into two back-to-back query fans.
         this.schedulePrefetch();
       } else if (!isAnimating && wasAnimating) {
         // When animation pauses, ensure tiles for current time are loaded
@@ -1167,7 +1400,7 @@ export class SpatiotemporalTileset {
   }
 
   /**
-   * Set the interactive/motion bit (scrub-LOD P0). The PlaybackGovernor
+   * Set the interactive/motion bit that drives scrub-LOD. The PlaybackGovernor
    * broadcasts `true` on beginScrub and `false` on endScrub through the
    * optional `BufferSource.setInteractive` hook, exactly like its
    * `setAnimationState` keep-alive.
@@ -1179,11 +1412,10 @@ export class SpatiotemporalTileset {
    * on `true` the next pass serves the degraded motion tier; on `false` the
    * fine settle tier is restored without waiting for the next clock tick
    * (release must not leave a coarse selection as the priority working set
-   * while the post-seek gate fills — the G7 contract).
+   * while the post-seek gate fills).
    */
   setInteractive(interactive: boolean): void {
-    if (this.interactive === interactive) return;
-    this.interactive = interactive;
+    if (!this.prefetch.setInteractive(interactive)) return;
     if (!this.scrubLodEnabled()) return; // kill switch: bit only, zero behavior change
     this.lastSelectKey = '';
     this.selectAndLoadTiles();
@@ -1191,7 +1423,7 @@ export class SpatiotemporalTileset {
 
   /** Current interactive/motion bit (see {@link setInteractive}). */
   get isInteractive(): boolean {
-    return this.interactive;
+    return this.prefetch.isInteractive;
   }
 
   /**
@@ -1202,17 +1434,13 @@ export class SpatiotemporalTileset {
    * dead weight; the governor caps each leader near the neediest source's
    * frontier so the shared bandwidth budget flows to the laggard.
    *
-   * The cap is enforced with an internal safety floor of
-   * `max(bucketMs, timeWindow, |animationSpeed| × PREFETCH_CAP_FLOOR_REAL_MS)`
-   * so it can never starve this tileset's own speed-scaled gates. Lowering
-   * the cap below the already-planned runway flushes NOTHING — fetched tiles
-   * stay resident, the cap only stops further extension. `null` clears.
+   * The policy enforces the cap with an internal safety floor so it can never
+   * starve this tileset's own speed-scaled gates. Lowering the cap below the
+   * already-planned runway flushes NOTHING — fetched tiles stay resident, the
+   * cap only stops further extension. `null` clears.
    */
   setPrefetchRunAheadLimit(simMs: number | null): void {
-    this.prefetchRunAheadLimitMs =
-      typeof simMs === 'number' && Number.isFinite(simMs) && simMs > 0
-        ? simMs
-        : null;
+    this.prefetch.setRunAheadLimit(simMs);
   }
 
   /**
@@ -1220,7 +1448,7 @@ export class SpatiotemporalTileset {
    * scheduler (optional `BufferSource` method — the governor's bandwidth
    * re-balancing hook, effective immediately for queued work). Forwards to
    * the wired loader (normally `STTArchive.setSchedulerWeight`); no-op when
-   * the {@link SpatiotemporalTilesetOptions.setSchedulerWeight} callback
+   * the {@link SpatioTemporalTilesetOptions.setSchedulerWeight} callback
    * isn't wired.
    */
   setBandwidthWeight(weight: number): void {
@@ -1235,14 +1463,14 @@ export class SpatiotemporalTileset {
 
   /**
    * The zoom SELECTION should target: the viewport zoom, minus the scrub-LOD
-   * spatial drop while interactive (plan P1, §5.2). Clamped so the drop
+   * spatial drop while interactive. Clamped so the drop
    * never exceeds the parent-fallback band (those coarse tiles are what the
    * fallback path already fetches — often zero new fetches) nor undershoots
    * `minZoom`. Selection-only: the coverage index, buffer/readiness APIs,
    * prefetch planner, and overview tier all keep using the undegraded zoom.
    */
   private effectiveSelectionZoom(zoom: number): number {
-    if (!this.interactive) return zoom;
+    if (!this.prefetch.isInteractive) return zoom;
     const cfg = this.options.scrubLod;
     if (!cfg?.spatial) return zoom;
     const drop = Math.max(
@@ -1256,8 +1484,8 @@ export class SpatiotemporalTileset {
   }
 
   /**
-   * The temporal-LOD bucket selection should request while interactive
-   * (plan P2), or `null` for the base tier. Non-null only when: the drag is
+   * The temporal-LOD bucket selection should request while interactive,
+   * or `null` for the base tier. Non-null only when: the drag is
    * held, the temporal axis is enabled, the archive declares a pyramid AND
    * the LOD enumeration callback is wired (capability detection — archives
    * built without `--temporal-lod` no-op here), and the picked level is
@@ -1266,7 +1494,7 @@ export class SpatiotemporalTileset {
    * `maxZoomLevel` covers the requested (already-degraded) zoom.
    */
   private scrubTemporalLodBucketMs(selectionZoom: number): number | null {
-    if (!this.interactive) return null;
+    if (!this.prefetch.isInteractive) return null;
     const cfg = this.options.scrubLod;
     if (!cfg?.temporal) return null;
     const levels = this.options.temporalLodLevels;
@@ -1307,7 +1535,7 @@ export class SpatiotemporalTileset {
       );
       // `STTArchive.getTileIdsInBoundsForTemporalLod` stamps `bucketMs`
       // itself; normalize for custom callbacks so a LOD id can never alias
-      // a base tile's keys (tileIdToKey folds the bucket in).
+      // a base tile's keys (tileKey folds the bucket in).
       return ids.map((id) =>
         id.bucketMs === undefined ? { ...id, bucketMs: scrubBucketMs } : id,
       );
@@ -1316,26 +1544,25 @@ export class SpatiotemporalTileset {
   }
 
   /**
-   * Run prefetchFutureTiles(), but at most once per PREFETCH_DEBOUNCE_MS of
-   * wall-clock time. Coalesces the per-tick "selectAndLoadTiles → prefetch"
-   * storm during fast playback into one prefetch pass per ~quarter-second.
+   * Run prefetchFutureTiles() as soon as the policy's wall-clock pacing allows,
+   * deferring behind a single timer otherwise. Coalesces the per-tick
+   * "selectAndLoadTiles → prefetch" storm during fast playback into one pass
+   * per debounce window.
    */
   private schedulePrefetch(): void {
     if (this.prefetchPendingTimer !== null) {
       // Already deferred; the existing timer will run a fresh prefetch.
       return;
     }
-    const now = Date.now();
-    const elapsed = now - this.lastPrefetchAt;
-    if (elapsed >= SpatiotemporalTileset.PREFETCH_DEBOUNCE_MS) {
-      this.lastPrefetchAt = now;
+    const wait = this.prefetch.msUntilNextRun();
+    if (wait === 0) {
+      this.prefetch.markRunStarted();
       this.prefetchFutureTiles();
       return;
     }
-    const wait = SpatiotemporalTileset.PREFETCH_DEBOUNCE_MS - elapsed;
     this.prefetchPendingTimer = setTimeout(() => {
       this.prefetchPendingTimer = null;
-      this.lastPrefetchAt = Date.now();
+      this.prefetch.markRunStarted();
       this.prefetchFutureTiles();
     }, wait);
   }
@@ -1343,6 +1570,22 @@ export class SpatiotemporalTileset {
   /**
    * Update tileset with new viewport
    * Returns new frame number if tiles changed
+   *
+   * DEFENCE IN DEPTH (docs/roadmap/tile-loading-3d-2026-07.md §4.3): the box
+   * arriving here is camera-derived, and every backend has at least one camera
+   * for which its derivation produces a DEGENERATE box — deck's two-corner AABB
+   * inverts past `bearing > atan2(h, w)`, an above-horizon unproject
+   * (`pitch + fovy/2 > 90°`) returns a point behind the camera, three's globe
+   * solve can collapse to a zero-height line, cesium hands back
+   * `Rectangle.MAX_VALUE`. Fixing each producer is necessary but not
+   * sufficient: core must survive a bad box from ANY producer, including a
+   * host application driving `update()` directly. So the box is repaired here
+   * as well, by the SAME primitive the backends use, and a box that carries no
+   * usable information at all is REJECTED — we keep the previous viewport
+   * rather than select against garbage. An inverted latitude box would
+   * otherwise make `boundsToTiles`' row loop never execute (zero tiles) while
+   * `getBufferedRunway` reports `complete: true` and `isLoaded` reports
+   * settled: a blank map with every readiness signal saying it is fine.
    */
   update(
     viewport: {
@@ -1353,8 +1596,36 @@ export class SpatiotemporalTileset {
     },
     skipDebounce: boolean = false,
   ): number {
+    const normalized = normalizeViewportBounds(viewport.bounds);
+    if (!normalized) {
+      // Non-finite somewhere in the box. There is no repair that preserves any
+      // information, and the previous viewport is strictly better than a
+      // guess: hold it, select nothing new, and leave what is on screen alone.
+      if (!this.warnedRejectedViewport) {
+        this.warnedRejectedViewport = true;
+        console.warn(
+          '[Tileset] update() received a non-finite viewport box ' +
+            `(${viewport.bounds.minLon}, ${viewport.bounds.minLat}, ` +
+            `${viewport.bounds.maxLon}, ${viewport.bounds.maxLat}); keeping the ` +
+            'previous viewport. This is a camera→bounds derivation bug in the ' +
+            'calling renderer, not a data problem.',
+        );
+      }
+      return this.frameNumber;
+    }
+
     const previousTime = this.currentViewport?.time;
-    this.currentViewport = viewport;
+    // The REPAIRED box, in a viewport object of our own. `normalizeViewportBounds`
+    // returns a fresh bounds object, which also ends the aliasing the old
+    // `currentViewport = viewport` assignment carried: the deck chassis reuses
+    // one cached bounds object across frames, so a caller that mutates it in
+    // place used to change what the tileset believed the last frame was.
+    this.currentViewport = {
+      bounds: normalized.bounds,
+      zoom: viewport.zoom,
+      time: viewport.time,
+      timeWindow: viewport.timeWindow,
+    };
 
     // Track animation speed based on time changes
     const now = Date.now();
@@ -1372,7 +1643,7 @@ export class SpatiotemporalTileset {
       // balloon the next prefetch span), so the seek branch skips both.
       const seekThreshold = Math.max(
         viewport.timeWindow,
-        Math.abs(this.animationSpeed) * SEEK_DETECTION_REAL_MS,
+        Math.abs(this.prefetch.animationSpeed) * SEEK_DETECTION_REAL_MS,
       );
       if (Math.abs(simTimeDelta) > seekThreshold) {
         this.flushPrefetch();
@@ -1388,7 +1659,7 @@ export class SpatiotemporalTileset {
           // evidence of zero speed — overwriting the signalled speed here would
           // collapse the prefetch span exactly when the gate needs it most.
           if (realTimeDelta > 0 && realTimeDelta < 1000 && simTimeDelta !== 0) {
-            this.animationSpeed = simTimeDelta / realTimeDelta;
+            this.prefetch.observeSpeed(simTimeDelta / realTimeDelta);
           }
         }
       }
@@ -1495,7 +1766,7 @@ export class SpatiotemporalTileset {
    * bounds to measure drift, not a quantized snapshot).
    */
   private quantizedSpatialKey(bounds: BoundingBox, zoom: number): string {
-    const lonSpan = bounds.maxLon - bounds.minLon || 1e-9;
+    const lonSpan = lonSpanOf(bounds) || 1e-9;
     const latSpan = bounds.maxLat - bounds.minLat || 1e-9;
     const qLon = lonSpan * SPATIAL_FLUSH_TOLERANCE;
     const qLat = latSpan * SPATIAL_FLUSH_TOLERANCE;
@@ -1521,10 +1792,10 @@ export class SpatiotemporalTileset {
 
     // Scrub-LOD motion tier (docs/roadmap/playback-and-loading.md): while the
     // interactive bit is held AND an axis is enabled, SELECTION degrades —
-    // a coarser requested zoom (P1) and/or the temporal-LOD pyramid tier
-    // (P2). Both resolve to the pass-through values when off, and both are
-    // selection-only: coverage/runway math, prefetch, and the overview tier
-    // stay on the fine settle tier (the G7 preview-only contract).
+    // a coarser requested zoom (spatial axis) and/or the temporal-LOD pyramid
+    // tier (temporal axis). Both resolve to the pass-through values when off,
+    // and both are selection-only: coverage/runway math, prefetch, and the
+    // overview tier stay on the fine settle tier (preview-only).
     const selectionZoom = this.effectiveSelectionZoom(zoom);
     const scrubBucketMs = this.scrubTemporalLodBucketMs(selectionZoom);
 
@@ -1557,25 +1828,22 @@ export class SpatiotemporalTileset {
     const prev = this.lastSpatialBounds;
     let spatialFlush = false;
     if (prev !== undefined) {
-      const lonSpan = Math.max(
-        bounds.maxLon - bounds.minLon,
-        prev.maxLon - prev.minLon,
-        1e-9,
-      );
+      // Seam-crossing-aware span/centre (see lonSpanOf / lonCenterOf): a
+      // `minLon > maxLon` viewport otherwise reports a NEGATIVE span, which
+      // zeroes the tolerance and flushes the prefetch runway every pass.
+      const boundsLonSpan = lonSpanOf(bounds);
+      const prevLonSpan = lonSpanOf(prev);
+      const lonSpan = Math.max(boundsLonSpan, prevLonSpan, 1e-9);
       const latSpan = Math.max(
         bounds.maxLat - bounds.minLat,
         prev.maxLat - prev.minLat,
         1e-9,
       );
-      const dCenterLon =
-        Math.abs(bounds.minLon + bounds.maxLon - (prev.minLon + prev.maxLon)) /
-        2;
+      const dCenterLon = Math.abs(lonCenterOf(bounds) - lonCenterOf(prev));
       const dCenterLat =
         Math.abs(bounds.minLat + bounds.maxLat - (prev.minLat + prev.maxLat)) /
         2;
-      const dSpanLon = Math.abs(
-        bounds.maxLon - bounds.minLon - (prev.maxLon - prev.minLon),
-      );
+      const dSpanLon = Math.abs(boundsLonSpan - prevLonSpan);
       const dSpanLat = Math.abs(
         bounds.maxLat - bounds.minLat - (prev.maxLat - prev.minLat),
       );
@@ -1587,7 +1855,10 @@ export class SpatiotemporalTileset {
         dSpanLat > latSpan * SPATIAL_FLUSH_TOLERANCE;
     }
     if (spatialFlush) {
-      this.flushPrefetch();
+      // Spatial flush only — a slice the playhead has already entered is kept
+      // (see flushPrefetch's `preserveNeeded`). Seeks and direction flips
+      // still flush everything.
+      this.flushPrefetch(true);
     }
     // Copy (not alias) — the layer reuses its cached bounds object across frames.
     this.lastSpatialBounds = {
@@ -1614,7 +1885,7 @@ export class SpatiotemporalTileset {
 
     // Mark tiles as used (for LRU)
     const now = Date.now();
-    const neededTileKeys = new Set<string>();
+    const neededTileKeys = new Set<TileKey>();
 
     // Generation guard: this method is async (the getAvailableTiles slice can
     // be a real network round-trip for paged directories), so two passes for
@@ -1668,19 +1939,18 @@ export class SpatiotemporalTileset {
     if (generation !== this.selectGeneration) return;
 
     // Queue-membership snapshots so the promote-from-prefetch branch below is
-    // O(N + Q) instead of O(N·Q): the old code did a `.some()` over the
-    // priority queue AND a `.findIndex()` over the prefetch queue PER candidate
-    // (and the playhead sweeping into a band of prefetched buckets promotes many
-    // tiles at once). We test membership against these Sets and batch the
-    // prefetch removals into ONE filter pass after the loop — mirroring the
-    // `queuedKeys` pattern prefetchFutureTiles already uses.
-    const priorityKeys = new Set<string>();
-    for (const qid of this.priorityQueue)
-      priorityKeys.add(this.tileIdToKey(qid));
-    const prefetchKeys = new Set<string>();
-    for (const qid of this.prefetchQueue)
-      prefetchKeys.add(this.tileIdToKey(qid));
-    const promotedFromPrefetch = new Set<string>();
+    // O(N + Q), not O(N·Q). Rescanning the queues per candidate — a `.some()`
+    // over the priority queue plus a `.findIndex()` over the prefetch queue —
+    // goes quadratic exactly when it hurts: the playhead sweeping into a band
+    // of prefetched buckets promotes many tiles at once. Membership is tested
+    // against these Sets and the prefetch removals batched into ONE filter
+    // pass after the loop, mirroring the `queuedKeys` pattern in
+    // prefetchFutureTiles.
+    const priorityKeys = new Set<TileKey>();
+    for (const qid of this.priorityQueue) priorityKeys.add(tileKey(qid));
+    const prefetchKeys = new Set<TileKey>();
+    for (const qid of this.prefetchQueue) prefetchKeys.add(tileKey(qid));
+    const promotedFromPrefetch = new Set<TileKey>();
     let enqueuedPriority = false;
 
     // Process results - primary zoom first for proper queue ordering
@@ -1693,7 +1963,7 @@ export class SpatiotemporalTileset {
         // nothing to keep in the needed/visible set — excluding it would blank
         // the very fallback it exists to provide.
         if (this.isOversizedParent(tileId, primaryZoom)) {
-          const key = this.tileIdToKey(tileId);
+          const key = tileKey(tileId);
           const loadedHeader = this.tiles.get(key);
           if (loadedHeader?.isLoaded) {
             neededTileKeys.add(key);
@@ -1703,7 +1973,7 @@ export class SpatiotemporalTileset {
           continue;
         }
 
-        const key = this.tileIdToKey(tileId);
+        const key = tileKey(tileId);
         neededTileKeys.add(key);
 
         let header = this.tiles.get(key);
@@ -1753,7 +2023,18 @@ export class SpatiotemporalTileset {
             // Promote to priority unless it is already loading or already
             // queued at priority. Membership is tested against the Sets built
             // before the loop (O(1)) rather than scanning the queues per tile.
-            if (!header.isLoading && !priorityKeys.has(key)) {
+            // A tile serving out its retry backoff is skipped: selection runs
+            // on every viewport and playhead change, so without this gate the
+            // request rate for a failing tile would be set by the camera
+            // rather than by the tile's own history. The gate EXPIRES (unlike
+            // the one-way `isFailed` latch it replaced), so a tile that failed
+            // during a blip is picked straight back up by the next selection
+            // once its backoff is over.
+            if (
+              !header.isLoading &&
+              !this.isQuarantined(header) &&
+              !priorityKeys.has(key)
+            ) {
               // Mark for removal from the prefetch queue (batched into one
               // filter pass after the loop) instead of an O(Q) splice here.
               if (prefetchKeys.has(key)) {
@@ -1778,7 +2059,7 @@ export class SpatiotemporalTileset {
     // (they are now queued at priority) instead of an O(Q) splice per tile.
     if (promotedFromPrefetch.size > 0) {
       this.prefetchQueue = this.prefetchQueue.filter(
-        (qid) => !promotedFromPrefetch.has(this.tileIdToKey(qid)),
+        (qid) => !promotedFromPrefetch.has(tileKey(qid)),
       );
     }
 
@@ -1806,8 +2087,7 @@ export class SpatiotemporalTileset {
     // This frees up bandwidth for current tiles
     this.cancelSupersededRequests(neededTileKeys);
 
-    // Prefetch when enabled, but debounced to once per PREFETCH_DEBOUNCE_MS
-    // of wall-clock — see schedulePrefetch().
+    // Prefetch when enabled, coalesced on wall-clock — see schedulePrefetch().
     if (this.options.enablePrefetch) {
       this.schedulePrefetch();
     }
@@ -1843,153 +2123,47 @@ export class SpatiotemporalTileset {
 
     const { bounds, zoom, time, timeWindow } = this.currentViewport;
     const { prefetchAhead, prefetchSteps } = this.options;
-
-    // Use the hysteresis-smoothed committed prefetch direction. A single
-    // backward scrub frame will not flip this (see updatePrefetchDirection).
-    const direction = this.prefetchDirection;
+    const bucketMs = this.options.temporalBucketMs;
 
     // Get zoom levels to prefetch. Deliberately the UNdegraded viewport zoom
     // even mid-scrub: prefetch is what warms the FINE settle tier while a
-    // settle-commit gate holds (scrub-LOD G7 — the coarse motion tier is
+    // settle-commit gate holds (the coarse scrub-LOD motion tier is
     // selection-only and preview-only).
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     const primaryZoom = zoomLevels[0];
     const now = Date.now();
 
-    // How far ahead to prefetch, in SIM time. During a running animation, cover
-    // a fixed slice of REAL playback time (speed × LOOKAHEAD) so a fast scrub
-    // prefetches one big contiguous chunk that coalesces into a few range
-    // requests. Fall back to the configured window-based lookahead when paused
-    // (speed ≈ 0) so a stationary view still warms its immediate neighbourhood.
-    const speed = Math.abs(this.animationSpeed); // sim-ms per real-ms
-    const windowAhead =
-      (prefetchAhead > 0 ? prefetchAhead : timeWindow) * prefetchSteps;
-    let effectiveAhead = Math.max(
-      windowAhead,
-      speed * PREFETCH_LOOKAHEAD_REAL_MS,
-    );
-    // Bound the horizon (see MAX_PREFETCH_BUCKETS) so a fast playback can't
-    // inflate it to tens of days — which would make each pass walk+sort the
-    // directory over that whole slice on the main thread. The speed-scaled
-    // floor keeps the cap from undercutting the governor's speed-scaled
-    // buffered-runway gates at very fast playback.
-    const bucketMs = this.options.temporalBucketMs;
-    if (bucketMs > 0) {
-      effectiveAhead = Math.min(
-        effectiveAhead,
-        Math.max(
-          MAX_PREFETCH_BUCKETS * bucketMs,
-          speed * PREFETCH_CAP_FLOOR_REAL_MS,
-        ),
-      );
-    }
-    // Governor run-ahead fairness cap (see setPrefetchRunAheadLimit). The
-    // internal safety floor keeps a cooperating-but-misjudged cap from
-    // starving this tileset's own speed-scaled gates: the horizon never drops
-    // below the resident window nor below what the governor's wall-clock
-    // gates consume at the current speed (same sizing as the bucket cap
-    // above — see PREFETCH_CAP_FLOOR_REAL_MS).
-    if (this.prefetchRunAheadLimitMs !== null) {
-      effectiveAhead = Math.min(
-        effectiveAhead,
-        Math.max(
-          this.prefetchRunAheadLimitMs,
-          bucketMs,
-          timeWindow,
-          speed * PREFETCH_CAP_FLOOR_REAL_MS,
-        ),
-      );
-    }
-    // Pressure ladder (see the PRESSURE_* constants): recover the scale when
-    // no runway eviction happened recently — at most one step per
-    // PRESSURE_RECOVERY_STEP_INTERVAL_MS of wall time, NOT per plan (plans
-    // fire every ~250 ms during playback, which would rebound the scale from
-    // floor to 1 in ~2 s and oscillate fetch→evict indefinitely under
-    // sustained pressure). Then apply the scale AFTER every cap so pressure
-    // always shrinks the final horizon. At scale 1 the branch is skipped
-    // entirely — the un-pressured horizon must stay byte-identical to the
-    // pre-ladder behavior (no floor may RAISE it). Under pressure the floor
-    // keeps the resident window loading and — same sizing as the run-ahead
-    // cap above — never shrinks below what the governor's speed-scaled
-    // wall-clock gates consume, so a decay step can't turn a recoverable
-    // stall into the maxStartWaitMs escape hatch at high sim-speed.
-    if (
-      this.prefetchPressureScale < 1 &&
-      now - this.lastRunwayEvictionAt >= PRESSURE_RECOVERY_QUIET_MS &&
-      now - this.lastPressureRecoveryAt >= PRESSURE_RECOVERY_STEP_INTERVAL_MS
-    ) {
-      this.prefetchPressureScale = Math.min(
-        1,
-        this.prefetchPressureScale + PRESSURE_SCALE_RECOVERY_STEP,
-      );
-      this.lastPressureRecoveryAt = now;
-    }
-    if (this.prefetchPressureScale < 1) {
-      effectiveAhead = Math.max(
-        effectiveAhead * this.prefetchPressureScale,
-        bucketMs,
-        timeWindow,
-        speed * PREFETCH_CAP_FLOOR_REAL_MS,
-      );
-    }
-    const prefetchEndTime = time + direction * effectiveAhead;
-
-    // Throttle on the remaining prefetched "runway": skip the wide load while the
-    // play head still has more than (1 − fraction) × lookahead of already-
-    // prefetched span ahead of it. This re-issues when the head has consumed
-    // ~half the span, AND whenever the span GROWS (e.g. the animation speeds up,
-    // making the previous end-time fall short) — the earlier start-time-anchored
-    // throttle wrongly suppressed that case, leaving playback to drip per-frame.
-    //
-    // EXCEPT when the prefetch pipeline is idle: the planner's enqueue is
-    // budget-capped (a fraction of the cache), so one pass may cover only part
-    // of the span it claimed via lastPrefetchEndTime. If the queue and the
-    // in-flight set have both drained, the consumed-runway rule must not block
-    // a re-plan — with a frozen playhead (a buffering gate holding the clock)
-    // the head consumes nothing, the rule never re-arms, and loading stops
-    // exactly when the gate is waiting for it (the high-speed stall deadlock).
-    // A re-plan that finds nothing new enqueues zero tiles and stops cleanly.
-    const pipelineIdle =
-      this.prefetchQueue.length === 0 && this.inflightPrefetch.size === 0;
-    if (this.lastPrefetchEndTime !== undefined && !pipelineIdle) {
-      const runway = direction * (this.lastPrefetchEndTime - time);
-      if (runway > effectiveAhead * (1 - PREFETCH_RELOAD_FRACTION)) {
-        return;
-      }
-    }
-    this.lastPrefetchEndTime = prefetchEndTime;
-
-    // One query per zoom level covering the whole prefetch range. The previous
-    // implementation enumerated every bucket boundary in [startTime, endTime]
-    // and issued one getAvailableTiles() call per (bucket × zoom). For datasets
-    // with large prefetch ranges and small temporal buckets (e.g. earthquakes:
-    // 76 days × 4 steps lookahead, 1-hour buckets → 8192 queries), the loop
-    // dominated the main thread — ~215 ms per pass × 4 passes/sec, collapsing
-    // FPS to single digits. The collapsed query returns the SAME tile IDs
-    // (getAvailableTiles already filters by interval overlap), just in O(zoomLevels)
-    // queries instead of O(buckets × zoomLevels).
-    const startTime = direction > 0 ? time : prefetchEndTime;
-    const endTime = direction > 0 ? prefetchEndTime : time;
-    const fullRange = {
-      start: startTime - timeWindow / 2,
-      end: endTime + timeWindow / 2,
-    };
+    // Ask the policy for the horizon. `null` means the play head still has
+    // enough planned runway ahead of it that another pass is wasted work; a
+    // plan CLAIMS its span, so from here on the pass must either enqueue
+    // against it or hand the anchor back via anchorTruncatedRunway.
+    const plan = this.prefetch.plan({
+      time,
+      timeWindow,
+      bucketMs,
+      prefetchAhead,
+      prefetchSteps,
+      pipelineIdle:
+        this.prefetchQueue.length === 0 && this.inflightPrefetch.size === 0,
+    });
+    if (!plan) return;
+    const { effectiveAhead } = plan;
 
     if (DEBUG)
       console.log('[Tileset] Wide-range prefetch:', {
         time: new Date(time).toISOString(),
         zoomLevels,
-        fullRangeStart: new Date(fullRange.start).toISOString(),
-        fullRangeEnd: new Date(fullRange.end).toISOString(),
+        fullRangeStart: new Date(plan.queryRange.start).toISOString(),
+        fullRangeEnd: new Date(plan.queryRange.end).toISOString(),
       });
 
-    const generation = ++this.prefetchGeneration;
+    const pass = this.prefetch.beginPass();
     const results = await Promise.allSettled(
       zoomLevels.map(async (z) => {
         const tileIds = await this.fetchAvailableTilesForZoom(
           bounds,
           z,
-          fullRange,
+          plan.queryRange,
         );
         return { zoom: z, tileIds };
       }),
@@ -1999,7 +2173,7 @@ export class SpatiotemporalTileset {
     // pass superseded this plan while we awaited the directory queries —
     // enqueuing its candidates now would warm buckets for a stale playhead
     // or direction (and recreate headers flushPrefetch just dropped).
-    if (generation !== this.prefetchGeneration) return;
+    if (!this.prefetch.isCurrentPass(pass)) return;
 
     // Flatten the candidate tiles across all zoom levels into one list.
     const candidates: TileId[] = [];
@@ -2018,27 +2192,24 @@ export class SpatiotemporalTileset {
     // Tiles already behind the head (wrong side) sort to the very end. Without
     // this, the budget below would enqueue a spatially-arbitrary slice of a
     // multi-year span instead of the next few seconds of playback.
-    const aheadDist = (id: TileId): number => {
-      const d = direction > 0 ? id.t - time : time - id.t;
-      return d >= 0 ? d : Number.MAX_SAFE_INTEGER + d; // behind-head tiles last
-    };
-    candidates.sort((a, b) => aheadDist(a) - aheadDist(b));
+    candidates.sort(
+      (a, b) => plan.aheadDistance(a.t) - plan.aheadDistance(b.t),
+    );
 
-    // Bound the prefetch runway to a fraction of the cache (see
-    // PREFETCH_CACHE_FRACTION) so it can never overflow the LRU and thrash.
-    // Nearest-first ordering means this budget always buys the most imminent
-    // buckets; the runway then slides forward as the head consumes it.
-    const prefetchBudget = Math.max(
-      64,
-      Math.floor(this.options.maxCacheSize * PREFETCH_CACHE_FRACTION),
+    // Bound the prefetch runway to a fraction of the cache so it can never
+    // overflow the LRU and thrash. Nearest-first ordering means this budget
+    // always buys the most imminent buckets; the runway then slides forward as
+    // the head consumes it.
+    const prefetchBudget = this.prefetch.enqueueBudget(
+      this.options.maxCacheSize,
     );
 
     // Keys already sitting in either queue: a dead header (see below) must not
     // be double-enqueued. Built once per pass — the candidate loop would be
     // O(candidates × queue) otherwise.
-    const queuedKeys = new Set<string>();
-    for (const qid of this.prefetchQueue) queuedKeys.add(this.tileIdToKey(qid));
-    for (const qid of this.priorityQueue) queuedKeys.add(this.tileIdToKey(qid));
+    const queuedKeys = new Set<TileKey>();
+    for (const qid of this.prefetchQueue) queuedKeys.add(tileKey(qid));
+    for (const qid of this.priorityQueue) queuedKeys.add(tileKey(qid));
 
     let newTilesAdded = 0;
     // Furthest ahead-of-head distance actually ENQUEUED this pass — the
@@ -2046,7 +2217,7 @@ export class SpatiotemporalTileset {
     // sentinel distances are ignored).
     let coveredAheadMs = 0;
     const noteEnqueued = (id: TileId): void => {
-      const d = aheadDist(id);
+      const d = plan.aheadDistance(id.t);
       if (d <= effectiveAhead) coveredAheadMs = Math.max(coveredAheadMs, d);
     };
     for (const tileId of candidates) {
@@ -2054,7 +2225,7 @@ export class SpatiotemporalTileset {
       // Don't prefetch giant low-zoom parent placeholders either (see
       // isOversizedParent); they'd evict the runway they're meant to warm.
       if (this.isOversizedParent(tileId, primaryZoom)) continue;
-      const key = this.tileIdToKey(tileId);
+      const key = tileKey(tileId);
       const header = this.tiles.get(key);
 
       if (!header) {
@@ -2075,6 +2246,7 @@ export class SpatiotemporalTileset {
       } else if (
         !header.isLoaded &&
         !header.isLoading &&
+        !this.isQuarantined(header) &&
         !queuedKeys.has(key)
       ) {
         // DEAD header: a previous fetch was aborted (its shared batch was
@@ -2085,6 +2257,13 @@ export class SpatiotemporalTileset {
         // high-speed playback starves forever. Reset the one-way isCancelled
         // latch (mirrors the priority-path reset in selectAndLoadTiles) and
         // re-enqueue.
+        //
+        // The retry backoff (isQuarantined) is the missing bound on that
+        // revival: a tile the origin will NEVER serve came back here on every
+        // planning pass, so the runway spent its whole budget re-fetching the
+        // same 404 for as long as the viewport contained it. The gate is a
+        // decaying rate rather than a permanent write-off, so lookahead work
+        // lost to one bad minute is still planned again afterwards.
         header.isCancelled = false;
         header.lastUsed = now;
         this.prefetchQueue.push(tileId);
@@ -2097,19 +2276,11 @@ export class SpatiotemporalTileset {
       }
     }
 
-    // Budget-capped pass: the optimistic claim above (lastPrefetchEndTime =
-    // prefetchEndTime, set before the await as a re-entry guard) covers the
-    // FULL speed-scaled span, but the enqueue stopped at the budget. Anchor
-    // the runway throttle at the furthest bucket actually planned, so the
-    // next pass re-plans when the head nears the REAL frontier instead of
-    // trusting a span nobody fetched. (Only correct our own claim — a
-    // concurrent flush/flip may have reset it while we awaited.)
-    if (
-      newTilesAdded >= prefetchBudget &&
-      this.lastPrefetchEndTime === prefetchEndTime
-    ) {
-      this.lastPrefetchEndTime =
-        time + direction * (coveredAheadMs + this.options.temporalBucketMs);
+    // Budget-capped pass: the plan claimed the FULL speed-scaled span, but the
+    // enqueue stopped at the budget. Hand the honest frontier back so the next
+    // pass re-plans against what was actually planned.
+    if (newTilesAdded >= prefetchBudget) {
+      this.prefetch.anchorTruncatedRunway(plan, coveredAheadMs, bucketMs);
     }
 
     // Log prefetch results
@@ -2186,7 +2357,7 @@ export class SpatiotemporalTileset {
       // Animation phase tolerates more prefetch (smoothing the play head);
       // paused phase keeps a tight cap so a stale prefetch queue can't tie up
       // bandwidth when the user starts panning again.
-      const prefetchShare = this.isAnimating ? 0.5 : 0.33;
+      const prefetchShare = this.prefetch.isAnimating ? 0.5 : 0.33;
       const prefetchCap = Math.max(
         1,
         Math.floor(this.options.maxRequests * prefetchShare),
@@ -2227,16 +2398,18 @@ export class SpatiotemporalTileset {
     // this queue.
     if (this.priorityQueue.length > 0) return;
 
-    // Prefetch: ONE small SLICE in flight at a time, sized in bytes to
-    // ≈ PREFETCH_SLICE_TARGET_REAL_MS of measured download (see the slice
-    // constants). The queue is drained nearest-to-playhead-first, so each
+    // Prefetch: ONE small SLICE in flight at a time, sized in bytes to a fixed
+    // wall-clock span of measured download (the policy sizes it). The queue is
+    // drained nearest-to-playhead-first, so each
     // slice is exactly the next most-imminent stretch of runway; the
     // finally-handler (plus extendPrefetchIfDrained) dispatches the next
     // slice the moment this one settles, and re-checks priority work first.
     // A second concurrent slice would only add bandwidth contention against
     // priority fetches.
     if (this.prefetchQueue.length > 0 && this.inflightPrefetch.size === 0) {
-      const budget = this.prefetchSliceBytes();
+      const budget = this.prefetch.sliceBytes(
+        this.options.getThroughput?.().bytesPerMs ?? null,
+      );
       const sizeFn = this.options.getTileByteSize;
       const candidates: TileId[] = [];
       let sliceBytes = 0;
@@ -2260,26 +2433,6 @@ export class SpatiotemporalTileset {
     // queue is fully drained on this pass, so it can never starve viewport
     // work.
     this.drainOverviewQueue();
-  }
-
-  /**
-   * Byte budget for the next prefetch slice: ≈ PREFETCH_SLICE_TARGET_REAL_MS
-   * of download at the measured throughput, clamped to [MIN, MAX]; a fixed
-   * cold-start size until the estimator has a sample. Sizing by TIME (not a
-   * fixed byte count) keeps the hostage window — how long a play head that
-   * catches the slice must wait for it — roughly constant across link speeds.
-   */
-  private prefetchSliceBytes(): number {
-    const bytesPerMs = this.options.getThroughput?.().bytesPerMs ?? null;
-    if (bytesPerMs === null || bytesPerMs <= 0)
-      return PREFETCH_SLICE_COLD_BYTES;
-    return Math.min(
-      PREFETCH_SLICE_MAX_BYTES,
-      Math.max(
-        PREFETCH_SLICE_MIN_BYTES,
-        bytesPerMs * PREFETCH_SLICE_TARGET_REAL_MS,
-      ),
-    );
   }
 
   /**
@@ -2327,13 +2480,20 @@ export class SpatiotemporalTileset {
     tileId: TileId,
     tier: RequestTier = 'priority',
   ): boolean {
-    const key = this.tileIdToKey(tileId);
+    const key = tileKey(tileId);
 
-    // Skip if already loading, loaded, or cancelled.
-    // The isCancelled latch is reset in selectAndLoadTiles() when a tile is
-    // re-needed, so a cancelled-then-re-needed tile CAN load again.
+    // Skip if already loading, loaded, cancelled, or serving out a retry
+    // backoff. The isCancelled latch is reset in selectAndLoadTiles() when a
+    // tile is re-needed, so a cancelled-then-re-needed tile CAN load again;
+    // the backoff gate (isQuarantined) EXPIRES, so a failed tile can too.
     const header = this.tiles.get(key);
-    if (!header || header.isLoading || header.isLoaded || header.isCancelled) {
+    if (
+      !header ||
+      header.isLoading ||
+      header.isLoaded ||
+      header.isCancelled ||
+      this.isQuarantined(header)
+    ) {
       return false;
     }
 
@@ -2349,6 +2509,15 @@ export class SpatiotemporalTileset {
     const inflightRecord =
       tier === 'prefetch' ? { controller: abortController, keys: [key] } : null;
     if (inflightRecord) this.inflightPrefetch.add(inflightRecord);
+
+    // Whether this request ended in an ABORT rather than a failure — read by
+    // the settle handler. Both halves matter: `signal.aborted` catches the
+    // teardown paths in this class, and the AbortError check catches an abort
+    // raised INSIDE the transport (a per-request timeout, a connection-pool
+    // kill) against a signal we never touched. The second half is the one the
+    // old `isCancelled` test could not see, so a timing-out origin burned the
+    // whole attempt budget in three flaky seconds.
+    let sawAbort = false;
 
     // Load tile with abort signal
     this.options
@@ -2371,16 +2540,22 @@ export class SpatiotemporalTileset {
       })
       .catch((error) => {
         // Ignore abort errors - they're expected when cancelling
-        if (error.name !== 'AbortError') {
-          this.options.onTileError?.(error, tileId);
-        }
+        if (error.name === 'AbortError') sawAbort = true;
+        else this.options.onTileError?.(error, tileId);
       })
       .finally(() => {
         header.isLoading = false;
         header.abortController = undefined;
-        this.activeRequests.delete(key);
+        this.releaseActiveRequest(key, header);
         if (inflightRecord) this.inflightPrefetch.delete(inflightRecord);
         if (tier === 'overview') this.settleOverviewKeys([key]);
+        else {
+          this.noteSettledWithoutTile(
+            key,
+            header,
+            sawAbort || abortController.signal.aborted,
+          );
+        }
 
         // Process next in queue
         this.processRequestQueue();
@@ -2420,17 +2595,18 @@ export class SpatiotemporalTileset {
     const abortController = new AbortController();
     const started: {
       id: TileId;
-      key: string;
-      header: SpatiotemporalTileHeader;
+      key: TileKey;
+      header: SpatioTemporalTileHeader;
     }[] = [];
     for (const tileId of tileIds) {
-      const key = this.tileIdToKey(tileId);
+      const key = tileKey(tileId);
       const header = this.tiles.get(key);
       if (
         !header ||
         header.isLoading ||
         header.isLoaded ||
-        header.isCancelled
+        header.isCancelled ||
+        this.isQuarantined(header)
       ) {
         continue;
       }
@@ -2484,6 +2660,8 @@ export class SpatiotemporalTileset {
     // while the farther groups are still in flight. `delivered` guards
     // double-accounting when the resolved array replays hook-delivered tiles.
     const delivered: boolean[] = new Array(started.length).fill(false);
+    /** See `sawAbort` in startTileLoad — the batch mirror. */
+    let sawAbort = false;
     const deliverTile = (i: number, tile: Tile): void => {
       const { header } = started[i];
       if (delivered[i] || header.isCancelled || header.isLoaded) return;
@@ -2506,23 +2684,24 @@ export class SpatiotemporalTileset {
         // Lookahead tiers yield to concurrent need-now fetches at the
         // browser's connection scheduler; priority keeps the default.
         fetchPriority: tier === 'priority' ? 'auto' : 'low',
-        // Cross-source EDF hint (multi-source coordination, Phase 2 §2.8): the
+        // Cross-source EDF hint (docs/roadmap/playback-and-loading.md §5): the
         // current play-head time + committed prefetch direction, so a batch
         // backed by a shared-scheduler archive can rank range-groups by
         // distance-to-playhead comparably across archives. Forwarded by the
         // layer's getTileDataBatch into STTArchive.getTiles({playheadTime}).
         playheadTime: this.currentViewport?.time,
-        playheadDirection: this.prefetchDirection,
+        playheadDirection: this.prefetch.direction,
         // Spatial scheduler tie-break (perf research 2026-07): among
         // range-groups already tied in EDF/enqueue order, the one nearer the
         // viewport center resolves first. Forwarded the same way as
         // playheadTime, into STTArchive.getTiles({viewportCenter}).
         viewportCenter: this.currentViewport
           ? {
-              lon:
-                (this.currentViewport.bounds.minLon +
-                  this.currentViewport.bounds.maxLon) /
-                2,
+              // Seam-crossing aware, then folded back into [-180, 180): the
+              // scheduler projects this as a GEOGRAPHIC longitude, so an
+              // unwrapped 184 (or a crossing box's far-side midpoint) would
+              // put the "nearest" tile on the wrong side of the world.
+              lon: wrapLon(lonCenterOf(this.currentViewport.bounds)),
               lat:
                 (this.currentViewport.bounds.minLat +
                   this.currentViewport.bounds.maxLat) /
@@ -2557,24 +2736,250 @@ export class SpatiotemporalTileset {
         }
       })
       .catch((error) => {
-        if (error.name !== 'AbortError') {
+        // See `sawAbort` in startTileLoad: the AbortError branch also covers a
+        // timeout raised inside the transport, which never touches our signal
+        // and never sets `isCancelled` — the settle handler must not charge
+        // that against the readiness budget.
+        if (error.name === 'AbortError') sawAbort = true;
+        else
           for (const { id } of started) this.options.onTileError?.(error, id);
-        }
       })
       .finally(() => {
         for (const { key, header } of started) {
           header.isLoading = false;
           header.abortController = undefined;
-          this.activeRequests.delete(key);
+          this.releaseActiveRequest(key, header);
         }
         if (registry) registry.delete(inflightRecord);
         if (tier === 'overview')
           this.settleOverviewKeys(started.map((s) => s.key));
+        else {
+          const aborted = sawAbort || abortController.signal.aborted;
+          for (const { key, header } of started)
+            this.noteSettledWithoutTile(key, header, aborted);
+        }
         this.processRequestQueue();
         this.extendPrefetchIfDrained();
       });
 
     return started.length;
+  }
+
+  /**
+   * Release a key from the in-flight set at settle time — but only if this
+   * request still OWNS it.
+   *
+   * `activeRequests` is keyed by tile, while a request holds a captured
+   * `header` reference, and the two can diverge: `flushPrefetch()` and
+   * `evictTiles()` both drop a header while its fetch is still in flight, and
+   * the next selection pass then creates a FRESH header for the same key and
+   * dispatches it. When the original request finally settles, an unconditional
+   * `delete(key)` removes the entry belonging to its REPLACEMENT — the
+   * in-flight accounting under-counts, and on the per-tile dispatch path the
+   * freed "slot" lets `processRequestQueue` over-subscribe the connection.
+   *
+   * Deleting only on an exact header match would leak in the opposite
+   * direction (a dropped header with no replacement would pin its key in the
+   * set forever), so the release also fires when nobody else is loading it.
+   */
+  private releaseActiveRequest(
+    key: TileKey,
+    owner: SpatioTemporalTileHeader,
+  ): void {
+    const current = this.tiles.get(key);
+    if (current === owner || !current?.isLoading) {
+      this.activeRequests.delete(key);
+    }
+  }
+
+  /**
+   * Whether this tile is serving out its retry backoff and must not be
+   * dispatched yet.
+   *
+   * THE dispatch gate for a tile that has settled without data — every
+   * enqueue site (selection's promote branch, the prefetch dead-header
+   * revival) and both start paths consult this. It replaced a one-way
+   * `isFailed` check at each of those sites, which is what made a written-off
+   * tile immortal: selection runs on every camera and playhead change, so
+   * without a per-header gate the camera resets the budget, but with a
+   * PERMANENT one the tile can never come back at all. A time-boxed gate is
+   * the only version of "not right now" that is not also "not ever".
+   */
+  private isQuarantined(header: SpatioTemporalTileHeader): boolean {
+    return header.retryAfter !== undefined && Date.now() < header.retryAfter;
+  }
+
+  /**
+   * Record that a fetch for a NEEDED tile settled without producing data, and
+   * schedule the revival.
+   *
+   * The only site that enqueues a needed tile is `selectAndLoadTiles`'s
+   * candidate loop, and it is unreachable for this tile: the exact-bounds
+   * `selectKey` fast path short-circuits every identical `update()`, so a
+   * stationary camera never re-runs selection at all. The tile is left in
+   * `neededTileKeys`, in no queue, with a header that looks eligible but that
+   * nothing will ever pick up — a permanent hole that also pins the buffered
+   * runway at zero, because the coverage index counts it as missing forever.
+   *
+   * `aborted` separates the two outcomes that both arrive here as "no tile".
+   * An abort is not evidence about the tile: it is the transport being torn
+   * down, by supersession, by a prefetch flush, or — the case `isCancelled`
+   * cannot see, because only this class's own teardown paths set it — by a
+   * timeout raised INSIDE the fetch. Charging those against the readiness
+   * budget wrote off perfectly good tiles after three flaky seconds. They
+   * still advance the backoff ladder, though: an abort loop is as expensive as
+   * a failure loop.
+   */
+  private noteSettledWithoutTile(
+    key: TileKey,
+    header: SpatioTemporalTileHeader,
+    aborted: boolean,
+  ): void {
+    // Loaded is success; cancelled is supersession (selection re-arms the
+    // latch and re-enqueues on its own); pinned belongs to the overview tier,
+    // which owns its own retry story. None of those are failures.
+    if (header.isLoaded || header.isCancelled || header.isPinned) return;
+    // A header that has already been replaced (flushed / evicted mid-flight)
+    // is not ours to write off — the replacement is in charge now.
+    if (this.tiles.get(key) !== header) return;
+
+    // The count is charged on EVERY tier, not just the needed one: the
+    // prefetch planner has its own revival for dead headers, and without a
+    // shared budget a tile the origin will never serve came back through it
+    // on every planning pass forever.
+    if (!aborted) {
+      const attempts = (header.attempts ?? 0) + 1;
+      header.attempts = attempts;
+      if (attempts >= FAILED_TILE_MAX_ATTEMPTS && !header.isFailed) {
+        header.isFailed = true;
+        // The readiness APIs stop counting this tile as missing the moment the
+        // latch is set, so the runway that was pinned behind it can advance —
+        // tell whoever is gating on it.
+        this.notifyBufferChange();
+      }
+    }
+
+    // Decaying retry rate: fast enough that a blip heals while the user is
+    // still looking at the hole, slow enough that a tile the origin will never
+    // serve costs one coalesced probe a minute. See
+    // FAILED_TILE_RETRY_COOLDOWN_MS for why neither a flat cooldown nor a hard
+    // give-up satisfies both halves.
+    const settles = (header.retrySettles ?? 0) + 1;
+    header.retrySettles = settles;
+    header.retryAfter =
+      Date.now() +
+      Math.min(
+        FAILED_TILE_RETRY_COOLDOWN_MS * 2 ** (settles - 1),
+        FAILED_TILE_RETRY_MAX_BACKOFF_MS,
+      );
+
+    // Bound the abort exemption. Aborts deliberately do not advance `attempts`,
+    // so a transport that aborts EVERY request would never latch `isFailed` and
+    // would pin the runway at zero for the whole session — the failure mode the
+    // attempt cap exists to prevent, reached through the abort door instead.
+    // See FAILED_TILE_READINESS_WRITEOFF_SETTLES.
+    if (!header.isFailed && settles >= FAILED_TILE_READINESS_WRITEOFF_SETTLES) {
+      header.isFailed = true;
+      this.notifyBufferChange();
+    }
+
+    // The scheduled revival is for NEEDED tiles only. Lookahead work the
+    // playhead never reached is not a hole in anything the user can see, and
+    // the prefetch planner re-proposes it on its own schedule (under the same
+    // backoff ladder, via isQuarantined).
+    if (!this.neededTileKeys.has(key)) return;
+    this.retryKeys.add(key);
+    this.scheduleRetrySweep();
+  }
+
+  /**
+   * (Re)arm the single shared retry timer for the EARLIEST pending deadline.
+   *
+   * One timer, not one per key: a bad network minute produces one failed
+   * settle per hole per round-trip, and a timer each would be hundreds of
+   * live timers whose only job is to wake up and find nothing due. The
+   * `retryDueAt` comparison keeps the arm/re-arm cost at zero in the common
+   * case — a fresh failure whose deadline is later than the pending sweep
+   * needs no timer work at all, because that sweep re-arms for whatever is
+   * still outstanding when it runs.
+   */
+  private scheduleRetrySweep(): void {
+    let earliest = Number.POSITIVE_INFINITY;
+    for (const key of this.retryKeys) {
+      const due = this.tiles.get(key)?.retryAfter ?? 0;
+      if (due < earliest) earliest = due;
+    }
+    if (!Number.isFinite(earliest)) return;
+
+    if (this.retryTimer !== null) {
+      if (this.retryDueAt !== null && this.retryDueAt <= earliest) return;
+      clearTimeout(this.retryTimer);
+    }
+    this.retryDueAt = earliest;
+    this.retryTimer = setTimeout(
+      () => {
+        this.retryTimer = null;
+        this.retryDueAt = null;
+        this.retryFailedTiles();
+      },
+      Math.max(0, earliest - Date.now()),
+    );
+  }
+
+  /**
+   * Re-enqueue the tiles whose backoff has expired and that are still needed,
+   * still unloaded, and still unqueued. Anything that healed on its own in the
+   * meantime (a neighbouring batch delivered it, the viewport moved off it) is
+   * dropped silently — this path only ever fills holes.
+   *
+   * A WRITTEN-OFF tile (`isFailed`) is deliberately still retried here. The
+   * latch is the readiness verdict, not a fetch verdict: readiness has to stop
+   * waiting or the runway pins at zero, but the pixels are still missing and
+   * the ladder has already slowed the asking down to once a minute.
+   */
+  private retryFailedTiles(): void {
+    if (this.retryKeys.size === 0) return;
+
+    // Queue membership up front: re-enqueuing a tile that is already queued
+    // would dispatch it twice and double-count the backoff ladder.
+    const queued = new Set<TileKey>();
+    for (const id of this.priorityQueue) queued.add(tileKey(id));
+    for (const id of this.prefetchQueue) queued.add(tileKey(id));
+
+    const now = Date.now();
+    let enqueued = false;
+    for (const key of Array.from(this.retryKeys)) {
+      const header = this.tiles.get(key);
+      // Gone, healed, already in flight, or off screen: drop the bookkeeping.
+      // (Selection re-queues an off-screen tile if the camera comes back, and
+      // its ladder rides along on the surviving header.)
+      if (
+        !header ||
+        header.isLoaded ||
+        header.isLoading ||
+        !this.neededTileKeys.has(key)
+      ) {
+        this.retryKeys.delete(key);
+        continue;
+      }
+      // Not due yet — this sweep was armed for an earlier tile's deadline.
+      // Leave it pending; the re-arm at the bottom covers it.
+      if (header.retryAfter !== undefined && now < header.retryAfter) continue;
+      this.retryKeys.delete(key);
+      if (queued.has(key)) continue;
+      header.isCancelled = false;
+      header.lastUsed = now;
+      this.priorityQueue.push(header.id);
+      queued.add(key);
+      enqueued = true;
+    }
+    if (enqueued) {
+      this.priorityQueueDirty = true;
+      this.processRequestQueue();
+    }
+    // Whatever was not due yet (or was re-added by a settle while this ran)
+    // needs the next sweep armed for it.
+    this.scheduleRetrySweep();
   }
 
   /**
@@ -2585,7 +2990,7 @@ export class SpatiotemporalTileset {
    * tiles, so this converges instead of spinning.
    */
   private extendPrefetchIfDrained(): void {
-    if (!this.isAnimating || !this.options.enablePrefetch) return;
+    if (!this.prefetch.isAnimating || !this.options.enablePrefetch) return;
     if (this.prefetchQueue.length > 0 || this.inflightPrefetch.size > 0) return;
     this.schedulePrefetch();
   }
@@ -2617,13 +3022,13 @@ export class SpatiotemporalTileset {
    * - PINNED overview tiles are exempt as before: they are needed at EVERY
    *   time (that is the storyboard contract).
    */
-  cancelSupersededRequests(neededTileKeys: Set<string>): number {
+  cancelSupersededRequests(neededTileKeys: Set<TileKey>): number {
     let cancelledCount = 0;
 
     // Keys owned by registered in-flight batches: prefetch keys are exempt
     // from supersession entirely; priority-batch keys are decided batch-wise
     // below — either way the per-tile sweep must skip them.
-    const exemptKeys = new Set<string>();
+    const exemptKeys = new Set<TileKey>();
     for (const rec of this.inflightPrefetch) {
       for (const key of rec.keys) exemptKeys.add(key);
     }
@@ -2680,6 +3085,31 @@ export class SpatiotemporalTileset {
   // ── Buffer model + readiness API (WS-A) ──────────────────────────────────
 
   /**
+   * Whether a coverage-index tile has reached a state the readiness APIs can
+   * stop waiting on: loaded, or written off after
+   * {@link FAILED_TILE_MAX_ATTEMPTS} failed settles.
+   *
+   * The `isFailed` half is what keeps ONE permanently-absent tile from pinning
+   * the buffered runway at zero for the whole session — the playback governor
+   * gates the clock on `getBufferedRunway`, so a tile that will never arrive
+   * but still counts as missing stops playback forever. This mirrors the
+   * stance {@link isLoaded} already takes (a failed fetch counts as settled,
+   * otherwise one permanent hole pins the signal false).
+   *
+   * MONOTONE by construction, and that is why `isFailed` stays latched even
+   * though the tile keeps being retried on the backoff ladder: if readiness
+   * un-wrote-off a tile for each retry, the runway would collapse to zero and
+   * the governor would stall the clock once per backoff window — a periodic
+   * stutter in place of one clean write-off. A retry that SUCCEEDS flips this
+   * to ready through `isLoaded` instead, which is the direction that matters.
+   */
+  private isCoverageReady(key: TileKey): boolean {
+    const header = this.tiles.get(key);
+    if (!header) return false;
+    return header.isLoaded || header.isFailed === true;
+  }
+
+  /**
    * Probe how much contiguous sim-time ahead of `time` (in `direction`) is
    * fully buffered for the current viewport at the primary zoom.
    *
@@ -2710,7 +3140,7 @@ export class SpatiotemporalTileset {
     this.ensureBufferTracking();
     const bucketMs = this.options.temporalBucketMs;
     const timeWindow = this.currentViewport?.timeWindow ?? bucketMs;
-    const speed = Math.abs(this.animationSpeed);
+    const speed = Math.abs(this.prefetch.animationSpeed);
     const horizon = Math.max(
       horizonSimMs ?? Math.max(4 * timeWindow, speed * RUNWAY_HORIZON_REAL_MS),
       bucketMs,
@@ -2764,7 +3194,7 @@ export class SpatiotemporalTileset {
       const bucket = idx.buckets.get(b)!;
       let missing = false;
       for (let j = 0; j < bucket.keys.length; j++) {
-        if (!this.tiles.get(bucket.keys[j])?.isLoaded) {
+        if (!this.isCoverageReady(bucket.keys[j])) {
           missing = true;
           bytesPending += bucket.bytes[j];
         }
@@ -2822,7 +3252,7 @@ export class SpatiotemporalTileset {
       const bucket = idx.buckets.get(b)!;
       let ready = true;
       for (const key of bucket.keys) {
-        if (!this.tiles.get(key)?.isLoaded) {
+        if (!this.isCoverageReady(key)) {
           ready = false;
           break;
         }
@@ -2871,7 +3301,10 @@ export class SpatiotemporalTileset {
       if (b + bucketMs < range.start) continue;
       const bucket = idx.buckets.get(b)!;
       for (let j = 0; j < bucket.keys.length; j++) {
-        if (!this.tiles.get(bucket.keys[j])?.isLoaded) {
+        // A written-off tile costs nothing to "finish": no fetch will ever be
+        // issued for it again, so billing its bytes would inflate every ETA
+        // built on this number for the rest of the session.
+        if (!this.isCoverageReady(bucket.keys[j])) {
           bytes += bucket.bytes[j];
           tiles++;
         }
@@ -2908,15 +3341,24 @@ export class SpatiotemporalTileset {
    * These are the ONLY ways in-flight prefetch work is ever aborted —
    * `cancelSupersededRequests` exempts it (ahead-of-window is prefetch's
    * normal operating condition). Safe to call manually at any time.
+   *
+   * `preserveNeeded` is the SPATIAL flush's concession to a fact the tier tag
+   * cannot express: a request's tier is stamped once at dispatch and never
+   * promoted, so a slice the playhead has since ARRIVED AT is still labelled
+   * `prefetch` even though its tiles are exactly what is being drawn right
+   * now. Aborting those on a pan of 1/8 of the viewport throws away bytes the
+   * priority path immediately re-requests, and the runway collapses while the
+   * user is still moving. A seek or a direction flip stays TOTAL: there the
+   * playhead really has left, so no in-flight slice is worth keeping.
    */
-  flushPrefetch(): void {
+  flushPrefetch(preserveNeeded: boolean = false): void {
     // (1) Queued-but-not-started prefetch tiles: drop their headers
     //     entirely. prefetchFutureTiles only enqueues ids with NO header, so
     //     a lingering unloaded header would permanently shadow the tile from
     //     future prefetch passes. PINNED overview headers survive — the
     //     overview tier owns them and will (re)load them itself.
     for (const id of this.prefetchQueue) {
-      const key = this.tileIdToKey(id);
+      const key = tileKey(id);
       const header = this.tiles.get(key);
       if (header && !header.isLoading && !header.isLoaded && !header.isPinned) {
         this.tiles.delete(key);
@@ -2932,6 +3374,18 @@ export class SpatiotemporalTileset {
     //     (Overview-tier batches are never registered here, so a flush can
     //     never abort a pinned-overview fetch itself.)
     for (const inflight of this.inflightPrefetch) {
+      // Spatial path only: a record holding a key the CURRENT selection needs
+      // is serving the playhead, whatever tier it was dispatched under. The
+      // needed set read here is the previous pass's — the spatial flush runs
+      // from `selectAndLoadTiles` BEFORE the new set is computed — which is
+      // exactly the right question to ask: "has the playhead already entered
+      // this slice?", not "will it be in the set we are about to build?".
+      if (
+        preserveNeeded &&
+        inflight.keys.some((key) => this.neededTileKeys.has(key))
+      ) {
+        continue;
+      }
       inflight.controller.abort();
       for (const key of inflight.keys) {
         const header = this.tiles.get(key);
@@ -2948,8 +3402,7 @@ export class SpatiotemporalTileset {
     //     next selection pass. Bump the prefetch generation so an in-flight
     //     prefetchFutureTiles pass (awaiting its directory queries) drops
     //     its now-stale plan instead of enqueuing against the flushed state.
-    this.prefetchGeneration++;
-    this.lastPrefetchEndTime = undefined;
+    this.prefetch.invalidatePlan();
     this.lastSelectKey = '';
   }
 
@@ -3052,10 +3505,10 @@ export class SpatiotemporalTileset {
 
     // De-dupe defensively (directories shouldn't repeat ids, but a pinned
     // double-count would corrupt the pending bookkeeping).
-    const seen = new Set<string>();
+    const seen = new Set<TileKey>();
     const candidates: TileId[] = [];
     for (const id of ids) {
-      const key = this.tileIdToKey(id);
+      const key = tileKey(id);
       if (seen.has(key)) continue;
       seen.add(key);
       candidates.push(id);
@@ -3092,7 +3545,7 @@ export class SpatiotemporalTileset {
     // Pin every candidate; queue the not-yet-loaded ones at the overview tier.
     const now = Date.now();
     for (const id of candidates) {
-      const key = this.tileIdToKey(id);
+      const key = tileKey(id);
       let header = this.tiles.get(key);
       if (!header) {
         header = {
@@ -3138,7 +3591,7 @@ export class SpatiotemporalTileset {
       candidates.length < MAX_COALESCE_BATCH
     ) {
       const id = this.overviewQueue.shift()!;
-      const key = this.tileIdToKey(id);
+      const key = tileKey(id);
       const header = this.tiles.get(key);
       if (!header || header.isLoaded || header.isCancelled) {
         // Already resident (e.g. loaded via the priority path because the
@@ -3174,7 +3627,7 @@ export class SpatiotemporalTileset {
    * best-effort either way) and resolve the preload when none remain.
    * Called from the overview-tier fetch finally-handlers.
    */
-  private settleOverviewKeys(keys: string[]): void {
+  private settleOverviewKeys(keys: TileKey[]): void {
     const state = this.overviewState;
     if (!state || state.settled) return;
     for (const key of keys) state.pendingKeys.delete(key);
@@ -3262,8 +3715,8 @@ export class SpatiotemporalTileset {
   private maybeRebuildCoverageIndex(bounds: BoundingBox, zoom: number): void {
     // Deliberately the UNdegraded zoom: the coverage index (and every
     // readiness API on top of it) stays honest about the FINE primary tier
-    // even while a scrub-LOD drag degrades selection (G7 — gates on release
-    // must re-arm against full detail, never the coarse preview).
+    // even while a scrub-LOD drag degrades selection (gates on release must
+    // re-arm against full detail, never the coarse preview).
     const primaryZoom = this.getZoomLevelsToLoad(zoom)[0];
     // Quantize to the SAME tolerance the prefetch flush applies (see
     // quantizedSpatialKey): a smoothly drifting camera (AV ego-follow, eased
@@ -3284,14 +3737,14 @@ export class SpatiotemporalTileset {
 
         const getSize = this.options.getTileByteSize;
         const buckets = new Map<number, CoverageBucket>();
-        const keySet = new Set<string>();
+        const keySet = new Set<TileKey>();
         for (const id of ids) {
           let bucket = buckets.get(id.t);
           if (!bucket) {
             bucket = { keys: [], bytes: [] };
             buckets.set(id.t, bucket);
           }
-          const key = this.tileIdToKey(id);
+          const key = tileKey(id);
           bucket.keys.push(key);
           keySet.add(key);
           bucket.bytes.push((getSize ? getSize(id) : undefined) ?? 0);
@@ -3343,7 +3796,7 @@ export class SpatiotemporalTileset {
       const callback = this.options.onBufferChange;
       const viewport = this.currentViewport;
       if (!callback || !viewport) return;
-      callback(this.getBufferedRunway(viewport.time, this.prefetchDirection));
+      callback(this.getBufferedRunway(viewport.time, this.prefetch.direction));
     }, wait);
   }
 
@@ -3355,16 +3808,16 @@ export class SpatiotemporalTileset {
    * PERFORMANCE: Grace period reduced from 5 minutes to 60 seconds
    * to prevent memory bloat while still supporting animation loops.
    */
-  private evictUnusedTiles(neededTileKeys: Set<string>): void {
+  private evictUnusedTiles(neededTileKeys: Set<TileKey>): void {
     const now = Date.now();
     // Grace period scales with animation: longer during animation to keep prefetched tiles
     // 120 seconds during animation (2 minutes of real-time buffer)
     // 30 seconds when paused (keep recently viewed tiles)
-    const GRACE_PERIOD = this.isAnimating ? 120000 : 30000;
+    const GRACE_PERIOD = this.prefetch.isAnimating ? 120000 : 30000;
 
     // Loaded-tile count and byte total are both maintained incrementally
-    // (see `loadedTileCount` / `currentCacheBytes`). The previous version
-    // walked every header to recount loaded tiles on every eviction pass —
+    // (see `loadedTileCount` / `currentCacheBytes`) and must stay that way:
+    // walking every header to recount loaded tiles on each eviction pass is
     // visibly expensive at a few thousand cached tiles.
     let loadedCount = this.loadedTileCount;
     let cacheBytes = this.currentCacheBytes;
@@ -3375,7 +3828,7 @@ export class SpatiotemporalTileset {
 
     if (!overSizeLimit && !overByteLimit) {
       // Under limits - only evict tiles outside grace period
-      const tilesToEvict: string[] = [];
+      const tilesToEvict: TileKey[] = [];
 
       // Tiles in the coverage index (current viewport at the primary zoom,
       // FULL time range) are exempt from the wall-clock grace timer: they are
@@ -3424,7 +3877,7 @@ export class SpatiotemporalTileset {
     // — the preload byte budget keeps that contribution small, and
     // preloadOverviewTier warns once if it somehow isn't), and never
     // in-flight headers (see the under-limit note above).
-    const candidates: Array<[string, SpatiotemporalTileHeader]> = [];
+    const candidates: Array<[TileKey, SpatioTemporalTileHeader]> = [];
     for (const [key, header] of this.tiles) {
       if (
         !neededTileKeys.has(key) &&
@@ -3442,7 +3895,7 @@ export class SpatiotemporalTileset {
 
     // Ordered eviction plan. `runway` marks tiers C/D — evictions that reach
     // into the protected playhead window (the thrash signal).
-    let plan: Array<{ key: string; header: SpatiotemporalTileHeader }>;
+    let plan: Array<{ key: TileKey; header: SpatioTemporalTileHeader }>;
     let runwayFrom: number;
 
     if (!coverageKeys || playhead === undefined) {
@@ -3453,7 +3906,7 @@ export class SpatiotemporalTileset {
         .map(([key, header]) => ({ key, header }));
       runwayFrom = plan.length; // nothing counts as a runway eviction
     } else {
-      const direction = this.prefetchDirection;
+      const direction = this.prefetch.direction;
       const timeWindow = this.currentViewport?.timeWindow ?? bucketMs;
       // Back-buffer keep + protected forward window, in sim-ms. A tile's
       // bucket spans [t, t + bucketMs]; distances are signed along the
@@ -3462,8 +3915,8 @@ export class SpatiotemporalTileset {
       const protectedAhead = Math.max(timeWindow, 2 * bucketMs);
 
       type Ranked = {
-        key: string;
-        header: SpatiotemporalTileHeader;
+        key: TileKey;
+        header: SpatioTemporalTileHeader;
         metric: number;
       };
       const tierA: Ranked[] = []; // non-coverage (stale viewports/zooms)
@@ -3497,7 +3950,7 @@ export class SpatiotemporalTileset {
       runwayFrom = tierA.length + tierB.length;
     }
 
-    const tilesToEvict: string[] = [];
+    const tilesToEvict: TileKey[] = [];
     let runwayEvicted = false;
 
     for (let i = 0; i < plan.length; i++) {
@@ -3521,16 +3974,9 @@ export class SpatiotemporalTileset {
 
     // A tier-C/D eviction means the limits forced us into the protected
     // runway: shrink the prefetch horizon (degrade speculation) instead of
-    // letting the fetch-evict-refetch loop continue. Recovery happens in
-    // prefetchFutureTiles after PRESSURE_RECOVERY_QUIET_MS of quiet — see the
-    // PRESSURE_* constants for the full loop.
-    if (runwayEvicted) {
-      this.prefetchPressureScale = Math.max(
-        PRESSURE_SCALE_MIN,
-        this.prefetchPressureScale * PRESSURE_SCALE_DECAY,
-      );
-      this.lastRunwayEvictionAt = Date.now();
-    }
+    // letting the fetch-evict-refetch loop continue. The policy recovers the
+    // scale once the evictions stop — see its pressure ladder.
+    if (runwayEvicted) this.prefetch.noteRunwayEviction();
 
     this.evictTiles(tilesToEvict);
   }
@@ -3539,10 +3985,10 @@ export class SpatiotemporalTileset {
    * Actually evict tiles from cache. Keeps the running byte counter +
    * loaded-tile count accurate.
    */
-  private evictTiles(tileKeys: string[]): void {
+  private evictTiles(tileKeys: TileKey[]): void {
     let evictedLoaded = false;
-    for (const tileKey of tileKeys) {
-      const header = this.tiles.get(tileKey);
+    for (const key of tileKeys) {
+      const header = this.tiles.get(key);
       if (header) {
         if (header.isLoading && !header.isLoaded) {
           // Belt-and-braces: a deleted in-flight header could still receive
@@ -3559,7 +4005,7 @@ export class SpatiotemporalTileset {
           if (header.isLoaded) this.loadedTileCount--;
           evictedLoaded = true;
         }
-        this.tiles.delete(tileKey);
+        this.tiles.delete(key);
         this.cacheStats.evictions++;
       }
     }
@@ -3652,15 +4098,27 @@ export class SpatiotemporalTileset {
     if (primaryZoom < 0) return []; // Defensive: neededTileKeys guarantees headers.
 
     const tiles: Tile[] = [];
+    // Registry keys already emitted. The stand-in passes can reach the same
+    // resident tile from several directions (one ancestor covers up to
+    // 4^depth missing cells), and a tile pushed twice is drawn twice.
+    const emitted = new Set<TileKey>();
     // Cover set at primary zoom: "x/y/t" of loaded primary tiles.
     const primaryCover = new Set<string>();
+    // "x/y/t" of primary cells the viewport NEEDS and has not received. These
+    // are the only cells OUTSIDE the viewport's own tile box that can still
+    // justify holding a coarse parent on screen — see the slack ring below.
+    const primaryPending = new Set<string>();
 
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
-      if (!header?.isLoaded || !header.tile) continue;
-      if (header.id.z === primaryZoom) {
+      if (!header || header.id.z !== primaryZoom) continue;
+      const cell = `${header.id.x}/${header.id.y}/${header.id.t}`;
+      if (header.isLoaded && header.tile) {
         tiles.push(header.tile);
-        primaryCover.add(`${header.id.x}/${header.id.y}/${header.id.t}`);
+        emitted.add(key);
+        primaryCover.add(cell);
+      } else {
+        primaryPending.add(cell);
       }
     }
 
@@ -3685,18 +4143,47 @@ export class SpatiotemporalTileset {
     // parent — that parent is the only holder of those features).
     const vpBounds = this.currentViewport?.bounds;
     const nPrimary = 1 << primaryZoom;
-    const vpMinX = vpBounds
-      ? lonToTileClamped(vpBounds.minLon, primaryZoom)
-      : 0;
-    const vpMaxX = vpBounds
-      ? lonToTileClamped(vpBounds.maxLon, primaryZoom)
-      : nPrimary - 1;
-    const vpMinY = vpBounds
+    const worldSpans: Array<[number, number]> = [[0, nPrimary - 1]];
+    // One interval normally; TWO when the viewport straddles the antimeridian
+    // (see viewportTileXIntervals) — the parent's child-cell scan below is
+    // intersected against each in turn.
+    let vpXSpans: Array<[number, number]> = vpBounds
+      ? viewportTileXIntervals(vpBounds, primaryZoom)
+      : worldSpans;
+    let vpMinY = vpBounds
       ? latToTileClamped(vpBounds.maxLat, primaryZoom) // y is flipped
       : 0;
-    const vpMaxY = vpBounds
+    let vpMaxY = vpBounds
       ? latToTileClamped(vpBounds.minLat, primaryZoom)
       : nPrimary - 1;
+    // An EMPTY viewport intersection is the one case where the clamp must not
+    // be applied at all. With no columns, or with `vpMinY > vpMaxY`, the inner
+    // loops never execute, `needed` stays false, and the coarse parent is
+    // DROPPED — but for a FALLBACK tile "I could not work out what you can
+    // see" has to mean KEEP, never discard. That inversion is reachable from a
+    // degenerate camera box (docs/roadmap/tile-loading-3d-2026-07.md §1) and it
+    // is precisely how a missing tile becomes a visible FLASH: the parent
+    // painted the pitched frame a moment ago and is then removed from content
+    // already on screen. Fall back to the unclamped child scan instead.
+    if (vpXSpans.length === 0 || vpMinY > vpMaxY) {
+      vpXSpans = worldSpans;
+      vpMinY = 0;
+      vpMaxY = nPrimary - 1;
+    }
+    // One primary-zoom tile of slack around the clamp, so an off-by-one at the
+    // frame edge — the render-time box is the CURRENT camera's, while
+    // `primaryCover` was built by a selection pass that may be a frame or two
+    // behind it — cannot drop a parent that is still painting the boundary.
+    // Ring cells are qualified below: they are never selected, so counting
+    // them like in-box cells would make every parent whose block reaches past
+    // the frame edge permanently "needed" — reinstating the full-copy-per-
+    // parent-level cost the clamp exists to remove.
+    const slackMinY = Math.max(0, vpMinY - 1);
+    const slackMaxY = Math.min(nPrimary - 1, vpMaxY + 1);
+    const slackXSpans: Array<[number, number]> = vpXSpans.map(([x0, x1]) => [
+      Math.max(0, x0 - 1),
+      Math.min(nPrimary - 1, x1 + 1),
+    ]);
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
       if (!header?.isLoaded || !header.tile) continue;
@@ -3707,41 +4194,82 @@ export class SpatiotemporalTileset {
       // if they do, fall through to include them.
       if (zDiff <= 0) {
         tiles.push(header.tile);
+        emitted.add(key);
         continue;
       }
       const range = 1 << zDiff;
       const baseX = x << zDiff;
       const baseY = y << zDiff;
-      // Intersect the parent's child-cell range with the viewport range.
-      const x0 = Math.max(baseX, vpMinX);
-      const x1 = Math.min(baseX + range - 1, vpMaxX);
-      const y0 = Math.max(baseY, vpMinY);
-      const y1 = Math.min(baseY + range - 1, vpMaxY);
+      // Intersect the parent's child-cell range with the SLACKENED viewport
+      // range; the unslackened one still decides how each cell is judged.
+      const y0 = Math.max(baseY, slackMinY);
+      const y1 = Math.min(baseY + range - 1, slackMaxY);
       let needed = false;
-      for (let cy = y0; cy <= y1 && !needed; cy++) {
-        for (let cx = x0; cx <= x1; cx++) {
-          if (!primaryCover.has(`${cx}/${cy}/${t}`)) {
-            needed = true;
-            break;
+      for (let s = 0; s < slackXSpans.length && !needed; s++) {
+        const [sx0, sx1] = slackXSpans[s];
+        const [vpMinX, vpMaxX] = vpXSpans[s];
+        const x0 = Math.max(baseX, sx0);
+        const x1 = Math.min(baseX + range - 1, sx1);
+        for (let cy = y0; cy <= y1 && !needed; cy++) {
+          const inRowBand = cy >= vpMinY && cy <= vpMaxY;
+          for (let cx = x0; cx <= x1; cx++) {
+            const cell = `${cx}/${cy}/${t}`;
+            if (primaryCover.has(cell)) continue;
+            // INSIDE the viewport box: unchanged semantics — any uncovered
+            // cell keeps the parent, including a cell the archive has no tile
+            // for at all (`--min-features-per-tile` omits deep-zoom tiles in
+            // sparse regions, and the parent is then the only holder of those
+            // features). IN THE SLACK RING: only a cell the viewport actually
+            // asked for and has not received.
+            if (
+              (inRowBand && cx >= vpMinX && cx <= vpMaxX) ||
+              primaryPending.has(cell)
+            ) {
+              needed = true;
+              break;
+            }
           }
         }
       }
-      if (needed) tiles.push(header.tile);
+      if (needed) {
+        tiles.push(header.tile);
+        emitted.add(key);
+      }
     }
 
-    // Pass 3: primary-zoom cells that are NEEDED but not yet loaded — the
-    // common case right after a zoom-OUT, while the new coarser tile is
-    // still in flight — fall back to already-resident FINER descendant
-    // tiles as a temporary stand-in. Pure reuse of tiles already sitting in
-    // `this.tiles` (typically what was on screen a moment ago): no new
-    // network requests, no change to what selectAndLoadTiles fetches. Only
-    // meaningful for 'best-available', which is the only strategy that ever
-    // shows anything but the exact requested zoom.
-    if (this.options.refinementStrategy !== 'no-overlap') {
-      for (const key of this.neededTileKeys) {
-        const header = this.tiles.get(key);
-        if (!header || header.id.z !== primaryZoom || header.isLoaded) continue;
-        const { z, x, y, t } = header.id;
+    // Pass 3: primary-zoom cells that are NEEDED but not yet loaded fall back
+    // to an already-resident tile from the zoom the camera just left — a FINER
+    // descendant after a zoom-out, a COARSER ancestor after a zoom-in. Pure
+    // reuse of what is already sitting in `this.tiles` (typically what was on
+    // screen a moment ago): it issues no fetches and changes nothing about
+    // what `selectAndLoadTiles` requests.
+    //
+    // Deliberately NOT gated on the refinement strategy. It was, on the
+    // reading that 'no-overlap' means "show exactly the requested zoom" — but
+    // 'no-overlap' exists to stop a parent and its children being DRAWN ON TOP
+    // OF EACH OTHER, and neither stand-in here can do that: a descendant
+    // covers only the area of a cell that has nothing else in it, and the
+    // ancestor branch refuses to draw when any primary cell under it is
+    // already loaded. All ten storm4d tilesets run 'no-overlap', so with the
+    // gate in place a single integer-zoom crossing — one scroll notch — blanked
+    // every layer at once with neither a parent nor a descendant to stand in.
+    // Run in TWO sub-passes, descendants first, because an ancestor covers
+    // 4^up primary cells and therefore has to know what happened to its
+    // SIBLING cells before it may draw. Interleaved (one cell fully resolved
+    // at a time, as this ran originally) the outcome depended on
+    // `neededTileKeys` iteration order: a cell that reached for an ancestor
+    // before its sibling had picked up its descendants got both, with the
+    // coarse tile laid straight over the finer stand-ins. On an opaque layer
+    // that is invisible; on a translucent one — every storm4d volume and
+    // isoline layer, the heatmaps, the flow corridors — it is a patch of
+    // doubled density that vanishes when the real primary tile lands.
+    const standInCover = new Set<string>();
+    const uncovered: TileId[] = [];
+    for (const key of this.neededTileKeys) {
+      const header = this.tiles.get(key);
+      if (!header || header.id.z !== primaryZoom || header.isLoaded) continue;
+      const { z, x, y, t } = header.id;
+      if (
         this.collectLoadedDescendants(
           z,
           x,
@@ -3749,8 +4277,28 @@ export class SpatiotemporalTileset {
           t,
           CHILD_LOOKAHEAD_LEVELS,
           tiles,
-        );
+          emitted,
+        )
+      ) {
+        // Finer detail wins when both exist, and taking only one of the two
+        // keeps the "never overlap" property: an ancestor drawn on top of a
+        // descendant of the same cell would double-paint that area.
+        standInCover.add(`${x}/${y}/${t}`);
+      } else {
+        uncovered.push(header.id);
       }
+    }
+    for (const { z, x, y, t } of uncovered) {
+      this.collectLoadedAncestor(
+        z,
+        x,
+        y,
+        t,
+        primaryCover,
+        standInCover,
+        tiles,
+        emitted,
+      );
     }
 
     return tiles;
@@ -3763,6 +4311,9 @@ export class SpatiotemporalTileset {
    * already-covered cell would just double-render the same area. Render-time
    * only (see {@link getVisibleTiles}): a quadrant with no resident tile at
    * any depth is simply left uncovered, never fetched.
+   *
+   * Returns whether ANY descendant was emitted, so the caller knows the cell
+   * already has a stand-in and does not also reach for a coarser one.
    */
   private collectLoadedDescendants(
     zoom: number,
@@ -3771,8 +4322,9 @@ export class SpatiotemporalTileset {
     t: number,
     depth: number,
     out: Tile[],
-  ): void {
-    if (depth <= 0 || zoom >= this.options.maxZoom) return;
+    emitted: Set<TileKey>,
+  ): boolean {
+    if (depth <= 0 || zoom >= this.options.maxZoom) return false;
     const childZoom = zoom + 1;
     const childCoords: Array<[number, number]> = [
       [2 * x, 2 * y],
@@ -3780,14 +4332,95 @@ export class SpatiotemporalTileset {
       [2 * x, 2 * y + 1],
       [2 * x + 1, 2 * y + 1],
     ];
+    let any = false;
     for (const [cx, cy] of childCoords) {
-      const key = this.tileIdToKey({ z: childZoom, x: cx, y: cy, t });
+      // BASE-TIER ONLY, deliberately: the synthesized id carries no
+      // `bucketMs`, so this matches base-tier descendants and never a
+      // temporal-LOD one. LOD tiles are scrub previews — standing one in for
+      // a settled tile would show a coarser time bucket than the viewport
+      // asked for, and outlive the scrub that produced it.
+      const key = tileKey({ z: childZoom, x: cx, y: cy, t });
       const header = this.tiles.get(key);
       if (header?.isLoaded && header.tile) {
-        out.push(header.tile);
-      } else {
-        this.collectLoadedDescendants(childZoom, cx, cy, t, depth - 1, out);
+        if (!emitted.has(key)) {
+          out.push(header.tile);
+          emitted.add(key);
+        }
+        any = true;
+      } else if (
+        this.collectLoadedDescendants(
+          childZoom,
+          cx,
+          cy,
+          t,
+          depth - 1,
+          out,
+          emitted,
+        )
+      ) {
+        any = true;
       }
+    }
+    return any;
+  }
+
+  /**
+   * Emit the nearest already-resident ANCESTOR of a needed-but-unloaded
+   * primary cell — the zoom-IN mirror of {@link collectLoadedDescendants}, and
+   * the case that leaves a `no-overlap` tileset with nothing at all on screen
+   * when one scroll notch crosses an integer zoom: the previous zoom's tiles
+   * are still resident, but nothing in the needed set refers to them.
+   *
+   * The overlap guard is what makes this safe to run under every refinement
+   * strategy: an ancestor covers 4^up primary cells, and any of those that
+   * already has content is being drawn in its own right, so laying the coarse
+   * copy over the top would render the same features twice. It draws only when
+   * the whole block it covers is still blank. Render-time only — nothing here
+   * fetches, pins, or changes the needed set.
+   *
+   * "Has content" is BOTH cover sets. `primaryCover` (loaded primary tiles)
+   * was the only one consulted originally, which missed the case this pass
+   * exists for: a camera sitting between two zooms, where some cells still
+   * hold the finer children they were drawn from and others hold nothing.
+   * Those descendant stand-ins are on screen exactly like a loaded primary
+   * is, so an ancestor spanning them double-paints exactly the same way.
+   */
+  private collectLoadedAncestor(
+    primaryZoom: number,
+    x: number,
+    y: number,
+    t: number,
+    primaryCover: Set<string>,
+    standInCover: Set<string>,
+    out: Tile[],
+    emitted: Set<TileKey>,
+  ): void {
+    for (let up = 1; up <= ANCESTOR_LOOKBACK_LEVELS; up++) {
+      const z = primaryZoom - up;
+      if (z < this.options.minZoom || z < 0) return;
+      const ax = x >> up;
+      const ay = y >> up;
+      // Base tier only, for the same reason as the descendant walk.
+      const key = tileKey({ z, x: ax, y: ay, t });
+      // Already on screen — either as a genuine parent fallback (pass 2) or
+      // as a sibling cell's stand-in. Either way this cell is covered.
+      if (emitted.has(key)) return;
+      const header = this.tiles.get(key);
+      if (!header?.isLoaded || !header.tile) continue;
+      const span = 1 << up;
+      const baseX = ax << up;
+      const baseY = ay << up;
+      for (let cy = baseY; cy < baseY + span; cy++) {
+        for (let cx = baseX; cx < baseX + span; cx++) {
+          // A coarser ancestor covers a strict superset of this block, so if
+          // this one would double-paint, so would every one above it.
+          const cell = `${cx}/${cy}/${t}`;
+          if (primaryCover.has(cell) || standInCover.has(cell)) return;
+        }
+      }
+      out.push(header.tile);
+      emitted.add(key);
+      return;
     }
   }
 
@@ -3807,7 +4440,7 @@ export class SpatiotemporalTileset {
       activeRequests: this.activeRequests.size,
       priorityQueueLength: this.priorityQueue.length,
       prefetchQueueLength: this.prefetchQueue.length,
-      prefetchPressureScale: this.prefetchPressureScale,
+      prefetchPressureScale: this.prefetch.pressureScale,
     };
   }
 
@@ -3839,6 +4472,16 @@ export class SpatiotemporalTileset {
     this.activeRequests.clear();
     this.currentCacheBytes = 0;
     this.loadedTileCount = 0;
+
+    // The failed-tile revival is bookkeeping ABOUT headers that no longer
+    // exist; firing it after a clear would enqueue ids from the torn-down
+    // registry.
+    this.retryKeys.clear();
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.retryDueAt = null;
 
     // The pinned overview tier went down with the registry. Settle a
     // still-pending preload (its promise must never hang) and reset, so a
@@ -3875,20 +4518,6 @@ export class SpatiotemporalTileset {
       this.bufferChangeTimer = null;
     }
     this.clear();
-  }
-
-  // Helper methods
-
-  private tileIdToKey(id: TileId): string {
-    // `@<bucketMs>` keeps a temporal-LOD (scrub preview) tile's identity
-    // distinct from the base tile sharing its z/x/y/t across EVERY keyed
-    // registry (cache headers, needed set, priority/prefetch queues). Base
-    // ids keep the historical key, so the coverage index — built from the
-    // base-tier enumeration — stays base-keyed and a resident LOD tile can
-    // never satisfy base coverage (the G7 preview-only contract).
-    return id.bucketMs !== undefined
-      ? `${id.z}/${id.x}/${id.y}/${id.t}@${id.bucketMs}`
-      : `${id.z}/${id.x}/${id.y}/${id.t}`;
   }
 
   // Tile-size estimation lives in archive.ts (estimateTileSize) so the archive

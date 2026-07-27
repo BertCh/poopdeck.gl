@@ -1,7 +1,7 @@
 /**
  * AnimatedHeatmapLayer — animated density heatmap built on CANONICAL deck.gl.
- * (Renamed from `HeatmapLayer`, which shadowed `@deck.gl/aggregation-layers`'
- * HeatmapLayer; the old name is no longer exported.)
+ * (The `Animated` prefix is load-bearing: a bare `HeatmapLayer` export shadows
+ * `@deck.gl/aggregation-layers`' layer of that name, which this one wraps.)
  *
  * This is a thin composite over `@deck.gl/aggregation-layers`'
  * {@link DeckHeatmapLayer}, the standard deck.gl heatmap. That layer does the
@@ -10,14 +10,13 @@
  * THEN maps the accumulated density through a colour ramp. Dense regions get
  * hotter because more splats land on the same pixels — true per-pixel density.
  *
- * ### Why this replaces the old custom-splat layer
- * The previous implementation hand-rolled a single-pass splat shader that
- * sampled the palette PER SPLAT (each point coloured by its own weight) and
- * additively blended the resulting *colours*. Overlapping points summed colours
- * instead of density, so hot zones blew out to white and the result never read
- * as a heatmap. Its own shader comments admitted the ramp was "sampled
- * per-splat, not per-pixel". This rewrite hands the splat+accumulate+ramp
- * pipeline to deck.gl's tested implementation instead.
+ * ### Why not a hand-rolled splat shader
+ * A single-pass splat that samples the palette PER SPLAT (each point coloured
+ * by its own weight) and additively blends the resulting *colours* sums
+ * COLOURS rather than density: overlapping points blow out to white and the
+ * result never reads as a heatmap. The ramp has to be applied per PIXEL, after
+ * accumulation — which is precisely what deck's splat+accumulate+ramp pipeline
+ * does, so this composite delegates to it rather than reimplementing it.
  *
  * ### Time animation
  * The canonical HeatmapLayer has no notion of time. We animate it with
@@ -37,15 +36,55 @@
  * a single global max, so there are no per-tile brightness seams, and gaussian
  * splats that straddle a tile border accumulate correctly. The consolidated
  * buffers are cached by visible-tile-set key and rebuilt only when that set (or
- * the channel config) changes — never per frame. Per frame, only the small
- * `filterRange` array changes, so deck.gl re-aggregates over the already-
- * uploaded GPU buffers without re-uploading anything.
+ * the channel config) changes — never per frame.
+ *
+ * COST OF A WINDOW MOVE (measured against the installed 9.3.2, not assumed):
+ * `filterRange` is an extension prop, so it is absent from `HeatmapLayer`'s
+ * `_propTypes` and therefore absent from the `ignoreProps` that
+ * `isAggregationDirty({compareAll: true})` builds — a changed `filterRange`
+ * reads as `changeFlags.dataChanged`. The re-aggregation that follows is cheap
+ * (the vertex buffers are already resident), but `_updateHeatmapState` also
+ * calls `_createWeightsTransform`, which destroys and re-links the whole
+ * `TextureTransform` pipeline, forces `_updateBounds(true)`, and rewrites two
+ * buffers. Doing that per tick per channel dominated the layer's cost and left
+ * `debounceTimeout` dead during playback. So `filterRange` /
+ * `filterSoftRange` are memoized by CONTENT here: a tick that lands inside the
+ * same window hands back the SAME array reference and the sublayer sees no
+ * change at all. Only a window that actually moved pays for the rebuild — and
+ * it has to, since that rebuild is what re-runs the aggregation.
+ *
+ * ### Geometry kinds
+ * Point tiles splat one gaussian per feature. LineString tiles splat one per
+ * VERTEX (walked through `startIndices`), which is what makes a "density of AIS
+ * tracks / flight paths" heatmap read correctly — indexing `positions` by
+ * feature index there would have splatted the first N vertices of the first few
+ * paths instead. Polygon tiles are rejected by {@link expectGeometry} with a
+ * named warning rather than mis-rendered.
  *
  * f32 time precision: absolute epoch-ms (~1.7e12) cannot live in a Float32
  * attribute. Both the per-point filter value AND `filterRange` are relativized
  * against a single `layerTimeOffset` (the first visible tile's offset), so both
  * sides of the shader comparison are small numbers that fit exactly in f32 —
  * the same scheme the TimeFilterExtension uses for point/path/trips layers.
+ *
+ * ### Two different "domains" — the units contract
+ * `colorDomain` (this layer's prop, and `HeatmapChannelSpec.colorDomain`) is a
+ * verbatim pass-through of deck's own prop and carries deck's own units: an
+ * ACCUMULATED-per-texel figure that `HeatmapLayer._updateWeightmap` further
+ * rescales by `metersPerPixel * weightsScale` for `aggregation: 'SUM'`. It is
+ * therefore neither a per-feature weight nor zoom-independent — see the prop
+ * doc before pinning one.
+ *
+ * `metadata.heatmapDomain` (baked by `stt-build`'s `compute_heatmap_domain`) is
+ * `[min, p95]` of the RAW per-feature weight COLUMN. Those units are not
+ * comparable to `colorDomain`'s, and the archive cannot know the accumulated
+ * value a texel will reach (that depends on point density, radius and zoom).
+ * The archive domain is consequently NOT forwarded as `colorDomain` — doing so
+ * put the ramp top orders of magnitude above any real texel, collapsed the map
+ * onto the bottom of the ramp, and (because `threshold` is ignored once
+ * `colorDomain` is set) removed the alpha cutoff that would have hidden it. It
+ * is instead applied where its units ARE valid: as a per-point weight
+ * normaliser (see {@link AnimatedHeatmapLayer.archiveWeightScale}).
  */
 
 import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
@@ -65,8 +104,9 @@ import { warnOnce } from '../../lib/log.js';
 import { updateTriggersDigest } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type { WeightAccessorValue } from '../../lib/accessor-alias.js';
-import { DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
+import { DEFAULT_HEATMAP_COLOR_RANGE, GeometryType } from '@poopdeck.gl/core';
 import type { Tile } from '@poopdeck.gl/core';
+import { expectGeometry } from '../../lib/geometry-guard.js';
 
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
@@ -96,10 +136,12 @@ export interface HeatmapChannelSpec {
   /** Per-class color ramp (low → high density). Defaults to OrRd. */
   colorRange?: Color[];
   /**
-   * Pinned [min, max] density domain. Setting this skips the canonical layer's
-   * per-frame max-normalisation (which otherwise makes colours "breathe" as the
-   * window slides). When unset the layer auto-normalises against the current
-   * window's max density.
+   * Pinned `[min, max]` ACCUMULATED-density domain, in deck.gl's own
+   * `HeatmapLayer.colorDomain` units — see the top-level
+   * {@link _AnimatedHeatmapLayerProps.colorDomain} doc for the full units
+   * contract. NOT a per-feature weight range, and NOT the archive's
+   * `metadata.heatmapDomain` (which is measured in raw weight-column units and
+   * is applied as a weight normaliser instead).
    */
   colorDomain?: [number, number];
   /** Per-class weight multiplier folded into each point's accumulation weight. */
@@ -109,7 +151,15 @@ export interface HeatmapChannelSpec {
 /** Props added by {@link AnimatedHeatmapLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link AnimatedHeatmapLayerProps}). */
 export interface _AnimatedHeatmapLayerProps {
-  /** Splat radius in pixels. Defaults to 30. */
+  /**
+   * Splat radius in pixels, 1..100 (deck's own clamp).
+   *
+   * DELIBERATE DEFAULT DRIFT: `30` here vs deck's `50`. STT tiles are dense
+   * (a summary-zoom viewport routinely carries 10⁵–10⁶ points), and deck's 50px
+   * kernel merges every feature into one blob at those densities. Pass
+   * `radiusPixels: 50` for byte-identical deck behaviour.
+   * @default 30
+   */
   radiusPixels?: number;
   /** Global intensity multiplier (canonical HeatmapLayer `intensity`). */
   intensity?: number;
@@ -126,15 +176,36 @@ export interface _AnimatedHeatmapLayerProps {
   /** Color ramp used when `channels` is unset (single-class mode). */
   colorRange?: Color[];
   /**
-   * Pinned [min, max] density domain for the default (single-class) mode.
-   * When unset (null) the layer auto-normalises (and reads
-   * metadata.heatmapDomain when the archive carries one).
+   * Pinned `[min, max]` ACCUMULATED-density domain for the default
+   * (single-class) mode. `null` (the default) auto-normalises against the
+   * current window's peak texel.
+   *
+   * UNITS — read before pinning. This is a verbatim pass-through of deck's own
+   * `HeatmapLayer.colorDomain`, which is NOT a per-feature weight range. It is
+   * compared against the value a weights-texture TEXEL accumulates (the sum of
+   * every gaussian splat landing on it), and for `aggregation: 'SUM'`
+   * `HeatmapLayer._updateWeightmap` further rescales it by
+   * `metersPerPixel * weightsScale`, where
+   * `metersPerPixel = viewport.distanceScales.metersPerUnit[2] * commonBoundsWidth
+   * / weightsTextureSize`. Two consequences: (1) the value is in
+   * "accumulated weight per meter", not in weight-column units; (2) it is
+   * ZOOM- and LATITUDE-dependent, so a domain pinned at one zoom does not mean
+   * the same thing at another. Setting it also disables {@link threshold}
+   * (deck's ramp shader takes the `colorDomain` branch and never reads the
+   * threshold-derived alpha floor). Tune it against the rendered map rather
+   * than deriving it from the data.
+   *
+   * The archive's `metadata.heatmapDomain` is deliberately NOT used here — it
+   * is measured in raw weight-column units, which are not convertible into
+   * these without knowing point density. See the module doc.
    */
   colorDomain?: [number, number] | null;
   /**
    * Density fraction below which pixels render transparent (canonical
-   * HeatmapLayer `threshold`). Only takes effect when `colorDomain` is unset.
-   * Default 0.05.
+   * HeatmapLayer `threshold`), 0..1. Only takes effect when `colorDomain` is
+   * unset — deck's ramp shader switches to the pinned domain and stops
+   * deriving an alpha floor at all.
+   * @default 0.05
    */
   threshold?: number;
   /**
@@ -159,14 +230,14 @@ export interface _AnimatedHeatmapLayerProps {
    */
   aggregation?: 'SUM' | 'MEAN';
   /**
-   * Side length of the density texture — canonical HeatmapLayer pass-through.
-   * Larger = finer detail at higher GPU cost.
+   * Side length of the density texture — canonical HeatmapLayer pass-through,
+   * 128..2048 (deck's own clamp). Larger = finer detail at higher GPU cost.
    * @default 2048
    */
   weightsTextureSize?: number;
   /**
    * Interaction debounce (ms) before re-aggregating during pan/zoom —
-   * canonical HeatmapLayer pass-through.
+   * canonical HeatmapLayer pass-through, 0..1000 (deck's own clamp).
    * @default 500
    */
   debounceTimeout?: number;
@@ -178,9 +249,21 @@ export type AnimatedHeatmapLayerProps = _AnimatedHeatmapLayerProps &
 
 interface ResolvedChannel {
   id: string;
+  /** Per-channel weight multiplier from {@link HeatmapChannelSpec.intensity}. */
   intensity: number;
+  /**
+   * Archive-derived per-point weight NORMALISER (see
+   * {@link AnimatedHeatmapLayer.archiveWeightScale}), folded into the same
+   * per-point multiply as {@link intensity}. `1` when the archive bakes no
+   * usable domain.
+   */
+  weightScale: number;
   colorRange: Color[];
-  /** null → let the canonical layer auto-normalise (no pinned domain). */
+  /**
+   * Pinned deck `colorDomain` (accumulated-per-texel units) from the caller's
+   * props ONLY; `null` → let the canonical layer auto-normalise. The archive's
+   * raw-weight domain is never routed here — see the module doc.
+   */
   colorDomain: [number, number] | null;
   categoryFilter?: { property: string; values: string[] };
 }
@@ -201,9 +284,15 @@ interface ChannelData {
 // which motivated the previous `static defaultProps: any`).
 const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
   ...SpatioTemporalLayer.defaultProps,
-  radiusPixels: { type: 'number', value: 30, min: 1 },
+  // Upstream's `max` clamps are restored on every prop that has one
+  // (radiusPixels 100, threshold 1, weightsTextureSize 2048, debounceTimeout
+  // 1000). Dropping them didn't widen the accepted range — the sublayer's
+  // validator rejects the same values under `deck.setProps({debug: true})` —
+  // it only moved the throw from OUR boundary into deck's internals, where the
+  // error names a generated sublayer id instead of the prop the caller set.
+  radiusPixels: { type: 'number', value: 30, min: 1, max: 100 },
   intensity: { type: 'number', value: 1, min: 0 },
-  threshold: { type: 'number', value: 0.05, min: 0 },
+  threshold: { type: 'number', value: 0.05, min: 0, max: 1 },
   colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
   colorDomain: { type: 'array', value: null, compare: true, optional: true },
   channels: { type: 'array', value: null, compare: true, optional: true },
@@ -218,8 +307,8 @@ const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
   fadeInDuration: { type: 'number', value: 0, min: 0 },
   fadeOutDuration: { type: 'number', value: 0, min: 0 },
   aggregation: 'SUM',
-  weightsTextureSize: { type: 'number', value: 2048, min: 128 },
-  debounceTimeout: { type: 'number', value: 500, min: 0 },
+  weightsTextureSize: { type: 'number', value: 2048, min: 128, max: 2048 },
+  debounceTimeout: { type: 'number', value: 500, min: 0, max: 1000 },
 };
 
 /**
@@ -248,8 +337,18 @@ export class AnimatedHeatmapLayer<
   /** Wall-clock floor for the filterRange (re-aggregation) cadence. */
   private _lastFilterUpdateWall = 0;
 
+  /**
+   * Last emitted `filterRange` / `filterSoftRange`, kept so an unchanged window
+   * hands the sublayers back the SAME array reference. See {@link stableRange}
+   * and the "cost of a window move" note in the module doc.
+   */
+  private _filterRange: [number, number] | null = null;
+  private _filterSoftRange: [number, number] | null = null;
+
   finalizeState(context: LayerContext): void {
     this._channelCache.clear();
+    this._filterRange = null;
+    this._filterSoftRange = null;
     super.finalizeState(context);
   }
 
@@ -267,7 +366,7 @@ export class AnimatedHeatmapLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): `getWeight` wins when set; a
+   * Accessor-alias resolution: `getWeight` wins when set; a
    * function-valued alias warns once and falls back to `weightProperty`.
    * Column-name semantics only — there is no constant-weight prop.
    */
@@ -297,7 +396,9 @@ export class AnimatedHeatmapLayer<
     if (nowWall - this._lastFilterUpdateWall >= intervalMs) {
       this._lastFilterUpdateWall = nowWall;
       // setState (not setNeedsRedraw) is what re-runs renderLayers() and thus
-      // pushes a fresh filterRange into the aggregation sublayers.
+      // re-evaluates the window. A tick whose window is unchanged re-emits the
+      // SAME filterRange reference, so the sublayers diff clean and skip the
+      // TextureTransform rebuild entirely (see the module doc).
       this.setState({ frameNumber: (this.state.frameNumber || 0) + 1 });
     }
   }
@@ -313,18 +414,21 @@ export class AnimatedHeatmapLayer<
     const tileSetKey = tiles.map(tileKey).sort().join('|');
 
     // Time window, relativized against the layer offset so it sits in the same
-    // small-number f32 space as the per-point filter values. A FRESH array is
-    // allocated every render on purpose: the canonical aggregation layer
-    // reference-compares filterRange, so reusing the array would freeze the
-    // animation (it would never see a "changed" prop and never re-aggregate).
+    // small-number f32 space as the per-point filter values. The array is
+    // memoized by CONTENT: a MOVED window must hand the sublayer a fresh
+    // reference (that is what flags dataChanged and re-runs the aggregation),
+    // but a tick that lands inside the SAME window must not — an unconditional
+    // fresh literal made every tick destroy and re-link the weights
+    // TextureTransform. See the module doc.
     const time = this.getCurrentTime();
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const halfWindow = this.props.timeWindow / 2;
     const center = time - layerTimeOffset;
-    const filterRange: [number, number] = [
+    const filterRange = (this._filterRange = stableRange(
       center - halfWindow,
       center + halfWindow,
-    ];
+      this._filterRange,
+    ));
 
     // Optional soft edges from fadeIn/fadeOut, clamped inside the hard range.
     // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
@@ -334,7 +438,11 @@ export class AnimatedHeatmapLayer<
     const softMax = filterRange[1] - fadeOut;
     const filterSoftRange: [number, number] | null =
       (fadeIn > 0 || fadeOut > 0) && softMin < softMax
-        ? [softMin, softMax]
+        ? (this._filterSoftRange = stableRange(
+            softMin,
+            softMax,
+            this._filterSoftRange,
+          ))
         : null;
 
     // Prune cache entries for channels that no longer exist.
@@ -371,7 +479,9 @@ export class AnimatedHeatmapLayer<
           radiusPixels: this.props.radiusPixels,
           intensity: this.props.intensity,
           colorRange: channel.colorRange as any,
-          // null → canonical auto-normalisation; pinned → stable (no breathing).
+          // null → canonical auto-normalisation (and a live `threshold`);
+          // pinned → the caller's deck-units domain. NEVER the archive's
+          // raw-weight domain — see the module doc's units contract.
           colorDomain: channel.colorDomain ?? null,
           threshold: this.props.threshold,
           weightsTextureSize: this.props.weightsTextureSize,
@@ -407,18 +517,23 @@ export class AnimatedHeatmapLayer<
     const filterSig = channel.categoryFilter
       ? `${channel.categoryFilter.property}:${channel.categoryFilter.values.join(',')}`
       : '';
+    // The per-channel intensity and the archive-derived weight normaliser are
+    // folded into ONE per-point multiply at consolidation time (both are pure
+    // scalars on the weight column), so the cache key carries their product.
+    const weightMultiplier = channel.intensity * channel.weightScale;
     // updateTriggers ride the key so a user trigger bump (e.g. getWeight)
     // re-consolidates the channel buffers.
-    const key = `${tileSetKey}::${weightProp ?? ''}::${layerTimeOffset}::${filterSig}::${channel.intensity}::${updateTriggersDigest(this.props.updateTriggers)}`;
+    const key = `${tileSetKey}::${weightProp ?? ''}::${layerTimeOffset}::${filterSig}::${weightMultiplier}::${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const cached = this._channelCache.get(channelIndex);
     if (cached && cached.key === key) return cached.data;
 
     const data = buildConsolidatedChannelData(
       tiles,
-      channel,
+      { categoryFilter: channel.categoryFilter, intensity: weightMultiplier },
       weightProp,
       layerTimeOffset,
+      this.props.id,
     );
     if (data) {
       this._channelCache.set(channelIndex, { key, data });
@@ -430,6 +545,7 @@ export class AnimatedHeatmapLayer<
 
   private resolveChannels(): ResolvedChannel[] {
     const { channels } = this.props;
+    const weightProp = this.weightPropertyValue();
     if (channels && channels.length > 0) {
       if (channels.length > MAX_CHANNELS) {
         warnOnce(
@@ -440,8 +556,9 @@ export class AnimatedHeatmapLayer<
       return channels.slice(0, MAX_CHANNELS).map((ch) => ({
         id: ch.id,
         intensity: ch.intensity ?? 1,
+        weightScale: this.archiveWeightScale(ch.id, weightProp),
         colorRange: ch.colorRange ?? DEFAULT_COLOR_RANGE,
-        colorDomain: ch.colorDomain ?? this.archiveHeatmapDomain(ch.id),
+        colorDomain: ch.colorDomain ?? null,
         categoryFilter: ch.categoryFilter,
       }));
     }
@@ -449,19 +566,23 @@ export class AnimatedHeatmapLayer<
       {
         id: 'default',
         intensity: 1,
+        weightScale: this.archiveWeightScale('default', weightProp),
         colorRange: this.props.colorRange,
-        colorDomain:
-          this.props.colorDomain ?? this.archiveHeatmapDomain('default'),
+        colorDomain: this.props.colorDomain ?? null,
       },
     ];
   }
 
   /**
-   * Pull the per-class density domain baked at build time from archive
-   * metadata. Returns null when the archive predates the field (or the class
-   * isn't present) — in which case the canonical layer auto-normalises.
+   * Pull the per-class weight domain baked at build time from archive metadata
+   * (`compute_heatmap_domain` → `[min, p95]` of the raw weight COLUMN). Returns
+   * null when the archive predates the field or the class isn't present.
    */
-  private archiveHeatmapDomain(channelId: string): [number, number] | null {
+  private archiveHeatmapDomain(channelId: string): {
+    min: number;
+    max: number;
+    property?: string;
+  } | null {
     const metadata = this.state.metadata as any;
     const domain = metadata?.heatmapDomain;
     if (!domain || !Array.isArray(domain.classes)) return null;
@@ -475,8 +596,71 @@ export class AnimatedHeatmapLayer<
     ) {
       return null;
     }
-    return [entry.min, entry.max];
+    return entry;
   }
+
+  /**
+   * Per-point weight normaliser derived from the archive's baked
+   * `[min, p95]` weight-column domain: `1 / p95`, i.e. each point's weight is
+   * re-expressed in units of "one p95-magnitude feature".
+   *
+   * WHY THIS AND NOT `colorDomain`. The baked domain measures the raw weight
+   * COLUMN (earthquake magnitude, AIS speed, …); deck's `colorDomain` measures
+   * what a texel ACCUMULATES, further rescaled by a zoom- and
+   * latitude-dependent `metersPerPixel`. The two are not inter-convertible at
+   * build time — the accumulated value depends on how many points land in a
+   * texel, which depends on the viewport. Feeding the raw domain in as
+   * `colorDomain` put the ramp top ~10³–10⁴× above any real texel and flattened
+   * the map onto the bottom of the ramp. A pure SCALE on the weights is the
+   * conversion that IS dimensionally valid: it is exact (`weight / p95` is
+   * still a weight), zoom-independent, and it keeps the accumulated values near
+   * the 1-per-splat range the 8-bit `rgba8unorm` fallback path
+   * (`weightsScale = 1/255`) needs to avoid saturating.
+   *
+   * Returns `1` (no-op) when there is no weight column in play (every point
+   * already weighs exactly 1), when the archive bakes no usable entry, or when
+   * `p95 <= 0`. An entry measured from a DIFFERENT column than the one being
+   * rendered is ignored with a named warning — silently scaling magnitudes by a
+   * speed percentile would be worse than not scaling at all.
+   */
+  private archiveWeightScale(
+    channelId: string,
+    weightProp: string | undefined,
+  ): number {
+    if (!weightProp) return 1;
+    const entry = this.archiveHeatmapDomain(channelId);
+    if (!entry) return 1;
+    if (typeof entry.property === 'string' && entry.property !== weightProp) {
+      warnOnce(
+        `AnimatedHeatmapLayer:domainPropertyMismatch:${channelId}:${weightProp}`,
+        `[AnimatedHeatmapLayer] archive heatmapDomain for channel ` +
+          `'${channelId}' was measured from '${entry.property}' but the layer ` +
+          `is weighting by '${weightProp}'. Ignoring the baked domain — ` +
+          `rebuild with \`stt-build --heatmap-weight ${weightProp}\` to bake a ` +
+          'matching one, or drop `weightProperty`/`getWeight`.',
+      );
+      return 1;
+    }
+    if (!Number.isFinite(entry.max) || entry.max <= 0) return 1;
+    return 1 / entry.max;
+  }
+}
+
+/**
+ * Return `last` when it already holds `[lo, hi]`, otherwise a fresh tuple.
+ * Reference stability is the whole point: deck's aggregation layer reads a
+ * changed `filterRange` reference as `dataChanged`, which costs a full
+ * TextureTransform rebuild — so an unmoved window must reuse the array.
+ */
+function stableRange(
+  lo: number,
+  hi: number,
+  last: [number, number] | null | undefined,
+): [number, number] {
+  // Truthiness, not `!== null`: the Object.create test harnesses (and any
+  // subclass that skips the field initializers) leave `last` undefined.
+  if (last && last[0] === lo && last[1] === hi) return last;
+  return [lo, hi];
 }
 
 function tileKey(tile: Tile): string {
@@ -493,13 +677,33 @@ function pickLayerTimeOffset(tiles: Tile[]): number {
   return 0;
 }
 
+/** Geometry kinds this consolidator can read. */
+const ACCEPTED_GEOMETRY = [
+  GeometryType.Point,
+  GeometryType.LineString,
+] as const;
+
 /**
- * Consolidate every visible tile's points for one channel into a single binary
+ * Consolidate every visible tile's splats for one channel into a single binary
  * `data: { length, attributes }` payload. Features that don't pass the
  * channel's category filter are simply omitted from the buffers (the GPU never
  * sees them). Positions are kept in Float64 (matching the canonical layer's
  * float64 `getPosition` accessor); times are relativized against
  * `layerTimeOffset` so they fit in f32.
+ *
+ * GEOMETRY. Point tiles emit ONE splat per feature at `positions[i * dims]`.
+ * LineString tiles emit one splat per VERTEX, walked through `startIndices` —
+ * on a trip/track archive (`flights`, `drifters`, `ais-*`) `featureCount` is
+ * the PATH count while `positions` holds every vertex, so the old
+ * feature-indexed read splatted the first N vertices of the first few paths at
+ * those paths' start times: a blob at the head of track #1 rather than a
+ * track-density map, with no error. Per-vertex times come from
+ * `vertexTimestamps` when the archive baked them, otherwise the whole path
+ * takes its feature start time (no haversine synthesis here — the heatmap has
+ * no per-vertex identity to preserve and this runs over every visible tile).
+ * Polygon tiles are rejected by {@link expectGeometry} with a named warning.
+ *
+ * `layerId` only names the layer in that warning.
  *
  * Exported for unit testing (no GPU needed).
  */
@@ -511,11 +715,15 @@ export function buildConsolidatedChannelData(
   },
   weightProp: string | undefined,
   layerTimeOffset: number,
+  layerId = 'AnimatedHeatmapLayer',
 ): ChannelData | null {
-  // Pass 1: per tile-layer, compute the category mask + retained count.
+  // Pass 1: per tile-layer, compute the category mask + emitted splat count.
   interface Part {
     binary: import('@poopdeck.gl/core').BinaryFeatures;
     mask: Uint8Array | null;
+    /** Walk vertices via startIndices rather than one position per feature. */
+    isPath: boolean;
+    /** Number of SPLATS this part emits (vertices for paths, features else). */
     count: number;
   }
   const parts: Part[] = [];
@@ -525,9 +733,23 @@ export function buildConsolidatedChannelData(
     for (const tileLayer of tile.layers) {
       const binary = tileLayer.features;
       if (binary.featureCount === 0) continue;
+      if (
+        !expectGeometry(
+          binary.geometryType,
+          ACCEPTED_GEOMETRY,
+          layerId,
+          tileLayer.name,
+        )
+      ) {
+        continue;
+      }
+      // A LineString tile without startIndices can't be walked; treat it as
+      // point-shaped (the decoder always emits them, so this is fixtures only).
+      const isPath =
+        binary.geometryType === GeometryType.LineString &&
+        binary.startIndices != null;
 
       let mask: Uint8Array | null = null;
-      let count = binary.featureCount;
 
       if (channel.categoryFilter) {
         const cat = binary.categoricalProps[channel.categoryFilter.property];
@@ -540,17 +762,26 @@ export function buildConsolidatedChannelData(
         }
         if (allowed.size === 0) continue;
         mask = new Uint8Array(binary.featureCount);
-        count = 0;
         for (let i = 0; i < binary.featureCount; i++) {
-          if (allowed.has(cat.indices[i])) {
-            mask[i] = 1;
-            count++;
-          }
+          if (allowed.has(cat.indices[i])) mask[i] = 1;
         }
-        if (count === 0) continue;
       }
 
-      parts.push({ binary, mask, count });
+      let count = 0;
+      if (isPath) {
+        const startIndices = binary.startIndices!;
+        for (let i = 0; i < binary.featureCount; i++) {
+          if (mask && !mask[i]) continue;
+          count += startIndices[i + 1] - startIndices[i];
+        }
+      } else if (mask) {
+        for (let i = 0; i < binary.featureCount; i++) if (mask[i]) count++;
+      } else {
+        count = binary.featureCount;
+      }
+      if (count === 0) continue;
+
+      parts.push({ binary, mask, isPath, count });
       total += count;
     }
   }
@@ -564,18 +795,37 @@ export function buildConsolidatedChannelData(
   const perChannelIntensity = channel.intensity;
 
   let dst = 0;
-  for (const { binary, mask } of parts) {
+  for (const { binary, mask, isPath } of parts) {
     const dims = binary.positionDimensions ?? 2;
     const weightSrc = weightProp ? binary.numericProps[weightProp] : null;
     const tileToLayerDelta = binary.timeOffset - layerTimeOffset;
+    const startIndices = isPath ? binary.startIndices! : null;
+    const vertexTimes = isPath ? binary.vertexTimestamps : undefined;
     for (let i = 0; i < binary.featureCount; i++) {
       if (mask && !mask[i]) continue;
+      const weight = (weightSrc ? weightSrc[i] : 1) * perChannelIntensity;
+      const featureTime = binary.startTimes[i] + tileToLayerDelta;
+      if (startIndices) {
+        // One splat per vertex; the feature's weight applies to each of them.
+        for (let v = startIndices[i]; v < startIndices[i + 1]; v++) {
+          const srcIdx = v * dims;
+          positions[dst * 3] = binary.positions[srcIdx];
+          positions[dst * 3 + 1] = binary.positions[srcIdx + 1];
+          positions[dst * 3 + 2] = 0;
+          weights[dst] = weight;
+          filterValues[dst] = vertexTimes
+            ? vertexTimes[v] + tileToLayerDelta
+            : featureTime;
+          dst++;
+        }
+        continue;
+      }
       const srcIdx = i * dims;
       positions[dst * 3] = binary.positions[srcIdx];
       positions[dst * 3 + 1] = binary.positions[srcIdx + 1];
       positions[dst * 3 + 2] = 0;
-      weights[dst] = (weightSrc ? weightSrc[i] : 1) * perChannelIntensity;
-      filterValues[dst] = binary.startTimes[i] + tileToLayerDelta;
+      weights[dst] = weight;
+      filterValues[dst] = featureTime;
       dst++;
     }
   }

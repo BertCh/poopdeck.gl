@@ -349,7 +349,8 @@ tuning — all P4 polish on a feature with no consumer, so none of it is schedul
 
 ## 8. Follow-ups — triaged 2026-07-01
 
-**The one open item — multi-source browser-verify (user-run):** (1) a
+**The one open item — multi-source browser-verify (user-run; part of L2 in the
+[roadmap README](./README.md)):** (1) a
 multi-source composite (radar / AV cockpit) plays with all REQUIRED sources
 locked, no overlay racing ahead of unloaded required data; (2) single-dataset
 demos unchanged — no throughput regression, identical bar; (3) under a slow

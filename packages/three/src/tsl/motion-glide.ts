@@ -4,15 +4,15 @@
 
 /**
  * `motion-glide` — the GPU interpolation node for the motionInterpolation
- * ("glide") family (Wave 1 item 7). Given a per-track keyframe DATA TEXTURE
+ * ("glide") family. Given a per-track keyframe DATA TEXTURE
  * (`../lib/track-keyframes.ts` bakes it: RGB = RTC-local position, A = heading
  * in radians) and the shared `currentTime` uniform, the VERTEX stage maps time
  * to a fractional frame position, fetches the two bracketing keyframe columns
  * and `mix()`es them — so the instance GLIDES between its samples with ZERO
  * per-frame CPU attribute writes. Only the time uniform changes each frame.
  *
- * O(1) lookup (the roadmap's "fixed-rate resample" verdict): the CPU already
- * resampled each track onto a uniform grid, so the shader is a straight
+ * O(1) lookup: the CPU already resampled each track onto a uniform fixed-rate
+ * grid, so the shader is a straight
  * `frame = (t − t0)·invDt` — no per-vertex binary search. The two-fetch + `mix`
  * is done explicitly (rather than leaning on hardware LINEAR filtering, which
  * needs the WebGL2 `OES_texture_float_linear` extension for float textures), so
@@ -20,12 +20,12 @@
  * alike. The exact same texel arithmetic is mirrored on the CPU in
  * {@link import('../lib/track-keyframes.js').glideSampleCpu} for unit testing.
  *
- * STORAGE-BUFFER NOTE. The roadmap's end-state swaps this NEAREST data-texture
- * fetch for a WebGPU `storage()` / `instancedArray` read (a strictly-WebGPU
- * optimisation). That is a drop-in replacement of the `keyframeTexelNode` fetch
- * ONLY — the CPU assembly, the per-instance locator attributes and the material
- * wiring are all store-agnostic. The data-texture path is the portable baseline
- * that runs on BOTH backends, so it ships first; see the campaign doc.
+ * STORAGE-BUFFER NOTE. This NEAREST data-texture fetch can be swapped for a
+ * WebGPU `storage()` / `instancedArray` read (a strictly-WebGPU optimisation).
+ * That is a drop-in replacement of the `keyframeTexelNode` fetch ONLY — the CPU
+ * assembly, the per-instance locator attributes and the material wiring are all
+ * store-agnostic. The data-texture path is the portable baseline: it is the one
+ * that runs on BOTH backends.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

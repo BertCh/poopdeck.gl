@@ -6,10 +6,10 @@
 > [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md), which also
 > specifies the v5 directory codec (§4 there). The single-file layout under
 > "Top-level layout" below documents the **retired single-file container** —
-> removed from the Rust toolchain (no writer, reader, or transcode) and no
-> longer read by either reference reader; it survives only as a committed legacy
-> fixture (`sample.stt`) that a test helper transcodes to packed so the existing
-> cross-implementation tests keep exercising its tiles.
+> removed from the Rust toolchain (no writer, reader, or transcode), read by
+> neither reference reader, and no longer represented by any committed
+> fixture. It is a **paper record** so an archived `.stt` file can still be
+> identified and hand-parsed; nothing in this document depends on it.
 
 An STT dataset combines a spatial tile pyramid with a temporal axis. Tile
 payloads are **Apache Arrow IPC** record batches with **GeoArrow**-encoded
@@ -38,10 +38,8 @@ the packed spec's header.)
 > container has been **removed** from the Rust toolchain — `stt-build` emits the
 > packed format directly (the non-arrow `--streaming` path streams into the
 > `PackWriter`). Neither reference reader decodes it anymore (the TypeScript
-> reader is packed-only). The layout below is retained only as a paper record of
-> the committed `sample.stt` fixture, which a test-only helper
-> (`packages/core/test/helpers/packed-fixture.ts`, `parseV4`) transcodes to an
-> in-memory packed dataset before the packed reader consumes it.
+> reader is packed-only), and the last `sample.stt` fixture was deleted with
+> the v1 expunge. The layout below is retained purely as a paper record.
 
 ```
 ┌─────────────────────────┐  offset 0
@@ -68,21 +66,22 @@ requests per addressable unit.
 The first four bytes are the magic number; the trailing byte is the format
 version.
 
-| Magic     | Version | Status                                                                                                                                                 |
-| --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `STT\x01` | 1       | retired (pre-Arrow protobuf tiles)                                                                                                                     |
-| `STT\x02` | 2       | retired (gzip + BLAKE3-64 dedup)                                                                                                                       |
-| `STT\x03` | 3       | retired (zstd + CRC32C, no dedup)                                                                                                                      |
-| `STT\x04` | 4       | single-file container (dedup + run-length directory); retired — read by neither reference reader, kept only as the committed `sample.stt` test fixture |
+| Magic     | Version | Status                                                                                                                                              |
+| --------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STT\x01` | 1       | retired (pre-Arrow protobuf tiles)                                                                                                                  |
+| `STT\x02` | 2       | retired (gzip + BLAKE3-64 dedup)                                                                                                                    |
+| `STT\x03` | 3       | retired (zstd + CRC32C, no dedup)                                                                                                                   |
+| `STT\x04` | 4       | single-file container (dedup + run-length directory); retired — read by neither reference reader and no longer represented by any committed fixture |
 
 > The **current container is the packed format**, which has no single-file magic
 > — a dataset is identified by `manifest.json` with `"format": "stt-packed"`. The
 > magic table above applies only to single-file archives, which neither reference
 > reader decodes anymore: the Rust in-repo reader has been removed, and the
 > TypeScript reader is packed-only (`packages/core/src/directory.ts` rejects any
-> non-v5 directory). The v4 codec survives only as a test-only helper (`parseV4`)
-> that transcodes the frozen `sample.stt` fixture. Readers MUST refuse archives
-> whose version they do not understand.
+> non-v5 directory). A v4-parsing test helper (`parseV4` in
+> `packages/core/test/helpers/packed-fixture.ts`) still exists but has no
+> fixture left to read and no caller. Readers MUST refuse archives whose
+> version they do not understand.
 
 ## Header (64 bytes, little-endian)
 
@@ -114,9 +113,10 @@ is.
 
 Each blob is **zstd(layer frame)** (the default — `stt-build` is zstd-only)
 or the raw layer frame, depending on the header's `compression` byte.
-Compression **byte 1 (gzip) is retired/reserved**: no writer ever emitted it,
-and no reference reader accepts a v2 (gzip) archive, so byte 1 is never observed
-on a v4 blob.
+Compression **byte 1 (gzip) is retired**: it was the codec of the `STT\x02`
+archive (row 2 of the table above), which no reference reader accepts, so byte 1
+is never observed on a v4 blob. No v4 or packed writer has ever emitted it, and
+no released build can read or write it.
 
 **Deduplication.** The packed `PackWriter` blake3-hashes each compressed blob
 and writes byte-identical blobs once — a static cell repeated across time
@@ -136,11 +136,18 @@ in its directory entry. Verification status:
 ### Layer frame
 
 A tile may carry several named layers (e.g. one for points and one for
-linestrings). The blob payload is a tiny frame around one Arrow IPC stream
-per layer:
+linestrings). The blob payload is a frame around one Arrow IPC stream per
+layer. **The current frame is the sectioned v2 frame** — normatively
+specified in the
+[packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing)
+and summarized under "Layer frame v2" below.
+
+The v1 frame it replaced is retained here as a **historical** record only
+(no writer emits it, no reference reader decodes it — see
+[packed spec §5.1](../spec/stt-packed-format.md#51-tile-payload-layer-frame-v1--historical-non-normative)):
 
 ```
-[u16 layer_count]            // high bit = ALIGNED_FRAME_FLAG (0x8000)
+[u16 layer_count]            // high bit = ALIGNED_FRAME_FLAG (0x8000)   HISTORICAL
   repeated layer_count times:
     [u16 name_len][name utf8][u32 ipc_len][pad?][ipc stream bytes]
 ```
@@ -165,6 +172,13 @@ All integers are little-endian. `ipc stream bytes` is the output of an Arrow
   properties) ship their complete dictionary inside the layer's own stream;
   delta dictionary batches and dictionary replacement are not permitted —
   every tile decodes standalone.
+- **Buffer alignment is 8, not 64 (normative).** Every stream is written by
+  an IPC writer configured for 8-byte buffer alignment — the Arrow IPC
+  spec's own requirement, _not_ arrow-rs' `IpcWriteOptions::default()` of 64
+  (a SIMD recommendation). A third-party writer at any other alignment will
+  not reproduce STT content addresses, and 64 inflates uncompressed payload
+  by 19–39% across the reference fleet. Rationale and measurements:
+  [packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
 
 **Size ceilings (normative):** `ipc_len` is `u32`, capping one layer's IPC
 stream at 4 GiB − 1; the directory likewise caps a tile's compressed blob
@@ -172,34 +186,37 @@ length, uncompressed payload size, and `feature_count` at `u32` — see the
 [packed spec §12 (Container limits)](../spec/stt-packed-format.md#12-container-limits).
 A writer MUST fail loudly at these ceilings, never wrap or clamp.
 
-When the leading `u16`'s `ALIGNED_FRAME_FLAG` (`0x8000`) bit is set, the
-writer inserts `(8 - pos % 8) % 8` zero bytes after each `ipc_len` so every
-IPC stream starts 8-byte aligned relative to the payload start — the
-alignment Arrow requires for zero-copy buffer views. `ipc_len` is the exact
-IPC byte length (padding excluded); the pad is never stored, readers derive
-it from the same alignment math. Layer count is therefore capped at
-`0x7fff`. Frames with the flag unset carry no padding; readers MUST accept
-both shapes. See the packed spec §5.1.
+In that historical frame, when the leading `u16`'s `ALIGNED_FRAME_FLAG`
+(`0x8000`) bit was set the writer inserted `(8 - pos % 8) % 8` zero bytes
+after each `ipc_len` so every IPC stream started 8-byte aligned relative to
+the payload start — the alignment Arrow requires for zero-copy buffer views.
+`ipc_len` was the exact IPC byte length (padding excluded); the pad was
+never stored, readers derived it from the same alignment math. Layer count
+was therefore capped at `0x7fff`. The v2 frame keeps the derived-pad rule
+verbatim and carries `layer_count` in its own field, so its ceiling is the
+full `u16::MAX`. See the packed spec §5.1/§5.2.
 
 The whole payload, unwrapped:
 
 ```mermaid
 flowchart TD
   B["tile blob — one per (z, x, y, t)"] --> Z["zstd frame"]
-  Z --> LF["layer frame\nu16 layer_count, then per layer:\nname + u32 ipc_len (+ optional 8-byte alignment pad)"]
-  LF --> IPC["Arrow IPC stream\none RecordBatch per layer"]
-  IPC --> SM["schema metadata\nstt:layer · stt:time_offset_ms\nstt:vertex_time_origin_ms / _step_ms\nstt:vertex_value_buckets · stt:has_triangles\n(+ stt:quant / stt:qa on quantized fields)"]
-  IPC --> COL["columns\nid · start_time · end_time · geometry (GeoArrow)\nvertex_time · vertex_value(_matrix) · triangles\nproperty columns · vector groups"]
+  Z --> LF["layer frame v2\n0xFFFF escape, frame_version 2, layer_count,\nthen per layer: name + ref kinds + section TOC"]
+  LF --> TM["TILE_META section (canonical JSON)\net · qa · sorted · st · t0 · vb · vq · vt"]
+  LF --> IPC["CORE / PROPS Arrow IPC streams\nschema template + tail, one RecordBatch each"]
+  IPC --> SM["template schema metadata\nstt:layer · stt:geometry · stt:has_triangles\nstt:quant (on quantized geometry)\nGeoArrow ARROW:extension:*"]
+  IPC --> COL["columns\nCORE: id · start_time · end_time · geometry (GeoArrow)\nvertex_time · vertex_value(_matrix) · triangles · part_offsets\nPROPS: property columns · vector groups"]
 ```
 
 ### Layer frame v2 (packed formatVersion 2)
 
-Datasets written as packed **formatVersion 2** replace the frame above with
-the **sectioned, template-referencing** frame — normatively specified in the
+The current frame is the **sectioned, template-referencing** frame —
+normatively specified in the
 [packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
 The Arrow envelope rules above (stream format, one `RecordBatch` per layer,
-no IPC body compression, no delta dictionaries, u32 size ceilings) are
-unchanged; what moves is _where_ the schema and the per-tile metadata live:
+no IPC body compression, no delta dictionaries, 8-byte buffer alignment, u32
+size ceilings) are unchanged; what moves is _where_ the schema and the
+per-tile metadata live:
 
 - The layer's Arrow IPC **schema message** is hoisted into a per-dataset
   **template** (referenced by blake3-128 hash, resolved through
@@ -221,27 +238,53 @@ unchanged; what moves is _where_ the schema and the per-tile metadata live:
   template. Reference decoders **re-inject** the TILE_META values into the
   decoded batch's schema/field metadata, so every consumer downstream of
   decode sees the v1-shaped layer of this document, unchanged.
+- Three `TILE_META` keys have **no v1 counterpart** and are re-typings, not
+  relocations — `st` / `et` (compact feature times) and `vq` (per-vertex
+  value quantization). Each is declared in `manifest.capabilities`
+  (`time-delta`, `vertex-value-quant`) so a reader that lacks it refuses at
+  open. Reference decoders **re-inflate** them at decode, so — exactly as
+  with the relocated keys — every consumer downstream sees the absolute
+  `Int64` times and `Float32` vertex values this document specifies. The
+  wire shapes are in the sections below and normatively in packed spec
+  §5.2.4 / §5.2.6.
 - v2 rows are stable-sorted by `start_time` at encode (after feature-id
   assignment), declared by `TILE_META.sorted`.
 
-`stt-serve` responses keep emitting the v1 frame regardless of build
-version (see the [serve protocol](../spec/stt-serve-protocol.md)); the v2
-frame appears only inside packed formatVersion-2 datasets.
+`stt-serve` emits **self-contained v2 frames** (every layer inlines its own
+schema section, since a live server has no manifest to carry a `schemas`
+registry) and advertises the frame version as `formatVersion` on
+`/metadata.json`. It has **no `capabilities` channel**, so a served tile
+using compact times (the default) declares nothing — a client decoder is
+assumed to be the one shipped alongside. See the
+[serve protocol](../spec/stt-serve-protocol.md), whose §3.4.3 still
+describes the retired v1 behaviour.
 
 ### Per-layer Arrow schema
+
+Columns are listed in **wire order**: the reserved columns below (each
+optional member omitted, never null-filled) form the CORE batch, in exactly
+this order; `<prop>` / `<vector-group>` columns form the PROPS batch.
 
 | column                | type                                                                                                                   | nullability | notes                                                                                                                                                                                                                                                                                                                    |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `id`                  | `UInt64`                                                                                                               | non-null    | per-feature id (H3 / quadbin cell index in summary tiles)                                                                                                                                                                                                                                                                |
-| `start_time`          | `Int64`                                                                                                                | non-null    | Unix ms, absolute                                                                                                                                                                                                                                                                                                        |
-| `end_time`            | `Int64`                                                                                                                | non-null    | Unix ms, absolute                                                                                                                                                                                                                                                                                                        |
+| `start_time`          | `Int64` absolute, or `UInt32` offset from `TILE_META.t0`                                                               | non-null    | Unix ms. `UInt32` iff `TILE_META.st == "u32"` — see [compact feature times](#compact-feature-times-start_time--end_time)                                                                                                                                                                                                 |
+| `end_time`            | `Int64` absolute, or `UInt32` duration, or **absent**                                                                  | non-null    | Unix ms. `UInt32` iff `TILE_META.et == "dur32"`; the column is omitted entirely iff `et == "zero"` — see below                                                                                                                                                                                                           |
 | `geometry`            | GeoArrow Point / LineString / Polygon                                                                                  | non-null    | interleaved lon/lat, `Float64` by default (`Int32` fixed-point when coordinate-quantized, `[x,y,z]` when the point-elevation fold is applied) — see below                                                                                                                                                                |
-| `vertex_time`         | `List<UInt16>` (deltas) or `List<Int64>` (exact)                                                                       | nullable    | per-vertex times (LineString only) — see below                                                                                                                                                                                                                                                                           |
-| `vertex_value`        | `List<Float32>`                                                                                                        | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues`                                                                                                                                                                                                                              |
-| `vertex_value_matrix` | `List<Float32>`                                                                                                        | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets`                                                                                                                                                                   |
-| `triangles`           | `List<UInt16>` or `List<UInt32>`                                                                                       | non-null    | feature-local earcut indices (Polygon, `--pre-tessellate`); `UInt16` when the feature-local max index fits, else `UInt32`                                                                                                                                                                                                |
+| `vertex_time`         | `List<UInt16>` or `List<UInt32>` (deltas) or `List<Int64>` (exact)                                                     | nullable    | per-vertex times (LineString only) — see below                                                                                                                                                                                                                                                                           |
+| `vertex_value`        | `List<Float32>`, or `List<UInt16>` when quantized                                                                      | nullable    | per-vertex scalar (e.g. SST on drifters/currents); decoded to `BinaryFeatures.vertexValues`                                                                                                                                                                                                                              |
+| `vertex_value_matrix` | `List<Float32>`, or `List<UInt16>` when quantized                                                                      | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets`                                                                                                                                                                   |
+| `triangles`           | `List<UInt16>` or `List<UInt32>`                                                                                       | non-null    | feature-local earcut indices (Polygon); `UInt16` when the feature-local max index fits, else `UInt32` — see below for when it is emitted                                                                                                                                                                                 |
+| `part_offsets`        | `List<UInt32>`                                                                                                         | non-null    | per-feature MultiPolygon part boundaries as feature-local ring indices (Polygon only). **Absent ⇒ every feature is single-part** — see below                                                                                                                                                                             |
 | `<prop>`              | `Float64` (numeric) or `Dictionary<UInt16, Utf8>` (categorical); `UInt16`/`Int32` fixed-point when attribute-quantized | nullable    | one column per property, by name — see below                                                                                                                                                                                                                                                                             |
 | `<vector-group>`      | `FixedSizeList<Float32 \| UInt8, N>`                                                                                   | nullable    | interleaved GPU-ready vector column fused from N scalar properties (`--vector-group NAME=col1,col2,…[:f32\|u8]`, e.g. `surfel_quat=qx,qy,qz,qw` or `point_rgba=r,g,b,a:u8`); decoded to `BinaryFeatures.vectorProps` and bound zero-copy to an instanced attribute. The source scalar columns are removed from the tile. |
+
+The three re-typed shapes in that table (`start_time`/`end_time`,
+`vertex_value(_matrix)`, and a quantized `<prop>`) are discriminated by a
+`TILE_META` key, **never by the Arrow `DataType` alone**, and reference
+decoders reconstruct the canonical shape before anything downstream sees the
+batch. That is the format's standing convention for a re-typed column — the
+same one `stt:quant` established for geometry.
 
 Geometry uses the GeoArrow extension metadata key
 `ARROW:extension:name` with values `geoarrow.point`, `geoarrow.linestring`,
@@ -326,42 +369,149 @@ The fold composes independently with [coordinate quantization](#coordinate-quant
 A feature with no value for the folded property encodes `z = 0`
 (`qz = 0` when quantized).
 
+#### Compact feature times (`start_time` / `end_time`)
+
+Absolute `Int64` Unix ms per feature is the historical shape and remains the
+**canonical decoded shape** — every reader reconstructs it, and every
+consumer downstream of decode sees it. On the wire, a layer MAY instead ship
+either column in a compact form, declared by `TILE_META`:
+
+| `TILE_META`   | wire column                                                   | reconstruction                  |
+| ------------- | ------------------------------------------------------------- | ------------------------------- |
+| `st: "u32"`   | `start_time`: non-null `UInt32`, ms offset from `t0`          | `start = t0 + offset`           |
+| `st` absent   | `start_time`: non-null `Int64`, absolute                      | `start = value`                 |
+| `et: "dur32"` | `end_time`: non-null `UInt32`, ms duration from its OWN start | `end = start + dur`             |
+| `et: "zero"`  | `end_time` column **omitted** from the batch                  | `end = start` for every feature |
+| `et` absent   | `end_time`: non-null `Int64`, absolute                        | `end = value`                   |
+
+The two forms are chosen **per layer, independently of each other**, from
+that layer's own data, so they can differ from tile to tile. A reader MUST
+branch on the keys, MUST treat `st: "u32"` without a finite `t0` as
+malformed, and — for `et: "zero"` — MUST synthesize the `end_time` column
+back at the index immediately after `start_time`, restoring the canonical
+column order. An empty layer always takes the absolute pair. Full normative
+rules, including the writer's fits-in-`u32` selection test: [packed spec
+§5.2.4](../spec/stt-packed-format.md#524-compact-feature-times-st--et--capability-time-delta).
+
+This is a re-typing, so a writer using it declares the **`time-delta`**
+capability. It is **on by default** (`stt-build --no-compact-times`
+suppresses both the encoding and the declaration), which makes `time-delta`
+the first capability a default build emits.
+
 #### `vertex_time` (per-vertex timestamps)
 
 LineString layers built with `--end-time-field` carry a per-vertex time
-column. The writer encodes it as `List<UInt16>` **deltas** relative to a per-layer
+column. The writer encodes it as integer **deltas** relative to a per-layer
 `(origin, step)`: the absolute time of a vertex is
 `origin + delta * step`. The origin and step are recorded in the layer's
-**schema-level** Arrow metadata under the keys:
+**schema-level** Arrow metadata under the keys (hoisted to `TILE_META.vt`
+in the v2 frame, and re-injected under these names at decode):
 
 | schema metadata key         | meaning                                   |
 | --------------------------- | ----------------------------------------- |
 | `stt:vertex_time_origin_ms` | absolute Unix-ms origin (`i64` as string) |
 | `stt:vertex_time_step_ms`   | ms per delta unit (`u32` as string)       |
 
-The encoder picks the smallest `step` (≥ 1) that keeps every
-`(t - origin)` inside `u16::MAX`, **bounded by a precision ceiling**
-(`DEFAULT_VERTEX_TIME_MAX_STEP_MS` = 1000 ms, configurable via
-`stt-build --vertex-time-precision`). A layer whose span would need a
-coarser step — anything over ~18.2 h at the default — takes the exact
-absolute `List<Int64>` shape instead and omits the two metadata keys, so
-quantization error is always bounded by the ceiling. A reader
-that sees a `List<Int64>` column (or no origin/step metadata) treats the
-values as absolute Unix ms; a reader that sees `List<UInt16>` reconstructs
-`origin + delta * step`.
+The encoder walks a **width ladder** — `List<UInt16>`, then `List<UInt32>` —
+taking the first width at whose smallest sufficient `step` (≥ 1, chosen so
+every `t - origin` fits that width) the step is still within the precision
+ceiling (`DEFAULT_VERTEX_TIME_MAX_STEP_MS` = 1000 ms, configurable via
+`stt-build --vertex-time-precision`). Concretely, at the default ceiling:
+spans up to ~18.2 h take `UInt16`; spans up to ~49.7 days take `UInt32`;
+anything wider falls back to the exact absolute `List<Int64>` shape, which
+omits the two metadata keys. Quantization error is therefore always bounded
+by the ceiling regardless of which rung is used.
+
+**A reader MUST key "is this a delta column?" off the origin/step metadata
+(v2: `TILE_META.vt`) and "how wide is the leaf?" off the Arrow type.** Both
+delta widths carry the metadata and reconstruct identically; the absolute
+`List<Int64>` shape carries neither key. Keying the delta path off the
+metadata and then assuming a `UInt16` leaf is the specific bug the `UInt32`
+rung introduces — it is why this document states the two decisions
+separately.
 
 #### `triangles` (pre-tessellated polygon meshes)
 
-`triangles` is present only when the archive was built with
-`stt-build --pre-tessellate` (the layer also carries the schema metadata
-key `stt:has_triangles = "true"`). The column is emitted only for polygon
-layers — an over-eager builder that attaches it to a point/line layer has
-it silently dropped at encode time. The Rust writer stores feature-LOCAL
-indices, narrowed to `List<UInt16>` when every feature-local index fits in
-16 bits (the common case) and `List<UInt32>` otherwise; the TS decoder
-pre-shifts them by each feature's `startIndices[i]` and exposes a single
-tile-global `triangles: Uint32Array` on `BinaryFeatures` so the renderer can
-hand it straight to deck.gl / WebGL.
+`triangles` carries baked earcut indices so renderers skip CPU tessellation
+on tile arrival. The layer also carries the schema metadata key
+`stt:has_triangles = "true"`. It is emitted only for polygon layers — an
+over-eager builder that attaches it to a point/line layer has it silently
+dropped at encode time.
+
+Two independent triggers turn it on, **either** of which suffices:
+
+1. `stt-build --pre-tessellate` — the explicit, whole-build opt-in.
+2. **Any feature in the layer needing a non-trivial tessellation** — a
+   feature with more than one ring (a polygon with holes, or a MultiPolygon)
+   — because the renderers cannot derive the correct mesh from the ring list
+   alone.
+
+**Per-layer, all-or-nothing (normative).** Once a layer carries `triangles`,
+**every** feature in it carries a non-empty index list, including
+single-ring polygons whose triangulation a renderer could have derived
+itself. This is a reader contract, not an encoder accident: all three
+reference renderers bind `triangles` as one whole-layer index buffer and
+trust each feature's slice with no fallback, so a feature with an empty
+slice would silently disappear. A writer MUST NOT mix empty and non-empty
+lists within a triangle-bearing layer. (The alternative — omit the trivial
+cases and have readers backfill — measures ~40–45% of the column's bytes and
+is deliberately not taken until the reader side gains that backfill.)
+
+The Rust writer stores feature-LOCAL indices, narrowed to `List<UInt16>`
+when every feature-local index fits in 16 bits (the common case) and
+`List<UInt32>` otherwise; the TS decoder pre-shifts them by each feature's
+`startIndices[i]` and exposes a single tile-global `triangles: Uint32Array`
+on `BinaryFeatures` so the renderer can hand it straight to deck.gl / WebGL.
+
+#### `part_offsets` (MultiPolygon part boundaries)
+
+`geoarrow.polygon` is `List<List<FixedSizeList>>` — one flat ring list per
+feature, exterior first then holes. A MultiPolygon's parts are flattened
+part-major into that same ring list, and **GeoArrow has no part level**, so
+part-vs-hole is unrecoverable from the geometry column alone: a generic
+GeoArrow consumer (GeoPandas, lonboard, geoarrow-rs,
+`@geoarrow/deck.gl-layers`) reads parts 2..n as holes of part 1. This is not
+exotic input — the tiler emits a MultiPolygon whenever clipping cuts one
+source polygon into several pieces inside a tile.
+
+`part_offsets` restores the boundary:
+
+- **Type** `List<UInt32>`, non-null, one list per feature; last among the
+  reserved columns.
+- **Units** ring indices relative to that feature's **own first ring**. Part
+  0 always starts at `0`, so a single-part feature's list is `[0]`. Values
+  are strictly increasing and the last start is inside that feature's ring
+  count.
+- **Presence** emitted iff at least one feature in the layer has more than
+  one part, and only on polygon layers. **Absence means every feature is
+  single-part**, not "unknown". Holes do not make a feature multi-part; the
+  nesting is feature ⊇ part ⊇ ring.
+- **Purely additive** — no `manifest.capabilities` entry, no
+  `formatVersion` bump. An older reader ignores the column and is exactly as
+  correct (or as wrong) as it was before.
+- The TS decoder republishes it as `BinaryFeatures.partIndices`: global
+  layer-rebased **vertex** indices, `totalParts + 1` long, terminator = the
+  total position count — the identical convention to `ringIndices`.
+  `partIndices === undefined` is the single-part case.
+
+#### Geometry admission (what reaches a tile)
+
+Every row in a layer carries real source geometry. A feature whose geometry
+cannot be read as the layer's kind is **dropped and counted**, never
+replaced with a placeholder: the builder logs one aggregated warning per
+layer build with the dropped count and the first reason, and the id, time
+and property columns are built over exactly the surviving rows, so every
+column stays index-aligned with `geometry`.
+
+Two real classes hit this: `GeometryCollection` features (member extraction
+is not implemented), and polygons whose only rings have fewer than four
+positions. Before 2026-07-26 both were silently replaced with fabricated
+placeholders — a single-point "line", a one-vertex "ring" — which rendered
+as nothing anyway but inflated `metadata.feature_count`. **Consequence for
+consumers: `metadata.feature_count` for such sources drops on rebuild.** It
+is now honest, not regressed. If a polygon _part_ has no usable exterior
+ring the whole part is dropped rather than promoting one of its holes to
+exterior; individual unusable holes are dropped alone.
 
 #### Space-time cube payload (`vertex_value_matrix`)
 
@@ -405,6 +555,32 @@ exactly this column. (A full preprocessing framework — cube / aggregation /
 trend recipes — was designed and deliberately counted out; see the counted-out
 register in `docs/roadmap/stt-packed-format-decisions.md`.)
 
+##### Per-vertex value quantization (`TILE_META.vq`)
+
+These two are the format's only `List<Float32>` columns, and on
+matrix-heavy datasets they dominate the payload (measured: 96.1% of
+`bixi-corridors` tile bytes, 64.2% of `nyc-taxi-flows`). Built with
+`stt-build --quantize-vertex-values`, either ships as `List<UInt16>` indices
+under its own range-adaptive affine, recorded per column in
+`TILE_META.vq` as `{column: [o, s]}` — `value = o + q * s`. Exactly halves
+the column.
+
+| rule              | value                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| key set           | CLOSED: `vertex_value`, `vertex_value_matrix`. Any other key, a key naming an absent column, or a named column whose leaf is not `UInt16` is malformed |
+| per-column        | the affine is chosen per column per layer **independently** — one column may be quantized while the other stays raw `Float32`                          |
+| finite range      | maps onto `[0, 0xFFFE]` (65 535 levels); finite values are clamped so none can reach the sentinel                                                      |
+| `0xFFFF`          | reserved sentinel → decodes to `NaN`, the format's "no value at this vertex" marker                                                                    |
+| no finite value   | `{o: 0, s: 1}` — every entry is the sentinel, so the affine is never applied; pinned so the bytes stay reproducible                                    |
+| constant column   | `{o: min, s: 1}` — every value maps to index 0 and reconstructs to `o` exactly                                                                         |
+| absent `vq` entry | that column is raw `List<Float32>`                                                                                                                     |
+
+A reader MUST branch on `vq`, not on the Arrow leaf type (a mixed tile with
+one quantized and one raw column is legal and is exactly what catches the
+type-sniffing shortcut). This is the **one lossy encoding** in this set — 16
+bits across the column's own range, on data a map colours by — which is why
+it is opt-in, and why it declares the **`vertex-value-quant`** capability.
+
 #### Numeric attribute quantization
 
 Any `<prop>` numeric column can ship as fixed-point integers instead of
@@ -430,20 +606,85 @@ folded by the [point-elevation fold](#point-elevation-fold-3d-points), if
 any, is removed from the property set before quantization runs, so it is
 never separately attribute-quantized.
 
-| mode                  | leaf type                                                  | `o` / `s`                                                                                                                                                                           |
-| --------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| explicit precision    | `UInt16` if the quantized range fits 16 bits, else `Int32` | `o` = the column's finite minimum; `s` = the requested precision                                                                                                                    |
-| range-adaptive (auto) | always `UInt16`                                            | `o` = the column's finite minimum (`0.0` if the tile has none); `s` = `(max - min) / 65535` (or `1.0` when there's no range — a constant column, or none, or a single finite value) |
+Both modes have two encoding regimes: an **exact integer** regime for
+columns whose finite values are all integer-valued, and the lossy
+fixed-point regime for everything else. The exact regime exists because
+mapping an integer column onto a fractional step is not a size win at all —
+it corrupts the values while spending the same bytes.
+
+| mode                  | condition                                                                    | leaf type                                                  | `o` / `s`                                                                  |
+| --------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| explicit precision    | integer-valued column, requested `s ≥ 1.0`, `max\|v\| ≤ 2^53`, span ≤ 65 535 | `UInt16`                                                   | `o` = finite min; `s` **snapped down to `1.0`** (exact)                    |
+| explicit precision    | otherwise                                                                    | `UInt16` if the quantized range fits 16 bits, else `Int32` | `o` = finite min; `s` = the requested precision                            |
+| range-adaptive (auto) | some finite `max\|v\| ≥ `i32::MAX`` (≈ 2.147e9)                              | **not quantized** — stays `Float64`                        | (no `stt:qa` key) — the ONLY refusal                                       |
+| range-adaptive (auto) | no finite value at all                                                       | `UInt16`, all-null                                         | `{o: 0, s: 1}`                                                             |
+| range-adaptive (auto) | integer-valued, span ≤ 65 535                                                | `UInt16`                                                   | `o` = finite min; `s = 1.0` — **exact**                                    |
+| range-adaptive (auto) | integer-valued, 65 535 < span ≤ `i32::MAX`                                   | `Int32`                                                    | `o` = finite min; `s = 1.0` — **exact**                                    |
+| range-adaptive (auto) | span 0 (or `span/65535` underflows)                                          | `UInt16`                                                   | `o` = finite min; `s = 1.0` (every value at index 0, reconstructs exactly) |
+| range-adaptive (auto) | everything else — non-integer, or integer with span > `i32::MAX`             | `UInt16`                                                   | `o` = finite min; `s = (max - min) / 65535`                                |
+
+The explicit mode's snap-down is capped at the `UInt16` span so that asking
+for a _coarser_ precision can never make the column _bigger_: past 65 535
+quanta the requested precision stands verbatim rather than snapping to 1.0
+and widening the leaf to `Int32`.
+
+The auto mode has exactly **one** refusal, and the threshold is derived, not
+tuned. At `i32::MAX` both encodings stop being defensible at once: the
+step-1 exact path can no longer index the column into even the `Int32` leaf,
+and the range-adaptive path's step is ≥ ~32 000 — under five significant
+digits of the _leading_ value, and far worse for the body. For an identifier
+domain lossy is silent corruption (every distinct value matters and
+interpolating between them is meaningless), which is what this catches: both
+64-bit hashes (`nyc-taxi-points.trip_id`, measured shipping at `o = 2.35e18`,
+`s = 2.3e14`) and mid-magnitude ids like OSM node ids (≈ 1.2e10), which sit
+well inside `f64`'s exact-integer range yet would otherwise decode off by tens
+of thousands. `f64` represents every such integer exactly, so "leave it
+`Float64`" is lossless, not a punt.
+
+Keying the refusal off value **magnitude** rather than span or distribution is
+what makes it **stable across tiles**: magnitude is a property of the column's
+domain, whereas span and outlier-conditioning are properties of whichever rows
+a tile happened to catch. A tile holding a single hash-like `trip_id` (span 0)
+refuses exactly like every other tile of that column. This matters beyond
+tidiness — a column that is `Float64` in one tile and an integer leaf in
+another is structural schema drift, which `stt-validate` hard-fails.
+
+**Not covered, deliberately:** a small-magnitude column whose span is inflated
+by a rare outlier (body 0–10 with an occasional 1e6 → step ≈ 15, so the body
+collapses onto index 0) still quantizes, coarsely. Detecting that needs a
+distribution test, which is irreducibly a property of the tile's sample and so
+reintroduces the drift above. Coarseness is the advertised cost of an opt-in
+lossy lever; a column whose Arrow type depends on its rows is a broken archive.
+The correct fix is a dataset-wide range pre-pass that makes the affine — and
+this decision — global rather than per tile; it is on the deferred register in
+[`stt-packed-format-decisions.md`](../roadmap/stt-packed-format-decisions.md).
 
 Unlike the [coordinate-quantization](#coordinate-quantization) affine, whose
 `x0`/`y0`/`sx`/`sy` are fixed dataset-wide constants, `o` and `s` here are
 derived from **that tile's own** column values, so the same property's
-`stt:qa` affine — and, under the explicit-precision mode, even its leaf type
-(`UInt16` vs `Int32`) — can differ from tile to tile. A reader decodes
-`stt:qa` fresh from each tile's schema rather than caching it across tiles of
-the same property. The range-adaptive mode fixes the leaf to `UInt16` in
-every tile (it never falls back to `Int32`), so a reader need not branch on
-leaf width in that mode — only the affine varies.
+`stt:qa` affine — and its leaf type — can differ from tile to tile in
+**both** modes. A reader decodes `stt:qa` fresh from each tile's schema
+(v2: from that tile's `TILE_META.qa`) rather than caching it across tiles of
+the same property, and MUST accept `UInt16` and `Int32` interchangeably.
+
+> **Erratum (2026-07-26).** This table previously stated that the
+> range-adaptive mode "fixes the leaf to `UInt16` in every tile (it never
+> falls back to `Int32`), so a reader need not branch on leaf width in that
+> mode." **That guarantee is withdrawn** — the exact-integer regime above
+> emits `Int32` for wide integer spans and no quantized column at all for
+> the two refusal cases. Readers were already required to handle both leaf
+> widths for the explicit mode, and both reference readers were verified to
+> be leaf-agnostic before the change shipped, so no reader change was needed;
+> but a third-party reader that took the withdrawn sentence literally must
+> now branch. Consequences worth naming: (a) the _set_ of quantized columns
+> in a layer is stable tile to tile — the sole refusal keys off value
+> magnitude, a property of the column's domain, precisely so it cannot flip
+> on which rows a tile caught (an earlier revision of this change did have a
+> sample-dependent refusal, and `stt-validate` hard-failed on it); (b) each
+> distinct width combination mints one
+> extra PROPS schema template; (c) archives published before this date carry
+> the old mode's **wrong values** for integer columns and are not
+> retroactively fixed — rebuild to correct them.
 
 ### Summary-tier layers
 
@@ -521,6 +762,18 @@ default. Polygons are encoded as `List<List<FixedSizeList<Float64, 2>>>`
 (rings inside features), and linestrings as `List<FixedSizeList<Float64, 2>>`.
 This is the default shape only — see the callout immediately below for the
 two encoder features that depart from it.
+
+> **MultiPolygon parts are not representable in `geoarrow.polygon`.** A
+> multi-part feature's rings are flattened part-major into the one ring list,
+> and the ring offsets do **not** keep the parts separable: GeoArrow's
+> polygon type has no part level, so a generic consumer reads parts 2..n as
+> holes of part 1. STT ships the part boundary out-of-band in the additive
+> [`part_offsets`](#part_offsets-multipolygon-part-boundaries) column, which
+> a generic GeoArrow consumer will not look at. A tile whose polygon layer
+> carries `part_offsets` is still a valid GeoArrow record batch — it is just
+> one whose multi-part features a GeoArrow-only reader will render wrong.
+> A native `geoarrow.multipolygon` geometry type is the real fix and is on
+> the deferred list (`docs/roadmap/stt-packed-format-decisions.md` §10).
 
 > **Quantized / elevation-folded tiles are not literal GeoArrow.** The
 > "is a valid GeoArrow record batch" guarantee above assumes the default
@@ -740,17 +993,24 @@ extra request.
 - New per-layer columns are tolerated automatically — they appear in the
   Arrow schema and a property-aware client passes them through to the
   renderer.
-- Coordinate quantization (`stt:quant`) and numeric attribute quantization
-  (`stt:qa`) are opt-in re-typings of the _existing_ `geometry` and `<prop>`
-  columns, not new columns — unlike a new column, a reader that doesn't
-  check for these keys won't skip the data, it will silently misdecode it
-  (e.g. reading raw `Int32` grid indices as tiny lon/lat degrees, or a raw
-  quantized index as an enormous property value). A reader MUST check both
-  keys before decoding `geometry` / any numeric `<prop>` field. The writer
-  additionally declares each such re-typing in `manifest.capabilities`
-  (`coord-quant` / `attr-quant` / `elevation-fold` — packed spec §3.1), so a
-  reader that lacks the feature refuses the dataset at open instead of
-  misdecoding it.
+- **Re-typings of existing columns are the dangerous class.** Unlike a new
+  column, a reader that doesn't check the discriminating key won't skip the
+  data — it will silently misdecode it. The full set, each with the
+  `manifest.capabilities` entry that makes a lacking reader refuse at open
+  instead (packed spec §3.1):
+
+  | re-typing                         | key to check                 | capability           | misdecode if ignored                              |
+  | --------------------------------- | ---------------------------- | -------------------- | ------------------------------------------------- |
+  | quantized `geometry`              | `stt:quant` (field metadata) | `coord-quant`        | `Int32` grid indices read as tiny lon/lat degrees |
+  | quantized numeric `<prop>`        | `stt:qa` / `TILE_META.qa`    | `attr-quant`         | a raw index read as an enormous property value    |
+  | 3-wide POINT leaf                 | `FixedSizeList` width        | `elevation-fold`     | `[x,y,z]` read as `[x,y]` pairs                   |
+  | compact `start_time` / `end_time` | `TILE_META.st` / `.et`       | `time-delta`         | ms offsets read as absolute Unix ms → 1970        |
+  | quantized `vertex_value(_matrix)` | `TILE_META.vq`               | `vertex-value-quant` | 0..65534 indices rendered as physical values      |
+
+  A reader MUST check the key, never infer from the Arrow `DataType` alone.
+
+- **Additive columns never get a capability**, because ignoring them is
+  safe: `triangles`, `part_offsets`, vector groups, summary-tier columns.
 - New metadata fields use serde defaults so old archives decode under new
   readers; new fields are skipped when unset so new archives decode under
   old readers that ignore them.

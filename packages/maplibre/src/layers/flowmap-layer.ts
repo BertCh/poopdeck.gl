@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Flowmap geometry adapter — animated origin→destination **flow arrows**
- * (maplibre parity campaign Wave M4, P2 tier).
+ * Flowmap geometry adapter — animated origin→destination **flow arrows**.
  *
  * One tapered arrow per OD pair whose WIDTH tracks the pair's trip volume at
  * the playhead: as the slider scrubs, corridors swell and recede with demand.
@@ -15,8 +14,8 @@
  * The deck sibling is `@poopdeck.gl/layers`'s `FlowmapLayer` + its internal
  * `FlowLinesLayer` (itself a port of flowmap.gl's arrow primitive). Same
  * geometry vocabulary, same defaults, same `√flow` width law — but the
- * magnitude decode moved from the CPU to the GPU, which is the point of this
- * wave (see below).
+ * magnitude decode happens on the GPU here, not the CPU, which is the whole
+ * point of this layer (see below).
  *
  * ── The contract this layer exists to keep ──────────────────────────────────
  *
@@ -54,8 +53,9 @@
  *
  * ── Pre-baked bundles ───────────────────────────────────────────────────────
  * `liveBundling` (GPU KDEEB edge bundling) is a **permanent declared fallback**
- * for this backend — it depends on luma transform feedback and the campaign
- * counted the port out (§4, P2). What this layer DOES honour is bundle geometry
+ * for this backend: it depends on luma transform feedback, which this
+ * dependency-free adapter has no access to. What this layer DOES honour is
+ * bundle geometry
  * an archive already baked: an OD feature with interior vertices contributes a
  * quadratic Bézier control point ({@link bundleControlPoint}) so the arrow
  * follows the bundle's own bulge. A plain 2-vertex feature gets the chord
@@ -92,9 +92,10 @@
  * ── Deliberate gaps (see the package CHANGELOG / descriptor) ────────────────
  *   - **Node circles.** deck's `FlowmapLayer` also draws a circle per station
  *     sized by incident flow, which needs a CPU aggregation across every
- *     visible tile per sub-step. That is exactly the per-frame CPU path this
- *     wave removed, so it is deferred rather than ported; `sourceInsetPixels` /
- *     `targetInsetPixels` are the hook a node overlay would drive.
+ *     visible tile per sub-step — exactly the per-frame CPU path this layer
+ *     exists to avoid, so it is deferred rather than ported;
+ *     `sourceInsetPixels` / `targetInsetPixels` are the hook a node overlay
+ *     would drive.
  *   - **liveBundling.** Permanent fallback (above).
  */
 
@@ -102,9 +103,9 @@ import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
-  type STTBaseLayerOptions,
+  type STTFilterableLayerOptions,
   type STTTimeFilterMode,
   type DrawContext,
   type TileGpuCache,
@@ -148,6 +149,11 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -155,12 +161,11 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
-  type STTDataFilterOptions,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
 } from '../shaders/data-filter.glsl.js';
 
 /** The four real time-filter modes, under this layer's name. */
@@ -203,8 +208,7 @@ const GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS = 0x8b4c;
 const UNPACK_PREMULTIPLY_ALPHA_WEBGL = 0x9241;
 const UNPACK_FLIP_Y_WEBGL = 0x9240;
 
-export interface STTFlowmapLayerOptions
-  extends STTBaseLayerOptions, STTDataFilterOptions {
+export interface STTFlowmapLayerOptions extends STTFilterableLayerOptions {
   // ── magnitude → width ────────────────────────────────────────────────────
   /**
    * Flow at or below which an arrow collapses to width 0 — INVISIBLE, which is
@@ -422,7 +426,7 @@ export interface STTFlowmapLayerOptions
  *
  * Byte-identical to `STTArcLayer`'s `unwrapMercatorX`; kept under a distinct
  * name so the two can be exported side by side until one of them is hoisted
- * into `lib/projection.ts` (see the concerns note in the wave log).
+ * into `lib/projection.ts`.
  */
 export function unwrapFlowMercatorX(referenceX: number, x: number): number {
   return x - Math.floor(x - referenceX + 0.5);
@@ -672,27 +676,6 @@ const MODE_KERNEL: Readonly<Record<FlowmapTimeFilterMode, string>> =
     trail: TIME_TRAIL_GLSL,
   });
 
-/** Uniforms each mode reads; only the active mode's block is declared. */
-const MODE_UNIFORMS: Readonly<Record<FlowmapTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
-
 /**
  * The `timeAlpha = …` expression per mode. `trail` is the only per-VERTEX one:
  * its frontier time is the feature's `[start, end]` sampled at the arrow
@@ -876,7 +859,7 @@ ${magnitudeAttribute}${colorDecls}${filter ? FILTER_ATTRIBUTE : ''}${matrixUnifo
   uniform float uHeadMaxFraction;
   uniform float uTailScale;
   uniform vec2 uEndpointInset;
-${usesTexture ? FLOW_UNIFORMS : ''}${MODE_UNIFORMS[mode]}${filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
+${usesTexture ? FLOW_UNIFORMS : ''}${TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE[mode]}${filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
 ${bundle ? '\n  const float STT_TANGENT_DT = 0.01;\n' : ''}${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}${sampler}${FLOW_WIDTH_GLSL}
 ${pathFn}
   void main() {
@@ -971,7 +954,12 @@ const ID_FS_SOURCE = `
   }
 `;
 
-interface FlowmapProgramHandles {
+interface FlowmapProgramHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -1018,22 +1006,6 @@ interface FlowmapProgramHandles {
   uFlowMatrixDims: WebGLUniformLocation | null;
   uFlowValueScale: WebGLUniformLocation | null;
   uFlowBucket: WebGLUniformLocation | null;
-  // Mode uniforms: only the active mode's are non-null.
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  // DataFilter uniforms: null unless the branch was compiled in.
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface FlowmapGpuCache extends TileGpuCache {
@@ -1111,7 +1083,7 @@ const FALLBACK_LEGACY_FRAME: HostFrame = createHostFrame();
  * flows.attach(map);
  * ```
  */
-export class STTFlowmapLayer extends STTBaseLayer {
+export class STTFlowmapLayer extends STTFilterableLayer {
   private flowOpts: {
     minFlow: number;
     widthScale: number;
@@ -1145,11 +1117,6 @@ export class STTFlowmapLayer extends STTBaseLayer {
     trailLength: number;
     fadeTrail: number;
   };
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private readonly filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
   /** Allocated once; `resolveFlowMatrixUniforms` refills it per draw. */
   private readonly flowUniforms: FlowMatrixUniforms =
     createFlowMatrixUniforms();
@@ -1170,7 +1137,6 @@ export class STTFlowmapLayer extends STTBaseLayer {
   private readonly wakeLengthOpt?: number;
   private readonly trailLengthOpt?: number;
   private requestedMode: FlowmapTimeFilterMode;
-  private warnedCategoricalFilter = false;
   /**
    * Shared arrow template buffers, keyed by SHAFT segment count (the head count
    * is fixed per layer). Two entries at most in practice — the configured count
@@ -1232,14 +1198,6 @@ export class STTFlowmapLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? halfWindow,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.shaderConfig = {
       // Placeholder — `resolveTimeConfig()` below owns the compiled mode.
@@ -1345,27 +1303,6 @@ export class STTFlowmapLayer extends STTBaseLayer {
    */
   setNumSegments(segments: number): void {
     this.flowOpts.shaftSegments = clampSegments(segments);
-    this.map?.triggerRepaint();
-  }
-
-  /**
-   * Move the DataFilter bounds (the slider path). Uniform-only — no relink, no
-   * tile rebuild — so it is safe to call every animation frame.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every arrow unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
     this.map?.triggerRepaint();
   }
 
@@ -1638,13 +1575,7 @@ export class STTFlowmapLayer extends STTBaseLayer {
     let hasFilterColumn = false;
     if (this.shaderConfig.filter) {
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-            `categorical column; range filtering needs a numeric one — rendering unfiltered.`,
-        );
-      }
+      if (col.categorical) this.warnCategoricalFilterOnce();
       filterValues = col.values;
       hasFilterColumn = col.hasColumn;
     }
@@ -1917,35 +1848,10 @@ export class STTFlowmapLayer extends STTBaseLayer {
             FLOW_NAMES.valueScale,
           ),
           uFlowBucket: glc.getUniformLocation(program, FLOW_NAMES.bucket),
-          uWindowStart: glc.getUniformLocation(program, 'uWindowStart'),
-          uWindowEnd: glc.getUniformLocation(program, 'uWindowEnd'),
-          uFadeIn: glc.getUniformLocation(program, 'uFadeIn'),
-          uFadeOut: glc.getUniformLocation(program, 'uFadeOut'),
-          uCurrentTime: glc.getUniformLocation(program, 'uCurrentTime'),
-          uWakeLength: glc.getUniformLocation(program, 'uWakeLength'),
-          uWakeTailScale: glc.getUniformLocation(program, 'uWakeTailScale'),
-          uTrailLength: glc.getUniformLocation(program, 'uTrailLength'),
-          uFadeTrail: glc.getUniformLocation(program, 'uFadeTrail'),
-          uFilterRange: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.range,
-          ),
-          uFilterSoftRange: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.softRange,
-          ),
-          uFilterEnabled: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.enabled,
-          ),
-          uFilterTransformSize: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.transformSize,
-          ),
-          uFilterTransformColor: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.transformColor,
-          ),
+          ...resolveTimeUniformLocations(glc, program),
+          ...resolveWakeTailScaleUniformLocation(glc, program),
+          ...resolveDataFilterUniformLocations(glc, program),
+          ...resolveFilterTransformSizeUniformLocation(glc, program),
         };
       },
     );
@@ -2007,25 +1913,6 @@ export class STTFlowmapLayer extends STTBaseLayer {
         gl.uniform1f(h.uFadeOut, fadeOut);
       }
     }
-  }
-
-  /** Upload the DataFilter uniforms for one tile. No-op unless compiled in. */
-  private setFilterUniforms(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: FlowmapProgramHandles,
-    cache: FlowmapGpuCache,
-  ): void {
-    if (!this.shaderConfig.filter) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
-      cache.hasFilterColumn,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
   }
 
   /**
@@ -2158,7 +2045,9 @@ export class STTFlowmapLayer extends STTBaseLayer {
     gl.uniform2fv(h.uEndpointInset, this.endpointInset);
     this.setMagnitudeUniforms(gl, h, cache, ctx);
     this.setTimeUniforms(gl, h, cache, ctx);
-    this.setFilterUniforms(gl, h, cache);
+    if (this.shaderConfig.filter) {
+      this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn);
+    }
     // Colour is shared because its ALPHA gates the id pass as well as painting
     // the visual one — resolving it in one place is what keeps "invisible ⇒
     // unpickable" true for a gradient that ramps to alpha 0.
@@ -2279,7 +2168,7 @@ export class STTFlowmapLayer extends STTBaseLayer {
 
   /**
    * Draw this flow tile into the id-pick FBO, painting feature `i` the flat
-   * colour `encodePickId(idBase + i)` (campaign D11). The id program is built
+   * colour `encodePickId(idBase + i)`. The id program is built
    * from the SAME vertex source as the visual pass — same projection variant,
    * same tessellation, same time mode, same DataFilter branch, same magnitude
    * gate — so the pickable area is exactly the arrow the user sees, and an arrow

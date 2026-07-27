@@ -31,26 +31,27 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Render Options
 
-| Property          | Type                   | Default            | Description                                                                                                                                  |
-| :---------------- | :--------------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
-| `widthScale`      | `number`               | `1`                | Global multiplier for path widths.                                                                                                           |
-| `widthUnits`      | `'pixels' \| 'meters'` | `'pixels'`         | Units for width.                                                                                                                             |
-| `widthMinPixels`  | `number`               | `0`                | Clamp path width to at least this many on-screen pixels.                                                                                     |
-| `widthMaxPixels`  | `number`               | `MAX_SAFE_INTEGER` | Clamp path width to at most this many on-screen pixels.                                                                                      |
-| `capRounded`      | `boolean`              | `false`            | Rounded line caps. Rounded caps are the dominant fragment-shader cost at small widths and visually indistinguishable from flat below ~10 px. |
-| `jointRounded`    | `boolean`              | `false`            | Rounded line joints; same fragment-cost tradeoff.                                                                                            |
-| `miterLimit`      | `number`               | `4`                | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`).                          |
-| `billboard`       | `boolean`              | `false`            | Extrude lines in screen space so they always face the camera (PathLayer pass-through).                                                       |
-| `fadeInDuration`  | `number`               | `300`              | Duration (ms) for paths to fade in when their time range enters the window.                                                                  |
-| `fadeOutDuration` | `number`               | `300`              | Duration (ms) for paths to fade out when their time range leaves the window.                                                                 |
+| Property          | Type                               | Default            | Description                                                                                                                                                                                                                                                                                 |
+| :---------------- | :--------------------------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `widthScale`      | `number`                           | `1`                | Global multiplier for path widths.                                                                                                                                                                                                                                                          |
+| `widthUnits`      | `'pixels' \| 'meters' \| 'common'` | `'pixels'`         | Units for width — the full upstream `Unit` domain. **Default drift**: upstream `PathLayer` defaults to `'meters'`; tile-sourced paths are map furniture (routes, lane lines, contours) whose on-screen weight should not collapse as you zoom out. Pass `'meters'` for ground-truth widths. |
+| `widthMinPixels`  | `number`                           | `0`                | Clamp path width to at least this many on-screen pixels.                                                                                                                                                                                                                                    |
+| `widthMaxPixels`  | `number`                           | `MAX_SAFE_INTEGER` | Clamp path width to at most this many on-screen pixels.                                                                                                                                                                                                                                     |
+| `capRounded`      | `boolean`                          | `false`            | Rounded line caps. Rounded caps are the dominant fragment-shader cost at small widths and visually indistinguishable from flat below ~10 px.                                                                                                                                                |
+| `jointRounded`    | `boolean`                          | `false`            | Rounded line joints; same fragment-cost tradeoff.                                                                                                                                                                                                                                           |
+| `miterLimit`      | `number`                           | `4`                | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`).                                                                                                                                                                         |
+| `billboard`       | `boolean`                          | `false`            | Extrude lines in screen space so they always face the camera (PathLayer pass-through).                                                                                                                                                                                                      |
+| `pathType`        | `'open' \| 'loop'`                 | `'open'`           | Path topology, forwarded to `PathLayer._pathType`. See [Closed rings (`pathType`)](#closed-rings-pathtype) before setting `'loop'`.                                                                                                                                                         |
+| `fadeInDuration`  | `number`                           | `300`              | Duration (ms) for paths to fade in when their time range enters the window.                                                                                                                                                                                                                 |
+| `fadeOutDuration` | `number`                           | `300`              | Duration (ms) for paths to fade out when their time range leaves the window.                                                                                                                                                                                                                |
 
 ### Data Accessors
 
 | Property              | Type                            | Default                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | :-------------------- | :------------------------------ | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pathColor`           | `Color \| string`               | `[0, 150, 255, 255]`   | Path color: constant RGBA, or a property name for categorical coloring.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `pathColor`           | `Color \| string`               | `[0, 150, 255, 255]`   | Path color: constant RGBA, or a property name for categorical coloring. **Default drift**: upstream `PathLayer.getColor` defaults to opaque black, which is invisible on the dark basemaps these tiles are usually drawn over.                                                                                                                                                                                                                                                                                                                    |
 | `getColor`            | `Color \| string \| null`       | `null`                 | Upstream-vocabulary (PathLayer) alias of `pathColor`. Accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back to `pathColor`). When set, it wins.                                                                                                                                                                                                                                                                                                     |
-| `pathWidth`           | `number \| string`              | `3`                    | Path width: constant, or a numeric property name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `pathWidth`           | `number \| string`              | `3`                    | Path width: constant, or a numeric property name — also the fallback width for tiles that do not carry the named column. **Default drift**: upstream `PathLayer.getWidth` defaults to `1`, which in this layer's `'pixels'` units is a hairline that all but disappears on a HiDPI display.                                                                                                                                                                                                                                                       |
 | `getWidth`            | `number \| string \| null`      | `null`                 | Upstream-vocabulary alias of `pathWidth` (same domain rules).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `colorPalette`        | `Color[]`                       | 10-color palette       | Palette for categorical `pathColor` (GPU lookup via `CategoryColorExtension`, up to 4096 entries).                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `colorMapping`        | `Record<string, Color> \| null` | `null`                 | Explicit category-string → color map for categorical `pathColor`. Resolved per-tile against each tile's own category dictionary, so the same category (e.g. an HD-map `lane_divider` class) renders the same color in every tile — unlike `colorPalette`, whose indices are assigned per-tile in first-seen order. Takes precedence over `colorPalette` when set.                                                                                                                                                                                 |
@@ -59,6 +60,29 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `filterRange`         | `[number, number] \| null`      | `null`                 | Inclusive `[min, max]` bounds for `filterProperty`. `null` idles the filter (renders all) while keeping the column bound, so a range set later animates by uniform with no re-preparation. No effect unless `filterProperty` is set.                                                                                                                                                                                                                                                                                                              |
 | `filterSoftRange`     | `[number, number] \| null`      | `null`                 | Optional soft `[min, max]` inside `filterRange` for a fade instead of a hard clip. No effect unless `filterProperty` + `filterRange` are set.                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `filterEnabled`       | `boolean`                       | `true`                 | Enable/disable the column filter without dropping the bound attribute. Effective only with `filterProperty` + a valid `filterRange`.                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+## Closed rings (`pathType`)
+
+`'open'` (the default) draws a START_CAP at a feature's first vertex and an
+END_CAP at its last. On CLOSED geometry — contour rings, lane loops, footprints
+baked as LineStrings — that leaves a visible notch at the ring seam where a
+mitred joint belongs. `pathType: 'loop'` closes the joint instead.
+
+⚠️ **`'loop'` is not a drop-in for arbitrary tiles**, for two reasons:
+
+1. **It is tile-WIDE, not per-feature.** STT tiles feed `PathLayer` binary data
+   (`normalize: false`), and its tessellator then reads closedness from the
+   `loop` flag alone rather than comparing each path's endpoints. Every feature
+   in every tile is treated as closed — so only set it for datasets that are
+   **all** rings.
+2. **The buffer must already carry the +2 wrap vertices.** For a closed path the
+   tessellator expects `numPoints + 2` vertices — the ring followed by a repeat
+   of its first TWO vertices (`B0 B1 B2 B3 B0 B1`) — and it reads that padding
+   out of the tile's own `positions`/`startIndices`; the binary path never
+   synthesizes it. A ring baked in the usual first-vertex-repeated-last form
+   does **not** satisfy this and renders a short, mis-capped final segment. The
+   layer checks the tile's buffers for the padding and **warns once** when it is
+   missing.
 
 ## Elevation (space-time relief)
 
@@ -90,10 +114,18 @@ above.
 
 ## Architecture & performance
 
+- **Geometry-kind guard**: tile layers whose `geometryType` is not
+  `LineString` are skipped with one named console warning, rather than
+  misreading the position buffer (a point tile's `featureCount` positions are
+  not a vertex run). Tiles predating the geometry-kind tag are trusted.
 - **Per-tile binary sublayers**: one `PathLayer` per (tile, layer) pair
   using the binary `data: { length, startIndices, attributes }` interface;
   typed arrays reference the tile's Arrow buffers zero-copy. New tiles are
-  additive — one sublayer, one GPU upload.
+  additive — one sublayer, one GPU upload. `positionFormat` is **not**
+  forwarded: `PathLayer` derives the geometry stride from
+  `data.attributes.getPath.size`, which this layer always sets, and only falls
+  back to `positionFormat` when the descriptor carries no `size` — so passing
+  it was inert and the prop has been removed.
 - **Sublayer + prepared-data caches** with content-keyed style digests, so
   unchanged tiles short-circuit deck.gl's prop diff entirely.
 - **Per-tile `timeOffset`** through a window-mode

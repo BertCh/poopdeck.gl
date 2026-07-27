@@ -29,19 +29,34 @@
  * (`startTime + tile.timeOffset`) during pooling so snapshots from tiles with
  * different `timeOffset`s sort into one timeline; interpolation then runs in
  * plain f64 JS (no Float32 relative-time contract to honour). The pooled,
- * track-grouped index is rebuilt only when the visible tile SET changes (or a
- * style prop that feeds it changes); each frame just re-interpolates it.
+ * track-grouped index is MAINTAINED INCREMENTALLY across tile churn by
+ * {@link TrackIndexMaintainer} (only added tiles are pooled, only removed ones
+ * dropped, only the affected tracks re-sorted); each frame just re-interpolates
+ * it. A change to a style prop that FEEDS the pool (a column name, the color
+ * mapping) still forces a full re-pool, since the baked values are stale.
  *
- * Cost: AV scenes carry tens of active objects and a few thousand snapshots per
- * scene, so the per-frame work is a binary-search + lerp per active track —
- * well under a millisecond. Like {@link AnimatedTripHeadsLayer} (and
- * FlowCorridorLayer) we override `_handleTimeUpdate` to force a renderLayers()
- * pass each tick, because the motion lives in a CPU-computed instance buffer the
- * base class would otherwise never recompute (its siblings animate via a shader
- * uniform). The tile-loading window (`timeWindow`) is UNTOUCHED — it still gates
- * which buckets are resident, and only needs to cover ±one keyframe gap.
+ * Cost, in two very different budgets:
+ *   • PER FRAME — a binary search + lerp per ACTIVE track. AV scenes carry tens
+ *     of active objects, so this is well under a millisecond, and it is the
+ *     figure the design is built around.
+ *   • PER INDEX SYNC — proportional to the tiles that ENTERED or LEFT and the
+ *     tracks they touched, not to the resident snapshot count. That distinction
+ *     is the whole reason for the maintainer: the loader window slides
+ *     continuously during playback, so the tile ARRAY identity changes
+ *     constantly, and the previous full `buildTrackIndex` re-pooled every
+ *     resident tile and re-sorted every track inside a single synchronous
+ *     render frame on each churn — a few thousand snapshots per scene, but
+ *     paid over and over, and it showed up as the frame-time spike
+ *     (`track-kernel.ts`, "Incremental track-index maintenance").
  *
- * ── RENDERING: ORIENTED BOXES — FILL and/or OUTLINE (av-cockpit.md §3c) ───────
+ * Like {@link AnimatedTripHeadsLayer} (and FlowCorridorLayer) we override
+ * `_handleTimeUpdate` to force a renderLayers() pass each tick, because the
+ * motion lives in a CPU-computed instance buffer the base class would otherwise
+ * never recompute (its siblings animate via a shader uniform). The tile-loading
+ * window (`timeWindow`) is UNTOUCHED — it still gates which buckets are
+ * resident, and only needs to cover ±one keyframe gap.
+ *
+ * ── RENDERING: ORIENTED BOXES — FILL and/or OUTLINE (av-cockpit.md §1.3) ──────
  * Two interchangeable looks, selected by `filled` / `stroked`:
  *   • FILLED (`filled`, default) — one `SimpleMeshLayer` (`@deck.gl/mesh-layers`)
  *     instanced over a unit `CubeGeometry` (`@luma.gl/engine`); the solid,
@@ -70,7 +85,7 @@
  *                      /fadeOutDuration). Fed pre-lighting so SimpleMeshLayer's
  *                      phong shading still reads the box as a 3D volume (the GPU
  *                      CategoryColorExtension writes AFTER lighting and would
- *                      flatten it — av-cockpit.md §3c).
+ *                      flatten it — av-cockpit.md §2).
  *   • wireframe / material  → SimpleMeshLayer pass-through.
  *
  * ── OPTIONAL streetscape.gl SUBLAYERS (off by default) ───────────────────────
@@ -116,7 +131,7 @@ import {
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type { ColorAccessorValue } from '../../lib/accessor-alias.js';
 import {
-  buildTrackIndex as kernelBuildTrackIndex,
+  TrackIndexMaintainer,
   sampleTrack as kernelSampleTrack,
   makePickRow,
   RAD_TO_DEG,
@@ -177,7 +192,7 @@ export interface _AnimatedBoundingBoxLayerProps {
 
   /**
    * Per-feature yaw column NAME (radians, world frame, 0 = +x/east, CCW
-   * positive — av-cockpit.md §2c). Drives `getOrientation: [0, heading°, 0]`
+   * positive — spec/sidecar-assets.md §3.1). Drives `getOrientation: [0, heading°, 0]`
    * (yaw about the vertical z-axis — slot 1 of deck's [pitch, yaw, roll]),
    * angle-interpolated between keyframes. When the column is absent, boxes are
    * axis-aligned.
@@ -502,20 +517,37 @@ export class AnimatedBoundingBoxLayer<
     velocityWidthMinPixels: { type: 'number', value: 2, min: 0 },
   };
 
-  /** Pooled, track-grouped keyframe index. Rebuilt only when the tile set or a
-   * feeding style prop changes; re-interpolated (not rebuilt) every frame. */
+  /** Pooled, track-grouped keyframe index. Re-synced only when the tile set or
+   * a feeding style prop changes; re-interpolated (not rebuilt) every frame. */
   private trackIndex: Map<string, Track> | null = null;
   private trackIndexKey = '';
   private lastTilesRef: Tile[] | null = null;
+  /**
+   * Incremental owner of {@link trackIndex}. Lazily constructed so the layer
+   * carries no per-instance state before its first render (and so the
+   * `Object.create` test harnesses keep working).
+   */
+  private indexMaintainer: TrackIndexMaintainer | null = null;
   /** True when at least one loaded tile carried the speed column (gates arrows). */
   private hasSpeedColumn = false;
   /** Sim-time of the last box-pose re-interpolation; skips redundant ticks. */
   private lastBoxFrameTime = NaN;
+  /**
+   * Reference-stable label rows + row OBJECTS, reused across frames — see
+   * {@link buildLabels} for why a fresh array would re-run TextLayer's whole
+   * glyph pipeline every tick. Lazily allocated (like {@link indexMaintainer})
+   * so the layer holds nothing until labels are first drawn.
+   */
+  private labelRows: LabelRow[] | null = null;
+  /** Bumped per {@link buildLabels} call; the label `getPosition` update trigger. */
+  private labelFrame = 0;
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
     this.trackIndex = null;
     this.lastTilesRef = null;
+    this.indexMaintainer = null;
+    this.labelRows = null;
   }
 
   /**
@@ -607,15 +639,29 @@ export class AnimatedBoundingBoxLayer<
   }
 
   /**
-   * Pool every loaded tile's object snapshots into a `track_id`-keyed map via
-   * the shared {@link kernelBuildTrackIndex}, then layer on this layer's own
-   * telemetry + missing-track-id warning. Runs only when the tile set or a
-   * feeding prop changes.
+   * Bring the pooled `track_id`-keyed index in line with the current tile set,
+   * then layer on this layer's own telemetry + missing-track-id warning. Runs
+   * only when the tile set or a feeding prop changes.
+   *
+   * Uses {@link TrackIndexMaintainer} rather than a full `buildTrackIndex`:
+   * the latter is O(all resident snapshots) — re-pool every tile, re-sort every
+   * track — and the loader window slides continuously during playback, so it
+   * was paid in full inside one synchronous render frame on every churn. The
+   * maintainer pools only ADDED (tile, layer)s, drops only REMOVED ones, and
+   * re-sorts only the tracks those touched, for a byte-for-byte identical
+   * index. Same adoption as the point + icon glide paths.
+   *
+   * A change to a prop that FEEDS the pool (a column name, the color mapping)
+   * invalidates the baked colors/labels, so that case resets the maintainer and
+   * re-pools from scratch.
    */
-  private buildTrackIndex(tiles: Tile[]): Map<string, Track> {
+  private syncTrackIndex(tiles: Tile[], indexKey: string): Map<string, Track> {
     const t0 = performance.now();
     const cfg = this.trackFieldConfig();
-    const result = kernelBuildTrackIndex(tiles, cfg);
+    if (!this.indexMaintainer)
+      this.indexMaintainer = new TrackIndexMaintainer();
+    if (this.trackIndexKey !== indexKey) this.indexMaintainer.reset();
+    const result = this.indexMaintainer.sync(tiles, cfg);
 
     if (result.trackIdMissing) {
       warnOnce(
@@ -661,15 +707,16 @@ export class AnimatedBoundingBoxLayer<
       return [];
     }
 
-    // Rebuild the pooled index only when the visible tile SET changes or a
+    // Re-sync the pooled index only when the visible tile SET changes or a
     // feeding style prop changes; otherwise re-interpolate the cached index.
+    // The sync itself is incremental (see syncTrackIndex).
     const indexKey = this.computeIndexKey();
     if (
       this.lastTilesRef !== tiles ||
       this.trackIndexKey !== indexKey ||
       !this.trackIndex
     ) {
-      this.trackIndex = this.buildTrackIndex(tiles);
+      this.trackIndex = this.syncTrackIndex(tiles, indexKey);
       this.trackIndexKey = indexKey;
       this.lastTilesRef = tiles;
     }
@@ -692,9 +739,14 @@ export class AnimatedBoundingBoxLayer<
 
     // Fill / outline selection. `filled` draws the solid SimpleMeshLayer;
     // `stroked` adds the crisp 12-edge LineLayer outline. If neither is asked
-    // for, fall back to filled so the layer never renders nothing. Exactly one
+    // for, fall back to filled so the layer never renders nothing. At most ONE
     // of the two carries picking (prefer the fill when present — a solid box is
-    // far easier to click than a thin edge).
+    // far easier to click than a thin edge); the other RESTRICTS to
+    // `pickable: false`. Neither ever FORCES picking on: `takesPicks` decides
+    // which sublayer may inherit the composite's own `pickable`, so
+    // `pickable: false` on the layer really does let clicks fall through to
+    // whatever is underneath (the LiDAR layer, in the AV cockpit) and skips the
+    // picking pass and its instancePickingColors.
     const wantStroke = this.props.stroked ?? false;
     const drawFill = (this.props.filled ?? true) || !wantStroke;
     const layers: Layer[] = [];
@@ -721,8 +773,16 @@ export class AnimatedBoundingBoxLayer<
     return layers;
   }
 
-  /** Build the single oriented-box SimpleMeshLayer over the active samples. */
-  private buildBoxes(samples: Sample[], pickable: boolean): SimpleMeshLayer {
+  /**
+   * Build the single oriented-box SimpleMeshLayer over the active samples.
+   *
+   * `takesPicks` says this sublayer is the one allowed to receive picks — it
+   * does NOT turn picking on. `getSubLayerProps` merges the composite's own
+   * `pickable` first and anything in `sublayerProps` over it, so a hard
+   * `pickable: true` here would beat the caller's `pickable: false`; the value
+   * is therefore only ever written to RESTRICT.
+   */
+  private buildBoxes(samples: Sample[], takesPicks: boolean): SimpleMeshLayer {
     const n = samples.length;
     const sizeScale = this.props.sizeScale ?? 1;
     const half = 0.5 * sizeScale;
@@ -810,7 +870,9 @@ export class AnimatedBoundingBoxLayer<
       wireframe: this.props.wireframe,
       material: this.props.material,
       extensions,
-      pickable,
+      // Restrict only — omitted when this sublayer takes picks, so the
+      // composite's inherited `pickable` decides.
+      ...(takesPicks ? {} : { pickable: false }),
       // Per-frame active-track props for getPickingInfo (read off the sublayer).
       // One row per instance, so the stride is 1 (vs the edges layer's 12).
       sttPickRows: pickRows,
@@ -833,10 +895,12 @@ export class AnimatedBoundingBoxLayer<
    * (or its `getLineColor` alias) sets a distinct constant outline color, which
    * still rides the same fade on its alpha. Width/units/clamp come from
    * `strokeWidth`/`strokeWidthUnits`/`strokeWidthMinPixels`/`strokeWidthMaxPixels`.
-   * `pickable` is set by the caller (only when there is no fill underneath to
-   * take picks).
+   *
+   * `takesPicks` is set by the caller (only when there is no fill underneath to
+   * take picks) and, as in {@link buildBoxes}, only ever RESTRICTS: the edges
+   * never force `pickable: true` over the composite's own value.
    */
-  private buildEdges(samples: Sample[], pickable: boolean): LineLayer {
+  private buildEdges(samples: Sample[], takesPicks: boolean): LineLayer {
     const n = samples.length;
     const EDGES = 12;
     const total = n * EDGES;
@@ -956,7 +1020,8 @@ export class AnimatedBoundingBoxLayer<
       widthMinPixels: this.props.strokeWidthMinPixels ?? 1,
       widthMaxPixels:
         this.props.strokeWidthMaxPixels ?? Number.MAX_SAFE_INTEGER,
-      pickable,
+      // Restrict only — see buildBoxes.
+      ...(takesPicks ? {} : { pickable: false }),
       // 12 segments per box, so a hit's segment index ÷ 12 is the box index.
       sttPickRows: pickRows,
       sttPickStride: EDGES,
@@ -965,12 +1030,57 @@ export class AnimatedBoundingBoxLayer<
     return new SubLayerClass(props as any);
   }
 
-  /** Build the single per-object label TextLayer over the active samples. */
+  /**
+   * Build the single per-object label TextLayer over the active samples.
+   *
+   * Label POSITIONS move every tick, but the TEXT SET is stable for as long as
+   * the active-track set is — and the two costs are nothing alike. A fresh
+   * `data` array (what this used to allocate per tick) sets deck's
+   * `changeFlags.dataChanged`, which invalidates EVERY attribute regardless of
+   * `updateTriggers` — so the old `updateTriggers` were dead code, and
+   * TextLayer re-ran `_updateText` (string → per-glyph expansion, startIndices
+   * rebuild, full character-attribute re-upload) at tick rate. So:
+   *
+   *   • `data` is one array, reused; rows are objects, reused and MUTATED in
+   *     place. Same reference ⇒ no `dataChanged` ⇒ `updateTriggers` are live
+   *     again and act per attribute.
+   *   • `getPosition`'s trigger is a frame counter — cheap to diff, and the
+   *     one thing that must be re-read every tick.
+   *   • `getText`'s trigger is a SIGNATURE of the ordered label list.
+   *     TextLayer re-runs `_updateText` only on `dataChanged` or a `getText`
+   *     trigger change, so an unchanged text set now costs nothing. The
+   *     signature is the labels themselves rather than `rows.length`, which a
+   *     simultaneous track exit + entry leaves unchanged, and rather than the
+   *     row array, which deck's `compareProps` would walk key-by-key in both
+   *     directions (2×O(n) strict compares per diff). Equal signature ⇒ equal
+   *     glyph expansion, so it is exactly the right key — including for the
+   *     exit+entry case, where the layout is genuinely identical.
+   */
   private buildLabels(samples: Sample[]): TextLayer {
-    const rows: LabelRow[] = samples.map((s) => ({
-      position: [s.lon, s.lat, s.alt],
-      text: s.track.label,
-    }));
+    const n = samples.length;
+    const rows = (this.labelRows ??= []);
+    let textSig = '';
+    for (let i = 0; i < n; i++) {
+      const s = samples[i];
+      let row = rows[i];
+      if (!row) {
+        row = { position: [0, 0, 0], text: '' };
+        rows[i] = row;
+      }
+      // `getPosition` returns this same array each time; deck copies out of it,
+      // so mutating in place is what keeps the row object reference-stable.
+      row.position[0] = s.lon;
+      row.position[1] = s.lat;
+      row.position[2] = s.alt;
+      row.text = s.track.label;
+      // Length-prefixed so no two distinct label lists can collide (a
+      // plain separator would fuse ["a b"] with ["a", "b"]).
+      textSig += `${s.track.label.length}:${s.track.label}`;
+    }
+    // Shrink IN PLACE — a `slice` would be a new reference.
+    if (rows.length > n) rows.length = n;
+    this.labelFrame = (this.labelFrame || 0) + 1;
+
     const props = this.composeSubLayerProps('labels', 'all', {
       data: rows as any,
       getText: (d: LabelRow) => d.text,
@@ -987,7 +1097,10 @@ export class AnimatedBoundingBoxLayer<
       getTextAnchor: 'middle',
       getAlignmentBaseline: 'bottom',
       pickable: false,
-      updateTriggers: { getText: rows.length, getPosition: rows },
+      updateTriggers: {
+        getText: textSig,
+        getPosition: this.labelFrame,
+      },
     });
     const SubLayerClass = this.getSubLayerClass('labels', TextLayer);
     return new SubLayerClass(props as any);

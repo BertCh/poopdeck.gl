@@ -36,7 +36,7 @@ import {
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { getDeviceCapabilities } from '../renderer/webgpu-renderer.js';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -158,7 +158,7 @@ function makeValueTexture(
   return tex;
 }
 
-export class STTFlowCorridorLayer extends BaseSttLayer {
+export class STTFlowCorridorLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -184,7 +184,7 @@ export class STTFlowCorridorLayer extends BaseSttLayer {
     this.viewport = [width, height];
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     const buf = buildFlowCorridorBuffers(
       tiles,

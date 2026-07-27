@@ -37,13 +37,13 @@ for (const layer of tile?.layers ?? []) {
 ```
 
 For streaming a live viewport + playhead (selection, prefetch, eviction,
-buffered-runway events), wrap the archive in a `SpatiotemporalTileset`:
+buffered-runway events), wrap the archive in a `SpatioTemporalTileset`:
 
 ```ts
-import { SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { SpatioTemporalTileset } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 
-const tileset = new SpatiotemporalTileset({
+const tileset = new SpatioTemporalTileset({
   minZoom: meta.minZoom,
   maxZoom: meta.maxZoom,
   temporalBucketMs: meta.temporalBucketMs,
@@ -56,7 +56,7 @@ tileset.update({ bounds, zoom, time, timeWindow });
 ## What's in the box
 
 - **Reader** — `STTArchive` (packed manifest + paged directory + per-pack
-  Range requests), `SpatiotemporalTileset` (selection, prefetch, eviction,
+  Range requests), `SpatioTemporalTileset` (selection, prefetch, eviction,
   buffered-runway events), `TileDecoder` (inline or worker-pool).
 - **`BinaryFeatures`** — the decoded, columnar, zero-copy tile payload
   (positions, times, per-vertex values, vector groups, triangles).
@@ -68,7 +68,7 @@ tileset.update({ bounds, zoom, time, timeWindow });
 ## Docs
 
 - [Tile decoding](../../docs/api/stt-loader.md)
-- [SpatiotemporalTileset](../../docs/api/spatiotemporal-tileset.md)
+- [SpatioTemporalTileset](../../docs/api/spatiotemporal-tileset.md)
 - [Binary features](../../docs/api/binary-features.md)
 - [Render kernel](../../docs/api/render-kernel.md)
 - [Format spec](../../docs/spec/stt-packed-format.md)

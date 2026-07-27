@@ -11,14 +11,14 @@
  * Returns props to spread onto `<DeckGL>`:
  *   - `userData`        mirrors the controller onto `context.userData.stt` so
  *                       every STT layer resolves time with no per-layer prop
- *                       (P1 — the deck-idiomatic global channel).
+ *                       (the deck-idiomatic global channel).
  *   - `_animate`        forces a redraw every frame *while playing*, so
  *                       `onBeforeRender` fires every frame (deck gates
  *                       `onBeforeRender` behind `needsRedraw`, and `_animate`
  *                       short-circuits that). While paused it's false — no
  *                       wasted redraws; seeks/interactions still redraw via
  *                       deck's normal path.
- *   - `onBeforeRender`  advances the controller once per drawn frame (P2).
+ *   - `onBeforeRender`  advances the controller once per drawn frame.
  *
  * Kept separate from {@link usePlayback} so non-deck consumers (maplibre /
  * three / standalone) keep the controller's self-owned rAF untouched.

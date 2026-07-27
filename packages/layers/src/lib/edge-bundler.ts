@@ -45,10 +45,16 @@
  * desktop WebGL2, absent on some mobile GPUs (the cosmos.gl caveat) —
  * {@link isBundlingSupported} gates on it and the composite falls back to
  * straight arrows when it's missing.
+ *
+ * SIZE LIMITS: every bundle allocates textures whose HEIGHT is the edge count,
+ * so `maxTextureDimension2D` (4096 on some mobile GPUs) caps how many edges can
+ * be bundled AT ALL — see {@link maxBundleEdges}, which the composite clamps
+ * against before it allocates anything.
  */
 
 import type { Device, Texture, Framebuffer } from '@luma.gl/core';
 import { Model, Geometry } from '@luma.gl/engine';
+import { warnOnce } from './log.js';
 
 // ───────────────────────── pure (CPU-testable) math ─────────────────────────
 // The GLSL kernel mirrors these; they exist so the bundling logic is unit-tested
@@ -88,10 +94,87 @@ export function laplacianStep(
 }
 
 /**
+ * Allocation-free arc-length resample of ONE polyline straight out of a binary
+ * `positions` buffer and straight into a caller-owned control-point buffer —
+ * the streaming form of {@link subdivide}, used on the per-tile-set bundle
+ * rebuild path where the boxed `Vec2[]`/`cum[]` of `subdivide` dominated (one
+ * rebuild at E=4000, P=48 allocated ~200k short-lived arrays).
+ *
+ * Reads vertices `[v0, v1)` of `positions` (stride `dims`) and writes `count`
+ * evenly spaced points (endpoints preserved) at `out[(outPoint0 + i) * dims]`.
+ * A single-vertex input degenerates to `count` copies of it; an empty input
+ * writes zeros. Numerically identical to `subdivide` — the two are cross-checked
+ * in edge-bundler.test.ts.
+ */
+export function resampleInto(
+  positions: ArrayLike<number>,
+  dims: number,
+  v0: number,
+  v1: number,
+  count: number,
+  out: Float64Array,
+  outPoint0: number,
+): void {
+  const n = v1 - v0;
+  const write = (i: number, x: number, y: number): void => {
+    const o = (outPoint0 + i) * dims;
+    out[o] = x;
+    out[o + 1] = y;
+  };
+  if (n <= 0) {
+    for (let i = 0; i < count; i++) write(i, 0, 0);
+    return;
+  }
+  if (n === 1 || count < 2) {
+    const x = positions[v0 * dims];
+    const y = positions[v0 * dims + 1];
+    for (let i = 0; i < count; i++) write(i, x, y);
+    return;
+  }
+
+  // Total arc length (one pass, no cumulative array — the walk below re-derives
+  // segment lengths in order, which is O(n + count) overall since `target` is
+  // monotonically increasing).
+  let total = 0;
+  for (let v = v0 + 1; v < v1; v++) {
+    const dx = positions[v * dims] - positions[(v - 1) * dims];
+    const dy = positions[v * dims + 1] - positions[(v - 1) * dims + 1];
+    total += Math.hypot(dx, dy);
+  }
+
+  let seg = v0 + 1; // walking segment [seg-1, seg]
+  let acc = 0; // arc length consumed before `seg`
+  let segLen = Math.hypot(
+    positions[seg * dims] - positions[(seg - 1) * dims],
+    positions[seg * dims + 1] - positions[(seg - 1) * dims + 1],
+  );
+  for (let i = 0; i < count; i++) {
+    const target = (total * i) / (count - 1);
+    while (seg < v1 - 1 && acc + segLen < target) {
+      acc += segLen;
+      seg++;
+      segLen = Math.hypot(
+        positions[seg * dims] - positions[(seg - 1) * dims],
+        positions[seg * dims + 1] - positions[(seg - 1) * dims + 1],
+      );
+    }
+    const f = segLen < EPS ? 0 : (target - acc) / segLen;
+    const ax = positions[(seg - 1) * dims];
+    const ay = positions[(seg - 1) * dims + 1];
+    write(
+      i,
+      ax + f * (positions[seg * dims] - ax),
+      ay + f * (positions[seg * dims + 1] - ay),
+    );
+  }
+}
+
+/**
  * Resample a polyline `points` into `newCount` evenly arc-length-spaced points,
- * preserving the endpoints. Used to seed each edge's control points (so 2-vertex
- * OD pairs stay straight, N-vertex trajectories keep their curve) and mirrors
- * the per-iteration GPU resample pass.
+ * preserving the endpoints — the readable reference form of the resampling the
+ * GPU pass and {@link resampleInto} both implement, kept as the oracle the
+ * streaming version is cross-checked against (see edge-bundler.test.ts). Use
+ * {@link resampleInto} on any hot path: this one boxes every vertex.
  */
 export function subdivide(
   points: Vec2[],
@@ -142,6 +225,101 @@ export function isBundlingSupported(device: Device): boolean {
   if (!device.features.has('texture-blend-float-webgl')) return false;
   if (!device.isTextureFormatRenderable('r32float')) return false;
   return POSITION_FORMATS.some((f) => device.isTextureFormatRenderable(f));
+}
+
+/**
+ * Conservative `maxTextureDimension2D` when a device doesn't report limits
+ * (a stub in tests, or an adapter that predates the WebGPU-style limits
+ * surface). 2048 is the floor real WebGL2 implementations ship.
+ */
+const FALLBACK_MAX_TEXTURE_DIM = 2048;
+
+/**
+ * This device's `maxTextureDimension2D`. Every bundle allocates textures whose
+ * HEIGHT is the edge count (`pointCount × edgeCount` positions, `numBuckets ×
+ * edgeCount` flows), so the GPU's texture limit — 8192/16384 on desktop, as low
+ * as 4096 on mobile — is a hard ceiling on how many edges can be bundled at
+ * all, independent of any tuning prop.
+ */
+export function maxTextureDimension(device: Device | null | undefined): number {
+  const limit = device?.limits?.maxTextureDimension2D;
+  return typeof limit === 'number' && limit > 0
+    ? limit
+    : FALLBACK_MAX_TEXTURE_DIM;
+}
+
+/**
+ * Largest edge count this device can hold in a bundle whose textures are
+ * `pointCount` and `numBuckets` wide. Returns `0` when the WIDTHS alone already
+ * exceed the limit (an absurd `subdivisionPoints` / bucket count), i.e. no
+ * bundle of any size fits. Callers must clamp to this BEFORE allocating the
+ * merged control-point buffer — exceeding it makes `createTexture` throw inside
+ * `renderLayers`, which takes the whole layer tree down with it.
+ */
+export function maxBundleEdges(
+  device: Device | null | undefined,
+  pointCount: number,
+  numBuckets: number,
+): number {
+  const limit = maxTextureDimension(device);
+  if (pointCount > limit || numBuckets > limit) return 0;
+  return limit;
+}
+
+/**
+ * Guard the `pointCount × edgeCount` position texture against the device limit
+ * BEFORE `createTexture` does — luma's own failure is an opaque throw from
+ * inside the caller's render callback. Callers are expected to clamp with
+ * {@link maxBundleEdges} and never hit this; it exists so the one that forgets
+ * gets a diagnosable message it can catch and degrade on.
+ */
+function assertBundleFits(
+  who: string,
+  device: Device,
+  edgeCount: number,
+  pointCount: number,
+): void {
+  const limit = maxTextureDimension(device);
+  if (edgeCount > limit || pointCount > limit) {
+    throw new Error(
+      `[${who}] a bundle of ${edgeCount} edges × ${pointCount} control points needs a ` +
+        `${pointCount}×${edgeCount} texture, over this device's maxTextureDimension2D ` +
+        `(${limit}). Clamp the edge count with maxBundleEdges() before constructing.`,
+    );
+  }
+}
+
+/**
+ * Fill budget for ONE density-splat pass, in additively-blended fragments.
+ * The splat rasterizes `edgeCount × pointCount` quads of side `2·h` px into the
+ * {@link DENSITY_RES}² target, so its cost is `sites × (2h)²` — QUADRATIC in
+ * the kernel radius, which `maxBundledEdges` does not bound at all. ~6×10⁷
+ * fragments is roughly a 60 fps budget for a single blended pass on integrated
+ * GPUs; past it we shrink `h` rather than let the headline knob quietly cost
+ * half a second a frame.
+ */
+const SPLAT_FILL_BUDGET = 6e7;
+
+/**
+ * Clamp the initial kernel bandwidth (in WORK-box units) so the first — and
+ * widest — density splat stays inside {@link SPLAT_FILL_BUDGET}. Exported pure
+ * so the cost model is unit-testable; see {@link EdgeBundlerOptions.kernelRadiusFraction}.
+ *
+ * Only the FIRST iteration needs clamping: the anneal shrinks `h` monotonically
+ * from there, so every later pass is strictly cheaper.
+ */
+export function clampKernelRadius(
+  requestedWorkUnits: number,
+  edgeCount: number,
+  pointCount: number,
+): number {
+  const sites = Math.max(1, edgeCount * pointCount);
+  // Each site rasterizes a (2·hPx)² quad; solve sites·(2·hPx)² ≤ budget.
+  const maxRadiusPx = 0.5 * Math.sqrt(SPLAT_FILL_BUDGET / sites);
+  const maxWorkUnits = (maxRadiusPx * WORK_SIZE) / DENSITY_RES;
+  // Never clamp below the 2-work-unit floor the constructor already enforces —
+  // a sub-texel kernel would bundle nothing at all.
+  return Math.max(2, Math.min(requestedWorkUnits, maxWorkUnits));
 }
 
 /**
@@ -236,7 +414,13 @@ export interface EdgeBundlerOptions {
   cosLat0: number;
   /** KDEEB iterations (≈15). */
   iterations: number;
-  /** Initial kernel bandwidth as a FRACTION of the drawing size (≈0.05). */
+  /**
+   * Initial kernel bandwidth as a FRACTION of the drawing size (≈0.05).
+   * COST: the density splat rasterizes `edgeCount × pointCount` additively-
+   * blended quads of side `2·h`, so fill is **quadratic** in this value —
+   * doubling it quadruples the per-iteration fragment count. It is clamped to
+   * a fill budget ({@link clampKernelRadius}, warns once when it bites).
+   */
   kernelRadiusFraction: number;
   /** Laplacian smoothing strength f (≈0.5). */
   smoothingStrength: number;
@@ -297,8 +481,12 @@ void main() {
 }
 `;
 
-/** Advect interior points up the normalized density gradient by `advectStep`. */
-function advectFs(numPoints: number): string {
+/**
+ * Advect interior points up the normalized density gradient by `advectStep`.
+ * Exported (`@internal`) so the CPU test suite can assert the kernel's
+ * invariants — there is no GLSL runtime under vitest.
+ */
+export function advectFs(numPoints: number): string {
   return /* glsl */ `#version 300 es
 precision highp float;
 uniform sampler2D posTex;
@@ -318,7 +506,12 @@ void main() {
   float dT = texelFetch(densityTex, ivec2(x, cl(dt.y + 1)), 0).r;
   vec2 grad = vec2(dR - dL, dT - dB);
   float g = length(grad);
-  if (g > 1e-8) p += kdeb.advectStep * grad / g;
+  // Keep the advected point INSIDE the work box: outside it the point splats
+  // off the density NDC (contributing nothing, and never pulled back) while the
+  // renderer still reconstructs a lon/lat for it. The gradient normally points
+  // inward, so this only ever bites at the boundary — but nothing else bounds
+  // the step.
+  if (g > 1e-8) p = clamp(p + kdeb.advectStep * grad / g, vec2(0.0), vec2(${WORK_SIZE}.0));
   fragColor = vec4(p, 0.0, 0.0);
 }
 `;
@@ -427,14 +620,30 @@ export class EdgeBundler {
     this.device = device;
     this.cosLat0 = cosLat0;
     this.iterations = Math.max(1, Math.floor(opts.iterations));
-    this.kernelRadius0 = Math.max(2, opts.kernelRadiusFraction * WORK_SIZE);
     this.smoothing = Math.max(0, Math.min(1, opts.smoothingStrength));
     this.annealLambda = Math.max(0.3, Math.min(0.95, opts.annealLambda ?? 0.8));
 
     const E = opts.edgeCount;
     const P = Math.max(3, Math.floor(opts.pointCount));
+    assertBundleFits('EdgeBundler', device, E, P);
     this.edgeCount = E;
     this.pointCount = P;
+
+    // Kernel bandwidth, clamped to the splat fill budget — the splat cost is
+    // quadratic in the radius and `maxBundledEdges` bounds only the instance
+    // COUNT, so a large kernelRadius over a dense view is what actually stalls
+    // the frame.
+    const requested = Math.max(2, opts.kernelRadiusFraction * WORK_SIZE);
+    this.kernelRadius0 = clampKernelRadius(requested, E, P);
+    if (this.kernelRadius0 < requested - 1e-6) {
+      warnOnce(
+        'EdgeBundler:kernelRadiusClamp',
+        `[EdgeBundler] kernelRadius clamped from ${(requested / WORK_SIZE).toFixed(4)} ` +
+          `to ${(this.kernelRadius0 / WORK_SIZE).toFixed(4)} of the extent: ` +
+          `${E} edges × ${P} points would exceed the density-splat fill budget. ` +
+          'Lower kernelRadius, subdivisionPoints or maxBundledEdges to bundle as tightly as asked.',
+      );
+    }
 
     const format =
       POSITION_FORMATS.find((f) => device.isTextureFormatRenderable(f)) ??
@@ -679,6 +888,7 @@ export class StaticBundle implements BundlePositions {
     this.cosLat0 = cosLat0;
     const E = opts.edgeCount;
     const P = Math.max(2, Math.floor(opts.pointCount));
+    assertBundleFits('StaticBundle', device, E, P);
     this.edgeCount = E;
     this.pointCount = P;
 

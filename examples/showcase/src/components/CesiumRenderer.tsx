@@ -12,8 +12,13 @@
 //     scene.preRender (attachCesiumClock), off React's 20 Hz UI clock, and the
 //     clock pumps scene.requestRender() so requestRenderMode still animates while
 //     playing. requestRenderMode + that pump are an ATOMIC pair.
-//  3. Streaming — SpatiotemporalTileset loads only the tiles in the camera
+//  3. Streaming — SpatioTemporalTileset loads only the tiles in the camera
 //     frustum at the view zoom, so N tracks the viewport, not the whole dataset.
+//  4. Republish coalescing — setTiles is a replace-all rebuild, and the tileset
+//     fires one load callback per tile, so publishing per callback costs
+//     O(features × tiles) of synchronous main-thread work per burst. Callbacks
+//     arm; the rebuild happens once per drawn frame, and only when the visible
+//     tile-key set actually changed.
 //
 // Cesium's static assets load from the CDN via CESIUM_BASE_URL. CesiumJS is
 // Apache-2.0 (no ion token). Browser-verify only (needs a live WebGL Scene).
@@ -23,14 +28,17 @@ import { Viewer, Rectangle, Ellipsoid, Math as CesiumMath } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import {
   STTArchive,
-  SpatiotemporalTileset,
+  SpatioTemporalTileset,
   type BoundingBox,
 } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import {
   applyViewStateToCamera,
-  cesiumViewToViewState,
+  resolveCesiumStreamView,
+  verticalFovRadians,
+  TilePublishGate,
   attachCesiumClock,
+  type CesiumViewOptions,
 } from '@poopdeck.gl/cesium';
 import type { TimeController } from '@poopdeck.gl/playback';
 import { buildCesiumLayer, cesiumLoaderTimeWindow } from './buildCesiumLayer';
@@ -113,17 +121,40 @@ export default function CesiumRenderer({
     }
     // Trips need the trail behind the playhead resident (deck auto-widens too).
     const loaderTimeWindow = cesiumLoaderTimeWindow(dataset);
-    // Default opts here → read the zoom back below with default opts too (round-trips).
-    applyViewStateToCamera(viewer.camera, dataset.initialViewState);
+
+    // The REAL canvas height and the REAL vertical fov, read fresh each time —
+    // the pair that turns a camera altitude into a zoom. Hard-coding 800 px and
+    // treating Cesium's 60° `fov` as vertical costs ~1.0–1.3 zoom levels of
+    // detail on a wide canvas (`fov` is the HORIZONTAL angle in landscape). Both
+    // the framing below and the zoom read back from it use this, so the two stay
+    // each other's inverse.
+    const viewOptions = (): CesiumViewOptions => {
+      const { canvas } = scene;
+      const height = canvas.clientHeight || canvas.height;
+      const width = canvas.clientWidth || canvas.width;
+      return {
+        viewportHeight: height > 0 ? height : undefined,
+        fovRadians: verticalFovRadians(
+          scene.camera.frustum as { fovy?: number; fov?: number },
+          height > 0 ? width / height : undefined,
+        ),
+      };
+    };
+    applyViewStateToCamera(
+      viewer.camera,
+      dataset.initialViewState,
+      viewOptions(),
+    );
 
     // ---- Streaming + time-hook shared state (closed over by the callbacks) ----
     let disposed = false;
-    let tileset: SpatiotemporalTileset | null = null;
+    let tileset: SpatioTemporalTileset | null = null;
     let view: { bounds: BoundingBox; zoom: number } | null = null;
     const scratchRect = new Rectangle();
     const archive = new STTArchive({ url: dataset.url });
     let removeChanged = () => {};
     let removeMoveEnd = () => {};
+    let removePreRender = () => {};
 
     // Cesium-time hook: apply the playhead every drawn frame AND keep temporal
     // prefetch tracking it (reusing the cached camera view — no per-frame
@@ -148,41 +179,41 @@ export default function CesiumRenderer({
       { requestRender: true },
     );
 
-    // Live camera → {bounds, zoom}. computeViewRectangle gives the true footprint
-    // (radians); height→zoom reuses the pure cesiumViewToViewState math.
+    // Live camera → {bounds, zoom}, or null when the camera produced nothing
+    // trustworthy — in which case the caller KEEPS the previous viewport
+    // (docs/roadmap/tile-loading-3d-2026-07.md §4.1 rule 1). Everything
+    // arithmetic lives in the pure, unit-tested resolveCesiumStreamView: the
+    // Rectangle.MAX_VALUE rejection, the `west > east` seam encoding that must
+    // NOT collapse to the archive's full extent, the normalizeViewportBounds
+    // routing, and the floored zoom.
     const cameraToStreamView = (
       metaBounds: BoundingBox,
       minZoom: number,
       maxZoom: number,
-    ): { bounds: BoundingBox; zoom: number } => {
+    ): { bounds: BoundingBox; zoom: number } | null => {
       const cam = scene.camera;
-      const rect = cam.computeViewRectangle(Ellipsoid.WGS84, scratchRect);
-      const bounds: BoundingBox =
+      const c = cam.positionCartographic;
+      return resolveCesiumStreamView({
+        rect: cam.computeViewRectangle(Ellipsoid.WGS84, scratchRect),
+        camera: {
+          longitude: CesiumMath.toDegrees(c.longitude),
+          latitude: CesiumMath.toDegrees(c.latitude),
+          // An ALTITUDE, not a distance to the screen-centre ground point;
+          // cesiumViewToViewState applies the tilt correction.
+          height: c.height,
+          headingRad: cam.heading,
+          pitchRad: cam.pitch,
+          rollRad: cam.roll,
+        },
+        archiveBounds: metaBounds,
+        minZoom,
+        maxZoom,
         // Global datasets (satellite tracks, ocean drifters) opt out of
         // viewport-clipped loading, same as the deck path (useGlobalBounds).
-        !dataset.useGlobalBounds && rect && rect.east >= rect.west
-          ? {
-              minLon: CesiumMath.toDegrees(rect.west),
-              minLat: CesiumMath.toDegrees(rect.south),
-              maxLon: CesiumMath.toDegrees(rect.east),
-              maxLat: CesiumMath.toDegrees(rect.north),
-            }
-          : metaBounds; // whole-globe view, antimeridian crossing, or global opt-out → full extent
-      if (dataset.zoomOverride !== undefined)
-        return { bounds, zoom: dataset.zoomOverride };
-      const c = cam.positionCartographic;
-      const { zoom } = cesiumViewToViewState({
-        longitude: CesiumMath.toDegrees(c.longitude),
-        latitude: CesiumMath.toDegrees(c.latitude),
-        height: c.height,
-        headingRad: cam.heading,
-        pitchRad: cam.pitch,
-        rollRad: cam.roll,
+        useGlobalBounds: dataset.useGlobalBounds,
+        zoomOverride: dataset.zoomOverride,
+        view: viewOptions(),
       });
-      return {
-        bounds,
-        zoom: Math.min(maxZoom, Math.max(minZoom, Math.round(zoom))),
-      };
     };
 
     void (async () => {
@@ -190,16 +221,40 @@ export default function CesiumRenderer({
         const meta = await archive.getMetadata();
         if (disposed) return;
 
-        // Tiles arrive after the synchronous update() returns — republish the
-        // resident set (replace-all: timeOrigin is self-consistent per rebuild).
-        const republish = () => {
+        // Tiles arrive after the synchronous update() returns, ONE CALLBACK PER
+        // TILE — and every Cesium layer's setTiles is a replace-all that rebuilds
+        // one primitive per feature across the whole resident set, synchronously.
+        // Rebuilding on each arrival is therefore O(features × tiles) of main-
+        // thread work for a burst that only needed the last rebuild. So the
+        // callbacks merely ARM a republish and the rebuild happens once on the
+        // next drawn frame, and only when the visible key set actually changed
+        // (TilePublishGate — which also refuses an empty set, so a momentary gap
+        // in selection never blanks the layer).
+        let republishArmed = false;
+        const publishGate = new TilePublishGate();
+        const flushRepublish = () => {
+          if (!republishArmed) return;
+          republishArmed = false;
           if (disposed || !tileset) return;
-          layer.setTiles(tileset.getVisibleTiles());
+          const tiles = tileset.getVisibleTiles();
+          if (!publishGate.offer(tiles).publish) return;
+          layer.setTiles(tiles);
           layer.setTime(timeController.getTime());
-          scene.requestRender(); // requestRenderMode won't repaint new geometry on its own
+          // One more frame. The batched-polyline layers cannot write an alpha
+          // until the new Primitive has rendered once (the batch table behind
+          // getGeometryInstanceAttributes only exists then), so under
+          // requestRenderMode with a paused playhead the lines would otherwise
+          // sit at their seeded alpha 0 — invisible — until the next interaction.
+          scene.requestRender();
         };
+        const republish = () => {
+          if (disposed || republishArmed) return;
+          republishArmed = true;
+          scene.requestRender(); // requestRenderMode won't repaint new geometry — nor run preRender — on its own
+        };
+        removePreRender = scene.preRender.addEventListener(flushRepublish);
 
-        tileset = new SpatiotemporalTileset({
+        tileset = new SpatioTemporalTileset({
           minZoom: meta.minZoom,
           maxZoom: meta.maxZoom,
           temporalBucketMs: meta.temporalBucketMs,
@@ -210,9 +265,17 @@ export default function CesiumRenderer({
           onTileUnload: republish,
         });
 
-        const onSettle = () => {
-          if (disposed || !tileset) return;
-          view = cameraToStreamView(meta.bounds, meta.minZoom, meta.maxZoom);
+        const applyView = (
+          next: { bounds: BoundingBox; zoom: number } | null,
+          immediate: boolean,
+        ) => {
+          // A null resolve means the camera produced a box tile selection must
+          // not trust (§4.1 rule 1): keep the previous viewport rather than
+          // select against garbage. On the very first call there is no previous
+          // one, so there is simply nothing to select yet — the next camera
+          // event retries.
+          if (next) view = next;
+          if (!tileset || !view) return;
           tileset.update(
             {
               bounds: view.bounds,
@@ -220,6 +283,24 @@ export default function CesiumRenderer({
               time: timeController.getTime(),
               timeWindow: loaderTimeWindow,
             },
+            immediate,
+          );
+          // Arm a republish on the VIEWPORT edge too, not only on tile
+          // load/unload. `TilePublishGate` refuses an empty set for a bounded
+          // hold and then lets it through — but it only ever sees a set when
+          // `flushRepublish` runs, and that is gated on `republishArmed`. Pan a
+          // land dataset out over open ocean and nothing loads and nothing is
+          // evicted, so neither callback fires, the gate is never offered the
+          // empty set, its hold never expires, and the last tiles stay painted
+          // over water indefinitely. Arming here costs one gate comparison per
+          // camera settle and makes the hold actually bounded in practice.
+          republish();
+        };
+
+        const onSettle = () => {
+          if (disposed || !tileset) return;
+          applyView(
+            cameraToStreamView(meta.bounds, meta.minZoom, meta.maxZoom),
             false, // debounced viewport change
           );
         };
@@ -230,14 +311,8 @@ export default function CesiumRenderer({
         removeMoveEnd = scene.camera.moveEnd.addEventListener(onSettle);
 
         // Seed the initial (already-framed) viewport.
-        view = cameraToStreamView(meta.bounds, meta.minZoom, meta.maxZoom);
-        tileset.update(
-          {
-            bounds: view.bounds,
-            zoom: view.zoom,
-            time: timeController.getTime(),
-            timeWindow: loaderTimeWindow,
-          },
+        applyView(
+          cameraToStreamView(meta.bounds, meta.minZoom, meta.maxZoom),
           true,
         );
       } catch (err) {
@@ -249,6 +324,7 @@ export default function CesiumRenderer({
       disposed = true;
       removeChanged();
       removeMoveEnd();
+      removePreRender();
       detachClock();
       const ts = tileset;
       tileset = null;

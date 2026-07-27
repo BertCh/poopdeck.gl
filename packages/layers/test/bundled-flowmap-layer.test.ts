@@ -10,12 +10,15 @@
  * unchanged, and that pruning destroys the GPU resources.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { odMatrixTile, TWO_PAIRS } from './fake-od';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { odMatrixTile, odStaticTile, TWO_PAIRS } from './fake-od';
+import { _resetWarnOnce } from '../src/lib/log';
 
 const h = vi.hoisted(() => ({
   supported: true as boolean,
   staticSupported: true as boolean,
+  /** Device texture-size ceiling the mocked maxBundleEdges reports. */
+  textureLimit: 16384 as number,
   bundlers: [] as any[],
   staticBundles: [] as any[],
 }));
@@ -104,21 +107,35 @@ vi.mock('../src/lib/edge-bundler', () => {
     }
   }
   // Simple linear resampler — enough for the straight 2-vertex OD fixtures here
-  // (the real arc-length subdivide is unit-tested in edge-bundler.test.ts).
-  const subdivide = (pts: number[][], n: number) => {
-    const a = pts[0];
-    const b = pts[pts.length - 1];
-    return Array.from({ length: n }, (_, i) => {
-      const f = n > 1 ? i / (n - 1) : 0;
-      return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
-    });
+  // (the real arc-length resampleInto is unit-tested in edge-bundler.test.ts).
+  const resampleInto = (
+    positions: ArrayLike<number>,
+    dims: number,
+    v0: number,
+    v1: number,
+    count: number,
+    out: Float64Array,
+    outPoint0: number,
+  ) => {
+    const ax = positions[v0 * dims];
+    const ay = positions[v0 * dims + 1];
+    const bx = positions[(v1 - 1) * dims];
+    const by = positions[(v1 - 1) * dims + 1];
+    for (let i = 0; i < count; i++) {
+      const f = count > 1 ? i / (count - 1) : 0;
+      const o = (outPoint0 + i) * dims;
+      out[o] = ax + (bx - ax) * f;
+      out[o + 1] = ay + (by - ay) * f;
+    }
   };
   return {
     EdgeBundler: FakeEdgeBundler,
     StaticBundle: FakeStaticBundle,
     isBundlingSupported: () => h.supported,
     isStaticBundleSupported: () => h.staticSupported,
-    subdivide,
+    maxBundleEdges: (_device: any, P: number, nb: number) =>
+      P > h.textureLimit || nb > h.textureLimit ? 0 : h.textureLimit,
+    resampleInto,
   };
 });
 
@@ -133,8 +150,11 @@ describe('BundledFlowmapLayer', () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    vi.useFakeTimers();
+    _resetWarnOnce();
     h.supported = true;
     h.staticSupported = true;
+    h.textureLimit = 16384;
     h.bundlers = [];
     h.staticBundles = [];
     createdTextures = [];
@@ -181,6 +201,7 @@ describe('BundledFlowmapLayer', () => {
         smoothingStrength: 0.5,
         maxBundledEdges: 4000,
         preBundled: false,
+        flowProperty: null,
         opacity: 1,
         visible: true,
         ...opts,
@@ -193,6 +214,11 @@ describe('BundledFlowmapLayer', () => {
       layer.fallbackCache = new Map();
       layer.lastTilesRef = null;
       layer.lastPropsKey = '';
+      layer.tileSetKey = '';
+      layer.nodeTable = null;
+      layer.pendingSig = '';
+      layer._rebuildTimer = null;
+      layer._bundleEpoch = 0;
       layer._bundleRafId = null;
       layer._bucket0Abs = 0;
       layer._bucketWidth = 0;
@@ -202,9 +228,31 @@ describe('BundledFlowmapLayer', () => {
       layer.getCurrentTime = () => time;
       // Avoid scheduling real rAF timers in the test harness.
       layer.scheduleBundleStep = () => {};
+      layer.setState = () => {};
       return layer;
     };
   });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Node overlay rows, decoded from the binary attributes it now carries. */
+  const nodeRows = (
+    nodeLayer: any,
+  ): { position: [number, number, number]; radius: number }[] => {
+    const { length, attributes } = nodeLayer.props.data;
+    const pos = attributes.getPosition.value as Float64Array;
+    const rad = attributes.getRadius.value as Float32Array;
+    return Array.from({ length }, (_, i) => ({
+      position: [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]] as [
+        number,
+        number,
+        number,
+      ],
+      radius: rad[i],
+    }));
+  };
 
   it('renders one merged GPU BundledFlowLinesLayer for the visible set + a node overlay', () => {
     const layer = makeLayer(0);
@@ -339,15 +387,15 @@ describe('BundledFlowmapLayer', () => {
   it('aggregates incident flow into node circles (CPU path unchanged)', () => {
     const layer = makeLayer(0); // bucket 0: only edge 0 active at flow 10
     layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
-    const nodes = layer.renderLayers()[1].props.data as {
-      position: number[];
-      radius: number;
-    }[];
+    const nodes = nodeRows(layer.renderLayers()[1]);
     expect(nodes.length).toBe(2);
-    expect(nodes.map((n) => n.radius)).toEqual([Math.sqrt(10), Math.sqrt(10)]);
+    // f32 attribute — compare with tolerance, not bit equality.
+    expect(nodes[0].radius).toBeCloseTo(Math.sqrt(10), 6);
+    expect(nodes[1].radius).toBeCloseTo(Math.sqrt(10), 6);
+    expect(layer.renderLayers()[1].props.id).toBe('bf-nodes-all');
   });
 
-  it('bundles the UNION of visible tiles in ONE bundler, rebuilding (and disposing) on change', () => {
+  it('bundles the UNION of visible tiles in ONE bundler, rebuilding (and disposing) once the set settles', () => {
     const layer = makeLayer(0);
     const a = odMatrixTile(TWO_PAIRS, { z: 12, x: 1, y: 1, t: 0 });
     const b = odMatrixTile(TWO_PAIRS, { z: 12, x: 2, y: 2, t: 0 });
@@ -360,10 +408,14 @@ describe('BundledFlowmapLayer', () => {
     const bundlerA = h.bundlers[0];
     const matrixA = createdTextures.find((t) => t.format === 'r32float');
 
-    // Removing a tile changes the visible-set signature → rebuild for {b} (2
-    // edges) and dispose the old bundle's GPU resources.
+    // Removing a tile changes the visible-set signature. The rebuild is
+    // DEBOUNCED (see below), so the old bundle keeps rendering until the set
+    // has been quiet — then it rebuilds for {b} (2 edges) and disposes the old
+    // bundle's GPU resources.
     layer.state = { tiles: [b] };
     layer.renderLayers();
+    expect(bundlerA.destroyed).toBe(false);
+    vi.advanceTimersByTime(200);
     expect(bundlerA.destroyed).toBe(true);
     expect(matrixA!.destroyed).toBe(true);
     expect(h.bundlers.length).toBe(2);
@@ -374,5 +426,193 @@ describe('BundledFlowmapLayer', () => {
     const layer = makeLayer(0);
     layer.state = { tiles: [] };
     expect(layer.renderLayers()).toEqual([]);
+  });
+
+  describe('device texture limits', () => {
+    it('falls back rather than allocating a texture taller than the device allows', () => {
+      // Both bundle textures are `edgeCount` rows tall. A 30k-edge corridor
+      // tier asked for a 48×30000 texture — over the 8192/16384 limit on
+      // essentially every GPU — and luma threw from inside renderLayers, which
+      // blanked the whole layer tree (after a ~23 MB Float64Array).
+      h.textureLimit = 1;
+      const layer = makeLayer(0);
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      const flow = layer.renderLayers()[0];
+      expect(layer.bundle.status).toBe('fallback');
+      expect(h.bundlers.length).toBe(0);
+      expect(flow.props.data.attributes.getWidth.size).toBe(1); // straight arrows
+    });
+
+    it('applies the ceiling to the preBundled path too', () => {
+      // The maxBundledEdges guard was explicitly skipped for baked bundles, so
+      // `preBundled: true` walked straight into createTexture.
+      h.textureLimit = 1;
+      const layer = makeLayer(0, { preBundled: true });
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      const flow = layer.renderLayers()[0];
+      expect(h.staticBundles.length).toBe(0);
+      expect(layer.bundle.status).toBe('fallback');
+      expect(flow.props.data.attributes.getWidth.size).toBe(1);
+    });
+
+    it('says the ceiling is hardware, not a prop to raise', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      h.textureLimit = 1;
+      const layer = makeLayer(0);
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.renderLayers();
+      expect(warn.mock.calls[0][0]).toMatch(/hardware ceiling/);
+      expect(warn.mock.calls[0][0]).not.toMatch(/Raise maxBundledEdges/);
+      warn.mockRestore();
+    });
+
+    it('degrades to straight arrows when GPU allocation throws', () => {
+      // Belt and braces: this all runs inside deck's synchronous render
+      // callback, so ANY driver-side refusal must not escape renderLayers.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layer = makeLayer(0);
+      layer.context = {
+        device: {
+          createTexture: () => {
+            throw new Error('out of memory');
+          },
+        },
+      };
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      const sublayers = layer.renderLayers();
+      expect(layer.bundle.status).toBe('fallback');
+      expect(sublayers[0].props.data.attributes.getWidth.size).toBe(1);
+      expect(warn.mock.calls[0][0]).toMatch(/out of memory/);
+      warn.mockRestore();
+    });
+  });
+
+  describe('bundle rebuild scheduling', () => {
+    it('debounces rebuilds across a stream of tile arrivals', () => {
+      // bundleSignature hashes every live tile key, so ANY arrival invalidated
+      // it and re-derived the whole union synchronously inside renderLayers —
+      // restarting the 15-iteration relaxation, so the rivers never converged
+      // while panning.
+      const layer = makeLayer(0);
+      const tiles = [odMatrixTile(TWO_PAIRS, { z: 12, x: 0, y: 0, t: 0 })];
+      layer.state = { tiles };
+      layer.renderLayers();
+      expect(h.bundlers.length).toBe(1); // first bundle is inline
+
+      // Five tiles stream in over 5 × 50 ms — well inside the settle window.
+      for (let i = 1; i <= 5; i++) {
+        tiles.push(odMatrixTile(TWO_PAIRS, { z: 12, x: i, y: 0, t: 0 }));
+        layer.state = { tiles: [...tiles] };
+        layer.renderLayers();
+        vi.advanceTimersByTime(50);
+      }
+      expect(h.bundlers.length).toBe(1); // still ONE — no restart per arrival
+
+      // Once the view settles, exactly one rebuild covers the whole union.
+      vi.advanceTimersByTime(200);
+      expect(h.bundlers.length).toBe(2);
+      expect(h.bundlers[1].edgeCount).toBe(12); // 6 tiles × 2 edges
+    });
+
+    it('does NOT rebuild on a playhead tick (the signature excludes time)', () => {
+      const layer = makeLayer(0);
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.renderLayers();
+      expect(h.bundlers.length).toBe(1);
+      for (const t of [500, 1000, 1500, 2000]) {
+        layer.getCurrentTime = () => t;
+        layer.renderLayers();
+        vi.advanceTimersByTime(60);
+      }
+      vi.advanceTimersByTime(500);
+      expect(h.bundlers.length).toBe(1);
+      expect(layer._rebuildTimer).toBeNull();
+    });
+  });
+
+  describe('sublayer cache invalidation', () => {
+    const rebuildsOn = (mutate: (props: any) => void): boolean => {
+      const layer = makeLayer(0);
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      const first = layer.renderLayers();
+      mutate(layer.props);
+      const second = layer.renderLayers();
+      return second[0] !== first[0];
+    };
+
+    it.each([
+      ['pickable', (p: any) => (p.pickable = true)],
+      ['autoHighlight', (p: any) => (p.autoHighlight = true)],
+      ['coordinateSystem', (p: any) => (p.coordinateSystem = 2)],
+      ['modelMatrix', (p: any) => (p.modelMatrix = [1, 0, 0, 0])],
+      ['parameters', (p: any) => (p.parameters = { depthTest: false })],
+      [
+        '_subLayerProps',
+        (p: any) => (p._subLayerProps = { flows: { gap: 3 } }),
+      ],
+      ['updateTriggers', (p: any) => (p.updateTriggers = { all: 7 })],
+      ['nodeRadiusScale', (p: any) => (p.nodeRadiusScale = 4)],
+    ])('rebuilds the bundled sublayer when %s changes', (_name, mutate) => {
+      expect(rebuildsOn(mutate as (p: any) => void)).toBe(true);
+    });
+
+    it('rebuilds cached fallback arrows when a NEW tile grows a shared hub', () => {
+      h.supported = false; // force the straight-arrow path
+      const a = odMatrixTile(TWO_PAIRS, { z: 12, x: 1, y: 1, t: 0 });
+      const b = odMatrixTile(
+        [{ source: [0, 0], target: [5, 5], flows: [90, 0, 0] }],
+        {
+          z: 12,
+          x: 2,
+          y: 2,
+          t: 0,
+        },
+      );
+      const layer = makeLayer(0);
+      layer.state = { tiles: [a] };
+      const alone = layer.renderLayers();
+      const insetAlone = alone[0].props.data.attributes.getEndpointOffsets
+        .value[0] as number;
+
+      layer.state = { tiles: [a, b] };
+      const together = layer.renderLayers();
+      expect(together[0]).not.toBe(alone[0]);
+      expect(
+        together[0].props.data.attributes.getEndpointOffsets.value[0],
+      ).toBeGreaterThan(insetAlone);
+    });
+  });
+
+  it('reads a per-feature numeric column when the tile has no bucket matrix', () => {
+    // No bucket axis → no GPU bundle (nothing to sample); the straight-arrow
+    // fallback must still show the corridors rather than an all-zero blank map.
+    const layer = makeLayer(0);
+    layer.state = {
+      tiles: [
+        odStaticTile(
+          [
+            { source: [0, 0], target: [1, 1] },
+            { source: [2, 2], target: [3, 3] },
+          ],
+          [16, 0],
+        ),
+      ],
+    };
+    const sublayers = layer.renderLayers();
+    expect(layer.bundle.status).toBe('fallback');
+    const w = sublayers[0].props.data.attributes.getWidth.value as Float32Array;
+    expect(w[0]).toBeCloseTo(4);
+    expect(w[1]).toBe(0);
+    expect(nodeRows(sublayers[1]).length).toBe(2);
+  });
+
+  it('strips forwarded extensions (they can never reach the custom shaders)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    class FakeDataFilterExtension {}
+    const layer = makeLayer(0, { extensions: [new FakeDataFilterExtension()] });
+    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    expect(layer.renderLayers()[0].props.extensions).toEqual([]);
+    expect(warn.mock.calls[0][0]).toMatch(/FakeDataFilterExtension/);
+    warn.mockRestore();
   });
 });

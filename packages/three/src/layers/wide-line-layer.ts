@@ -25,7 +25,7 @@ import {
 } from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -50,9 +50,9 @@ import type { RGBA } from '../lib/color.js';
 import { makePaletteTexture } from '../tsl/palette.js';
 import {
   resolveIdPick,
-  type SttIdPickInfo,
-  type SttIdPickable,
-  type SttIdPickKind,
+  type STTIdPickInfo,
+  type STTIdPickable,
+  type STTIdPickKind,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
@@ -107,7 +107,7 @@ export interface STTWideLineLayerOptions extends ThreeTimeWindowOptions {
   categoryOrder?: string[];
 }
 
-export class STTWideLineLayer extends BaseSttLayer implements SttIdPickable {
+export class STTWideLineLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -128,7 +128,7 @@ export class STTWideLineLayer extends BaseSttLayer implements SttIdPickable {
    * family, overridden to `'path'` by the {@link STTPathGeoLayer} subclass. Protected
    * so a subclass can retag its picks without duplicating the pick machinery.
    */
-  protected pickKind: SttIdPickKind = 'line';
+  protected pickKind: STTIdPickKind = 'line';
 
   constructor(options: STTWideLineLayerOptions) {
     super();
@@ -175,7 +175,7 @@ export class STTWideLineLayer extends BaseSttLayer implements SttIdPickable {
     return { property: mode.property, palette };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     const cat = this.resolveCategoryPalette();
@@ -304,12 +304,12 @@ export class STTWideLineLayer extends BaseSttLayer implements SttIdPickable {
 
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback) to
-   * a normalised {@link SttIdPickInfo}, or `null` for a miss. The `kind` is
+   * a normalised {@link STTIdPickInfo}, or `null` for a miss. The `kind` is
    * {@link pickKind} (`'line'`, or `'path'` for the {@link STTPathGeoLayer} subclass);
    * the coordinate is the feature's FIRST vertex (indexed geometry). Pure — the
    * unit-tested seam; call it directly with a decoded index.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -354,7 +354,7 @@ export class STTWideLineLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.object.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

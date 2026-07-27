@@ -67,6 +67,12 @@ import {
   updateDataFilterUniforms,
   type DataFilterOptions,
 } from './data-filter.js';
+import { TimeHeightUniforms } from './time-height.js';
+
+// The space-time-cube lift holder is shared with the other lifting materials;
+// re-exported here so a bundle's `timeHeight` field is nameable from the module
+// that produced the bundle.
+export { TimeHeightUniforms };
 
 /** Live column uniforms (constant opacity multiplier on top of the time window). */
 export class ColumnUniforms {
@@ -106,19 +112,6 @@ export interface ColumnMaterialOptions {
    * @default undefined
    */
   colorPalette?: { texture: Texture };
-}
-
-/**
- * Live time-as-height uniforms (the space-time-cube lift). All times are
- * RELATIVE to the layer `timeOrigin`, matching `sttStart`. Idles flat while
- * `heightScale` is 0 (deck's `timeHeightScale` default), so an installed-but-
- * unconfigured lift is a no-op.
- */
-export class TimeHeightUniforms {
-  /** Metres of altitude per simulation millisecond (0 = flat). */
-  readonly heightScale: UniformNode = uniform(0);
-  /** Relative time (vs the layer timeOrigin) mapped to altitude 0. */
-  readonly heightOrigin: UniformNode = uniform(0);
 }
 
 export interface ColumnMaterialBundle {

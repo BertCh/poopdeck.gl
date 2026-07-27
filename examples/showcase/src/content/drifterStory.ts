@@ -21,9 +21,20 @@
 const D = (y: number, m = 0, day = 1) => Date.UTC(y, m, day);
 export const DAY = 86_400_000;
 
-/** Full extent of the drifter archive rendered on the globe. */
-export const DATA_START = 287_884_800_000; // 1979-02-15
-export const DATA_END = 1_667_844_000_000; // 2022-11-07
+// NOTE: the archive's temporal extent is deliberately NOT declared here. It
+// used to be (`DATA_START`/`DATA_END`), and the hand-typed end drifted 6.75
+// days past the real last fix — so every drift/spin beat played out over a
+// week of empty ocean before the clock stopped. StoryGlobe now resolves the
+// range from the archive manifest (`useArchiveMetadata` + `resolvePlaybackParams`),
+// the same reconciliation path `/demo/:id` uses, so the story clock cannot
+// drift from the data again. Story content declares only editorial MOMENTS.
+//
+// The manifest is one async GET away, though, so the FIRST beat of a cold
+// visit is applied against the `ocean-drifters` placeholder in datasets.ts —
+// which is why that literal must equal the archive extent exactly, and why
+// `StoryClock.setArchiveRange` corrects the beat already on the clock (range
+// only, never a re-seek) the moment the real extent lands. See
+// components/story/storyClock.ts and test/story-clock.test.ts.
 
 export type GlobeMode = 'spin' | 'sweep' | 'drift' | 'still';
 
@@ -41,8 +52,13 @@ export interface GlobeFocus {
   /** Snapshot / center time (ms epoch). */
   time: number;
   mode: GlobeMode;
-  /** For mode 'sweep': play across this whole range. */
-  sweep?: { start: number; end: number };
+  /**
+   * For mode 'sweep': play across this whole range. `start` is optional and
+   * omitting it means "from the beginning of the archive" — StoryGlobe fills
+   * it in from the resolved archive extent, so the sweep can never open on a
+   * moment the data does not reach.
+   */
+  sweep?: { start?: number; end: number };
   /** Visible trail length, in days of sim-time. */
   trailDays?: number;
   /** Playback rate in sim-days per real second (sweep/drift/spin). */
@@ -142,7 +158,8 @@ export const ACT_BUILDUP: StoryAct = {
         zoom: 1.35,
         time: D(1992, 0, 1),
         mode: 'sweep',
-        sweep: { start: DATA_START, end: D(2005, 8, 18) },
+        // `start` omitted → the resolved archive start (the first fix).
+        sweep: { end: D(2005, 8, 18) },
         trailDays: 110,
         // The fastest beat by far — it compresses ~26 years over ~75 s. The
         // rate is a hand-tuned PACING choice; it no longer needs to be R2-safe

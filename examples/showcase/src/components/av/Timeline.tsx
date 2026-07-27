@@ -26,6 +26,14 @@ export interface TimelineProps {
   targetPlaybackSeconds: number;
   autoSpeed: boolean;
   onAutoSpeedSelect: () => void;
+  /** Media-element `ended` — swaps the play glyph for replay. */
+  ended?: boolean;
+  /** Loop state + toggle. Declared explicitly rather than relying on the
+   *  `{...playback}` spread carrying them invisibly past the type. */
+  loop?: boolean;
+  onLoopToggle?: () => void;
+  /** Set on surfaces that also mount `usePlaybackHotkeys`. */
+  keyboardShortcuts?: boolean;
 }
 
 const Timeline: React.FC<TimelineProps> = (props) => {

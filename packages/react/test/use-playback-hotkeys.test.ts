@@ -11,7 +11,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, cleanup } from '@testing-library/react';
 import { SPEED_STEPS } from '@poopdeck.gl/playback';
-import { usePlaybackHotkeys } from '../src/hooks/use-playback-hotkeys';
+import {
+  usePlaybackHotkeys,
+  PLAYBACK_SHORTCUTS,
+} from '../src/hooks/use-playback-hotkeys';
 import type { PlaybackState } from '../src/hooks/use-playback';
 
 const RANGE = { start: 0, end: 10_000 };
@@ -135,22 +138,125 @@ describe('usePlaybackHotkeys — speed ladder', () => {
     ]);
   });
 
-  it('ArrowUp steps to the next-higher preset speed', () => {
+  it('> steps to the next-higher preset speed', () => {
     const k = mount({ speed: 1 }); // ladder: …,0.75,1,1.5,… → up = 1.5
-    press('ArrowUp');
+    press('>');
     expect(k.onSpeedChange).toHaveBeenLastCalledWith(1.5);
   });
 
-  it('ArrowDown steps to the next-lower preset speed', () => {
+  it('< steps to the next-lower preset speed', () => {
     const k = mount({ speed: 1 }); // down = 0.75
-    press('ArrowDown');
+    press('<');
     expect(k.onSpeedChange).toHaveBeenLastCalledWith(0.75);
   });
 
   it('snaps an off-ladder (Auto) speed to the nearest rung before stepping', () => {
     const k = mount({ speed: 1.1 }); // nearest rung = 1 → up = 1.5
-    press('ArrowUp');
+    press('>');
     expect(k.onSpeedChange).toHaveBeenLastCalledWith(1.5);
+  });
+
+  it('leaves ArrowUp/ArrowDown entirely unmapped (they belong to the map)', () => {
+    // deck.gl/maplibre/Cesium all pan on the arrows once their canvas has
+    // focus. Claiming ↑/↓ at the window made ONE keypress both pan and change
+    // speed, so speed moved to < / > (which is where YouTube keeps it).
+    const k = mount({ speed: 1 });
+    press('ArrowUp');
+    press('ArrowDown');
+    expect(k.onSpeedChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('usePlaybackHotkeys — yielding to the surface underneath', () => {
+  /** Dispatch a keydown FROM a specific element (bubbles up to the window). */
+  function pressFrom(el: Element, key: string) {
+    el.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+    );
+  }
+
+  it('yields Space to a focused button so its own activation still works', () => {
+    // A <button> activates on Space. Claiming it here (and preventDefault'ing,
+    // which suppresses that activation) left keyboard users unable to press
+    // the transport's own Restart / speed / preview buttons.
+    const k = mount();
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    pressFrom(button, ' ');
+    expect(k.onPlayPause).not.toHaveBeenCalled();
+    button.remove();
+  });
+
+  it('still takes K from a focused button (K is not an activation key)', () => {
+    const k = mount();
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    pressFrom(button, 'k');
+    expect(k.onPlayPause).toHaveBeenCalledTimes(1);
+    button.remove();
+  });
+
+  it('yields Space to any activatable ancestor, not just the exact target', () => {
+    const k = mount();
+    const button = document.createElement('button');
+    const span = document.createElement('span');
+    button.appendChild(span);
+    document.body.appendChild(button);
+    pressFrom(span, ' ');
+    expect(k.onPlayPause).not.toHaveBeenCalled();
+    button.remove();
+  });
+
+  it('yields the arrow keys to a focused map canvas', () => {
+    const k = mount();
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(canvas);
+    pressFrom(canvas, 'ArrowRight');
+    pressFrom(canvas, 'ArrowLeft');
+    expect(k.onSeek).not.toHaveBeenCalled();
+    canvas.remove();
+  });
+
+  it('yields the arrow keys to an explicit [data-poopdeck-map] surface', () => {
+    const k = mount();
+    const surface = document.createElement('div');
+    surface.setAttribute('data-poopdeck-map', '');
+    document.body.appendChild(surface);
+    pressFrom(surface, 'ArrowRight');
+    expect(k.onSeek).not.toHaveBeenCalled();
+    surface.remove();
+  });
+
+  it('still takes Space and J/L from a focused map canvas', () => {
+    // The map does not use those, so the player keeps them — only the keys
+    // that genuinely collide are yielded.
+    const k = mount();
+    const canvas = document.createElement('canvas');
+    document.body.appendChild(canvas);
+    pressFrom(canvas, ' ');
+    pressFrom(canvas, 'l');
+    expect(k.onPlayPause).toHaveBeenCalledTimes(1);
+    expect(k.onSeek).toHaveBeenCalledTimes(1);
+    canvas.remove();
+  });
+});
+
+describe('usePlaybackHotkeys — fine step', () => {
+  it(', and . step ∓0.2% of the range', () => {
+    const k = mount({ time: 5_000 }); // range 0–10_000 → 0.2% = 20ms
+    press('.');
+    expect(k.onSeek).toHaveBeenLastCalledWith(5_020);
+  });
+
+  it('exposes the map as data for a shortcuts UI', () => {
+    // The panel in PlaybackControls renders exactly this, so the two can't
+    // drift.
+    expect(PLAYBACK_SHORTCUTS.length).toBeGreaterThan(0);
+    expect(PLAYBACK_SHORTCUTS.map((s) => s.keys)).toContain('< / >');
+    for (const s of PLAYBACK_SHORTCUTS) {
+      expect(s.keys).toBeTruthy();
+      expect(s.action).toBeTruthy();
+    }
   });
 });
 

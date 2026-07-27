@@ -30,8 +30,17 @@
  * the root tile to that (z, x, y), one digit per zoom level — exactly the
  * string `QuadkeyLayer.getQuadkey` expects (`"0"`, `"21"`, `"130"`, …).
  *
+ * This module also owns the cell's GEOMETRY ({@link quadkeyPolygon}), because
+ * deck's `QuadkeyLayer` bakes its own footprint: `indexToBounds()` hardcodes
+ * `coverage = extruded ? 0.99 : 1` and `GeoCellLayer.renderLayers()`
+ * destructures a fixed prop list that has no `coverage` in it, so a `coverage`
+ * prop handed to QuadkeyLayer is stored and never read. QuadbinSummaryLayer
+ * therefore computes the inset ring here and feeds it through a thin
+ * `indexToBounds()` override.
+ *
  * This is a pure, dependency-free port of CARTO's `quadbin → tile → quadkey`
- * path, kept small and unit-tested so the renderer can stay a thin wrapper.
+ * path plus the inverse-Mercator cell ring, kept small and unit-tested so the
+ * renderer can stay a thin wrapper.
  */
 
 /** A decoded Quadbin tile address. */
@@ -97,6 +106,72 @@ export function tileToQuadkey({ z, x, y }: QuadbinTile): string {
     quadkey += String(digit);
   }
   return quadkey;
+}
+
+/**
+ * Inverse of {@link tileToQuadkey}: recover the `(z, x, y)` tile address from
+ * a Bing quadkey string. `z` is the digit count, so the root tile (`""`)
+ * decodes to `{z: 0, x: 0, y: 0}`.
+ */
+export function quadkeyToTile(quadkey: string): QuadbinTile {
+  const z = quadkey.length;
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < z; i++) {
+    const mask = 1 << (z - i - 1);
+    const digit = quadkey.charCodeAt(i) - 48; // '0' → 0
+    if (digit & 1) x |= mask;
+    if (digit & 2) y |= mask;
+  }
+  return { z, x, y };
+}
+
+/**
+ * Convert a FRACTIONAL slippy-map tile coordinate to `[lng, lat]` — the exact
+ * inverse of Web Mercator, matching `@math.gl/web-mercator`'s `worldToLngLat`
+ * composed with deck's 512px world (`lat = atan(sinh(π(1 − 2y/2^z)))`). Kept
+ * local so this module stays dependency-free; `@math.gl/web-mercator` is only
+ * a transitive dep of `@deck.gl/geo-layers`, not a declared one of ours.
+ */
+function tileFracToLngLat(z: number, xf: number, yf: number): [number, number] {
+  const n = Math.pow(2, z);
+  const lng = (xf / n) * 360 - 180;
+  const lat =
+    (180 / Math.PI) * Math.atan(Math.sinh(Math.PI * (1 - (2 * yf) / n)));
+  return [lng, lat];
+}
+
+/**
+ * `[west, south, east, north]` lng/lat bounds of a quadkey cell, inset by
+ * `coverage` (0..1) toward the cell CENTROID.
+ *
+ * DIVERGENCE from deck's `quadkeyToWorldBounds`, which anchors its inset at
+ * the cell's north-west corner (`[x, x + coverage]`): that shifts every cell
+ * toward its own top-left as coverage drops, which reads as a skewed grid
+ * rather than a gap. Insetting `(1 − coverage) / 2` on each side keeps the
+ * cell centred — the same convention `H3HexagonLayer.coverage` uses, so the
+ * two summary layers look alike at the same coverage value.
+ */
+export function quadkeyToLngLatBounds(
+  quadkey: string,
+  coverage = 1,
+): [number, number, number, number] {
+  const { z, x, y } = quadkeyToTile(quadkey);
+  const inset = (1 - coverage) / 2;
+  const [west, north] = tileFracToLngLat(z, x + inset, y + inset);
+  const [east, south] = tileFracToLngLat(z, x + 1 - inset, y + 1 - inset);
+  return [west, south, east, north];
+}
+
+/**
+ * Flat `XY` ring for a quadkey cell — the shape `PolygonLayer` consumes with
+ * `_normalize: false` + `positionFormat: 'XY'`, matching deck's own
+ * `getQuadkeyPolygon` vertex ORDER (E/N → E/S → W/S → W/N → close) so the
+ * winding (and therefore the extruded normals) are unchanged.
+ */
+export function quadkeyPolygon(quadkey: string, coverage = 1): number[] {
+  const [w, s, e, n] = quadkeyToLngLatBounds(quadkey, coverage);
+  return [e, n, e, s, w, s, w, n, e, n];
 }
 
 /**

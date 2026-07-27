@@ -39,6 +39,53 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: '0'
           CARGO_PROFILE_TEST_DEBUG: '0'
 
+  rust-lint:
+    name: Rust (rustfmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The toolchain action installs the minimal profile, which ships neither
+      # rustfmt nor clippy — without this the steps below fail on a missing
+      # component rather than on a real finding.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # Baseline drift: rustfmt is the only formatting convention the workspace
+      # has, and a hand-formatted patch turns every later diff over the same
+      # lines into review noise that hides the real change.
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      # Correctness-flavoured lints ONLY, and the list is exactly what the
+      # workspace satisfies in full: every hit is therefore a fresh regression,
+      # never a pre-existing backlog entry. `-D warnings` is not usable here —
+      # the workspace still carries dozens of style, complexity and perf
+      # warnings, so it would fail on the first run and gate nothing. Widening
+      # the list requires first driving that lint's count to zero; plain
+      # `cargo clippy --workspace --all-targets` prints the standing backlog.
+      # `clippy::float_cmp` is deliberately absent: exact float comparison is
+      # intended here (integrality probes, encode/decode roundtrip assertions).
+      # Default features, matching the `rust` job — linting the duckdb, postgres
+      # and projection paths costs a bundled C++ and libproj build, and
+      # rust-all-features already compiles them.
+      - name: cargo clippy (curated deny set)
+        run: |
+          cargo clippy --workspace --all-targets --locked -- \
+            -D clippy::correctness \
+            -D clippy::suspicious \
+            -D clippy::cast_ptr_alignment \
+            -D clippy::index_refutable_slice \
+            -D clippy::invalid_upcast_comparisons \
+            -D clippy::mem_forget \
+            -D clippy::debug_assert_with_mut_call \
+            -D clippy::path_buf_push_overwrite \
+            -D clippy::transmute_ptr_to_ptr \
+            -D clippy::undocumented_unsafe_blocks \
+            -D clippy::lossy_float_literal \
+            -D clippy::dbg_macro \
+            -D clippy::todo \
+            -D clippy::unimplemented
+
   rust-feature-lanes:
     name: Rust (feature lanes compile)
     runs-on: ubuntu-latest
@@ -175,6 +222,32 @@ jobs:
       - name: av_common LOD home-zoom
         run: python test_lod_home_zoom.py
         working-directory: scripts/data-generation
+
+  typescript-lint:
+    name: TypeScript (oxlint + oxfmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Correctness class, not taste: .oxlintrc.json enables the correctness
+      # category as errors and nothing else, so a hit is a dead binding, an
+      # unreachable branch, a misused hook or a broken import — plus the five
+      # jsx-a11y rules the config promotes, which catch handlers no keyboard can
+      # reach. Both steps are source-only with no build, so this is its own job
+      # rather than a tail step on `typescript`: the answer arrives in seconds
+      # instead of behind eight typechecks and nine vitest suites.
+      - name: oxlint
+        run: pnpm lint
+      # Baseline drift across everything tracked, docs included — oxfmt formats
+      # markdown too, so a hand-realigned table fails here instead of landing as
+      # churn on top of the next person's diff.
+      - name: oxfmt --check
+        run: pnpm format:check
 
   typescript:
     name: TypeScript (typecheck + vitest)

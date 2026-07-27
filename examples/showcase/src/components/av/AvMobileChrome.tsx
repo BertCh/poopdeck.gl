@@ -21,7 +21,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router';
 import type { TimeController } from '@poopdeck.gl/playback';
-import type { Dataset, ColorRGBA } from '../../types';
+import type { AvDataset, ColorRGBA } from '../../types';
 import SceneSwitcher from './SceneSwitcher';
 import StreamPanel from './StreamPanel';
 import MetricCharts from './MetricCharts';
@@ -37,9 +37,9 @@ import type {
 
 export interface AvMobileChromeProps {
   scene: AvScene | null;
-  dataset: Dataset;
+  dataset: AvDataset;
   /** All AV scenes (for the switcher). */
-  scenes: Dataset[];
+  scenes: AvDataset[];
   sceneName: string;
   timeController: TimeController;
   // Streams + legend

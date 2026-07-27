@@ -27,12 +27,21 @@
  * aircraft) using a per-feature heading column (e.g. 'heading' / 'cog') baked
  * into the `getAngle` instanced attribute.
  *
- * ICON ATLAS CONSTRAINT: binary tiles can't run per-row JS accessors, so all
- * features share ONE constant icon — `getIcon` is a constant `() => icon`
- * resolving against the supplied `iconMapping`. Per-category icons are a
- * future enhancement (it would key the sprite by a categorical column, the
- * way `getColor` already does for color). Per-feature ROTATION, COLOR, and
- * SIZE are fully supported through instanced attributes.
+ * PER-CATEGORY ICONS: `getIcon` is deck's ONE accessor whose value is not a
+ * number — it names a sprite, and deck's standard updater resolves it through
+ * `getInstanceIconDef` once per ROW, allocating a fresh 7-element array each
+ * time (`icon-layer.ts:332`). That is 100k throwaway arrays on a 100k-feature
+ * tile, exactly the per-row JS work the binary path exists to remove. So this
+ * layer BYPASSES the accessor: `AttributeManager.update` resolves
+ * `buffers.instanceIconDefs` through `setExternalBuffer` BEFORE the accessor
+ * path (`attribute-manager.ts:199`), so baking the size-7 `instanceIconDefs`
+ * buffer ourselves — ONE `iconMapping` lookup per CATEGORY plus a typed-array
+ * fill — skips both the accessor and the transform. {@link
+ * _AnimatedIconLayerProps.iconProperty} names the categorical column that
+ * selects the sprite, mirroring how `color` already keys a category column.
+ * With no `iconProperty` (the default) every feature shares ONE constant icon
+ * via a constant `getIcon`. Per-feature ROTATION, COLOR, SIZE and PIXEL OFFSET
+ * ride instanced attributes as usual.
  *
  * Categorical colors lift to the GPU via CategoryColorExtension (same path as
  * AnimatedPointLayer's `fillColor`): a `color` property NAME hands the
@@ -82,15 +91,23 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import { bindFloatVector } from '../../lib/vector-props.js';
 import {
   DEFAULT_CATEGORICAL_PALETTE,
+  GeometryType,
   getFeatureProperties,
+  tileLayerKey,
 } from '@poopdeck.gl/core';
 import type {
   Tile,
@@ -131,6 +148,137 @@ export interface IconMappingEntry {
   mask?: boolean;
 }
 
+/** Value domain of {@link _AnimatedIconLayerProps.iconMapping}. */
+export type IconMappingValue = Record<string, IconMappingEntry> | string;
+
+/**
+ * Failure context handed to {@link _AnimatedIconLayerProps.onIconError} —
+ * deck.gl `IconManager`'s `LoadIconErrorContext`, re-declared so consumers do
+ * not have to reach into `@deck.gl/layers`' internal module.
+ */
+export interface IconLoadErrorContext {
+  error: Error;
+  /** The URL whose fetch failed. */
+  url: string;
+  /** The data object that requested the icon (always `null` on binary tiles). */
+  source: unknown;
+  /** Index of that object. */
+  sourceIndex: number;
+  /** The load options the fetch used (see `iconLoadOptions`). */
+  loadOptions: unknown;
+}
+
+/* ── Icon-atlas / icon-mapping cache tokens ────────────────────────────────
+ * `iconAtlas` and `iconMapping` are baked into a sublayer at CONSTRUCTION
+ * time, and the sublayer cache hands the SAME IconLayer instance back every
+ * render — deck never diffs its props — so an atlas/mapping swap only takes
+ * effect if it changes the layerPropsKey. Keying the atlas by
+ * `typeof x === 'string' ? x : ''` collapsed every Texture to the empty
+ * string, and the mapping was not keyed at all: a fresh mapping object with
+ * the same URL atlas, or a hi-DPI Texture swapped for the old one, both
+ * produced a byte-identical key and rendered the STALE atlas forever. */
+
+const iconAtlasIds = new WeakMap<object, number>();
+let nextIconAtlasId = 1;
+
+/**
+ * Cache token for an `iconAtlas`. A URL string digests verbatim (its content
+ * IS its identity); a `Texture` (or any object form) digests by reference
+ * identity — a texture's pixels can't be digested cheaply, so swapping the
+ * object is the invalidation contract, exactly like `functionId` in
+ * style-digest.ts.
+ */
+function iconAtlasToken(atlas: string | Texture | null | undefined): string {
+  if (!atlas) return '';
+  if (typeof atlas === 'string') return `u:${atlas}`;
+  let id = iconAtlasIds.get(atlas as unknown as object);
+  if (id === undefined) {
+    id = nextIconAtlasId++;
+    iconAtlasIds.set(atlas as unknown as object, id);
+  }
+  return `#${id}`;
+}
+
+const iconMappingDigests = new WeakMap<object, string>();
+
+/**
+ * Content digest of an `iconMapping`, memoized per object reference (the
+ * `colorMappingDigest` idiom): a caller who rebuilds an equal mapping literal
+ * every render pays one small serialization, and a reused reference is a
+ * WeakMap hit. A URL-string mapping digests verbatim. Key order is NOT
+ * normalized — a reordered-but-equal mapping merely rebuilds the sublayers
+ * once, which is cheap and correct.
+ */
+function iconMappingDigest(
+  mapping: IconMappingValue | null | undefined,
+): string {
+  if (!mapping) return '';
+  if (typeof mapping === 'string') return `u:${mapping}`;
+  let digest = iconMappingDigests.get(mapping);
+  if (digest === undefined) {
+    digest = Object.keys(mapping)
+      .map((key) => {
+        const e = mapping[key];
+        return `${key}:${e.x},${e.y},${e.width},${e.height},${
+          e.anchorX ?? ''
+        },${e.anchorY ?? ''},${e.mask ? 1 : 0}`;
+      })
+      .join(';');
+    iconMappingDigests.set(mapping, digest);
+  }
+  return digest;
+}
+
+const categoryIconMappingDigests = new WeakMap<
+  Record<string, string>,
+  string
+>();
+
+/** Content digest of an `iconCategoryMapping` (category → icon name). Memoized per reference. */
+function categoryIconMappingDigest(mapping: Record<string, string>): string {
+  let digest = categoryIconMappingDigests.get(mapping);
+  if (digest === undefined) {
+    digest = Object.keys(mapping)
+      .map((key) => `${key}:${mapping[key]}`)
+      .join(';');
+    categoryIconMappingDigests.set(mapping, digest);
+  }
+  return digest;
+}
+
+/**
+ * Floats per `instanceIconDefs` entry — deck's `IconLayer` declares
+ * `{size: 7}` with the shader attributes `instanceOffsets` (elements 0-1),
+ * `instanceIconFrames` (2-5) and `instanceColorModes` (6) carved out of it by
+ * `elementOffset`. Must stay in lockstep with `getInstanceIconDef`.
+ */
+const ICON_DEF_SIZE = 7;
+
+/**
+ * Write one icon's def at `offset`, byte-for-byte as deck's
+ * `IconLayer.getInstanceIconDef` computes it: `[width/2 - anchorX,
+ * height/2 - anchorY, x, y, width, height, mask ? 1 : 0]`, with each anchor
+ * defaulting to the sprite's half-extent. An absent entry leaves the seven
+ * zeros already in the buffer — the same values deck's own `MISSING_ICON`
+ * ({x:0, y:0, width:0, height:0}) produces, i.e. a zero-size (invisible)
+ * sprite rather than a wrong one.
+ */
+function writeIconDef(
+  target: Float32Array,
+  offset: number,
+  entry: IconMappingEntry | undefined,
+): void {
+  if (!entry) return;
+  const { x, y, width, height } = entry;
+  target[offset] = width / 2 - (entry.anchorX ?? width / 2);
+  target[offset + 1] = height / 2 - (entry.anchorY ?? height / 2);
+  target[offset + 2] = x;
+  target[offset + 3] = y;
+  target[offset + 4] = width;
+  target[offset + 5] = height;
+  target[offset + 6] = entry.mask ? 1 : 0;
+}
+
 /** Props added by {@link AnimatedIconLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link AnimatedIconLayerProps}). */
 export interface _AnimatedIconLayerProps {
@@ -142,19 +290,76 @@ export interface _AnimatedIconLayerProps {
   iconAtlas?: string | Texture | null;
 
   /**
-   * Named sub-rectangle map into {@link iconAtlas}. Forwarded verbatim to the
-   * sublayer `IconLayer`. The `icon` prop names which entry every feature uses.
+   * Named sub-rectangle map into {@link iconAtlas}, or a URL string pointing at
+   * a JSON file of the same shape (deck.gl resolves the URL asynchronously in
+   * the sublayer — its `iconMapping` prop is declared `async`). Forwarded
+   * verbatim to the sublayer `IconLayer`. {@link icon} / {@link iconProperty}
+   * name which entry a feature uses.
+   *
+   * NOTE: {@link iconProperty} needs the mapping's CONTENT to bake the per-
+   * feature sprite buffer, so it requires the OBJECT form — with a URL string
+   * the layer warns once and falls back to the constant {@link icon}.
    */
-  iconMapping?: Record<string, IconMappingEntry> | null;
+  iconMapping?: IconMappingValue | null;
 
   /**
-   * The SINGLE icon name (a key of {@link iconMapping}) used for ALL features.
-   * Binary tiles can't run a per-row `getIcon` accessor, so the sublayer's
-   * `getIcon` is wired to a constant `() => icon`. Per-category icons (keying
-   * the sprite by a categorical column) are a future enhancement.
+   * The icon name (a key of {@link iconMapping}) used for every feature — and,
+   * when {@link iconProperty} is set, the fallback for features whose category
+   * resolves to no entry.
    * @default 'marker'
    */
   icon?: string;
+
+  /**
+   * Categorical column NAME whose per-feature value selects the sprite —
+   * per-CATEGORY icons, mirroring how {@link color} keys a category column.
+   *
+   * The value is resolved to an icon name through {@link iconCategoryMapping}
+   * when that is set, otherwise the category value IS the icon name (a key of
+   * {@link iconMapping}). Resolution costs ONE mapping lookup per distinct
+   * category; the per-feature `instanceIconDefs` buffer is then a typed-array
+   * fill, bypassing deck's per-row `getIcon` accessor + `getInstanceIconDef`
+   * transform entirely (see the file header).
+   *
+   * Unset (the default) ⇒ every feature uses the constant {@link icon}, and no
+   * `instanceIconDefs` attribute is baked. Requires an OBJECT
+   * {@link iconMapping}. Ignored on the glide (`interpolate`) path, which
+   * re-emits one pose per entity and has no per-sample category to read.
+   * @default null
+   */
+  iconProperty?: string | null;
+
+  /**
+   * Explicit category value → icon NAME map for {@link iconProperty}. Unset
+   * (the default) means the category value is used as the icon name directly.
+   * Categories absent from the map fall back to {@link icon}; an icon name
+   * absent from {@link iconMapping} renders a zero-size (invisible) sprite,
+   * matching deck's own `MISSING_ICON` behaviour.
+   * @default null
+   */
+  iconCategoryMapping?: Record<string, string> | null;
+
+  /**
+   * Called when deck.gl's `IconManager` fails to fetch an icon (a bad atlas
+   * URL, a 403 on a credentialed atlas). Without it the failure is only
+   * observable as a `log.error` in the console. `IconLayer` pass-through.
+   * @default null
+   */
+  onIconError?: ((context: IconLoadErrorContext) => void) | null;
+
+  /**
+   * loaders.gl load options for the ICON ATLAS fetch — headers, credentials, a
+   * custom `fetch`. Reaches deck's `IconManager` as the sublayer's
+   * `loadOptions`.
+   *
+   * SPLIT, deliberately: the base {@link SpatioTemporalLayerProps.loadOptions}
+   * is repurposed by this project for the ARCHIVE's HTTP (manifest, directory,
+   * pack ranges) and `CompositeLayer.getSubLayerProps` does not forward it, so
+   * overloading it would either break archive loading or leak archive auth
+   * headers to a third-party atlas host. This prop is the icon-side half.
+   * @default null
+   */
+  iconLoadOptions?: Record<string, unknown> | null;
 
   /**
    * Rotation in degrees — constant number, or a numeric property NAME (e.g.
@@ -176,6 +381,11 @@ export interface _AnimatedIconLayerProps {
    * Marker tint — constant {@link Color}, or a property name for categorical
    * coloring (GPU path via CategoryColorExtension). For a `mask: true` icon the
    * tint replaces the sprite's color; for an opaque icon it modulates it.
+   *
+   * DELIBERATE DIVERGENCE from deck.gl `IconLayer.getColor` (`[0, 0, 0, 255]`):
+   * white leaves an opaque sprite's own colours untouched, whereas deck's black
+   * default silently blackens every masked icon. Pass `[0, 0, 0, 255]`
+   * explicitly for upstream parity.
    * @default [255, 255, 255, 255]
    */
   color?: Color | string;
@@ -210,6 +420,10 @@ export interface _AnimatedIconLayerProps {
   /**
    * Icon size — constant number, or a numeric property NAME baked per-feature
    * into the `getSize` instanced attribute. Interpreted in {@link sizeUnits}.
+   *
+   * DELIBERATE DIVERGENCE from deck.gl `IconLayer.getSize` (`1`): deck's
+   * default renders a 1-pixel marker, which reads as "nothing drew". Pass `1`
+   * explicitly for upstream parity.
    * @default 12
    */
   size?: number | string;
@@ -412,6 +626,74 @@ export interface _AnimatedIconLayerProps {
 export type AnimatedIconLayerProps = _AnimatedIconLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Sublayer-cache effect of every own prop, exhaustive by type: a prop added to
+ * {@link _AnimatedIconLayerProps} without an entry here fails to compile.
+ *
+ * `'sublayer'` — read by {@link AnimatedIconLayer.buildSublayer} (or by
+ * {@link AnimatedIconLayer.renderInterpolated}, which rebuilds its single
+ * sublayer every frame). A cached `IconLayer` freezes the value and deck never
+ * diffs its props, so a change must drop the sublayer cache.
+ *
+ * `'prepare'` — read only while baking a tile's binary attributes. Each is a
+ * component of {@link AnimatedIconLayer.computeStyleKey} (`iconProperty` and
+ * `iconCategoryMapping` via `iconKey`, `colorPalette` via `colorListDigest`,
+ * `colorMapping` via `colorMappingDigest`, `colorMappingDefault` via
+ * `mapDefault`), so a change rebuilds `prepared` — and the sublayer cache hit
+ * tests `prepared` by object identity, which is what invalidates the sublayer.
+ * Moving one of these to `'sublayer'` is safe; moving a `'sublayer'` prop here
+ * is only safe while `styleKey` genuinely contains it.
+ *
+ * The accessor-alias props (`angle`, `color`, `size`, `pixelOffset`,
+ * `filterProperty`) and the two opaque icon-atlas props are additionally keyed
+ * on a resolved value through the `overrides` channel — see
+ * {@link AnimatedIconLayer.computeLayerPropsKey}.
+ */
+const ICON_PROP_EFFECTS: PropEffects<_AnimatedIconLayerProps> = {
+  iconAtlas: 'sublayer',
+  iconMapping: 'sublayer',
+  icon: 'sublayer',
+  iconProperty: 'prepare',
+  iconCategoryMapping: 'prepare',
+  onIconError: 'sublayer',
+  iconLoadOptions: 'sublayer',
+  angle: 'sublayer',
+  getAngle: 'sublayer',
+  color: 'sublayer',
+  getColor: 'sublayer',
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+  size: 'sublayer',
+  getSize: 'sublayer',
+  sizeUnits: 'sublayer',
+  sizeScale: 'sublayer',
+  sizeMinPixels: 'sublayer',
+  sizeMaxPixels: 'sublayer',
+  sizeBasis: 'sublayer',
+  pixelOffset: 'sublayer',
+  getPixelOffset: 'sublayer',
+  alphaCutoff: 'sublayer',
+  billboard: 'sublayer',
+  textureParameters: 'sublayer',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+  wakeLength: 'sublayer',
+  wakeTailScale: 'sublayer',
+  // `filterProperty` decides the sublayer's EXTENSION SET, which is baked at
+  // construction time; the ranges and the enable flag are sublayer props.
+  filterProperty: 'sublayer',
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+  // Glide knobs. They select which render path runs and shape the pose data
+  // the interpolated sublayer is constructed from.
+  interpolate: 'sublayer',
+  idProperty: 'sublayer',
+  maxInterpolationGap: 'sublayer',
+  reducedMotion: 'sublayer',
+};
+
 // Default color palette for categorical data (shared shape with the point layer).
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
@@ -450,11 +732,6 @@ interface PreparedTile {
   features: BinaryFeatures;
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
-}
-
 /**
  * Animated icon layer with per-tile binary sublayers.
  *
@@ -480,6 +757,29 @@ export class AnimatedIconLayer<
     iconAtlas: { type: 'object', value: null, optional: true, compare: true },
     iconMapping: { type: 'object', value: null, optional: true, compare: true },
     icon: 'marker',
+    // Per-category sprite selection. Unset ⇒ constant icon, no instanceIconDefs
+    // attribute (byte-identical to the pre-category path).
+    iconProperty: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
+    iconCategoryMapping: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: false,
+    },
+    // Atlas-fetch failure hook + icon-side load options (the base `loadOptions`
+    // is the ARCHIVE's — see the prop docs).
+    onIconError: { type: 'object', value: null, optional: true, compare: true },
+    iconLoadOptions: {
+      type: 'object',
+      value: null,
+      optional: true,
+      compare: true,
+    },
 
     // Permissive descriptors ({type:'object'} validates anything): these props
     // legally hold a constant OR a column-name string, which the
@@ -601,9 +901,13 @@ export class AnimatedIconLayer<
    * test harness bypasses field initializers via Object.create).
    */
   private interpMaintainer: TrackIndexMaintainer | null = null;
-  /** Per-track representative decoded source feature, for glide picking. */
+  /**
+   * Per-track representative decoded source feature, for glide picking. Pruned
+   * to the RESIDENT track set on every tile-set change — see
+   * {@link scanInterpPickRows}.
+   */
   private interpPickRows: Map<string, Record<string, unknown>> | null = null;
-  /** Tile keys already scanned for {@link interpPickRows} — accumulate-only. */
+  /** Tile keys already scanned for {@link interpPickRows}; pruned to the live tile set. */
   private interpPickRowsScanned: Set<string> | null = null;
   /** Sim-time of the last glide re-interpolation; skips redundant ticks. */
   private lastInterpFrameTime = NaN;
@@ -672,7 +976,7 @@ export class AnimatedIconLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy prop.
    * Same value domain as the legacy props (constant or column name).
    */
@@ -712,6 +1016,37 @@ export class AnimatedIconLayer<
     );
   }
 
+  /** Resolve `iconProperty` to a categorical-column NAME, or '' when unset. */
+  private iconPropertyValue(): string {
+    const p = this.props.iconProperty;
+    return typeof p === 'string' ? p : '';
+  }
+
+  /**
+   * The `iconMapping` in OBJECT form, or null when it is a URL string / unset.
+   * Per-category sprites need the mapping's geometry on the CPU to bake
+   * `instanceIconDefs`; an unresolved URL can't provide it, so the layer warns
+   * once and falls back to the constant icon (which the sublayer still resolves
+   * once the async mapping lands).
+   */
+  private resolvedIconMapping(): Record<string, IconMappingEntry> | null {
+    const mapping = this.props.iconMapping;
+    if (!mapping) return null;
+    if (typeof mapping === 'string') {
+      if (this.iconPropertyValue()) {
+        warnOnce(
+          'AnimatedIconLayer:iconPropertyUrlMapping',
+          '[AnimatedIconLayer] iconProperty needs the iconMapping CONTENT to ' +
+            'bake per-feature sprites, but iconMapping is a URL string that ' +
+            'only the sublayer resolves. Falling back to the constant `icon`; ' +
+            'pass the mapping object to get per-category icons.',
+        );
+      }
+      return null;
+    }
+    return mapping;
+  }
+
   /**
    * Resolve `filterProperty` to a baked-column NAME. Accessor-alias of deck's
    * `getFilterValue`: a function-valued prop warns once and is ignored (there
@@ -727,57 +1062,49 @@ export class AnimatedIconLayer<
   }
 
   /**
-   * Compute a digest of the layer-level props that affect every sublayer.
-   * When this changes we throw away the entire sublayer cache.
+   * Digest of the layer-level inputs baked into every sublayer. When it
+   * changes, every cached `IconLayer` holds a frozen copy of a stale value, so
+   * the whole sublayer cache is thrown away.
+   *
+   * Which props participate is decided by {@link ICON_PROP_EFFECTS} rather than
+   * by an enumeration here, so a new prop cannot silently miss the key. The
+   * remaining inputs are not props of this layer at all — the inherited
+   * composite/time props ride the positional `extra` channel.
    */
   private computeLayerPropsKey(): string {
-    const angle = this.angleValue();
-    const color = this.colorValue();
-    const size = this.sizeValue();
-    const pixelOffset = this.pixelOffsetValue();
-    return [
-      this.props.icon,
-      // iconAtlas/iconMapping identity — a swap rebuilds every sublayer.
-      typeof this.props.iconAtlas === 'string' ? this.props.iconAtlas : '',
-      this.props.sizeUnits,
-      this.props.sizeScale,
-      this.props.sizeMinPixels,
-      this.props.sizeMaxPixels,
-      this.props.sizeBasis,
-      this.props.billboard,
-      this.props.alphaCutoff,
-      // Atlas sampler config — a swap changes the GPU texture's filtering/wrap.
-      JSON.stringify(this.props.textureParameters ?? null),
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
-      // props, _subLayerProps overrides…) plus the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      this.props.wakeLength,
-      this.props.wakeTailScale,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      // angle/color/size/pixelOffset constant branches only — the
-      // property-driven path lives in `prepared` and is keyed via
-      // preparedKey/styleKey.
-      typeof angle === 'number' ? angle : 0,
-      Array.isArray(color) ? color.join(',') : '',
-      typeof size === 'number' ? size : 0,
-      Array.isArray(pixelOffset) ? pixelOffset.join(',') : '',
-      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
-      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
-      // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedIconLayerProps>(
+      this.props,
+      ICON_PROP_EFFECTS,
+      {
+        overrides: {
+          // The sublayer is built from the RESOLVED alias value, so the key has
+          // to track it: keying the raw prop leaves every cached sublayer stale
+          // when only the alias changes.
+          angle: this.angleValue(),
+          color: this.colorValue(),
+          size: this.sizeValue(),
+          pixelOffset: this.pixelOffsetValue(),
+          filterProperty: this.filterPropertyValue(),
+          // A Texture's pixels cannot be digested, so the atlas keys by URL
+          // string or by reference identity; the mapping keys by CONTENT
+          // (memoized per reference), so a fresh-but-equal literal costs no
+          // rebuild while a real edit invalidates.
+          iconAtlas: iconAtlasToken(this.props.iconAtlas),
+          iconMapping: iconMappingDigest(this.props.iconMapping),
+        },
+        extra: [
+          // Composite props that getSubLayerProps bakes into every sublayer
+          // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
+          // props, _subLayerProps overrides…) plus the user's updateTriggers.
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          // Inherited time props that `buildSublayer` forwards directly.
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   /**
@@ -841,7 +1168,7 @@ export class AnimatedIconLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -926,11 +1253,25 @@ export class AnimatedIconLayer<
     // must re-prepare tiles (and, via the new preparedKey, rebuild sublayers —
     // covering the unset↔set toggle that adds/removes STTDataFilterExtension).
     const filterProp = this.filterPropertyValue() ?? '';
+    // Per-category sprites (`iconProperty`) bake the resolved iconMapping
+    // GEOMETRY into the instanceIconDefs attribute, so both the column and the
+    // mapping's CONTENT (plus the category→name indirection and the fallback
+    // `icon`) have to re-prepare tiles, not just rebuild sublayers.
+    const iconProp = this.iconPropertyValue();
+    const iconKey = iconProp
+      ? `${iconProp}~${this.props.icon}~${iconMappingDigest(
+          this.props.iconMapping,
+        )}~${
+          this.props.iconCategoryMapping
+            ? categoryIconMappingDigest(this.props.iconCategoryMapping)
+            : ''
+        }`
+      : '';
     return `${angleProp}|${colorProp}|${sizeProp}|${pixelOffsetProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${colorProp && mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
+    }|${colorProp && mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|f${filterProp}|i${iconKey}|${updateTriggersDigest(this.props.updateTriggers)}`;
   }
 
   /**
@@ -940,8 +1281,21 @@ export class AnimatedIconLayer<
    */
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     if (tileLayer.features.featureCount === 0) return null;
+    // Icons are instanced ONE PER FEATURE at `positions[i]`, so a linestring /
+    // polygon layer would silently read the first `featureCount` VERTICES of a
+    // flattened vertex run and bunch every marker onto the first few paths.
+    if (
+      !expectGeometry(
+        tileLayer.features.geometryType,
+        [GeometryType.Point],
+        this.props.id,
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
     const styleKey = this.computeStyleKey();
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -974,7 +1328,7 @@ export class AnimatedIconLayer<
     const pixelOffsetProp =
       typeof pixelOffsetValue === 'string' ? pixelOffsetValue : '';
     const styleKey = this.computeStyleKey();
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
 
     const t0 = performance.now();
     const count = binary.featureCount;
@@ -1013,12 +1367,42 @@ export class AnimatedIconLayer<
 
     // Property-driven pixel offset — a size-2 interleaved `vectorProps` column
     // ([x0,y0, x1,y1, …]) bound zero-copy to the getPixelOffset instanced
-    // attribute. Only a size-2 column qualifies; anything else falls through to
-    // the constant offset.
+    // attribute. `instancePixelOffset` is a FLOAT attribute, so the leaf type is
+    // load-bearing: a u8 leaf would produce a `uint8x2` vertex buffer against
+    // it (a format mismatch, not a rescale). bindFloatVector enforces that and
+    // warns once; anything it rejects falls through to the constant offset.
     if (pixelOffsetProp) {
-      const vec = binary.vectorProps?.[pixelOffsetProp];
-      if (vec && vec.size === 2) {
-        attributes.getPixelOffset = { value: vec.value, size: 2 };
+      const bound = bindFloatVector(
+        binary.vectorProps?.[pixelOffsetProp],
+        2,
+        'AnimatedIconLayer',
+        pixelOffsetProp,
+      );
+      if (bound) attributes.getPixelOffset = bound;
+    }
+
+    // Per-CATEGORY sprites — bake `instanceIconDefs` ourselves rather than let
+    // deck resolve `getIcon` + `getInstanceIconDef` once per ROW (a fresh
+    // 7-element array per feature). AttributeManager.update resolves
+    // `buffers.instanceIconDefs` through setExternalBuffer BEFORE the accessor
+    // path, so this bypasses both. Cost: one iconMapping lookup per CATEGORY
+    // plus a typed-array fill.
+    const iconProp = this.iconPropertyValue();
+    if (iconProp) {
+      const mapping = this.resolvedIconMapping();
+      const cat = mapping ? binary.categoricalProps[iconProp] : undefined;
+      if (mapping && cat) {
+        attributes.instanceIconDefs = {
+          value: this.buildIconDefs(cat, count, mapping),
+          size: ICON_DEF_SIZE,
+        };
+      } else if (mapping && binary.numericProps[iconProp]) {
+        warnOnce(
+          'AnimatedIconLayer:iconPropertyNumeric',
+          `[AnimatedIconLayer] iconProperty "${iconProp}" is a NUMERIC column; ` +
+            'sprite selection reads a CATEGORICAL (string) column. Falling back ' +
+            'to the constant `icon` for tiles where it is numeric.',
+        );
       }
     }
 
@@ -1112,6 +1496,64 @@ export class AnimatedIconLayer<
     return prepared;
   }
 
+  /**
+   * Expand a categorical column into deck's size-7 `instanceIconDefs` buffer.
+   *
+   * PER CATEGORY (not per feature): the K distinct values each resolve to one
+   * icon name (through `iconCategoryMapping`, or identity) and one
+   * {@link writeIconDef} call, into a `(K + 1) × 7` table whose last slot is
+   * the fallback {@link _AnimatedIconLayerProps.icon} — used for the NULL
+   * sentinel (0xffff) and for out-of-range indices. The per-feature pass is
+   * then seven scalar copies with no allocation, so a 100k-feature tile costs
+   * K mapping lookups instead of 100k lookups + 100k throwaway arrays.
+   */
+  private buildIconDefs(
+    cat: { indices: Uint16Array; categories: string[] },
+    count: number,
+    mapping: Record<string, IconMappingEntry>,
+  ): Float32Array {
+    const categoryMapping = this.props.iconCategoryMapping ?? null;
+    const fallbackIcon = this.props.icon;
+    const K = cat.categories.length;
+    const table = new Float32Array((K + 1) * ICON_DEF_SIZE);
+    let missing = '';
+    for (let k = 0; k < K; k++) {
+      const value = cat.categories[k];
+      const name = categoryMapping
+        ? (categoryMapping[value] ?? fallbackIcon)
+        : value;
+      const entry = mapping[name] ?? mapping[fallbackIcon];
+      if (!entry && !missing) missing = name;
+      writeIconDef(table, k * ICON_DEF_SIZE, entry);
+    }
+    writeIconDef(table, K * ICON_DEF_SIZE, mapping[fallbackIcon]);
+    if (missing) {
+      warnOnce(
+        'AnimatedIconLayer:iconCategoryUnmapped',
+        `[AnimatedIconLayer] iconMapping has no entry for "${missing}" (and no ` +
+          `fallback entry for icon "${fallbackIcon}") — those features render a ` +
+          'zero-size, invisible sprite. Add the entry, or map the category to a ' +
+          'known icon name via `iconCategoryMapping`.',
+      );
+    }
+
+    const out = new Float32Array(count * ICON_DEF_SIZE);
+    for (let i = 0; i < count; i++) {
+      const idx = cat.indices[i];
+      const slot = idx === 0xffff || idx >= K ? K : idx;
+      const s = slot * ICON_DEF_SIZE;
+      const o = i * ICON_DEF_SIZE;
+      out[o] = table[s];
+      out[o + 1] = table[s + 1];
+      out[o + 2] = table[s + 2];
+      out[o + 3] = table[s + 3];
+      out[o + 4] = table[s + 4];
+      out[o + 5] = table[s + 5];
+      out[o + 6] = table[s + 6];
+    }
+    return out;
+  }
+
   private buildSublayer(prepared: PreparedTile): IconLayer {
     // `Required<>`-typed: the defaultProps value guarantees a value here.
     const timeWindow = this.props.timeWindow;
@@ -1181,8 +1623,19 @@ export class AnimatedIconLayer<
       // Icon atlas + mapping forwarded verbatim.
       iconAtlas: this.props.iconAtlas,
       iconMapping: this.props.iconMapping,
-      // Single constant icon for ALL features — binary tiles can't run a
-      // per-row getIcon accessor. Per-category icons are a future enhancement.
+      // Atlas-fetch failure hook + the icon-side load options (headers /
+      // credentials / custom fetch for the atlas URL). `loadOptions` is NOT in
+      // getSubLayerProps' forwarded allowlist, so it only reaches IconManager
+      // because we pass it here — and it is deliberately NOT the base layer's
+      // (archive) loadOptions. See the `iconLoadOptions` prop docs.
+      onIconError: this.props.onIconError ?? null,
+      ...(this.props.iconLoadOptions
+        ? { loadOptions: this.props.iconLoadOptions }
+        : {}),
+      // Constant icon for every feature. When `iconProperty` baked the
+      // `instanceIconDefs` attribute above, that external buffer wins (deck
+      // resolves it before the accessor) and this is the fallback for tiles
+      // that lack the column.
       getIcon: () => icon,
 
       sizeUnits: this.props.sizeUnits,
@@ -1394,23 +1847,60 @@ export class AnimatedIconLayer<
 
   /**
    * Decode ONE representative source feature per entity id, for glide picking.
-   * Incremental + accumulate-only: only (tile, layer)s not scanned before are
-   * walked, and an id already present is never re-decoded (entity-level props
-   * are sample-invariant). Evicted entities' rows are left in place — harmless,
-   * since only ACTIVE tracks (resident tiles) are ever picked. Reset with the
-   * maintainer on a feeding-prop change.
+   * Incremental: only (tile, layer)s not scanned before are walked, and an id
+   * already present is never re-decoded (entity-level props are
+   * sample-invariant).
+   *
+   * BOUNDED, not accumulate-only: both caches are pruned to the RESIDENT set on
+   * every call — pick rows to the ids still in {@link interpTrackIndex}, scanned
+   * keys to the live (tile, layer) pairs. Retention was correct (only active
+   * tracks are ever picked) but not bounded: over a long AIS / ADS-B session
+   * every entity id ever seen kept a decoded `getFeatureProperties` object alive
+   * forever. Pruning costs O(cached ids) per tile-set change — strictly less
+   * than the pooling pass that precedes it — and a re-entering tile is simply
+   * re-scanned. Reset wholesale with the maintainer on a feeding-prop change.
    */
   private scanInterpPickRows(tiles: Tile[], idProp: string): void {
     if (!this.interpPickRows) this.interpPickRows = new Map();
     if (!this.interpPickRowsScanned) this.interpPickRowsScanned = new Set();
     const prov = this.interpPickRows;
     const scanned = this.interpPickRowsScanned;
+
+    const live = new Set<string>();
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers)
+        live.add(tileLayerKey(tile.id, tileLayer.name));
+    }
+    for (const key of scanned) {
+      if (!live.has(key)) scanned.delete(key);
+    }
+    // Drop rows for entities no longer in the pooled (resident) track index, so
+    // the map's high-water mark is the resident track count, not the session's.
+    const tracks = this.interpTrackIndex;
+    if (tracks) {
+      for (const id of prov.keys()) {
+        if (!tracks.has(id)) prov.delete(id);
+      }
+    }
+
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const key = makeTileKey(tile, tileLayer);
+        const key = tileLayerKey(tile.id, tileLayer.name);
         if (scanned.has(key)) continue;
         scanned.add(key);
         const binary = tileLayer.features;
+        // Glide reads `positions[i]` per feature through the shared track
+        // kernel; a non-point layer would misread the vertex run.
+        if (
+          !expectGeometry(
+            binary.geometryType,
+            [GeometryType.Point],
+            this.props.id,
+            tileLayer.name,
+          )
+        ) {
+          continue;
+        }
         const col = binary.categoricalProps[idProp];
         if (!col) continue;
         const count = binary.featureCount;
@@ -1599,6 +2089,13 @@ export class AnimatedIconLayer<
 
       iconAtlas: this.props.iconAtlas,
       iconMapping: this.props.iconMapping,
+      onIconError: this.props.onIconError ?? null,
+      ...(this.props.iconLoadOptions
+        ? { loadOptions: this.props.iconLoadOptions }
+        : {}),
+      // Glide re-emits ONE pose per ENTITY, not per sample, so there is no
+      // per-instance category to read — `iconProperty` does not apply here and
+      // every glided marker uses the constant icon.
       getIcon: () => icon,
 
       sizeUnits: this.props.sizeUnits,

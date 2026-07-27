@@ -60,8 +60,8 @@
 | flowStroke | ✅ | ↳ flowCorridor | ✅ | ↳ line |
 | isoLines | ↳ path | ✅ | — | ↳ path |
 | ego | — | ✅ | — | — |
-| text | ✅ | ↳ icon | ↳ icon | ↳ icon |
-| mesh | ✅ | ↳ boundingBox | — | ↳ boundingBox |
+| text | ✅ | ↳ icon | ↳ icon | — |
+| mesh | ✅ | ↳ boundingBox | — | — |
 | pointCloud | ✅ | ↳ point | ↳ point | ↳ point |
-| hexbin | ✅ | ↳ h3Summary | ✅ | ↳ h3Summary |
+| hexbin | ✅ | ↳ h3Summary | ✅ | — |
 

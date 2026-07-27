@@ -4,7 +4,41 @@
  * about anything we don't populate (featureIds, props), so we omit them.
  */
 
-import { GeometryType, type Tile, type Layer } from '@poopdeck.gl/core';
+import {
+  GeometryType,
+  tileKey,
+  type Tile,
+  type Layer,
+} from '@poopdeck.gl/core';
+
+/**
+ * Seed a REAL `SpatioTemporalTileset`'s private registries so
+ * `getVisibleTiles()` answers from genuine headers.
+ *
+ * Exists for the tests that have to exercise core's OWN eviction / clear
+ * paths rather than a stand-in for them: the thing under test is a callback
+ * ORDERING inside `evictTiles` and `clear` (both fire `onTileUnload` while the
+ * header is still in `this.tiles`), and a hand-rolled fake that fires the
+ * callback itself would only re-assert whatever ordering the test author
+ * assumed. Selecting real tiles through an archive would additionally need a
+ * fixture archive and a debounce flush, and buys nothing: the registry IS the
+ * whole input to `getVisibleTiles()`.
+ */
+export function seedResidentTiles(tileset: any, ...tiles: Tile[]): void {
+  for (const tile of tiles) {
+    const key = tileKey(tile.id);
+    tileset.tiles.set(key, {
+      id: tile.id,
+      tile,
+      isLoaded: true,
+      isLoading: false,
+      isCancelled: false,
+      lastUsed: Date.now(),
+      byteSize: 1024,
+    });
+    tileset.neededTileKeys.add(key);
+  }
+}
 
 export function makePointTile(): Tile {
   const positions = new Float64Array([

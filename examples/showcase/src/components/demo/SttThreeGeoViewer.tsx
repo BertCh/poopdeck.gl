@@ -7,24 +7,24 @@
  * `@poopdeck.gl/three/r3f`, as a drop-in alternative to the deck.gl `DemoViewer`.
  * Same resolved Dataset + palettes + the same shared `TimeController` and
  * playback-governor `registry`, composed declaratively as r3f layer components
- * inside `<SttCanvas>`. This mirrors how `AvThreeViewer` mirrors `buildDemoLayers`'
+ * inside `<STTCanvas>`. This mirrors how `AvThreeViewer` mirrors `buildDemoLayers`'
  * `case 'av'` — here we mirror the GEO cases (`point` / `path` / `trips` / `arc` /
  * `column` / `h3Summary` / `quadbinSummary` / `flowmap` / `polygon`).
  *
  * ── Two projection paths (chosen per dataset) ───────────────────────────────
  *   • FLAT demos → `MercatorProjection`: a web-mercator world where 1:1 camera-sync
  *     with a maplibre street basemap is exact. The basemap is a maplibre-gl `Map`
- *     stacked UNDER the transparent `<SttCanvas>` (ground OFF + transparent clear),
+ *     stacked UNDER the transparent `<STTCanvas>` (ground OFF + transparent clear),
  *     driven each frame by `BasemapOverlay.sync()` reading the SAME MercatorProjection
  *     instance. A basemap on/off toggle is exposed.
  *   • GLOBE demos (`useGlobe`) → `GlobeProjection` (WGS84 datum, so any future
  *     3D-tiles co-register): data is placed on a real ECEF globe. There is no slippy
- *     basemap — instead we render `<SttGlobeBasemap>` (an earth sphere) as the
+ *     basemap — instead we render `<STTGlobeBasemap>` (an earth sphere) as the
  *     backdrop and expose an opt-in atmosphere toggle (WebGPU-only, default OFF).
  *
  * Each layer registers a governor source under the SAME id the deck path uses
  * (`dataset.id`; overlays `${id}-heads`, gated per `overlayGatesPlayback`) via
- * `<SttCanvas registry>`, so the transport/clock gate identically.
+ * `<STTCanvas registry>`, so the transport/clock gate identically.
  */
 
 import React, {
@@ -49,22 +49,22 @@ import {
   type Projection,
   threeBackend,
   type RGBA,
-  type SttSourceRegistry,
+  type STTSourceRegistry,
 } from '@poopdeck.gl/three';
 import {
-  SttCanvas,
-  SttGlobeBasemap,
-  SttPointCloudLayer,
-  SttTripsLayer,
-  SttTripHeadsLayer,
-  SttPathLayer,
-  SttArcLayer,
-  SttColumnLayer,
-  SttH3Layer,
-  SttQuadbinLayer,
-  SttFlowmapLayer,
-  SttFlowCorridorLayer,
-  SttPolygonLayer,
+  STTCanvas,
+  STTGlobeBasemap,
+  STTPointCloudLayer,
+  STTTripsLayer,
+  STTTripHeadsLayer,
+  STTPathLayer,
+  STTArcLayer,
+  STTColumnLayer,
+  STTH3Layer,
+  STTQuadbinLayer,
+  STTFlowmapLayer,
+  STTFlowCorridorLayer,
+  STTPolygonLayer,
 } from '@poopdeck.gl/three/r3f';
 import { renderableDatasetTypes } from '../../lib/backendSupport';
 import type { Dataset } from '../../types';
@@ -98,7 +98,7 @@ const THREE_GEO_TYPES = renderableDatasetTypes(threeBackend, [
 
 /**
  * Whether a demo can be offered the Three.js backend. Both flat (Mercator +
- * maplibre basemap) and globe (`GlobeProjection` + `SttGlobeBasemap`) demos are
+ * maplibre basemap) and globe (`GlobeProjection` + `STTGlobeBasemap`) demos are
  * supported now; only the layer type needs to be one we can render.
  */
 export function datasetSupportsThree(dataset: Dataset): boolean {
@@ -125,12 +125,13 @@ type GeoColorMode =
 /** Resolve a per-feature colour the way `buildDemoLayers` picks the deck colour:
  *  per-vertex gradient → categorical `colorProperty`+`colorMapping` → constant. */
 function featureColorMode(ds: Dataset, constFallback: RGBA): GeoColorMode {
-  if (ds.tripGradient) {
+  const gradient = 'tripGradient' in ds ? ds.tripGradient : undefined;
+  if (gradient) {
     return {
       type: 'ramp',
-      property: ds.tripGradient.property,
-      domain: ds.tripGradient.domain,
-      range: ds.tripGradient.colors as RGBA[],
+      property: gradient.property,
+      domain: gradient.domain,
+      range: gradient.colors as RGBA[],
       fallback: constFallback,
     };
   }
@@ -165,7 +166,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       const sizeUnits = ds.radiusUnits === 'pixels' ? 'pixels' : 'meters';
       const hasCat = !!(ds.colorProperty && ds.colorMapping);
       return (
-        <SttPointCloudLayer
+        <STTPointCloudLayer
           id={ds.id}
           url={ds.url}
           mode={
@@ -190,7 +191,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
     }
     case 'tripHeads':
       return (
-        <SttTripHeadsLayer
+        <STTTripHeadsLayer
           id={ds.id}
           url={ds.url}
           headColor={asRGBA(ds.headColor) ?? [253, 128, 93, 255]}
@@ -200,7 +201,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       );
     case 'path':
       return (
-        <SttPathLayer
+        <STTPathLayer
           id={ds.id}
           url={ds.url}
           colorMode={featureColorMode(
@@ -218,10 +219,10 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       // Everything else is a trailing AnimatedTripsLayer.
       const primary =
         ds.flowMatrix || ds.flowStroke ? (
-          <SttFlowCorridorLayer
+          <STTFlowCorridorLayer
             id={ds.id}
             url={ds.url}
-            domain={ds.tripGradient?.domain ?? ds.summaryColorDomain ?? [0, 60]}
+            domain={ds.tripGradient?.domain ?? [0, 60]}
             ramp={
               (ds.tripGradient?.colors as RGBA[] | undefined) ?? DEFAULT_RAMP
             }
@@ -230,7 +231,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
             opacity={ds.opacity ?? 0.85}
           />
         ) : (
-          <SttTripsLayer
+          <STTTripsLayer
             id={ds.id}
             url={ds.url}
             colorMode={featureColorMode(
@@ -251,7 +252,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
         return (
           <>
             {primary}
-            <SttTripHeadsLayer
+            <STTTripHeadsLayer
               id={`${ds.id}-heads`}
               url={ds.headsOverlayUrl}
               sourceRequired={ds.overlayGatesPlayback ?? true}
@@ -265,7 +266,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
     }
     case 'arc':
       return (
-        <SttArcLayer
+        <STTArcLayer
           id={ds.id}
           url={ds.url}
           sourceColor={{
@@ -290,7 +291,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       );
     case 'column':
       return (
-        <SttColumnLayer
+        <STTColumnLayer
           id={ds.id}
           url={ds.url}
           colorMode={featureColorMode(
@@ -326,9 +327,9 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
         opacity: 0.85,
       };
       return ds.type === 'h3Summary' ? (
-        <SttH3Layer {...common} />
+        <STTH3Layer {...common} />
       ) : (
-        <SttQuadbinLayer {...common} />
+        <STTQuadbinLayer {...common} />
       );
     }
     case 'flowmap':
@@ -336,7 +337,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       // No GPU edge-bundling in the Three engine yet — both render as flowmap.gl
       // tapered arrows (the bundled variant falls back to straight arrows).
       return (
-        <SttFlowmapLayer
+        <STTFlowmapLayer
           id={ds.id}
           url={ds.url}
           sourceColor={asRGBA(ds.flowSourceColor) ?? [56, 196, 232, 235]}
@@ -353,7 +354,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       );
     case 'polygon':
       return (
-        <SttPolygonLayer
+        <STTPolygonLayer
           id={ds.id}
           url={ds.url}
           colorMode={featureColorMode(
@@ -466,7 +467,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
     };
   }, [dataset.initialViewState, isGlobe]);
 
-  // One projection instance per dataset, shared by <SttCanvas> AND (flat) the
+  // One projection instance per dataset, shared by <STTCanvas> AND (flat) the
   // basemap overlay so `cameraToViewState` is exact. Globe uses the WGS84 datum so
   // any future 3D-tiles / atmosphere co-register.
   const projection = useMemo<Projection>(
@@ -485,7 +486,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
   // GLOBE-only chrome: opt-in atmosphere (WebGPU-only, default OFF).
   const [atmosphere, setAtmosphere] = useState(false);
 
-  // Own the maplibre map (flat demos only): one per dataset (the SttCanvas is
+  // Own the maplibre map (flat demos only): one per dataset (the STTCanvas is
   // keyed on dataset.id too, so both remount together on a dataset switch).
   useEffect(() => {
     if (isGlobe) return;
@@ -562,7 +563,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
         />
       )}
 
-      <SttCanvas
+      <STTCanvas
         // Remount the whole scene (incl. the WebGPU context) on a dataset change;
         // the basemap map remounts in lock-step (its effect keys on the dataset).
         key={dataset.id}
@@ -570,11 +571,11 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
         projection={projection}
         timeOrigin={timeRange.start}
         timeRange={timeRange}
-        registry={registry as SttSourceRegistry}
+        registry={registry as STTSourceRegistry}
         getTime={getTime}
         reducedMotion={reducedMotion}
         // Flat: no engine ground + transparent clear so the maplibre canvas shows
-        // through. Globe: the SttGlobeBasemap sphere is the surface; clear to space.
+        // through. Globe: the STTGlobeBasemap sphere is the surface; clear to space.
         ground={false}
         background={isGlobe ? '#05070d' : 'transparent'}
         atmosphere={isGlobe ? atmosphere : false}
@@ -590,7 +591,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
         style={{ position: 'absolute', inset: 0 }}
       >
         {renderGeoLayers(dataset, false)}
-        {isGlobe && <SttGlobeBasemap color={globeColor} />}
+        {isGlobe && <STTGlobeBasemap color={globeColor} />}
         {!isGlobe && map && (
           <BasemapSync
             map={map}
@@ -598,7 +599,7 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
             enabled={showBasemap}
           />
         )}
-      </SttCanvas>
+      </STTCanvas>
 
       {/* Top-left toggle (clears a floating header via inset): basemap on/off for
           flat demos, atmosphere on/off for globe demos. */}

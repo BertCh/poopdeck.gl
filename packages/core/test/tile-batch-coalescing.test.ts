@@ -1,5 +1,5 @@
 /**
- * Tests for the batched (range-coalesced) load path in SpatiotemporalTileset.
+ * Tests for the batched (range-coalesced) load path in SpatioTemporalTileset.
  *
  * Before this, the live render path drained the priority/prefetch queues one
  * tile at a time through `getTileData` (= one HTTP Range request per tile),
@@ -10,11 +10,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 import { BOUNDS, fakeTile } from './helpers/fixtures';
 
-describe('SpatiotemporalTileset batched (coalesced) loads', () => {
+describe('SpatioTemporalTileset batched (coalesced) loads', () => {
   it('routes a multi-tile pass through getTileDataBatch and loads every tile', async () => {
     const ids: TileId[] = [0, 1, 2, 3, 4].map((x) => ({ z: 6, x, y: 0, t: 0 }));
     const availSpy = vi.fn(async (_b: BoundingBox, z: number) =>
@@ -24,7 +24,7 @@ describe('SpatiotemporalTileset batched (coalesced) loads', () => {
     const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
     const loaded: TileId[] = [];
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,
@@ -69,7 +69,7 @@ describe('SpatiotemporalTileset batched (coalesced) loads', () => {
     );
     const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,
@@ -100,7 +100,7 @@ describe('SpatiotemporalTileset batched (coalesced) loads', () => {
     );
     const singleSpy = vi.fn(async (id: TileId) => fakeTile(id));
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,

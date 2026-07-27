@@ -250,14 +250,25 @@ describe('packed-format manifest contract', () => {
   });
 
   it('capabilities is additive: optional, open-ended string array (must-understand, §3.1)', () => {
-    // Schema pin: declared (so its shape is pinned) but never required — the
-    // golden fixture (no re-typing feature used) omits the key entirely.
+    // Schema pin: declared (so its shape is pinned) but never required. The
+    // golden fixture DOES use a re-typing feature (compact times), so it now
+    // declares `["time-delta"]` — and every entry it declares must be one the
+    // TS reader implements, or `openPackedArchive` would refuse it.
     const cap = schema.properties.capabilities;
     expect(cap.type).toBe('array');
     expect(cap.items.type).toBe('string');
     expect(cap.items.enum).toBeUndefined(); // open-ended registry, by design
     expect(schema.required).not.toContain('capabilities');
-    expect('capabilities' in golden).toBe(false);
+    expect(golden.capabilities).toEqual(['time-delta']);
+    for (const c of golden.capabilities ?? []) {
+      expect(KNOWN_MANIFEST_CAPABILITIES).toContain(c);
+    }
+    // …and OPTIONAL means optional: strip the key and the manifest still
+    // validates. (This is the half of the old `'capabilities' in golden ===
+    // false` assertion that was actually about the schema rather than about
+    // which flags the fixture generator happened to pass.)
+    const { capabilities: _omitted, ...withoutCapabilities } = golden;
+    expect(validate(withoutCapabilities, schema)).toEqual([]);
 
     // A quantized build's declaration validates…
     expect(

@@ -57,6 +57,9 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import { bindColorVector, bindFloatVector } from '../../lib/vector-props.js';
+import { GeometryType, tileLayerKey } from '@poopdeck.gl/core';
 import type { Tile, STTTileLayer as TileLayer } from '@poopdeck.gl/core';
 
 const DEBUG = false;
@@ -174,16 +177,43 @@ interface PreparedSplatTile {
   };
   /** Tile carried the per-surfel colour vector column → instanceColors bound. */
   hasColor: boolean;
-  /** Tile carried an `is_dynamic` column → instanceIsDynamic was bound. */
-  hasDynamic: boolean;
   timeOffset: number;
   tile: Tile;
   layerName: string;
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
+/**
+ * Render caches, held in `this.state` rather than in instance fields.
+ *
+ * deck's layer matching constructs a NEW layer object for every render and
+ * moves only `state`/`internalState` across (`Layer._transferState`); class
+ * field initializers re-run on the new instance. So an unmemoized
+ * `new SplatLayer({...})` inside a React render emptied both caches every
+ * frame — re-preparing (and re-uploading) every resident surfel tile.
+ */
+interface SplatRenderCache {
+  /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
+  prepared: Map<string, PreparedSplatTile>;
+  /** Per-tile sublayer-instance cache — stable refs let deck skip prop diff. */
+  sublayers: Map<
+    string,
+    {
+      layer: SplatPrimitiveLayer;
+      preparedKey: PreparedSplatTile;
+      layerPropsKey: string;
+    }
+  >;
+  layerPropsKey: string;
+  tilesRef: Tile[] | null;
+}
+
+function emptySplatRenderCache(): SplatRenderCache {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    layerPropsKey: '',
+    tilesRef: null,
+  };
 }
 
 /**
@@ -223,27 +253,61 @@ export class SplatLayer<
     alphaCutoff: { type: 'number', value: 0.04, min: 0 },
   };
 
-  /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
-  private preparedTileCache = new Map<string, PreparedSplatTile>();
-  /** Per-tile sublayer-instance cache — stable refs let deck skip prop diff. */
-  private sublayerCache = new Map<
-    string,
-    {
-      layer: SplatPrimitiveLayer;
-      preparedKey: PreparedSplatTile;
-      layerPropsKey: string;
+  /**
+   * The render caches, lazily created inside `this.state` — see
+   * {@link SplatRenderCache} for why an instance field is the wrong home.
+   */
+  private get cache(): SplatRenderCache {
+    // `state` is assigned by deck long before renderLayers runs; the guard is
+    // for the Object.create-based unit harnesses.
+    if (!this.state) this.state = {} as this['state'];
+    const state = this.state;
+    let cache = state.sttSplatCache as SplatRenderCache | undefined;
+    if (!cache) {
+      cache = emptySplatRenderCache();
+      state.sttSplatCache = cache;
     }
-  >();
-  private lastLayerPropsKey = '';
-  private lastTilesRef: Tile[] | null = null;
+    return cache;
+  }
+
+  /* Named views onto {@link cache}. Accessors (not fields) so every existing
+   * call site — and the test harnesses that seed these by name — keep working
+   * while the storage itself lives in `state`. */
+
+  private get preparedTileCache(): Map<string, PreparedSplatTile> {
+    return this.cache.prepared;
+  }
+  private set preparedTileCache(v: Map<string, PreparedSplatTile>) {
+    this.cache.prepared = v;
+  }
+
+  private get sublayerCache(): SplatRenderCache['sublayers'] {
+    return this.cache.sublayers;
+  }
+  private set sublayerCache(v: SplatRenderCache['sublayers']) {
+    this.cache.sublayers = v;
+  }
+
+  private get lastLayerPropsKey(): string {
+    return this.cache.layerPropsKey;
+  }
+  private set lastLayerPropsKey(v: string) {
+    this.cache.layerPropsKey = v;
+  }
+
+  private get lastTilesRef(): Tile[] | null {
+    return this.cache.tilesRef;
+  }
+  private set lastTilesRef(v: Tile[] | null) {
+    this.cache.tilesRef = v;
+  }
 
   /** Stable getTime ref — a fresh arrow each render would defeat deck's cache. */
   private readonly boundGetTime: () => number = () => this.getCurrentTime();
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
-    this.preparedTileCache.clear();
-    this.sublayerCache.clear();
+    if (this.state) this.state.sttSplatCache = emptySplatRenderCache();
   }
 
   /**
@@ -290,7 +354,7 @@ export class SplatLayer<
       this.props.sizeScale,
       this.props.gaussianFalloff,
       this.props.alphaCutoff,
-      // Shader uniforms (no longer baked into the prepared attributes).
+      // Shader uniforms (not baked into the prepared attributes).
       this.props.elevationScale,
       Array.isArray(this.props.fallbackColor)
         ? this.props.fallbackColor.join('.')
@@ -314,7 +378,7 @@ export class SplatLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -380,7 +444,7 @@ export class SplatLayer<
     styleKey: string,
   ): PreparedSplatTile | null {
     if (tileLayer.features.featureCount === 0) return null;
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) return cached;
     const prepared = this.buildTileData(tile, tileLayer, styleKey);
@@ -395,10 +459,12 @@ export class SplatLayer<
    * `FixedSizeList` columns (`stt-build --vector-group`), so the decoder hands
    * each as a contiguous typed array (`binary.vectorProps`) that rides STRAIGHT
    * to the GPU. Positions stay 2D (zero-copy geometry); altitude rides its own
-   * zero-copy `z` column and is scaled in the shader. The only allocation here is
-   * the tiny attributes record — no per-surfel loops, no large typed arrays. This
-   * is what keeps a new dense ("ultra") tile arriving mid-drive from hitching the
-   * main thread.
+   * zero-copy `z` column and is scaled in the shader. For a correctly built
+   * archive the only allocation here is the tiny attributes record — no
+   * per-surfel loops, no large typed arrays — which is what keeps a new dense
+   * ("ultra") tile arriving mid-drive from hitching the main thread. (A colour
+   * column baked with an `f32` leaf instead of `u8` is converted once per tile
+   * and warns; see `lib/vector-props.ts`.)
    */
   private buildTileData(
     tile: Tile,
@@ -408,6 +474,38 @@ export class SplatLayer<
     const binary = tileLayer.features;
     const count = binary.featureCount;
     if (count === 0) return null;
+
+    const layerId = String(this.props.id ?? 'SplatLayer');
+    // Surfel centres are indexed by FEATURE, so a linestring/polygon tile would
+    // read the first `featureCount` VERTICES instead — every disk in the wrong
+    // place, with no error.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.Point],
+        layerId,
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
+
+    // The centre attribute is bound with `size: 2` straight off the geometry
+    // buffer, so a 3D surfel archive would read PAIRS across an interleaved
+    // [x,y,z,…] run and put every surfel after the first at a garbage
+    // coordinate. Skip + warn (same contract as the missing-column branch).
+    const dims = binary.positionDimensions ?? 2;
+    if (dims !== 2) {
+      warnOnce(
+        `SplatLayer:positionDimensions:${layerId}:${dims}`,
+        `[${layerId}] tile layer ${JSON.stringify(tileLayer.name)} carries ` +
+          `${dims}D positions, but surfel centres bind as 2D [lng, lat] with ` +
+          `altitude in the separate \`elevationProperty\` column. Nothing ` +
+          `rendered for this tile — rebuild the archive with 2D geometry + a ` +
+          `z column, or point a 3D-capable layer at it.`,
+      );
+      return null;
+    }
 
     const t0 = performance.now();
     const num = binary.numericProps;
@@ -421,13 +519,16 @@ export class SplatLayer<
       typeof this.props.scaleColumn === 'string'
         ? this.props.scaleColumn
         : 'surfel_scale';
-    const quat = vec[quatN];
-    const scale = vec[scaleN];
+    // `bindFloatVector` makes the LEAF TYPE load-bearing as well as the width:
+    // a u8 leaf against these float attributes is a format mismatch, not a
+    // rescale, so it is rejected (warned) rather than bound as garbage.
+    const quat = bindFloatVector(vec[quatN], 4, layerId, quatN);
+    const scale = bindFloatVector(vec[scaleN], 2, layerId, scaleN);
 
     // Surfel orientation + extent are mandatory — without them there is no
     // oriented disk to draw. They must be the interleaved vector columns baked
     // by `stt-build --vector-group`; skip (warn once) rather than mis-render.
-    if (!quat || quat.size !== 4 || !scale || scale.size !== 2) {
+    if (!quat || !scale) {
       warnOnce(
         'SplatLayer:missingSurfelColumns',
         `[SplatLayer] tile is missing the interleaved surfel vector columns ` +
@@ -448,13 +549,19 @@ export class SplatLayer<
 
     // Per-surfel RGBA (baked confidence already in alpha) — the interleaved u8
     // vector column, bound normalized. Absent ⇒ the shader's fallback colour.
+    // `bindColorVector` pins the leaf type: gating on `size === 4` alone let an
+    // f32 leaf through as a `float32x4` (16-byte stride) buffer against the
+    // `unorm8x4` attribute, blowing every surfel out to white with no
+    // diagnostic (see lib/vector-props.ts).
     const colorN =
       typeof this.props.colorColumn === 'string' ? this.props.colorColumn : '';
-    const color = colorN ? vec[colorN] : undefined;
-    const hasColor = !!color && color.size === 4;
+    const color = colorN
+      ? bindColorVector(vec[colorN], 4, layerId, colorN)
+      : null;
+    const hasColor = !!color;
 
     const attributes: PreparedSplatTile['data']['attributes'] = {
-      // 2D geometry, zero-copy. (positionDimensions is 2 for surfel tiles.)
+      // 2D geometry, zero-copy (guarded above).
       instancePositions: { value: binary.positions, size: 2 },
       instanceQuaternions: { value: quat.value, size: 4 },
       instanceScales: { value: scale.value, size: 2 },
@@ -464,27 +571,21 @@ export class SplatLayer<
     if (elev) {
       attributes.instanceElevations = { value: elev, size: 1 };
     }
-    if (hasColor) {
-      attributes.instanceColors = {
-        value: color!.value,
-        size: 4,
-        normalized: true,
-      };
+    if (color) {
+      attributes.instanceColors = color;
     }
     // Worldbuild static/dynamic flag (0/1) from the `is_dynamic` column, bound
     // zero-copy (the shader thresholds at 0.5). Absent ⇒ default 0 (all static).
     const dynArr = num['is_dynamic'];
-    const hasDynamic = !!dynArr;
     if (dynArr) {
       attributes.instanceIsDynamic = { value: dynArr, size: 1 };
     }
 
     const prepared: PreparedSplatTile = {
-      tileKey: makeTileKey(tile, tileLayer),
+      tileKey: tileLayerKey(tile.id, tileLayer.name),
       styleKey,
       data: { length: count, attributes },
       hasColor,
-      hasDynamic,
       timeOffset: binary.timeOffset,
       tile,
       layerName: tileLayer.name,
@@ -535,6 +636,19 @@ export class SplatLayer<
       tile: prepared.tile,
       sttFeatures: tileLayerFeatures(prepared),
     });
+    // `getSubLayerProps` copies the COMPOSITE's `parameters` onto every
+    // sublayer, and deck's default for it is `{}` — which would SHADOW
+    // SplatPrimitiveLayer's own `defaultProps.parameters` and silently wipe the
+    // sort-free depth-write contract that makes surface splatting work (see
+    // SPLAT_DRAW_PARAMETERS there). An empty/absent inherited value carries no
+    // information, so drop it and let the primitive's default stand. A caller
+    // who genuinely sets `parameters` — on this layer or via
+    // `_subLayerProps.splats` — still overrides it wholesale, which is deck's
+    // normal prop-beats-default semantics for `parameters`.
+    const inherited = props.parameters as Record<string, unknown> | undefined;
+    if (!inherited || Object.keys(inherited).length === 0) {
+      delete props.parameters;
+    }
     const SubLayerClass = this.getSubLayerClass('splats', SplatPrimitiveLayer);
     return new SubLayerClass(props as any);
   }

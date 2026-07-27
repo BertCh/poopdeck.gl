@@ -1,9 +1,9 @@
 /**
  * Point geometry adapter — renders POINT-type tiles as circular billboards.
  *
- * ── Wave M2 feature surface ─────────────────────────────────────────────────
- * Three parity axes join the original window-mode billboard, all defaulting to
- * the pre-M2 behaviour so an upgrading app sees no visual change:
+ * ── Feature surface ─────────────────────────────────────────────────────────
+ * Three parity axes sit on top of the window-mode billboard, all OFF-shaped at
+ * their defaults:
  *
  *  - `timeFilterMode` — window (default) / wake / cumulative / trail, each a
  *    kernel snippet from `shaders/time-window.glsl.ts`. The mode is chosen at
@@ -25,7 +25,7 @@ import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
   type STTBaseLayerOptions,
   type STTTimeFilterMode,
@@ -43,6 +43,11 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   discMaskGLSL,
@@ -56,17 +61,17 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 
 /**
  * The four real time-filter modes — the package-wide {@link STTTimeFilterMode}
- * under this layer's historical name.
+ * under this layer's own name.
  */
 export type PointTimeFilterMode = STTTimeFilterMode;
 
@@ -85,7 +90,7 @@ export interface STTPointLayerOptions
   radius?: number;
   /**
    * Unit `radius` (and a `radiusProperty` column) is expressed in. `'pixels'`
-   * (default) is the historical screen-space behaviour: one radius, same size
+   * (default) is screen-space: one radius, same size
    * at every zoom. `'meters'` is ground-metric (deck's `radiusUnits`): the
    * radius is converted per tile at the tile centre's latitude and the map's
    * current zoom, so a point covers a fixed patch of ground and grows as you
@@ -205,7 +210,7 @@ export interface PointShaderConfig {
   filter: boolean;
 }
 
-/** Pre-M2 behaviour: window mode, no column filter. */
+/** The OFF shape: window mode, no column filter. */
 const DEFAULT_SHADER_CONFIG: PointShaderConfig = Object.freeze({
   mode: 'window',
   filter: false,
@@ -220,29 +225,10 @@ const MODE_GLSL: Readonly<Record<PointTimeFilterMode, string>> = Object.freeze({
 });
 
 /**
- * Uniforms each mode reads. Only the active mode's block is declared, so an
- * unused uniform can never be silently mis-set. Window keeps the historical
- * declaration order.
+ * Uniforms each mode reads. The billboard tapers in wake mode, so this is the
+ * record carrying `uWakeTailScale`.
  */
-const MODE_UNIFORMS: Readonly<Record<PointTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
+const MODE_UNIFORMS = TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE;
 
 /** The `vAlpha = …` expression per mode. */
 const MODE_ALPHA: Readonly<Record<PointTimeFilterMode, string>> = Object.freeze(
@@ -432,7 +418,12 @@ const ID_FS_SOURCE = buildBillboardIdFragmentSource('points');
  * null (a no-op for `gl.uniform*`) and absent attributes come back -1, which
  * is exactly how a mode/filter combination that doesn't declare them reads.
  */
-interface PointSharedHandles {
+interface PointSharedHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the vertex source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -447,20 +438,6 @@ interface PointSharedHandles {
   uRadius: WebGLUniformLocation | null;
   uRadiusScale: WebGLUniformLocation | null;
   uUseFeatureRadius: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface PointIdProgramHandles extends PointSharedHandles {
@@ -507,7 +484,7 @@ interface PointGpuCache extends TileGpuCache {
  * setInterval(() => layer.setCurrentTime(Date.now()), 16);
  * ```
  */
-export class STTPointLayer extends STTBaseLayer {
+export class STTPointLayer extends STTFilterableLayer {
   private pointOpts: {
     color: [number, number, number, number];
     radius: number;
@@ -524,17 +501,12 @@ export class STTPointLayer extends STTBaseLayer {
     trailLength: number;
     fadeTrail: number;
   };
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private filterUniforms: DataFilterUniforms = createDataFilterUniforms();
   /** Compiled feature configuration; drives the program-cache keys. */
   private shaderConfig: PointShaderConfig;
   private mainKey: string;
   private pickKey: string;
   /** `${mainKey}::${variantName}` — the tile-VAO staleness key, built on variant flips only. */
   private mainVaoKey = '';
-  private warnedCategoricalFilter = false;
   /**
    * Handles of the most recently used variant (legacy seeded eagerly in
    * onContextReady), memoized per `*Variant` so the per-tile hot path skips
@@ -563,14 +535,6 @@ export class STTPointLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? 0,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.shaderConfig = {
       mode: this.resolveMode(),
@@ -627,28 +591,6 @@ export class STTPointLayer extends STTBaseLayer {
   }
 
   /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only: no relink, no tile rebuild. `null` idles the filter, which
-   * renders everything.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only, like `setFilterRange`. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every feature unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
-    this.map?.triggerRepaint();
-  }
-
-  /**
    * Recompute the compiled configuration after a mode knob moved, dropping the
    * memoized handles so the next draw resolves (and links, once) the program
    * for the new key. Tile VAOs carry the key in `vaoVariant` and rebuild
@@ -696,29 +638,10 @@ export class STTPointLayer extends STTBaseLayer {
       uRadius: gl.getUniformLocation(program, 'uRadius'),
       uRadiusScale: gl.getUniformLocation(program, 'uRadiusScale'),
       uUseFeatureRadius: gl.getUniformLocation(program, 'uUseFeatureRadius'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 
@@ -762,8 +685,8 @@ export class STTPointLayer extends STTBaseLayer {
     // Eagerly link the legacy variants (what a ≤v4 host uses from its first
     // frame; a v5 host links its own variant lazily through the base
     // per-variant program cache on first draw, then reuses it). The id
-    // program is compiled up-front alongside the visual one (as before) so
-    // the first `pick()` doesn't stall; it's a tiny flat-colour shader.
+    // program is compiled up-front alongside the visual one so the first
+    // `pick()` doesn't stall; it's a tiny flat-colour shader.
     this.handles = this.getOrCreateProgram(
       gl,
       this.mainKey,
@@ -824,13 +747,7 @@ export class STTPointLayer extends STTBaseLayer {
       // One point == one instance, so the per-FEATURE column binds directly
       // (no expandFilterValues, which is for segment/vertex instancing).
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-            `categorical column; range filtering needs a numeric one — rendering unfiltered`,
-        );
-      }
+      if (col.categorical) this.warnCategoricalFilterOnce();
       cache.hasFilterColumn = col.hasColumn;
       if (col.values) {
         cache.filterBuffer = this.uploadArrayBuffer(gl, col.values);
@@ -856,7 +773,7 @@ export class STTPointLayer extends STTBaseLayer {
 
   /**
    * The `uRadiusScale` value for this tile. In `'pixels'` mode it is the plain
-   * `radiusScale` multiplier (historical behaviour). In `'meters'` mode the
+   * `radiusScale` multiplier. In `'meters'` mode the
    * metres→device-pixels factor at the TILE CENTRE's latitude and the map's
    * FRACTIONAL zoom is folded in, so both the constant `radius` and a
    * `radiusProperty` column are read as ground metres and the size changes
@@ -914,29 +831,6 @@ export class STTPointLayer extends STTBaseLayer {
   }
 
   /**
-   * Upload the DataFilter uniforms for this tile. No-op unless the filter was
-   * compiled in. A tile that didn't bake the column resolves to `enabled: 0`,
-   * which the kernel reads as "render everything" — never as "hide everything".
-   */
-  private setFilterUniforms(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: PointSharedHandles,
-    cache: PointGpuCache,
-  ): void {
-    if (!this.shaderConfig.filter) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
-      cache.hasFilterColumn === true,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
-  }
-
-  /**
    * Projection + sizing + time + filter uniforms — everything the visual and
    * id passes set identically, so the pickable disc always matches the drawn
    * one (including on globe, where the prelude owns projection).
@@ -961,7 +855,11 @@ export class STTPointLayer extends STTBaseLayer {
     gl.uniform1f(h.uRadius, this.pointOpts.radius);
     gl.uniform1f(h.uRadiusScale, this.resolveRadiusScale(gl, tile, ctx));
     this.setTimeUniforms(gl, h, cache, ctx);
-    this.setFilterUniforms(gl, h, cache);
+    // A tile that didn't bake the column resolves to `enabled: 0`, which the
+    // kernel reads as "render everything" — never as "hide everything".
+    if (this.shaderConfig.filter) {
+      this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn === true);
+    }
     // useFeature* uniforms are program-level, not VAO-recorded; set them every
     // draw so toggling radiusProperty at runtime takes effect.
     gl.uniform1f(

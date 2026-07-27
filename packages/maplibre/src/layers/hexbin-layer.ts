@@ -80,12 +80,13 @@
  * once saying so: it is exactly the divergence deck documents for its own CPU
  * aggregator ("the CPU aggregator ignores the time window").
  *
- * ── Elevation units (D10) ───────────────────────────────────────────────────
+ * ── Elevation units ─────────────────────────────────────────────────────────
  * `elevationRange` is METRES. Cells are not tied to one tile, so the
  * metres→mercator-z factor is resolved once per layer at {@link resolveLatitude}
  * (not per tile as in `STTColumnLayer`), and the globe branch is fed metres
  * while the mercator branch is fed mercator-z, through the shared
- * `buildElevatedProjection` kernel. Never re-adopt the pre-D10 flat `1e-7`.
+ * `buildElevatedProjection` kernel. A flat `1e-7` factor is latitude-blind and
+ * ~4× too tall — never substitute one.
  *
  * ── Deliberate divergences from deck (all declared, none silent) ────────────
  *  - `MIN` / `MAX` aggregation degrade to `SUM` with a one-time warning: an
@@ -108,9 +109,9 @@ import { GeometryType } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import { MAX_PICK_ID, type SttPickResult } from '@poopdeck.gl/core/picking';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
-  type STTBaseLayerOptions,
+  type STTFilterableLayerOptions,
   type STTTimeFilterMode,
   type DrawContext,
   type PickProvenanceEntry,
@@ -127,10 +128,13 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS,
+  resolveTimeUniformLocations,
   timeWindowAlphaJS,
   wakeAlphaJS,
   cumulativeAlphaJS,
   trailAlphaJS,
+  type TimeUniformLocations,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -141,9 +145,12 @@ import {
   createDataFilterUniforms,
   dataFilterAlphaJS,
   extractFilterColumn,
+  resolveDataFilterUniformLocations,
   resolveDataFilterUniforms,
-  type DataFilterRange,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
   type DataFilterUniforms,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 import { buildElevatedProjection } from '../shaders/globe-elevation.glsl.js';
@@ -266,8 +273,8 @@ const HEXBIN_MESH_CACHE = new Map<0 | 1, HexbinMesh>();
  * `uElevationScale` folded to 0 by the draw path); `extruded: true` adds a
  * self-contained wall band carrying {@link HEXBIN_WALL_SHADE}, so the cap can
  * stay at full brightness. Structurally identical to `STTColumnLayer`'s
- * `buildColumnMesh` — see the concerns note about extracting a shared
- * `lib/prism-mesh.ts`.
+ * `buildColumnMesh`; a third prism kind is the trigger to hoist both into a
+ * shared `lib/prism-mesh.ts`.
  */
 export function buildHexbinMesh(extruded: boolean): HexbinMesh {
   const key: 0 | 1 = extruded ? 1 : 0;
@@ -604,26 +611,6 @@ const MODE_GLSL: Readonly<Record<HexbinTimeFilterMode, string>> = Object.freeze(
   },
 );
 
-/** Uniforms each mode reads — only the active mode's block is declared. */
-const MODE_UNIFORMS: Readonly<Record<HexbinTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
-
 /**
  * The gate expression per mode. A hexbin point contributes `weight · gate`, so
  * unlike the geometry layers there is no separate size transform — the wake's
@@ -669,7 +656,7 @@ export function buildHexbinScatterVertexSource(
   attribute vec2 aTime;        // [startTime, endTime], tile-relative
   attribute float aWeight;     // per-point weight (1.0 when no weight column)
 ${cfg.filter ? FILTER_ATTRIBUTE : ''}  uniform vec2 uBinTexSize;    // scatter target size, in texels
-${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying vec2 vContribution;  // (weight * gate, gate)
+${TIME_MODE_UNIFORM_DECLS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying vec2 vContribution;  // (weight * gate, gate)
 ${MODE_GLSL[cfg.mode]}${cfg.filter ? DATA_FILTER_GLSL : ''}
   void main() {
     float gate = ${MODE_ALPHA[cfg.mode]};
@@ -897,8 +884,7 @@ export const HEXBIN_ID_FS = `
 
 // ── options ─────────────────────────────────────────────────────────────────
 
-export interface STTHexbinLayerOptions
-  extends STTBaseLayerOptions, STTDataFilterOptions {
+export interface STTHexbinLayerOptions extends STTFilterableLayerOptions {
   /**
    * Hexagon radius in METRES (deck `HexagonLayer.radius`). Resolved to a
    * mercator radius ONCE for the layer at {@link radiusLatitude}, which is what
@@ -1011,26 +997,17 @@ export interface STTHexbinLayerOptions
 
 // ── GPU handles ─────────────────────────────────────────────────────────────
 
-interface ScatterHandles {
+interface ScatterHandles
+  extends
+    TimeUniformLocations,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   aBinIndex: number;
   aTime: number;
   aWeight: number;
   aFilterValue: number;
   uBinTexSize: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface CellHandles {
@@ -1141,7 +1118,7 @@ export interface HexbinTableStats {
  * layer.attach(map);
  * ```
  */
-export class STTHexbinLayer extends STTBaseLayer {
+export class STTHexbinLayer extends STTFilterableLayer {
   /** Host depth participation — `'3d'` by default (this kind extrudes). */
   readonly renderingMode: '2d' | '3d';
 
@@ -1170,10 +1147,6 @@ export class STTHexbinLayer extends STTBaseLayer {
     fadeTrail: number;
   };
 
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private readonly filterOpts: STTDataFilterOptions;
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
   /** Second payload so the CPU aggregator never clobbers the draw path's. */
   private readonly cpuFilterUniforms: DataFilterUniforms =
     createDataFilterUniforms();
@@ -1238,7 +1211,6 @@ export class STTHexbinLayer extends STTBaseLayer {
 
   private warnedExtremum = false;
   private warnedScaleType = false;
-  private warnedCategoricalFilter = false;
   private warnedNoInstancing = false;
   private warnedCpuFallback = false;
 
@@ -1269,14 +1241,6 @@ export class STTHexbinLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? 0,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.scatterConfig = Object.freeze({
       mode: resolveHexbinTimeFilterMode(
@@ -1405,28 +1369,12 @@ export class STTHexbinLayer extends STTBaseLayer {
   }
 
   /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only on the GPU path. On the CPU fallback the aggregate is stale
-   * until the next table rebuild, so it is recomputed here.
+   * A bin's total is a function of the filter, so a repaint alone would draw
+   * stale cells: the CPU path re-aggregates, and the GPU path — whose auto
+   * colour / elevation domains are sampled from a CPU aggregate — re-resolves
+   * those.
    */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.onFilterMoved();
-  }
-
-  /** Move the DataFilter's soft fade margin. See {@link setFilterRange}. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.onFilterMoved();
-  }
-
-  /** Master DataFilter switch. See {@link setFilterRange}. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
-    this.onFilterMoved();
-  }
-
-  private onFilterMoved(): void {
+  protected onFilterChanged(): void {
     if (this.cellConfig.source === 'cpu') this.refreshCpuAggregate();
     else this.refreshDomains();
     this.map?.triggerRepaint();
@@ -1572,14 +1520,8 @@ export class STTHexbinLayer extends STTBaseLayer {
     cache.hasFilterColumn = false;
     if (this.scatterConfig.filter) {
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-            'categorical column; range filtering needs a numeric one — ' +
-            'aggregating unfiltered',
-        );
-      }
+      if (col.categorical)
+        this.warnCategoricalFilterOnce('aggregating unfiltered');
       cache.hasFilterColumn = col.hasColumn;
       if (col.values) {
         // One point == one scatter primitive, so the per-FEATURE column binds
@@ -2220,28 +2162,9 @@ export class STTHexbinLayer extends STTBaseLayer {
         ? gl.getAttribLocation(program, DATA_FILTER_NAMES.attribute)
         : -1,
       uBinTexSize: gl.getUniformLocation(program, 'uBinTexSize'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 
@@ -2438,16 +2361,7 @@ export class STTHexbinLayer extends STTBaseLayer {
         gl.uniform1f(h.uWindowStart, rel - half);
         gl.uniform1f(h.uWindowEnd, rel + half);
         if (this.scatterConfig.filter) {
-          const fu = resolveDataFilterUniforms(
-            this.filterUniforms,
-            this.filterOpts,
-            cache.hasFilterColumn,
-          );
-          gl.uniform2fv(h.uFilterRange, fu.range);
-          gl.uniform2fv(h.uFilterSoftRange, fu.softRange);
-          gl.uniform1f(h.uFilterEnabled, fu.enabled);
-          gl.uniform1f(h.uFilterTransformSize, fu.transformSize);
-          gl.uniform1f(h.uFilterTransformColor, fu.transformColor);
+          this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn);
         }
 
         // A VAO records locations belonging to ONE linked program; the scatter

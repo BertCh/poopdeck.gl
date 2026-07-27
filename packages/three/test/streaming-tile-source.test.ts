@@ -10,13 +10,13 @@ import {
 import { mockTileset, tile, VIEWPORT } from './_support/streaming';
 
 // Shared capture across the hoisted `@poopdeck.gl/core` mock and the assertions:
-// the `.load()` path builds a real `SpatiotemporalTileset` from an archive URL,
+// the `.load()` path builds a real `SpatioTemporalTileset` from an archive URL,
 // so to prove the knob forwarding reaches the constructor we stub the archive +
 // tileset and record every constructor option object. The REAL core adapter
 // (`@poopdeck.gl/core/tileset-adapter`, a different specifier) is left unmocked,
 // so summary-tier dispatch is exercised end-to-end.
 const h = vi.hoisted(() => ({
-  /** One entry per `new SpatiotemporalTileset(opts)` — the captured options. */
+  /** One entry per `new SpatioTemporalTileset(opts)` — the captured options. */
   ctorOpts: [] as Array<Record<string, unknown>>,
   /** One entry per `preloadOverviewTier(opts)` call. */
   preloadCalls: [] as Array<unknown>,
@@ -67,7 +67,7 @@ vi.mock('@poopdeck.gl/core', () => {
     setAnimationState(): void {}
     clear(): void {}
   }
-  return { STTArchive: FakeArchive, SpatiotemporalTileset: FakeTileset };
+  return { STTArchive: FakeArchive, SpatioTemporalTileset: FakeTileset };
 });
 
 describe('tileKey / residentSetEqual', () => {

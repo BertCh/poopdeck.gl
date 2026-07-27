@@ -11,7 +11,8 @@
  *
  * The whole point of Phase 2 is that N composited `STTArchive`s share ONE global
  * concurrency budget instead of each opening up to its own per-archive cap (24)
- * and fighting for bandwidth (§2.5). A module-level singleton, reachable from
+ * and fighting for bandwidth (docs/roadmap/playback-and-loading.md §2).
+ * A module-level singleton, reachable from
  * every archive instance, is that single authority. The default budget is 24 —
  * the same number as the per-archive cap — so a scene with a
  * SINGLE archive is unchanged: DRR is work-conserving, so one source draws all

@@ -490,12 +490,11 @@ const TrajectoryClipping: React.FC = () => (
       Clipping runs once, at build — <Code>clip_trajectory</Code> during
       per-tile placement — so every tile ships a self-contained{' '}
       <Code>ClippedSegment</Code> and the viewer never fetches a neighbour to
-      finish drawing a partial trip. Crucially the border vertex carries an
-      interpolated <em>time</em>, not just a position:{' '}
-      <Code>interpolate_timestamp</Code> gives the last frame on the left tile
-      and the first frame on the right tile the same clock, to the millisecond.
-      That continuity across seams is the fix behind trips no longer flashing or
-      teleporting at tile borders.
+      finish a partial trip. The load-bearing detail is that the border vertex
+      carries an interpolated <em>time</em>, not just a position:{' '}
+      <Code>interpolate_timestamp</Code> gives the left tile's last frame and
+      the right tile's first frame the same clock, to the millisecond. Without
+      it, trips flash and teleport at tile borders.
     </p>
   </Card>
 );

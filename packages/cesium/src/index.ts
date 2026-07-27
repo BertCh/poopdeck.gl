@@ -10,7 +10,7 @@
  * tileset-adapter / picking / capabilities) — the proof that adding a backend is
  * thin: a `SttRenderNode` + a `BackendDescriptor` + a camera bridge.
  *
- * Streaming: wire a `SpatiotemporalTileset(makeTilesetCallbacks(archive))` from
+ * Streaming: wire a `SpatioTemporalTileset(makeTilesetCallbacks(archive))` from
  * `@poopdeck.gl/core` and feed its `onTileLoad` tiles to `STTPointLayer.setTiles`.
  *
  * CesiumJS is Apache-2.0 (free); rendering STT needs no Cesium ion token.
@@ -65,11 +65,29 @@ export {
 export {
   viewStateToCesiumView,
   cesiumViewToViewState,
+  type CesiumCameraSample,
   type CesiumView,
   type CesiumViewOptions,
   type ResolvedViewState,
 } from './camera.js';
 export { applyViewStateToCamera } from './camera-apply.js';
+
+// Camera → tile-selection inputs, and the gate that keeps a replace-all
+// `setTiles` off the per-tile-load path. Both pure (Cesium-free) + unit-tested.
+export {
+  resolveCesiumStreamView,
+  viewRectangleToBounds,
+  verticalFovRadians,
+  isWholeWorldRectangle,
+  type CameraRectangleRadians,
+  type CesiumStreamViewInput,
+} from './lib/stream-view.js';
+export {
+  TilePublishGate,
+  type TilePublishDecision,
+  type TilePublishGateOptions,
+  type TilePublishReason,
+} from './lib/tile-publish-gate.js';
 
 // Render-loop clock bridge: drive the STT playhead from Cesium's render loop
 // (scene.preRender) instead of per-frame React state, and pump requestRender so

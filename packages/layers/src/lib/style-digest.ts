@@ -138,8 +138,9 @@ const updateTriggersDigests = new WeakMap<object, string>();
 /**
  * Content digest of a user-facing `updateTriggers` prop, folded into the
  * layers' styleKey / layerPropsKey digests so a trigger bump invalidates the
- * cached prepared tiles + sublayer instances — the deck.gl contract the
- * hand-rolled keys previously ignored. Memoized per object reference: a fresh
+ * cached prepared tiles + sublayer instances. Hand-rolled cache keys do not
+ * see `updateTriggers` on their own, and skipping this breaks deck's contract
+ * that a trigger bump forces a re-read. Memoized per object reference: a fresh
  * literal per render costs one small serialization; a reused reference is a
  * WeakMap hit (in-place mutation of a reused object is invisible, exactly as
  * it is to deck's own oldProps/props trigger diff).
@@ -157,12 +158,53 @@ export function updateTriggersDigest(
 }
 
 /**
+ * Digest of the props each extension in `props.extensions` PASSES THROUGH into
+ * every sublayer.
+ *
+ * `CompositeLayer.getSubLayerProps()` ends with a loop over `extensions`
+ * calling `LayerExtension.getSubLayerProps`, whose base implementation copies
+ * each key of the extension class's `defaultProps` off the COMPOSITE's props
+ * (upstream `layer-extension.ts`). So `extensions: [new DataFilterExtension()]`
+ * silently makes `filterRange` / `getFilterValue` — props the composite itself
+ * declares nothing about — part of every sublayer's prop set. Digesting only
+ * the extension list (`extensionsDigest`) catches adding or removing the
+ * extension but NOT a change to the values it forwards, which would then only
+ * reach newly built tiles.
+ *
+ * Values digest structurally; a function-valued accessor digests by reference
+ * identity, matching the rest of this module.
+ */
+function extensionPassThroughDigest(props: Record<string, any>): string {
+  const extensions = props.extensions as readonly unknown[] | undefined;
+  if (!extensions || extensions.length === 0) return '';
+  const parts: string[] = [];
+  for (const extension of extensions) {
+    const defaults = (
+      extension as { constructor?: { defaultProps?: Record<string, unknown> } }
+    )?.constructor?.defaultProps;
+    if (!defaults) continue;
+    for (const key of Object.keys(defaults)) {
+      if (!(key in props)) continue;
+      parts.push(`${key}:${structuralDigest(props[key])}`);
+    }
+  }
+  return parts.join(';');
+}
+
+/**
  * Digest of every composite prop that `CompositeLayer.getSubLayerProps()`
  * forwards into sublayers (opacity/pickable/visible, coordinate system,
  * modelMatrix, highlight props, …) plus the `_subLayerProps` override map.
  * The animated layers bake these into cached sublayer instances at
  * construction time, so any change here must invalidate the sublayer caches
  * — without it, inherited props would only apply to newly built tiles.
+ *
+ * Audited against the installed deck.gl 9.3.2 `composite-layer.ts`, which
+ * forwards exactly: opacity, pickable, visible, parameters, getPolygonOffset,
+ * highlightedObjectIndex, autoHighlight, highlightColor, coordinateSystem,
+ * coordinateOrigin, wrapLongitude, positionFormat, modelMatrix, extensions,
+ * fetch, operation — plus `_subLayerProps[id]`, `updateTriggers`, and whatever
+ * each extension's `getSubLayerProps` pass-through adds.
  */
 export function inheritedPropsDigest(props: Record<string, any>): string {
   return [
@@ -186,5 +228,13 @@ export function inheritedPropsDigest(props: Record<string, any>): string {
     // (SpatioTemporalLayer.composeExtensions); adding/removing one must
     // rebuild the cached sublayer instances or the change never applies.
     extensionsDigest(props.extensions),
+    // …and so must a change to the props those extensions forward.
+    extensionPassThroughDigest(props),
+    // `getSubLayerProps` seeds every sublayer's `updateTriggers` with
+    // `this.props.updateTriggers.all`, and the chassis
+    // (`SpatioTemporalLayer.composeSubLayerProps`) forwards the WHOLE object.
+    // A trigger bump is deck's canonical "rebuild me" signal, so it has to
+    // invalidate the hand-rolled sublayer caches too. Memoized per reference.
+    updateTriggersDigest(props.updateTriggers),
   ].join('|');
 }

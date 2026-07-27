@@ -444,14 +444,12 @@ const DecodePipeline: React.FC = () => (
     >
       Decoding one tile inline is ~5–20 ms of decompress +{' '}
       <span className="font-mono">tableFromIPC</span> + buffer extraction — a
-      whole frame gone. So the archive hands each fetched slice to a small
-      worker pool instead, picks the least-pending worker, and transfers the
-      decoded typed-array buffers back zero-copy; the render loop never touches
-      the work. That is why streaming holds 60 fps. The two-tier cache is why a{' '}
-      <em>second</em> visit is instant: a warm RAM hit skips the network, and an
-      OPFS hit skips the network <em>and</em> the zstd step, returning a decoded
-      payload straight to the UI. Because the OPFS key is the content-addressed
-      directory fingerprint, a redeploy mints a new key and the stale tiles
+      whole frame gone. So each fetched slice goes to the least-pending worker
+      instead, and the decoded typed arrays are transferred back rather than
+      copied; the render loop never touches the work. The cache tiers are why a{' '}
+      <em>second</em> visit is instant: RAM skips the network, OPFS skips the
+      network <em>and</em> the zstd step. And because the OPFS key is the
+      directory's content address, a redeploy mints new keys and stale tiles
       simply stop being found — no walk-and-delete.
     </p>
   </div>

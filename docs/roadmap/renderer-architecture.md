@@ -58,7 +58,7 @@ WebGPU **and** WebGL2, and does it time-correctly:
   colour material**. Picking therefore cannot disagree with what is on screen —
   an out-of-window or filtered-out feature is unpickable by construction rather
   than by a parallel CPU predicate that can drift.
-- Verified in tree: nine `SttIdPickKind` values (`point`, `column`, `arc`, `line`,
+- Verified in tree: nine `STTIdPickKind` values (`point`, `column`, `arc`, `line`,
   `trips`, `polygon`, `path`, `icon`, `iso`) across ten layer classes
   (`WideLineLayer` + its `PathGeoLayer` subclass, `OdLineLayer`, `PointCloudLayer`,
   `ColumnLayer`, `ArcLayer`, `IconLayer`, `IsoLayer`, `PolygonLayer`,
@@ -72,7 +72,7 @@ WebGPU **and** WebGL2, and does it time-correctly:
 ## 1. Thesis: one substrate, several rendering models
 
 The shared seams that work are the **decoded-tile contract** (`@poopdeck.gl/core`:
-`STTArchive` / `SpatiotemporalTileset` / `BinaryFeatures` / `Tile` + the frozen
+`STTArchive` / `SpatioTemporalTileset` / `BinaryFeatures` / `Tile` + the frozen
 wire format) and the **framework-neutral playback clock** (`@poopdeck.gl/playback`:
 `TimeController` / `PlaybackGovernor` / `BufferSource` — every backend consumes it
 identically, the working proof that a shared seam is viable). Everything above
@@ -313,7 +313,7 @@ Earlier foundational verdicts (all held): mercator projection = BUILD (~30 lines
 globe ellipsoid math = BUY-by-copy; basemap = BUY (maplibre overlay, §2.1);
 camera/controls = BUY-by-copy (`GlobeControls`/`EnvironmentControls` take _our_
 camera and don't own the loop); tile streaming = BUILD by wrapping core
-`SpatiotemporalTileset` (framework streamers are welded to their WebGL renderers);
+`SpatioTemporalTileset` (framework streamers are welded to their WebGL renderers);
 terrain = DEFER.
 
 **Measured negative results from the same survey — do not re-litigate without new
@@ -347,8 +347,8 @@ never-instantiated `GpuPicker`: it passed its output buffer as the
 `textureIndex` argument to the unified renderer's `readRenderTargetPixelsAsync`
 (which _returns_ the pixels) — so **every GPU pick decoded index 0**. Also fixed: a
 background-sentinel bug (black clear == feature 0) and a concurrent-render race.
-`pickMechanism` is now `'gpu-id'`, and `SttPickInfo` became a discriminated union
-(`SttBoxPickInfo | SttIdPickInfo`; consumers narrow on `kind`).
+`pickMechanism` is now `'gpu-id'`, and `STTPickInfo` became a discriminated union
+(`STTBoxPickInfo | STTIdPickInfo`; consumers narrow on `kind`).
 **Moral: "exported but 0 call sites" code is unverified code.**
 
 ### 2.13 The WebGL2 16-attribute floor is a real ceiling, and it fails silently
@@ -439,6 +439,60 @@ line it never flew. `flights` ships `timeWindow: 1_200_000` ms (20 min) with
 gap; the window-coupled form supersedes it — a fixed gap unrelated to the window
 re-opens the teleport band.)_ **The bug this prevents:** a too-tight hold produces
 the "big zip" — freeze at the coverage-exit point, then jump to the re-entry point.
+
+**Motion modes (`TrackSampleConfig.motion`).** The kernel's one interpolation
+answer — lerp lon/lat between the bracketing keyframes — is right for dense AV
+object archives and wrong in two named ways for the sparse ones this project also
+ships. So the sampler takes an OPT-IN `MotionConfig` whose `mode` is exactly one
+of `'linear'` | `'velocity'` | `'great-circle'`, and nothing else. `'linear'` is
+_defined_ as the shipped behaviour, byte for byte, and
+`packages/core/test/motion-linear-parity.test.ts` is the differential gate that
+holds it there — same doubles, same NaNs, same null-ness, same own-property set
+on the returned `Sample`. Absent modes are absent for reasons: `'step'` is
+already `maxGapMs: 0`; a per-sample confidence that decays with extrapolation age
+double-fades against the CPU appear/disappear ramps that already multiply
+`Sample.alpha`; a teleport threshold duplicates `maxGapMs` on a second axis; and
+backward extrapolation has no consumer, because AIS, ADS-B and AV archives all
+predict forward.
+
+**Extrapolation is bounded by the residency window, on the same arithmetic as the
+gap rule above.** `maxExtrapolationMs` is a DURATION past the terminal keyframe,
+never an absolute time — three's GPU glide texture stores `t0`/`invDt`/`frameMax`
+as f32 relative to the scene `timeOrigin`, and an absolute epoch millisecond does
+not survive 52 bits into 24. The bound is `maxExtrapolationMs <= timeWindow / 2`,
+for the same reason `maxInterpolationGap` is: the loader keeps tiles within
+±`timeWindow`/2 of the playhead, so a prediction reaching further than that
+outlives the data that justified it — the entity keeps flying after its own tile
+has been evicted, and there is nothing left to correct it when it is wrong.
+`'linear'` ignores the field entirely. When a prediction turns out to be
+impossible (no `speed` column, no adjacent pair to difference,
+`deriveVelocity: false`) the track culls at its ordinary bound rather than
+freezing in place for the whole window.
+
+**Course convention is declared, never inferred.** Both spellings of "heading"
+exist in this repo under that one name: AIS `cog` and aircraft `heading` are
+COMPASS (0 = north, clockwise), while `animated-bounding-box-layer.ts` builds its
+velocity arrow as `vx = speed·cos(heading)` east / `vy = speed·sin(heading)`
+north, which is MATH (0 = east, counter-clockwise). Guessing produces a 90°
+rotation _and a mirror_, which looks like plausible traffic going the wrong way
+rather than like a bug. `geo/spherical.ts` is compass-only internally;
+`courseConvention` + `courseUnit` convert at the boundary, and anything the
+kernel writes back onto `Sample.heading` goes through `fromCompassDeg` into the
+caller's own unit and convention — so `getAngle`, `getOrientation` and the
+velocity arrow are untouched. Speed is the same story for the same reason: no
+unit travels with the archive, AIS `sog` is knots, so `speedUnit` is declared and
+normalised to m/s once.
+
+**`wrapLongitude` defaults per mode, deliberately not uniformly.** A bracket
+straddling the antimeridian (179.9 → −179.9, two tenths of a degree apart on the
+ground) currently lerps the entity 359.8° the WRONG way round the planet. That is
+a real bug and it is SHIPPED, in four backends. `'linear'` therefore keeps it
+(`wrapLongitude: false`) and `motion-antimeridian.test.ts` pins the broken sweep
+explicitly, so changing the default later is a visible test edit rather than a
+silent behaviour change under every existing layer. `'velocity'` defaults to
+`true` because the mode is new and starts correct; `'great-circle'` resolves to
+`true` though the flag is moot — slerping direction vectors is seam-correct by
+construction.
 
 ### 2.16 D10 — maplibre elevation reconciliation (BREAKING)
 
@@ -668,28 +722,32 @@ cesium's suite does not. **Port gate (c) to the cesium and three suites, then fi
 the three cesium entries.** (three's own fallbacks are all currently valid, so it
 would pass today; the gate is there to keep it that way.)
 
-### 4.2 KNOWN FALSE CLAIM — maplibre `globe: true` silently no-ops on the deployed site
+### 4.2 maplibre `globe: true` — deployment half fixed, structural half open
 
 `packages/maplibre/src/backend-descriptor.ts` declares `capabilities.globe: true`.
 That claim is true **only on a maplibre-gl v5+ host**, because globe rides the
 injected projection prelude (D3), which v5 introduced. The declaration carries no
 host qualifier.
 
-**The showcase pins `maplibre-gl: ^3.6.0` and resolves 3.6.2.** On v3 there is no
-`setProjection`, and `MaplibreRenderer.tsx` calls it optionally
-(`(map as any).setProjection?.({ type: projection })`) inside a try/catch, so the
-globe toggle **silently does nothing** on the deployed site. The descriptor says
-globe; the deployment cannot do globe; nothing fails.
+**What the defect was.** The showcase pinned `maplibre-gl: ^3.6.0` and resolved
+3.6.2. On v3 there is no `setProjection`, and `MaplibreRenderer.tsx` calls it
+optionally (`(map as any).setProjection?.({ type: projection })`) inside a
+try/catch — so the globe toggle **silently did nothing** on the deployed site. The
+descriptor said globe; the deployment could not do globe; nothing failed. It is the
+cleanest example in this repo of a capability that is true in the package and false
+in the product.
 
-**Fix:** bump the showcase to maplibre-gl **v5** — that is where globe landed and
-where the prelude path the backend already implements is exercised. Do **not** jump
-to v6: it shipped 2026-07-22, is ESM-only and WebGL2-only, and adopting it here
-bundles a packaging migration into a defect fix. The layer code is already v6-ready
-via runtime shape detection, so v6 can follow once the ecosystem settles.
-_(`packages/maplibre` declares peer `^3 || ^4 || ^5 || ^6` and devDeps `^4.7.0`;
-only the showcase pin is wrong.)_
+**Fixed on the deployment side (verified 2026-07-26):** the showcase now pins
+`maplibre-gl: ^5.24.0` and resolves 5.24.0, so the prelude path the backend already
+implements is exercised for the first time — and is therefore also unverified in a
+browser (L2 in the [roadmap README](./README.md)). v6 was deliberately **not**
+taken: it shipped 2026-07-22, is ESM-only and WebGL2-only, and adopting it here
+would bundle a packaging migration into a defect fix. _(Note a live inconsistency:
+`packages/maplibre` declares peer `^3 || ^4 || ^5` — no `^6` — while the layer code
+is v6-ready via runtime shape detection. Widen the peer in the same pass that first
+tests against v6, not before.)_
 
-**Structural fix, same defect:** capability resolution is not host-aware. The
+**Structural fix, still open:** capability resolution is not host-aware. The
 `hostApiRange` idea was counted out "until maplibre v5/globe is actually
 attempted" — that trigger has fired and `hostApiRange` still does not exist in the
 tree. A boolean `globe` cannot express "true on v5+": either the descriptor gains a
@@ -731,7 +789,7 @@ the same change.)_
   and `DemoPageImpl.tsx` ships the `deck | maplibre | three` selector. _(Earlier
   drafts listed the selector itself as unbuilt — stale.)_ What remains is the
   maplibre camera-sync basemap under the transparent three canvas.
-- **3D-tiles integration:** `createStt3DTiles` + `createSttGlobeControls` are built
+- **3D-tiles integration:** `createSTT3DTiles` + `createSTTGlobeControls` are built
   and tested in isolation and are still zero-consumer exports — §2.12's moral
   applies.
 - Folded into that wiring, not standalone tasks: **deck-exact zoom→distance pixel
@@ -750,21 +808,25 @@ the same change.)_
 
 ### 5.3 Render-side verify tail
 
-- **Polygon tile-seam overdraw — half-shipped, and a docstring now lies.** The
-  ratified design was two-phase, sequenced render-first. **Phase 1's decode half
-  shipped:** `extractGeometry` in `packages/core/src/tile.ts` surfaces per-ring
+- **Polygon tile-seam overdraw — Phase 1 complete, Phase 2 unstarted.** The
+  ratified design was two-phase, sequenced render-first. **Phase 1's decode half**
+  shipped first: `extractGeometry` in `packages/core/src/tile.ts` surfaces per-ring
   sub-indices as `BinaryFeatures.ringIndices` (registered in
-  `tile-transferables.ts` for zero-copy transfer). **Phase 1's render half did
-  not:** `AnimatedPolygonLayer.buildOutlineSublayer` still feeds the outline
-  `PathLayer` per-**feature** `startIndices` with `_pathType:'loop'`, so a holed or
-  multi-ring polygon still draws the spurious bridge segment and leaves holes
-  un-outlined — and its docstring still asserts the tile format "does not currently
-  carry" per-ring sub-indices, which is now false. Closing this is render-side on
-  already-built archives, zero rebuild. Closed-ring gotcha: drop the trailing
-  duplicate vertex before `_pathType:'loop'`. **Phase 2** (an optional, additive
-  per-vertex clip-edge-flag column from the Sutherland–Hodgman clipper, gated by a
-  new `stt:has_clip_edges` metadata key, absent on seam-free tiles so they stay
-  byte-identical) is unstarted and needs a rebuild. Cross-tile
+  `tile-transferables.ts` for zero-copy transfer). **Phase 1's render half has now
+  landed too:** `AnimatedPolygonLayer.buildOutlineSublayer` draws one path per
+  **ring** off `ringIndices`, falling back to per-feature `startIndices` only on
+  pre-column archives — so holed and multi-ring polygons stop drawing the spurious
+  bridge segment and holes get outlined. Zero rebuild; it read already-built
+  archives. Closed-ring gotcha, still load-bearing: drop the trailing duplicate
+  vertex before `_pathType:'loop'`. The extrusion side shipped separately as
+  `seamWalls` masking (`computePolygonWallMask`), where `eps = half the coordinate
+quantization step` is the load-bearing constant. Both are **pixel changes nobody
+  has looked at** — L2 in the [roadmap README](./README.md). **Phase 2** (an
+  optional, additive per-vertex clip-edge-flag column from the Sutherland–Hodgman
+  clipper, gated by a new `stt:has_clip_edges` metadata key, absent on seam-free
+  tiles so they stay byte-identical) is unstarted — verified absent from the tree
+  2026-07-26 — and needs a rebuild, so it should ride a byte-break batch rather
+  than churn addresses on its own. maplibre polygons remain unmasked. Cross-tile
   `SolidPolygonLayer` consolidation was **explicitly REJECTED**: clip is
   irreversible, tiles fetch and evict independently, and fills already abut —
   matching mapbox stencil / tippecanoe keep-clipped / deck MVTLayer never-reunion.
@@ -807,7 +869,7 @@ were already wired.
 | Item                                                                                                                                                                                               | Trigger to revive                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RenderRegistry.mount` app-facing seam                                                                                                                                                             | A runtime backend-toggle product need appears (the direct-consumer path works today).                                                                                                                                                                                                                                                                                                                                                                                   |
-| `hostApiRange` on descriptors                                                                                                                                                                      | **TRIGGER FIRED, NOT DONE** — v5/globe was attempted and shipped. See §4.2; this is now a defect, not a backlog item.                                                                                                                                                                                                                                                                                                                                                   |
+| `hostApiRange` on descriptors                                                                                                                                                                      | **TRIGGER FIRED, NOT DONE** — v5/globe shipped and the showcase now runs v5; still absent from the tree (2026-07-26). Tracked as K4 in the [roadmap README](./README.md); see §4.2.                                                                                                                                                                                                                                                                                     |
 | Bundle-size guard test (per-subpath `exports` + `sideEffects:false` proof)                                                                                                                         | The npm-publish packaging pass; resolve lockstep-vs-separate-package first.                                                                                                                                                                                                                                                                                                                                                                                             |
 | Cross-package regenerate-and-diff meta-test for `backend-capabilities.md`                                                                                                                          | Superseded by the CI `--check` gate (§4). Only revive if a test home that may import all four backends is wanted for other reasons.                                                                                                                                                                                                                                                                                                                                     |
 | Constructor-level capability assertions (`degrade()` only fires via the optional registry)                                                                                                         | Fold into whichever of registry/publish lands first.                                                                                                                                                                                                                                                                                                                                                                                                                    |

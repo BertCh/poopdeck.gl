@@ -11,7 +11,7 @@
  *
  * This pins that forward in the deck.gl `SpatioTemporalLayer`: it drives the
  * real `_initArchiveAndTileset`, captures the `getTileDataBatch` closure the
- * layer wires into the tileset (both `STTArchive` and `SpatiotemporalTileset`
+ * layer wires into the tileset (both `STTArchive` and `SpatioTemporalTileset`
  * are mocked to capture the constructor options), then invokes that closure
  * with play-head hooks and asserts the archive receives them.
  */
@@ -45,7 +45,7 @@ vi.mock('@poopdeck.gl/core', async () => {
     }
   }
 
-  class MockSpatiotemporalTileset {
+  class MockSpatioTemporalTileset {
     options: any;
     constructor(options: any) {
       this.options = options;
@@ -59,7 +59,7 @@ vi.mock('@poopdeck.gl/core', async () => {
   return {
     ...actual,
     STTArchive: MockSTTArchive,
-    SpatiotemporalTileset: MockSpatiotemporalTileset,
+    SpatioTemporalTileset: MockSpatioTemporalTileset,
   };
 });
 

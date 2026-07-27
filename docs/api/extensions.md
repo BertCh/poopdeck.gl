@@ -38,6 +38,20 @@ See `packages/layers/test/extensions-passthrough.test.ts` and
 `packages/layers/test/collision-filter-extension.test.ts` for the pinned
 contract.
 
+### The one family that does not forward extensions
+
+The flowmap composites — [`FlowmapLayer`](./flowmap-layer.md) and
+[`BundledFlowmapLayer`](./bundled-flowmap-layer.md) — render through
+[`FlowLinesLayer`](./flow-lines-layer.md), a fully custom-`Model` layer that
+calls luma's `picking` module functions directly instead of going through deck's
+globally-registered `DECKGL_FILTER_*` shader hooks (those hooks live on a
+process-wide `ShaderAssembler` singleton that a bundler can duplicate, leaving
+them undefined and the shader uncompilable).
+
+Extensions inject into exactly those hooks, so they have **no effect** on that
+primitive. Rather than forward an inert list, those composites **strip a
+forwarded `extensions` prop and warn once**.
+
 ## Works as-is (pass-through)
 
 Add these to the top-level `extensions` prop of any STT layer. No import from
@@ -87,10 +101,10 @@ accessor by running JS over binary features. Each is adapted to source its
 per-feature value from a **baked tile column** via the accessor-alias
 mechanism — the same shape as the internal `TimeFilterExtension`.
 
-| Extension                    | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ---------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **STTDataFilterExtension**   | port-adapted (P1, flagship) | Register a `filterValue` attribute from a baked column via accessor-alias (exactly like `TimeFilterExtension`, its hand-built descendant); keep `filterRange` / `filterSoftRange` / `filterEnabled` as constant uniforms. Passing it raw does **not** work — deck would run a JS accessor over binary features. Unlocks "filter vessels by speed", "filter by any baked property". `onFilteredItemsChange` / `countItems` are n/a (no CPU rows). See [DataFilterExtension](./data-filter-extension.md) for the full option/prop surface.                                                                                                                                                                                                                                                |
-| **CollisionFilterExtension** | adapted (P2)                | The **constant** case (`collisionEnabled` / `collisionGroup` / `collisionTestProps`, plus a constant `collisionPriority` that ranks a whole layer) works today via pass-through — great for de-cluttering `AnimatedIconLayer` / text labels. The `collisionFilterProps()` helper in `extensions/collision-filter-extension.ts` makes that one import and adds range-clamping. **Data-driven** priority (`collisionPriorityProperty`, a per-feature baked column) is **deferred**: it needs a `collisionPriorities` instanced attribute emitted by the layers (a layer-level change), so passing it warns once and falls back to the constant priority — we ship the honest helper rather than force a broken accessor. See [CollisionFilterExtension](./collision-filter-extension.md). |
+| Extension                    | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **STTDataFilterExtension**   | port-adapted (P1, flagship) | Register a `filterValue` attribute from a baked column via accessor-alias (exactly like `TimeFilterExtension`, its hand-built descendant); keep `filterRange` / `filterSoftRange` / `filterEnabled` as constant uniforms. Passing it raw does **not** work — deck would run a JS accessor over binary features. Unlocks "filter vessels by speed", "filter by any baked property". ⚠️ **`filterRange` defaults to `null` (idle) here, where upstream defaults to `[-1, 1]` (active)** — pass `[-1, 1]` explicitly to reproduce upstream. The four upstream construction options with no binary-tile meaning (`fp64`, `countItems`, `onFilteredItemsChange`, `categorySize`) are accepted so porting code type-checks, but each warns once and is dropped. See [STTDataFilterExtension](./data-filter-extension.md) for the full option/prop surface. |
+| **CollisionFilterExtension** | adapted (P2)                | The **constant** case (`collisionEnabled` / `collisionGroup` / `collisionTestProps`, plus a constant `collisionPriority` that ranks a whole layer) works today via pass-through — great for de-cluttering `AnimatedIconLayer` / text labels. The `collisionFilterProps()` helper in `extensions/collision-filter-extension.ts` makes that one import and adds range-clamping. **Data-driven** priority (`collisionPriorityProperty`, a per-feature baked column) is **deferred**: it needs a `collisionPriorities` instanced attribute emitted by the layers (a layer-level change), so passing it warns once and falls back to the constant priority — we ship the honest helper rather than force a broken accessor. See [CollisionFilterExtension](./collision-filter-extension.md).                                                              |
 
 ```ts
 import { AnimatedIconLayer } from '@poopdeck.gl/layers';
@@ -120,4 +134,9 @@ new AnimatedIconLayer({
   hand-built descendant of `STTDataFilterExtension` that filters/fades by time.
 - [`CategoryColorExtension`](./category-color-extension.md) — GPU categorical
   color, another baked-column extension.
+- [`ChevronFlowExtension`](./chevron-flow-extension.md) — poopdeck-native
+  directional chevrons for `PathLayer`-family hosts. It inspects the host's
+  capabilities and degrades any option the host cannot support, with a one-time
+  warning, rather than emitting an undeclared GLSL identifier.
+- [`SplatExtension`](./splat-extension.md) — soft-gaussian point splatting.
 - Parity decision record: `docs/roadmap/renderer-architecture.md`, §3 "Tier 3 — extensions".

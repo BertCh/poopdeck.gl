@@ -2,7 +2,14 @@
 
 The `BundledFlowmapLayer` is [`FlowmapLayer`](./flowmap-layer.md) with **GPU kernel-density edge bundling**. Instead of drawing one straight tapered arrow per origin→destination pair, it relaxes geometrically-close flows into smooth **bundled rivers** — so a dense overview reads as flowing channels instead of a hairball of crossing arrows. The bundling runs **entirely on the GPU**, in the same ping-pong-float-texture style [cosmos.gl](https://github.com/cosmosgl/graph) uses for its force graph, and the bundled geometry never leaves the GPU.
 
-It's a **drop-in superset** of `FlowmapLayer`: it consumes the same OD `vertexValueMatrix` tiles (`stt-generate bixi`), honors all the same `flow*` styling props, and keeps the same node-circle overlay. On a device that can't additively blend into a float texture, or for a tile with more edges than `maxBundledEdges`, it transparently falls back to `FlowmapLayer`'s straight arrows.
+It's a **drop-in superset** of `FlowmapLayer`: it consumes the same OD `vertexValueMatrix` tiles (`stt-generate bixi`), honors all the same `flow*` styling props (including the [`flowProperty`](./flowmap-layer.md#static-archives-without-a-bucket-matrix) static fallback for archives with no bucket matrix), and keeps the same node-circle overlay. On a device that can't additively blend into a float texture, or when the merged edge count exceeds `maxBundledEdges` **or the device's `maxTextureDimension2D`**, it transparently falls back to `FlowmapLayer`'s straight arrows — never a throw, because this all runs inside deck's synchronous render callback.
+
+**One bundle for the whole visible set, not one per tile.** Bundling each tile
+independently produces bundles that break at tile boundaries (each tile relaxes
+on its own); bundling the union keeps the rivers continuous the way flowmap.gl —
+which does not tile — does. For this to be correct the OD tiles must be built
+with **`--no-clip`**, so each corridor keeps its true station endpoints instead
+of being cut at tile edges.
 
 ## How it works
 
@@ -16,7 +23,19 @@ Each edge is resampled to `subdivisionPoints` control points, then **15 annealed
 4. **Smooth** — one 1D Laplacian pass along each edge. _This is what makes the bundles smooth_ — advection alone is jagged.
 5. **Anneal** — shrink the kernel bandwidth and repeat, progressively tightening the bundles.
 
-The bundle is a **stable spatial skeleton**: computed once per tile from the fixed edge set (not weighted by the playhead, so the rivers don't writhe as you scrub) and kept resident on the GPU. As the time slider moves, only each ribbon's **width** animates — sampled on the GPU from a per-tile `vertexValueMatrix` texture at the live playhead, so the edges need zero per-frame CPU work. Direction reads from a source→target **color gradient** along each river. Node circles keep `FlowmapLayer`'s cheap CPU aggregation.
+The bundle is a **stable spatial skeleton**: computed from the fixed edge set of the whole visible tile set (not weighted by the playhead, so the rivers don't writhe as you scrub) and kept resident on the GPU. As the time slider moves, only each ribbon's **width** animates — sampled on the GPU from a _merged_ `vertexValueMatrix` texture at the live playhead, so the edges need zero per-frame CPU work. Direction reads from a source→target **color gradient** along each river. Node circles keep `FlowmapLayer`'s cheap CPU aggregation.
+
+### When the bundle is rebuilt (and why it is debounced)
+
+The bundle is rebuilt only when the visible tile **set** changes (pan / zoom) —
+it is stable during playback, where the flowmap's tiles span the whole time range
+and never re-fetch. The **first** bundle for a view is built inline, so the
+opening frame has rivers; every later set change is **debounced ~150 ms off the
+render path**, so a pan that streams tiles in one at a time doesn't restart the
+relaxation on each arrival. The previous, converged bundle keeps drawing until
+the view settles. (Only a change of _signature_ re-arms the timer — a re-render
+at the same pending signature must not postpone it, or a playhead tick every
+~100 ms would defer the rebuild forever.)
 
 Because the control points are seeded from each feature's **full polyline**, a 2-vertex OD pair bundles as a straight edge while an N-vertex routed trip / trajectory keeps its curve.
 
@@ -62,7 +81,24 @@ Inherits everything from [`FlowmapLayer`](./flowmap-layer.md) (and therefore [`S
 | `kernelRadius`       | `number` | `0.05`  | Initial kernel bandwidth as a fraction of the tile's extent — the headline knob. Larger bundles flows together more aggressively (the CUBu literature default is 5%). |
 | `bundlingIterations` | `number` | `15`    | Number of density-advection iterations. More = tighter bundles (10–15 converges).                                                                                     |
 | `smoothingStrength`  | `number` | `0.5`   | Per-iteration Laplacian smoothing strength in `[0,1]`. Higher = smoother (but over-smoothing washes out structure).                                                   |
-| `maxBundledEdges`    | `number` | `4000`  | Above this many edges per tile, skip bundling and render straight arrows (keeps the per-frame density splat bounded).                                                 |
+| `maxBundledEdges`    | `number` | `4000`  | Above this many **merged** edges, skip bundling and render straight arrows (keeps the per-frame density splat bounded). See the two ceilings below.                   |
+
+### Two independent edge ceilings
+
+Both are checked before anything is allocated (the merged control-point buffer
+alone is `E · P · dims` f64 — ~23 MB at 30k edges):
+
+- **`maxBundledEdges`** bounds the per-frame density splat. It does **not** apply
+  on the `preBundled` path, which has no splat.
+- **the device's `maxTextureDimension2D`** is a hard limit — both bundle textures
+  are `edgeCount` rows tall — and applies to **every** path, baked included.
+  Exceeding it would make `createTexture` throw from inside `renderLayers`,
+  taking down the whole layer tree, so it can never be opt-out.
+
+Crossing either cap warns once (naming which one bound) and renders straight
+arrows. When the hardware ceiling is the binding one, raising `maxBundledEdges`
+will not help — reduce the visible edge count instead (zoom in, or build a
+coarser summary tier).
 
 ## Baked bundling (`preBundled`)
 
@@ -86,7 +122,10 @@ In this mode the build relaxes each zoom's clustered hub-pair corridors with a
 per-tile, which would seam) and stores the rivers as ordinary multi-vertex
 polylines. The layer skips the GPU bundler entirely: it uploads the baked control
 points once (`StaticBundle`) and renders them. `kernelRadius`,
-`bundlingIterations`, `smoothingStrength`, and `maxBundledEdges` are ignored.
+`bundlingIterations` and `smoothingStrength` are ignored, and so is
+`maxBundledEdges` (a baked bundle has no splat cost) — but **the device
+texture ceiling still applies**: a baked bundle has exactly the same
+`pointCount × edgeCount` texture footprint.
 
 |                | Live (default)                                         | Baked (`preBundled`)                                                                          |
 | -------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
@@ -104,7 +143,17 @@ origin/destination), so the demo still renders.
 
 ## When to use it vs `FlowmapLayer`
 
-Reach for `BundledFlowmapLayer` at **overview zooms with many crossing corridors**, where straight arrows pile into visual clutter — bundling reveals the dominant flow structure. At deep zooms (few corridors per tile) the straight-arrow `FlowmapLayer` is clearer and cheaper; this layer falls back to exactly that above `maxBundledEdges`.
+Reach for `BundledFlowmapLayer` at **overview zooms with many crossing corridors**, where straight arrows pile into visual clutter — bundling reveals the dominant flow structure. At deep zooms (few corridors per tile) the straight-arrow `FlowmapLayer` is clearer and cheaper; this layer falls back to exactly that above either edge cap.
+
+## Picking and extensions
+
+- **Picking is disabled on the merged bundle** — one river is many corridors, so
+  a hit has no single feature to report. The node overlay carries the dataset's
+  hover affordance.
+- **A forwarded `extensions` list is stripped, with a one-time warning** naming
+  the extensions dropped. Both the arrow and the ribbon sublayers use custom
+  shaders with no `DECKGL_FILTER_*` hooks, so extension injections never run —
+  see [deck.gl extensions on STT layers](./extensions.md#the-one-family-that-does-not-forward-extensions).
 
 ## Device support
 

@@ -55,18 +55,22 @@ Enforced by the server/operator, never by instructing the model.
   `--allow-cli` exposes browser-driven arbitrary file read/write and subprocess
   spawn — trusted networks only.
 
-### OPEN DEFECT — the shipped plugin config disarms the above
+### The shipped-plugin defect, and why the fix had two halves (closed)
 
-`poopdeck-ai/.mcp.json` passes **`--allow-cli`** and points `STT_DATA_ROOT` at
-`examples/showcase/public/data`, launching `packages/mcp/dist/bin.js` directly.
-**Both of those paths are gitignored** (`.gitignore:9` `dist/`, `.gitignore:83`
-`data/`), so a marketplace installer gets neither the built server nor the data. It
-is inert today **only because the paths are broken.**
+`poopdeck-ai/.mcp.json` used to pass **`--allow-cli`** and point `STT_DATA_ROOT`
+at `examples/showcase/public/data`, launching `packages/mcp/dist/bin.js`
+directly. **Both of those paths are gitignored** (`dist/`, `data/`), so a
+marketplace installer got neither the built server nor the data — it was inert
+only because the paths were broken.
 
-**The fix is to drop `--allow-cli` AND fix the path.** Repairing the path alone —
-e.g. swapping in `npx -y @poopdeck.gl/mcp`, which now works — would ship a
-marketplace plugin that **enables arbitrary subprocess execution by default for
-every installer**, which is exactly the posture `config.ts` defaults OFF.
+Worth keeping because the trap is re-enterable: **repairing the path alone would
+have been worse than the bug.** Swapping in `npx -y @poopdeck.gl/mcp` while
+leaving `--allow-cli` would ship a marketplace plugin that enables arbitrary
+subprocess execution by default for every installer — exactly the posture
+`config.ts` defaults OFF. Both halves shipped: the plugin now launches
+`npx -y @poopdeck.gl/mcp` with no flags. _(The repo-root `.mcp.json` still passes
+`--allow-cli` against a local data root; that one is the maintainer's dev config,
+not a distributed artifact.)_
 
 ## As built
 
@@ -119,7 +123,9 @@ every installer**, which is exactly the posture `config.ts` defaults OFF.
 
 ## Open
 
-- Fix `poopdeck-ai/.mcp.json` (see the open defect above) — highest priority here.
+Carried as **K8** in the [roadmap README](./README.md) — none of it blocks a
+release, and none of it has a forcing consumer yet.
+
 - Remote hosting: OAuth 2.1 Resource Server (RFC 8707 audience validation, no token
   passthrough) in front of the HTTP transport. Not started; the transport ships.
 - Migration to the `2026-07-28` MCP revision (stateless, MCP Apps, Tasks for async

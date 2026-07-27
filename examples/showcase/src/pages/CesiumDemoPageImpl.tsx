@@ -61,6 +61,11 @@ export default function CesiumDemoPage() {
           targetPlaybackSeconds={dataset.targetPlaybackSeconds ?? 30}
           autoSpeed={playback.autoSpeed}
           onAutoSpeedSelect={playback.onAutoSpeedSelect}
+          ended={playback.ended}
+          loop={playback.loop}
+          onLoopToggle={playback.onLoopToggle}
+          // This page mounts usePlaybackHotkeys, so the bar may advertise keys.
+          keyboardShortcuts
         />
         {/* Hover preview is deck-only (needs the deck camera); omitted here. */}
       </div>

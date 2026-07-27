@@ -47,7 +47,12 @@ const CosmosWorlds: React.FC = () => {
   const reducedMotion = useReducedMotion();
   const isMobile = useIsMobile();
 
-  const dataset = useMemo(() => getDatasetById(DATASET_ID), []);
+  // The gallery mounts exactly one `worlds` bundle; anything else under that id
+  // is not this page's dataset.
+  const dataset = useMemo(() => {
+    const d = getDatasetById(DATASET_ID);
+    return d?.type === 'worlds' ? d : undefined;
+  }, []);
   const [worlds, setWorlds] = useState<WorldsIndex | null>(null);
   const [loadError, setLoadError] = useState(false);
 

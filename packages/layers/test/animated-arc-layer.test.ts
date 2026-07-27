@@ -154,9 +154,15 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.instanceEndTime.size).toBe(1);
   });
 
-  it('sets positionFormat:"XY" so 2D endpoints are not misread as XYZ', () => {
+  it('carries 2D endpoints via attribute `size`, NOT a positionFormat override', () => {
+    // ArcLayer has no tesselator and never reads `positionFormat` (only the
+    // path / polygon families do), so the layer must not pass one — what makes
+    // a 2D tile buffer read correctly is `size: dims` on the endpoint
+    // attributes. Passing 'XY' shadowed the inherited value for nothing.
     const built = buildSublayerForTile(odTile(4));
-    expect(built.props.positionFormat).toBe('XY');
+    expect(built.props.positionFormat).toBeUndefined();
+    expect(built.props.data.attributes.getSourcePosition.size).toBe(2);
+    expect(built.props.data.attributes.getTargetPosition.size).toBe(2);
   });
 
   it('forwards the greatCircle prop to ArcLayer', () => {
@@ -260,6 +266,103 @@ describe('AnimatedArcLayer per-tile sublayer architecture (v3)', () => {
     });
     expect(built.props.getSourceColor).toEqual([9, 9, 9, 255]);
   });
+
+  // ── Per-feature arc height / tilt (review fix 7) ───────────────────────────
+  //
+  // Upstream registers instanceHeights / instanceTilts as ordinary per-instance
+  // accessors (arc-layer.ts), so a baked numeric column rides them zero-copy
+  // exactly like getWidth. Constants-only meant overlapping flows on the same
+  // OD pair could not be separated — the documented purpose of getTilt.
+
+  it('binds per-feature arcHeight / arcTilt columns zero-copy', () => {
+    const tile = odTile(3);
+    const nums = tile.layers[0].features.numericProps;
+    nums['h'] = new Float32Array([0.2, 0.6, 1.4]);
+    nums['tilt'] = new Float32Array([-30, 0, 30]);
+    const built = buildSublayerForTile(tile, {
+      arcHeight: 'h',
+      arcTilt: 'tilt',
+    });
+    const attrs = built.props.data.attributes;
+
+    expect(attrs.getHeight.value).toBe(nums['h']);
+    expect(attrs.getHeight.size).toBe(1);
+    expect(attrs.getTilt.value).toBe(nums['tilt']);
+    expect(attrs.getTilt.size).toBe(1);
+  });
+
+  it('accepts the getHeight / getTilt aliases for the column arm too', () => {
+    const tile = odTile(3);
+    tile.layers[0].features.numericProps['h'] = new Float32Array([1, 2, 3]);
+    const built = buildSublayerForTile(tile, {
+      arcHeight: 9, // legacy constant loses to the alias
+      getHeight: 'h',
+      getTilt: 'missing', // absent column → constant fallback, no attribute
+    });
+    expect(built.props.data.attributes.getHeight.value).toBe(
+      tile.layers[0].features.numericProps['h'],
+    );
+    expect(built.props.data.attributes.getTilt).toBeUndefined();
+    // Constant fallbacks for tiles lacking the column: the layer defaults, not
+    // the column-name string.
+    expect(built.props.getHeight).toBe(1);
+    expect(built.props.getTilt).toBe(0);
+  });
+
+  it('keeps passing constants when arcHeight / arcTilt are numbers', () => {
+    const built = buildSublayerForTile(odTile(3), {
+      arcHeight: 0.5,
+      arcTilt: 30,
+    });
+    expect(built.props.getHeight).toBe(0.5);
+    expect(built.props.getTilt).toBe(30);
+    expect(built.props.data.attributes.getHeight).toBeUndefined();
+    expect(built.props.data.attributes.getTilt).toBeUndefined();
+  });
+
+  it('re-prepares tiles when the arcHeight COLUMN name changes', () => {
+    const layer = makeLayer({ arcHeight: 'a' });
+    const tile = odTile(3);
+    tile.layers[0].features.numericProps['a'] = new Float32Array([1, 2, 3]);
+    tile.layers[0].features.numericProps['b'] = new Float32Array([4, 5, 6]);
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    layer.props.arcHeight = 'b';
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first);
+    expect(second.data.attributes.getHeight.value).toBe(
+      tile.layers[0].features.numericProps['b'],
+    );
+  });
+
+  // ── Geometry-kind guard (review fix 11) ────────────────────────────────────
+
+  it('skips (and warns once about) a non-LineString tile instead of rendering nothing silently', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = odTile(3);
+    tile.layers[0].features.geometryType = 0 as any; // Point
+    const layer = makeLayer();
+    expect((layer as any).prepareTile(tile, tile.layers[0])).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/Point.*reads LineString/);
+    warn.mockRestore();
+  });
+
+  // ── Empty tile set releases derived buffers (review fix 12) ────────────────
+
+  it('clears the prepared/sublayer caches when the tile set empties', () => {
+    const layer = makeLayer();
+    layer.state = { tiles: [odTile(3)] };
+    expect((layer as any).renderLayers().length).toBe(1);
+    expect(layer.preparedTileCache.size).toBe(1);
+    expect(layer.sublayerCache.size).toBe(1);
+
+    // Scrubbing to an empty range must not pin the derived endpoint buffers —
+    // nor the references they hold into already-evicted tiles.
+    layer.state = { tiles: [] };
+    expect((layer as any).renderLayers()).toEqual([]);
+    expect(layer.preparedTileCache.size).toBe(0);
+    expect(layer.sublayerCache.size).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -320,9 +423,11 @@ describe('AnimatedLineLayer per-tile sublayer architecture (v3)', () => {
     expect(attrs.instanceEndTime.value).toBe(tile.layers[0].features.endTimes);
   });
 
-  it('sets positionFormat:"XY" for 2D endpoints', () => {
+  it('carries 2D endpoints via attribute `size` (LineLayer ignores positionFormat too)', () => {
     const built = buildSublayerForTile(odTile(3));
-    expect(built.props.positionFormat).toBe('XY');
+    expect(built.props.positionFormat).toBeUndefined();
+    expect(built.props.data.attributes.getSourcePosition.size).toBe(2);
+    expect(built.props.data.attributes.getTargetPosition.size).toBe(2);
   });
 
   it('passes a constant color when no category column is named', () => {

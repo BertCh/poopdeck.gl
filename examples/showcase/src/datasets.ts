@@ -5,7 +5,13 @@
  * calculateAnimationSpeed in types.ts.
  */
 
-import { Dataset, ColorRGBA, DatasetLegend } from './types';
+import {
+  AvDataset,
+  ColorRGBA,
+  Dataset,
+  DatasetField,
+  DatasetLegend,
+} from './types';
 
 /**
  * Chronological color ramp for OSM "edit age strata": older node creations read
@@ -178,6 +184,62 @@ function resolveDataUrl(url: string): string {
   return DATA_BASE_URL && url.startsWith('/data/')
     ? `${DATA_BASE_URL}${url}`
     : url;
+}
+
+/**
+ * Every dataset field that names an OVERLAY archive manifest or sidecar JSON
+ * beside the primary `url` — the radar/weather/storm4d context layers, the
+ * rain→flood rivers, the AV scene streams, and the `/worlds` scenario index. A
+ * field missing from this list keeps its authored `/data/…` path while `url`
+ * moves to the R2 origin, so the demo loads its primary archive and 404s every
+ * overlay.
+ *
+ * `DatasetField` makes the list checkable: renaming a field in `types.ts`
+ * breaks this array rather than silently dropping it from the rewrite.
+ */
+const SIDECAR_URL_FIELDS = [
+  'radarCellsUrl',
+  'radarTracksUrl',
+  'riversUrl',
+  'windUrl',
+  'lightningUrl',
+  'frontsUrl',
+  'frontsPipsUrl',
+  'coupletUrl',
+  'warningsUrl',
+  'reportsUrl',
+  'stationsUrl',
+  'outagesUrl',
+  'cloudTopUrl',
+  'wind3dUrl',
+  'soundingUrl',
+  'avSceneUrl',
+  'avLidarUrl',
+  'avStaticUrl',
+  'avDynamicUrl',
+  'avEgoUrl',
+  'avObjectsUrl',
+  'avTracksUrl',
+  'avTelemetryUrl',
+  'avCamerasUrl',
+  'avMapPolyUrl',
+  'avMapLineUrl',
+  'avMapPointsUrl',
+  'worldsUrl',
+] as const satisfies readonly DatasetField[];
+
+/**
+ * Rewrite `url` plus every {@link SIDECAR_URL_FIELDS} entry the dataset carries
+ * through {@link resolveDataUrl}, leaving the rest of the entry untouched.
+ */
+function resolveDatasetUrls<D extends Dataset>(d: D): D {
+  const resolved: D = { ...d, url: resolveDataUrl(d.url) };
+  const fields: Partial<Record<DatasetField, unknown>> = resolved;
+  for (const field of SIDECAR_URL_FIELDS) {
+    const value = fields[field];
+    if (typeof value === 'string') fields[field] = resolveDataUrl(value);
+  }
+  return resolved;
 }
 
 // Shared cockpit legend for the semantic-LIDAR scenes (hex of AV_LIDARSEG_COLORS;
@@ -2557,7 +2619,15 @@ const rawDatasets: Dataset[] = [
       initialFactor: 1,
       nowPlane: true,
       tileLattice: true,
-      maxPitch: 85,
+      // 70, not 85: past pitch 71.57° (deck's default `altitude: 1.5`) the
+      // top screen ray points ABOVE the horizon and `unproject` returns a
+      // ground point behind the camera, which inverts the viewport lon/lat
+      // box the tile loader selects against. See
+      // docs/roadmap/tile-loading-3d-2026-07.md §1/§4 — the chassis now
+      // repairs that box, and this cap is the belt-and-braces half: it keeps
+      // the camera out of the band entirely while still reading as a steep
+      // look down the time axis. Do not raise it back without reading §4.
+      maxPitch: 70,
     },
     legend: {
       title: 'Space-Time Cube (height = time)',
@@ -3195,13 +3265,17 @@ const rawDatasets: Dataset[] = [
     targetPlaybackSeconds: 120,
     // §9.0 camera: pitched view centered on the storm path over Greenfield.
     // maxPitch rides the view state (see types.ts initialViewState.maxPitch).
+    // Capped at 70 rather than 85: past 71.57° the above-horizon unproject
+    // inverts the viewport box the tile loader selects against
+    // (docs/roadmap/tile-loading-3d-2026-07.md §1/§4). The shipped pitch 55 is
+    // deliberate art direction and is unaffected — only the ceiling moves.
     initialViewState: {
       longitude: -94.46,
       latitude: 41.4,
       zoom: 8,
       pitch: 55,
       bearing: 25,
-      maxPitch: 85,
+      maxPitch: 70,
     },
     // Volume default render mode = reflectivity; the DemoViewer segmented
     // control (summaryToggleWeights, reused as the storm4d render-mode
@@ -3325,14 +3399,17 @@ const rawDatasets: Dataset[] = [
     fadeInDuration: 150000,
     fadeOutDuration: 150000,
     targetPlaybackSeconds: 120,
-    // Same camera as the point-cloud cut, so the two read as one comparison.
+    // Same camera as the point-cloud cut, so the two read as one comparison —
+    // including the 70° ceiling (docs/roadmap/tile-loading-3d-2026-07.md §4:
+    // above 71.57° the unproject-derived viewport box inverts and the loader
+    // silently under-selects).
     initialViewState: {
       longitude: -94.46,
       latitude: 41.4,
       zoom: 8,
       pitch: 55,
       bearing: 25,
-      maxPitch: 85,
+      maxPitch: 70,
     },
     // Render modes on the SAME layer/tileset (the DemoViewer segmented
     // control): color the sheets by the contour's own reflectivity level, or
@@ -3436,13 +3513,17 @@ const rawDatasets: Dataset[] = [
     // 35 min over ~35 s: the outbreak breathes in near real-ish time.
     targetPlaybackSeconds: 35,
     // Continental framing, pitched — the whole CONUS echo field at once.
+    // 70° ceiling: past 71.57° the viewport box the tile loader selects
+    // against inverts (docs/roadmap/tile-loading-3d-2026-07.md §1/§4), and a
+    // continental archive is exactly where an inverted longitude box reads as
+    // a deliberate antimeridian crossing and pulls near-whole-world columns.
     initialViewState: {
       longitude: -95,
       latitude: 39,
       zoom: 4.2,
       pitch: 50,
       bearing: 15,
-      maxPitch: 85,
+      maxPitch: 70,
     },
     // Vertical exaggeration is larger than Greenfield's 4× because a 19 km
     // column is invisibly thin against a 4,500 km-wide continent — 15× lifts
@@ -3510,10 +3591,17 @@ const rawDatasets: Dataset[] = [
     },
     timeWindow: 2000, // 2s rolling window — LIDAR sweeps step crisply
     targetPlaybackSeconds: 20, // real-time-ish playback of the 20s drive
-    // boston-seaport georef origin (per the contract table), tilted street view.
+    // The SCENE CENTRE, not the boston-seaport georef origin. This used to be
+    // the origin (-71.0573, 42.3375), which av_synthetic.py treats as the SW
+    // corner of the local metre frame — the drive is laid out around local
+    // (600, 500) m, so the origin sits ~830 m south-west of every archive's
+    // extent and the standard /demos view opened on empty street. (The cockpit
+    // hid it: AvDeck snaps to scene.json's `initialView` the moment it
+    // resolves, so only the pre-load frame was wrong there.) These are
+    // scene.json's authoritative values; the wider zoom 17 is deliberate.
     initialViewState: {
-      longitude: -71.0573,
-      latitude: 42.3375,
+      longitude: -71.05056219319084,
+      latitude: 42.34134072531357,
       zoom: 17,
       pitch: 55,
       bearing: 20,
@@ -4634,9 +4722,18 @@ const rawDatasets: Dataset[] = [
     // Light earth sphere (matches the paper landing page / hero globe) instead
     // of the default dark sphere.
     globeBackgroundColor: [240, 240, 236, 255],
+    // MUST equal the archive extent exactly (public/density/drifters.json /
+    // the packed manifest's `metadata.time_range`), not merely sit inside the
+    // reconciliation tolerance: /story/drifters uses this literal as the clock
+    // bound for the beat it applies BEFORE the manifest resolves, and forever
+    // if the manifest never does. The end used to read 1667844000000
+    // ("2022-11-07"), 6.75 days past the archive's last fix — dead air at the
+    // close of every drift/spin beat. `dataset-archive-reconcile.test.ts`
+    // could not catch it (its tolerance here is max(bucketMs 7d, 1% of a
+    // 43-year span) ≈ 159 days); `story-clock.test.ts` pins it exactly.
     timeRange: {
       start: 287884800000, // 1979-02-15 — first fix in the GDP record
-      end: 1667844000000, // 2022-11-07 — last fix (PMEL interpolated product ends here)
+      end: 1667260800000, // 2022-11-01 — last fix in the archive
     },
     // ~43 years compress into ~10 min, so sim-time races by; the loader window
     // is wide (weekly build buckets → ~30 buckets) and the trail long so each
@@ -4988,7 +5085,7 @@ const COLORED_SPLAT_BASE_IDS = new Set<string>([
   // before re-adding the ids.
 ]);
 
-function makeColoredSplatVariant(base: Dataset): Dataset {
+function makeColoredSplatVariant(base: AvDataset): AvDataset {
   const newId = `${base.id}-splat`;
   const rebase = (u: string) =>
     u.replace(`/data/${base.id}/`, `/data/${newId}/`);
@@ -5002,7 +5099,7 @@ function makeColoredSplatVariant(base: Dataset): Dataset {
     description: `Camera-colored splat variant: each LIDAR return painted by projecting it into the cameras and sampling the pixel, then rendered as soft gaussian splats. ${base.description}`,
     url: rebase(base.url),
     avLidarUrl: rebaseOpt(base.avLidarUrl),
-    avSceneUrl: rebaseOpt(base.avSceneUrl),
+    avSceneUrl: rebase(base.avSceneUrl),
     avEgoUrl: rebaseOpt(base.avEgoUrl),
     avObjectsUrl: rebaseOpt(base.avObjectsUrl),
     avTracksUrl: rebaseOpt(base.avTracksUrl),
@@ -5023,8 +5120,10 @@ function makeColoredSplatVariant(base: Dataset): Dataset {
   };
 }
 
-const coloredSplatVariants: Dataset[] = rawDatasets
-  .filter((d) => COLORED_SPLAT_BASE_IDS.has(d.id))
+const coloredSplatVariants: AvDataset[] = rawDatasets
+  .filter(
+    (d): d is AvDataset => d.type === 'av' && COLORED_SPLAT_BASE_IDS.has(d.id),
+  )
   .map(makeColoredSplatVariant);
 
 // Scene-split ("stage + actors") variants, auto-derived from the AV2 + Waymo base
@@ -5044,7 +5143,7 @@ const STAGE_BASE_IDS = new Set<string>([
   'waymo-phx-dusk-rain',
 ]);
 
-function makeStageVariant(base: Dataset): Dataset {
+function makeStageVariant(base: AvDataset): AvDataset {
   const newId = `${base.id}-stage`;
   const root = `/data/${newId}`;
   // Height/semantic legend is meaningless for the camera-colored surfel stage.
@@ -5086,8 +5185,8 @@ function makeStageVariant(base: Dataset): Dataset {
   };
 }
 
-const stageVariants: Dataset[] = rawDatasets
-  .filter((d) => STAGE_BASE_IDS.has(d.id))
+const stageVariants: AvDataset[] = rawDatasets
+  .filter((d): d is AvDataset => d.type === 'av' && STAGE_BASE_IDS.has(d.id))
   .map(makeStageVariant);
 
 // Experimental AV cockpit render-modes held back from the shipped product (their
@@ -5200,62 +5299,7 @@ export const datasets: Dataset[] = [
   .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
   .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.has(d.id)))
-  .map((d) => ({
-    ...d,
-    url: resolveDataUrl(d.url),
-    // The composite `radar` type carries two extra manifest URLs; rewrite them
-    // through the same VITE_DATA_BASE_URL resolver or they 404 on the R2 deploy
-    // while the primary field manifest loads.
-    ...(d.radarCellsUrl && { radarCellsUrl: resolveDataUrl(d.radarCellsUrl) }),
-    ...(d.radarTracksUrl && {
-      radarTracksUrl: resolveDataUrl(d.radarTracksUrl),
-    }),
-    // The rain→flood composite carries a second (river-discharge) manifest URL
-    // overlaid on the precip field; rewrite it through the same resolver.
-    ...(d.riversUrl && { riversUrl: resolveDataUrl(d.riversUrl) }),
-    // The weather-suite composite carries wind + lightning + fronts manifests
-    // on top of the precip field (+ its reused radarCells/TracksUrl above);
-    // rewrite them through the same resolver or they 404 on the R2 deploy.
-    ...(d.windUrl && { windUrl: resolveDataUrl(d.windUrl) }),
-    ...(d.lightningUrl && { lightningUrl: resolveDataUrl(d.lightningUrl) }),
-    ...(d.frontsUrl && { frontsUrl: resolveDataUrl(d.frontsUrl) }),
-    ...(d.frontsPipsUrl && { frontsPipsUrl: resolveDataUrl(d.frontsPipsUrl) }),
-    // The storm4d composite carries eight context-overlay manifests on top of
-    // the gate-volume primary (+ its reused lightningUrl above); rewrite every
-    // one through the same resolver or they 404 on the R2 deploy.
-    ...(d.coupletUrl && { coupletUrl: resolveDataUrl(d.coupletUrl) }),
-    ...(d.warningsUrl && { warningsUrl: resolveDataUrl(d.warningsUrl) }),
-    ...(d.reportsUrl && { reportsUrl: resolveDataUrl(d.reportsUrl) }),
-    ...(d.stationsUrl && { stationsUrl: resolveDataUrl(d.stationsUrl) }),
-    ...(d.outagesUrl && { outagesUrl: resolveDataUrl(d.outagesUrl) }),
-    ...(d.cloudTopUrl && { cloudTopUrl: resolveDataUrl(d.cloudTopUrl) }),
-    ...(d.wind3dUrl && { wind3dUrl: resolveDataUrl(d.wind3dUrl) }),
-    ...(d.soundingUrl && { soundingUrl: resolveDataUrl(d.soundingUrl) }),
-    // The composite `av` type carries the scene manifest, two overlay archive
-    // manifests, and two sidecar JSONs; rewrite all of them through the same
-    // VITE_DATA_BASE_URL resolver so they don't 404 on the R2 deploy.
-    ...(d.avSceneUrl && { avSceneUrl: resolveDataUrl(d.avSceneUrl) }),
-    ...(d.avLidarUrl && { avLidarUrl: resolveDataUrl(d.avLidarUrl) }),
-    // Scene-split ("stage + actors") carries two extra LIDAR archive manifests.
-    ...(d.avStaticUrl && { avStaticUrl: resolveDataUrl(d.avStaticUrl) }),
-    ...(d.avDynamicUrl && { avDynamicUrl: resolveDataUrl(d.avDynamicUrl) }),
-    ...(d.avEgoUrl && { avEgoUrl: resolveDataUrl(d.avEgoUrl) }),
-    ...(d.avObjectsUrl && { avObjectsUrl: resolveDataUrl(d.avObjectsUrl) }),
-    ...(d.avTracksUrl && { avTracksUrl: resolveDataUrl(d.avTracksUrl) }),
-    ...(d.avTelemetryUrl && {
-      avTelemetryUrl: resolveDataUrl(d.avTelemetryUrl),
-    }),
-    ...(d.avCamerasUrl && { avCamerasUrl: resolveDataUrl(d.avCamerasUrl) }),
-    ...(d.avMapPolyUrl && { avMapPolyUrl: resolveDataUrl(d.avMapPolyUrl) }),
-    ...(d.avMapLineUrl && { avMapLineUrl: resolveDataUrl(d.avMapLineUrl) }),
-    ...(d.avMapPointsUrl && {
-      avMapPointsUrl: resolveDataUrl(d.avMapPointsUrl),
-    }),
-    // The `worlds` scenario-index sidecar. Every asset INSIDE it (videos, hero
-    // LiDAR manifests) is bundle-relative and resolved by the page against this
-    // url's directory, so this one rewrite carries the whole bundle.
-    ...(d.worldsUrl && { worldsUrl: resolveDataUrl(d.worldsUrl) }),
-  }));
+  .map(resolveDatasetUrls);
 
 export function getDatasetById(id: string): Dataset | undefined {
   return datasets.find((d) => d.id === id);

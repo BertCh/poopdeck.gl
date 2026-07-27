@@ -11,15 +11,14 @@
  * hand-built `DataFilterExtension` specialized to the time window): both bind a
  * per-feature numeric attribute and gate the feature in the vertex shader.
  *
- * ## Why the `STT` prefix (0.6.0)
- * Because it is a DIFFERENT class with the SAME job: through 0.5.x it was
- * exported as `DataFilterExtension`, which shadowed
- * `@deck.gl/extensions`' export of that name in any app importing both — and
- * this package imports BOTH itself (the heatmap / hexagon composites drive
- * deck's stock extension over CPU rows, everything else drives this one over
- * binary columns). Two classes, same name, different `getFilterValue`
- * contract, is exactly the confusion the prefix removes. The unprefixed name
- * has been removed.
+ * ## Why the `STT` prefix
+ * Because it is a DIFFERENT class with the SAME job. Exporting it unprefixed
+ * as `DataFilterExtension` shadows `@deck.gl/extensions`' export of that name
+ * in any app importing both — and this package imports BOTH itself (the
+ * heatmap / hexagon composites drive deck's stock extension over CPU rows,
+ * everything else drives this one over binary columns). Two classes, same
+ * name, different `getFilterValue` contract, is exactly the confusion the
+ * prefix removes.
  *
  * ## Why not just pass deck.gl's `@deck.gl/extensions` `DataFilterExtension`?
  * Upstream sources its filter value by running a JS **function** accessor
@@ -38,6 +37,20 @@
  * warns once and is ignored — see `lib/accessor-alias.ts`). At the EXTENSION
  * level, `getFilterValue` survives only as the internal binding accessor / the
  * constant fallback used when a tile lacks the column.
+ *
+ * ## ⚠ ONE BEHAVIOURAL DIVERGENCE FROM deck.gl — the `filterRange` default
+ * Upstream defaults `filterRange` to **`[-1, 1]`**, which is an ACTIVE filter:
+ * drop the stock `DataFilterExtension` onto a layer without setting a range and
+ * everything outside `[-1, 1]` disappears. This extension defaults it to
+ * **`null` = IDLE**: with no range set, EVERY feature renders and the bound
+ * `filterValue` attribute simply sits there until a range arrives (so a slider
+ * animates by uniform alone, with zero tile re-preparation).
+ *
+ * Same layer, same props, opposite visibility for any value outside `[-1, 1]`.
+ * If you are porting code from `@deck.gl/extensions`, pass `filterRange:
+ * [-1, 1]` explicitly to reproduce upstream's behaviour. The default is NOT
+ * going to change — it is load-bearing for the tile pipeline and for every
+ * shipped STT layer that installs this extension speculatively.
  *
  * ## v1 scope
  * `filterSize` is fixed at **1** (a single scalar column). Multi-column
@@ -85,11 +98,16 @@ export type STTDataFilterExtensionProps<DataT = unknown> = {
   filterEnabled?: boolean;
   /**
    * The inclusive `[min, max]` bounds. A feature is rendered when its
-   * `filterValue` is within the bounds, hidden otherwise. `null` (the default)
-   * means "no range yet" → the filter idles and everything renders, so the
-   * attribute can be bound up-front and the range animated later (a slider,
-   * say) purely by uniform with zero tile re-preparation.
-   * @default null
+   * `filterValue` is within the bounds, hidden otherwise.
+   *
+   * ⚠ **DIVERGES from `@deck.gl/extensions`.** Upstream defaults this to
+   * `[-1, 1]`, an ACTIVE filter that hides everything outside that band the
+   * moment the extension is installed. Here the default is `null` = "no range
+   * yet" → the filter IDLES and everything renders, so the attribute can be
+   * bound up-front and the range animated later (a slider, say) purely by
+   * uniform with zero tile re-preparation. Porting from upstream? Pass
+   * `filterRange: [-1, 1]` explicitly. See the module docstring.
+   * @default null (idle — upstream's is `[-1, 1]`, active)
    */
   filterRange?: DataFilterRange | null;
   /**
@@ -98,6 +116,11 @@ export type STTDataFilterExtensionProps<DataT = unknown> = {
    * `filterRange` but outside `filterSoftRange` it renders "faded". Must sit
    * INSIDE `filterRange` to have any effect (a soft range wider than the hard
    * range is ignored per-edge, matching deck).
+   *
+   * Like upstream, supplying this turns the soft margin on INDEPENDENTLY of
+   * `filterRange` — the `useSoftMargin` uniform tracks this prop alone. (It
+   * still has no visible effect while `filterRange` is null, because the
+   * whole filter is idle then; see that prop.)
    * @default null
    */
   filterSoftRange?: DataFilterRange | null;
@@ -157,12 +180,30 @@ type DataFilterUniformProps = {
   transformColor: number;
 };
 
+// Attribute + varying declarations live in the shader MODULE source, NOT in a
+// `vs:#decl` / `fs:#decl` injection: deck's `mergeShaders` concatenates
+// same-key injections with NO dedup, so two STTDataFilterExtension instances on
+// one layer would emit `in float filterValue;` twice and the vertex shader
+// would fail to link (a silently blank layer). luma dedupes shader MODULES by
+// name, so declaring them here makes duplication harmless — the same placement
+// upstream's data-filter shader module uses for `filterValues`.
+const glslVertexDecl = `\
+// Per-feature filter value, bound zero-copy from a baked numeric column
+// (constant fallback via the getFilterValue accessor).
+in float filterValue;
+out float vDataFilterAlpha;
+`;
+
+const glslFragmentDecl = `\
+in float vDataFilterAlpha;
+`;
+
 // Shader-module definition for deck.gl 9.x. Exported for the ShaderInputs
 // getUniforms regression test (and symmetry with categoryColorUniforms).
 export const dataFilterUniforms = {
   name: 'sttFilter',
-  vs: glslUniformBlock,
-  fs: glslUniformBlock,
+  vs: `${glslUniformBlock}${glslVertexDecl}`,
+  fs: `${glslUniformBlock}${glslFragmentDecl}`,
   uniformTypes: {
     filterMin: 'f32',
     filterMax: 'f32',
@@ -198,16 +239,48 @@ export interface STTDataFilterExtensionOptions {
    * Number of scalar columns to filter by. **v1 supports `1` only.** Multi-size
    * filtering (2–4) — a `vec4` range with the classic per-component min-reduce,
    * as upstream — is deferred: it needs a `FixedSizeList` filter attribute and
-   * a vec4 uniform block. `fp64` (64-bit filter precision) and `categorySize`
-   * (category-bitmask filtering) are likewise future work.
+   * a vec4 uniform block. See {@link STTDataFilterUnsupportedOptions} for the
+   * rest of upstream's construction surface.
    * @default 1
    */
   filterSize?: 1;
 }
 
+/**
+ * Upstream `DataFilterExtension` construction options that are **accepted but
+ * NOT implemented** here. They are declared so porting code type-checks and so
+ * the constructor can say so out loud instead of absorbing them silently —
+ * each one warns once and is then dropped from `this.opts`.
+ *
+ * Why dropped rather than kept: `LayerExtension.equals()` compares `this.opts`
+ * with `deepEqual(…, 1)`, so an inert `{fp64: true}` riding along would make
+ * the instance compare UNEQUAL to a default-constructed one and force an
+ * `extensionsChanged` model rebuild every render — a silent frame-rate cliff
+ * bought for an option that does nothing.
+ */
+export interface STTDataFilterUnsupportedOptions {
+  /** N/A — v1 compares `filterValue` in f32. Bake a pre-offset column instead. */
+  fp64?: boolean;
+  /** N/A — there is no CPU row list to count on a binary tile. */
+  countItems?: boolean;
+  /** N/A — pairs with `countItems`; never fires. */
+  onFilteredItemsChange?: (event: { id: string; count: number }) => void;
+  /** N/A — category-bitmask filtering is deferred (see the module docstring). */
+  categorySize?: number;
+}
+
+/** The normalized option set actually stored on `this.opts` (v1: just the size). */
 const defaultOptions: Required<STTDataFilterExtensionOptions> = {
   filterSize: 1,
 };
+
+/** Keys of {@link STTDataFilterUnsupportedOptions}, for the constructor warning. */
+const UNSUPPORTED_OPTION_KEYS = [
+  'fp64',
+  'countItems',
+  'onFilteredItemsChange',
+  'categorySize',
+] as const;
 
 /**
  * Layer extension for GPU range-filtering by a single baked numeric column.
@@ -238,10 +311,16 @@ export class STTDataFilterExtension extends LayerExtension<
 
   // `filterSize` flows to super() so LayerExtension.equals() (which compares
   // this.opts) distinguishes instances — same pattern as upstream
-  // `DataFilterExtension` and our TimeFilterExtension `mode`. v1 only supports 1,
-  // so we CLAMP it into the opts up front (never mutating this.opts afterward,
-  // which keeps the constructor agnostic to LayerExtension's internals).
-  constructor(options: STTDataFilterExtensionOptions = {}) {
+  // `DataFilterExtension` and our TimeFilterExtension `mode`. v1 only supports
+  // 1, so the opts are NORMALIZED to exactly `{filterSize: 1}` rather than
+  // spread from the caller's object: an unsupported key riding along would
+  // make `equals()` report false against a default-constructed instance and
+  // rebuild the model every render for no behavioural gain. Everything the v1
+  // shader cannot honour warns once here and is dropped.
+  constructor(
+    options: STTDataFilterExtensionOptions &
+      STTDataFilterUnsupportedOptions = {},
+  ) {
     if (options.filterSize !== undefined && options.filterSize !== 1) {
       warnOnce(
         'STTDataFilterExtension:filterSize',
@@ -250,7 +329,17 @@ export class STTDataFilterExtension extends LayerExtension<
           'back to 1.',
       );
     }
-    super({ ...defaultOptions, ...options, filterSize: 1 });
+    for (const key of UNSUPPORTED_OPTION_KEYS) {
+      if (options[key] === undefined) continue;
+      warnOnce(
+        `STTDataFilterExtension:${key}`,
+        `[STTDataFilterExtension] the \`${key}\` option is accepted for ` +
+          'upstream-source compatibility but NOT implemented; it is ignored ' +
+          '(and dropped from the extension options so `equals()` stays ' +
+          'stable). See STTDataFilterUnsupportedOptions.',
+      );
+    }
+    super({ ...defaultOptions, filterSize: 1 });
   }
 
   getShaders(
@@ -260,13 +349,11 @@ export class STTDataFilterExtension extends LayerExtension<
     if (extension.cachedShaders) return extension.cachedShaders;
     const shaders = {
       modules: [dataFilterUniforms],
+      // NOTE: no `vs:#decl` / `fs:#decl` entries — the attribute and varying
+      // are declared in `dataFilterUniforms.vs/fs` so luma's name-based module
+      // dedup protects a duplicated extension. Every injection below keeps its
+      // locals block-scoped, so a doubled injection still links.
       inject: {
-        'vs:#decl': `
-          // Per-feature filter value, bound zero-copy from a baked numeric
-          // column (constant fallback via the getFilterValue accessor).
-          in float filterValue;
-          out float vDataFilterAlpha;
-        `,
         'vs:#main-start': `
           vDataFilterAlpha = 1.0;
           if (sttFilter.enabled > 0.5) {
@@ -311,9 +398,6 @@ export class STTDataFilterExtension extends LayerExtension<
           if (sttFilter.transformSize > 0.5) {
             size *= vDataFilterAlpha;
           }
-        `,
-        'fs:#decl': `
-          in float vDataFilterAlpha;
         `,
         'fs:#main-start': `
           if (vDataFilterAlpha == 0.0) discard;
@@ -375,8 +459,13 @@ export class STTDataFilterExtension extends LayerExtension<
       Number.isFinite(filterRange[0]) &&
       Number.isFinite(filterRange[1]);
 
+    // Upstream parity: `useSoftMargin` tracks `filterSoftRange` ALONE
+    // (`useSoftMargin: Boolean(opts.filterSoftRange)`), independently of
+    // whether the hard range is present. Do NOT gate it on `active` as well —
+    // that makes the soft margin quietly conditional on a second prop. (The
+    // extra finiteness check is ours: upstream's truthiness test would happily
+    // push NaN edges into `smoothstep`.)
     const useSoft =
-      active &&
       Array.isArray(filterSoftRange) &&
       filterSoftRange.length >= 2 &&
       Number.isFinite(filterSoftRange[0]) &&

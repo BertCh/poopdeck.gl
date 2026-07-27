@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, Tile } from '../src/types';
 import {
   BOUNDS,
@@ -37,7 +37,7 @@ interface GatedBatch {
 }
 
 function makeTileset(batches: GatedBatch[]) {
-  return new SpatiotemporalTileset({
+  return new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -60,7 +60,7 @@ function makeTileset(batches: GatedBatch[]) {
   });
 }
 
-describe('SpatiotemporalTileset selection settle', () => {
+describe('SpatioTemporalTileset selection settle', () => {
   it('starts settled at version 0, goes pending per selection, settles on load', async () => {
     const batches: GatedBatch[] = [];
     const tileset = makeTileset(batches);

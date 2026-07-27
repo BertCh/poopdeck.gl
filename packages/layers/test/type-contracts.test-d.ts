@@ -60,7 +60,9 @@ class MyPathLayer extends AnimatedPathLayer<MyExtraProps> {
     // values, so no `| undefined` and no `?? fallback` refetches needed.
     expectType<number>(this.props.timeWindow);
     expectType<number>(this.props.widthScale);
-    expectType<'pixels' | 'meters'>(this.props.widthUnits);
+    // The full upstream `Unit` domain — 'common' included, matching
+    // AnimatedLineLayer and PathLayer's own `widthUnits`.
+    expectType<'pixels' | 'meters' | 'common'>(this.props.widthUnits);
     expectType<string>(this.props.data);
     // `value: null`-default props stay nullable.
     expectType<{ start: number; end: number } | null>(this.props.timeRange);

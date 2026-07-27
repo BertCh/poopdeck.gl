@@ -33,7 +33,7 @@ import {
 } from '../src/layers/line-layer';
 import { trailAlphaJS } from '../src/shaders/time-window.glsl';
 import { normalizeRenderArgs } from '../src/lib/host-adapter';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 import { makeLineTile, makeTripsTile } from './fixtures';
 
 const baseOpts = {
@@ -354,7 +354,9 @@ describe('STTLineLayer globe subdivision', () => {
   it('beginFrame stashes the frame globe flag for cache building', () => {
     const layer = makeLayer();
     layer.map = makeMockMap();
-    layer.tileset = { update: vi.fn() };
+    // No tiles: this exercises beginFrame's frame plumbing, and beginFrame now
+    // derives the drawn set from the tileset, so the stub must answer for it.
+    publishVisibleTiles(layer);
 
     const frame = layer.beginFrame(v5Args('globe', 1), undefined);
     expect(frame.isGlobe).toBe(true);

@@ -2,9 +2,14 @@ import React from 'react';
 import FigureSvg from '../FigureSvg.tsx';
 
 /**
- * "Inside a tile" figure: the layer frame (aligned Arrow IPC streams) and the
- * columnar schema — required columns plus the optional columns that turn
- * static geometry into animation.
+ * "Inside a tile" figure: the v2 sectioned layer frame (schema hoisted into
+ * `manifest.schemas`, CORE/PROPS split) and the columnar schema — the three
+ * required columns plus the optional ones that turn static geometry into
+ * animation.
+ *
+ * Evidence: docs/spec/stt-packed-format.md §5.2 (frame layout, section tag
+ * registry, reserved CORE column order, TILE_META keys);
+ * crates/stt-core/src/arrow_tile/{encode,frame}.rs.
  */
 
 interface Col {
@@ -26,15 +31,8 @@ const COLS: Col[] = [
   {
     group: 'time',
     name: 'start_time',
-    type: 'Int64 · unix ms',
-    note: 'when the feature appears',
-    required: true,
-  },
-  {
-    group: 'time',
-    name: 'end_time',
-    type: 'Int64 · unix ms',
-    note: 'when it disappears',
+    type: 'UInt32 Δ from t0',
+    note: "offset from the layer's own t0 by default; absolute Int64 when a tile needs it",
     required: true,
   },
   {
@@ -45,22 +43,28 @@ const COLS: Col[] = [
     required: true,
   },
   {
+    group: 'time',
+    name: 'end_time',
+    type: 'UInt32 duration',
+    note: 'dropped entirely when every feature is instantaneous — true of most event data',
+  },
+  {
     group: 'per-vertex time',
     name: 'vertex_time',
-    type: 'List<UInt16> deltas',
-    note: 'a timestamp per vertex (origin + step in metadata; exact Int64 fallback) — trips & trails',
+    type: 'List<UInt16|UInt32>',
+    note: 'a timestamp per vertex (origin + step in TILE_META.vt; exact Int64 fallback) — trips & trails',
   },
   {
     group: 'per-vertex values',
     name: 'vertex_value',
-    type: 'List<Float32>',
+    type: 'List<Float32|UInt16>',
     note: 'one scalar per vertex, NaN = no sample — e.g. temperature along a track',
   },
   {
     group: 'per-vertex values',
     name: 'vertex_value_matrix',
-    type: 'List<Float32>',
-    note: 'vertex-major × time buckets (stt:vertex_value_buckets) — static geometry, animated values',
+    type: 'List<Float32|UInt16>',
+    note: 'vertex-major × time buckets (TILE_META.vb) — static geometry, animated values',
   },
   {
     group: 'geometry extras',
@@ -69,26 +73,49 @@ const COLS: Col[] = [
     note: 'pre-baked earcut indices — polygons skip tessellation on load',
   },
   {
-    group: 'properties',
-    name: '<your columns>',
-    type: 'Float64 · Dict<UInt16,Utf8>',
-    note: 'numeric + categorical props; optionally fixed-point ints + an stt:qa affine',
+    group: 'geometry extras',
+    name: 'part_offsets',
+    type: 'List<UInt32>',
+    note: 'MultiPolygon part boundaries — without it, parts 2..n read as holes',
   },
   {
-    group: 'gpu-ready',
+    group: 'props batch',
+    name: '<your columns>',
+    type: 'Float64 · Dict<UInt16,Utf8>',
+    note: 'numeric + categorical props; optionally fixed-point ints + a TILE_META.qa affine',
+  },
+  {
+    group: 'props batch',
     name: '<vector groups>',
     type: 'FixedSizeList<f32|u8, N>',
     note: 'interleaved quats / colors / scales — bound to the GPU zero-copy',
   },
 ];
 
-const FRAME_SEGMENTS: { label: string; wide?: boolean }[] = [
-  { label: 'u16 layer count | 0x8000' },
+/** The v2 frame header, left to right. */
+const FRAME_SEGMENTS: { label: string; accent?: boolean }[] = [
+  { label: 'u16 0xFFFF' },
+  { label: 'u8 ver = 2' },
+  { label: 'u16 layer count' },
   { label: 'name "default"' },
-  { label: 'u32 ipc length' },
+  { label: 'schema ref → blake3-128', accent: true },
+  { label: 'section TOC' },
   { label: 'pad → 8 B' },
-  { label: 'Arrow IPC stream (one RecordBatch)', wide: true },
-  { label: '…next layer' },
+];
+
+/** The sections that follow, in tag order. */
+const FRAME_SECTIONS: { label: string; sub: string; wide?: boolean }[] = [
+  { label: 'TILE_META', sub: 'per-tile JSON: t0 · st/et · qa · vt · vb · vq' },
+  {
+    label: 'CORE_BATCH',
+    sub: 'id · times · geometry · vertex columns',
+    wide: true,
+  },
+  {
+    label: 'PROPS_BATCH',
+    sub: 'your property columns — omitted if none',
+    wide: true,
+  },
 ];
 
 const TileAnatomy: React.FC = () => (
@@ -104,18 +131,16 @@ const TileAnatomy: React.FC = () => (
       className="font-display text-[13px] font-semibold"
       style={{ color: 'var(--ink-900)' }}
     >
-      A tile is a frame of 8-byte-aligned Arrow IPC streams
+      A tile is a sectioned frame — and its schema isn't in it
     </h4>
     <div className="mt-3 overflow-x-auto">
       <div className="flex items-stretch gap-1 min-w-[680px]">
         {FRAME_SEGMENTS.map((seg) => (
           <div
             key={seg.label}
-            className={`rounded px-2 py-1.5 font-mono text-[10px] whitespace-nowrap ${
-              seg.wide ? 'flex-1 text-center' : ''
-            }`}
+            className="rounded px-2 py-1.5 font-mono text-[10px] whitespace-nowrap"
             style={
-              seg.wide
+              seg.accent
                 ? {
                     background: 'var(--accent-soft)',
                     border: '1px solid var(--accent)',
@@ -132,11 +157,45 @@ const TileAnatomy: React.FC = () => (
           </div>
         ))}
       </div>
+      <div className="flex items-stretch gap-1 min-w-[680px] mt-1">
+        {FRAME_SECTIONS.map((s) => (
+          <div
+            key={s.label}
+            className={`rounded px-2 py-1.5 ${s.wide ? 'flex-1' : ''}`}
+            style={{
+              background: 'var(--surface-sunken)',
+              border: '1px solid var(--hairline)',
+            }}
+          >
+            <span
+              className="block font-mono text-[10px]"
+              style={{ color: 'var(--ink-900)' }}
+            >
+              {s.label}
+            </span>
+            <span
+              className="block text-[9.5px] mt-0.5 whitespace-nowrap"
+              style={{ color: 'var(--ink-400)' }}
+            >
+              {s.sub}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
-    <p className="mt-2 text-[11px]" style={{ color: 'var(--ink-500)' }}>
-      The alignment flag (top bit of the layer count) keeps every IPC stream on
-      an 8-byte boundary, so the reader can hand column buffers straight to the
-      GPU without copying.
+    <p
+      className="mt-2 text-[11px] leading-relaxed"
+      style={{ color: 'var(--ink-500)' }}
+    >
+      Arrow schemas are dataset-constant, so shipping one per tile pays for the
+      same bytes tens of thousands of times. Instead each layer carries a
+      16-byte blake3 reference into a schema table embedded in{' '}
+      <span className="font-mono">manifest.json</span>; only genuinely per-tile
+      metadata rides in <span className="font-mono">TILE_META</span>. Splitting
+      geometry from properties lets a reader decode a tile's shape without
+      touching its columns. Every section pads to 8 bytes and the IPC writer is
+      pinned to 8-byte buffer alignment, so column buffers hand to the GPU
+      without copying.
     </p>
 
     {/* the columns */}
@@ -144,7 +203,7 @@ const TileAnatomy: React.FC = () => (
       className="font-display text-[13px] font-semibold mt-6"
       style={{ color: 'var(--ink-900)' }}
     >
-      …and each stream is a columnar batch
+      …and the batches are columns
     </h4>
     <div className="mt-3 overflow-x-auto pb-1">
       <div className="flex items-stretch gap-2">
@@ -201,9 +260,11 @@ const TileAnatomy: React.FC = () => (
       </div>
     </div>
     <p className="mt-2 text-[11px]" style={{ color: 'var(--ink-500)' }}>
-      A tile of simple points costs four columns. Trips, splats, flow corridors
-      and summary tiers are the same container with more columns switched on —
-      there is no separate format per layer type.
+      A tile of simple events costs three columns — most event data is
+      instantaneous, so <span className="font-mono">end_time</span> isn't
+      written at all. Trips, splats, flow corridors and summary tiers are the
+      same container with more columns switched on; there is no separate format
+      per layer type.
     </p>
 
     {/* quantization deep-dive */}
@@ -214,9 +275,12 @@ const TileAnatomy: React.FC = () => (
       Deeper: how the numbers shrink
     </h4>
     <p className="mt-1 text-[11px]" style={{ color: 'var(--ink-500)' }}>
-      Every quantization is opt-in, exact to a declared precision, and carries
-      its inverse as field metadata — the reader reconstructs real values on
-      decode, so nothing downstream knows the wire was smaller.
+      Every quantization is opt-in and ships its own inverse, so the reader
+      reconstructs real values on decode and nothing downstream knows the wire
+      was smaller. Each one also declares itself in{' '}
+      <span className="font-mono">manifest.capabilities</span> — a reader that
+      doesn't implement it refuses the dataset at open rather than silently
+      drawing integer grid indices as degrees.
     </p>
     <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
       {/* coordinates */}
@@ -367,8 +431,9 @@ const TileAnatomy: React.FC = () => (
           className="text-[10.5px] mt-1 leading-snug"
           style={{ color: 'var(--ink-500)' }}
         >
-          Trajectory timestamps become UInt16 step counts; tiles that need finer
-          resolution fall back to exact Int64.
+          Trajectory timestamps become UInt16 step counts, widening to UInt32
+          when a tile's span needs it and falling back to exact Int64 past the{' '}
+          <span className="font-mono">--vertex-time-precision</span> ceiling.
         </p>
         <span
           className="inline-block mt-2 rounded px-1.5 py-0.5 font-mono text-[10px]"
@@ -455,8 +520,11 @@ const TileAnatomy: React.FC = () => (
           className="text-[10.5px] mt-1 leading-snug"
           style={{ color: 'var(--ink-500)' }}
         >
-          Numeric properties become range-adaptive UInt16 with a per-column
-          affine in <span className="font-mono">stt:qa</span>.
+          <span className="font-mono">--quantize-attrs-auto</span> maps every
+          Float64 property onto 65 536 levels of its own range;{' '}
+          <span className="font-mono">--quantize-attr z=0.05</span> pins one
+          column to a fixed precision instead. The per-column affine rides in{' '}
+          <span className="font-mono">TILE_META.qa</span>.
         </p>
         <span
           className="inline-block mt-2 rounded px-1.5 py-0.5 font-mono text-[10px]"

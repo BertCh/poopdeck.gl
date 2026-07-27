@@ -31,9 +31,9 @@ import type { OverviewPreloadResult } from '@poopdeck.gl/core';
 const governorPaused = (g: PlaybackGovernor): boolean => g.paused;
 
 /**
- * Multi-source registration API (multi-source coordination Phase 0): a renderer
- * registers EVERY layer's tileset as a classified governor source, keyed by the
- * layer id, so the clock waits for every *required* source — not just the field.
+ * Multi-source registration API: a renderer registers EVERY layer's tileset as a
+ * classified governor source, keyed by the layer id, so the clock waits for
+ * every *required* source — not just the field.
  * Optional overlays load coordinated but never gate. The governor re-probes all
  * sources itself on a buffer change, so the `runway` passed to
  * {@link SourceRegistry.onBufferChange} is advisory (it just kicks an immediate
@@ -57,6 +57,13 @@ export interface PlaybackState {
   /** 20Hz-throttled UI clock (slider/label/cube overlays — NOT the layers). */
   currentTime: number;
   isPlaying: boolean;
+  /**
+   * Parked at a non-looping range boundary — the media-element `ended` bit,
+   * mirrored from the governor. Drives the transport bar's replay affordance;
+   * `onPlayPause` from here restarts from the range start (the governor's
+   * `requestPlay` implements the media replay convention).
+   */
+  ended: boolean;
   bufferState: PlaybackGovernorState;
   speedMultiplier: number;
   /**
@@ -68,12 +75,16 @@ export interface PlaybackState {
   /** The `timeRange` option echoed back (for spreading into PlaybackControls). */
   timeRange?: { start: number; end: number };
   autoSpeed: boolean;
+  /** Live loop state (seeded from `UsePlaybackOptions.loop`). */
+  loop: boolean;
   overviewPreload: OverviewPreloadResult | null;
   baseAnimationSpeed: number;
   onPlayPause: () => void;
   onSeek: (time: number) => void;
   onSpeedChange: (multiplier: number) => void;
   onAutoSpeedSelect: () => void;
+  /** Flip looping at the range end. Never moves the playhead. */
+  onLoopToggle: () => void;
   /** Imperative play/pause for visibility-driven embeds. */
   play: () => void;
   pause: () => void;
@@ -105,7 +116,12 @@ export interface UsePlaybackOptions {
 }
 
 export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
-  const { timeRange, baseSpeed, loop = true, initialTime } = options;
+  const {
+    timeRange,
+    baseSpeed,
+    loop: initialLoop = true,
+    initialTime,
+  } = options;
   const rangeStart = timeRange?.start;
   const rangeEnd = timeRange?.end;
   const baseAnimationSpeed = baseSpeed ?? 1000;
@@ -115,10 +131,19 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
       new TimeController({
         initialTime: initialTime ?? rangeStart ?? Date.parse('2020-01-01'),
         speed: baseAnimationSpeed,
-        loop,
+        loop: initialLoop,
         timeRange,
       }),
   );
+
+  // Loop is a live user control (the transport bar exposes a toggle), so the
+  // option only SEEDS it. Pushed to the clock in an effect rather than from the
+  // click handler so the controller can never disagree with what the UI shows.
+  const [loop, setLoop] = useState(initialLoop);
+  useEffect(() => {
+    timeController.setLoop(loop);
+  }, [timeController, loop]);
+  const handleLoopToggle = useCallback(() => setLoop((v) => !v), []);
 
   const [currentTime, setCurrentTime] = useState(timeController.getTime());
   const [isPlaying, setIsPlaying] = useState(false);
@@ -161,16 +186,32 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
   // and the ended path both clear intent inside the governor, so they flow
   // through here without special-casing any particular state.
   const [bufferState, setBufferState] = useState<PlaybackGovernorState>('idle');
+  // The governor's media-element `ended` bit. It is NOT part of
+  // PlaybackGovernorState (a non-looping boundary stop leaves the machine
+  // 'idle'), so it has to be mirrored from both the event that sets it and the
+  // state transitions that clear it — play/seek both reset `endedAtBoundary`
+  // inside the governor, and each of those emits 'statechange'.
+  const [ended, setEnded] = useState(false);
   useEffect(() => {
     if (!governor) return;
     setBufferState(governor.state);
     setIsPlaying(!governorPaused(governor));
+    setEnded(governor.ended);
     const onStateChange = (state: PlaybackGovernorState) => {
       setBufferState(state);
       setIsPlaying(!governorPaused(governor));
+      setEnded(governor.ended);
+    };
+    const onEnded = () => {
+      setEnded(true);
+      setIsPlaying(!governorPaused(governor));
     };
     governor.on('statechange', onStateChange);
-    return () => governor.off('statechange', onStateChange);
+    governor.on('ended', onEnded);
+    return () => {
+      governor.off('statechange', onStateChange);
+      governor.off('ended', onEnded);
+    };
   }, [governor]);
 
   // Track the range VALUE actually applied so the reset below runs only when
@@ -376,17 +417,20 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     tilesetRef,
     currentTime,
     isPlaying,
+    ended,
     bufferState,
     speedMultiplier,
     currentSpeedMultiplier: speedMultiplier,
     timeRange,
     autoSpeed,
+    loop,
     overviewPreload,
     baseAnimationSpeed,
     onPlayPause: handlePlayPause,
     onSeek: handleSeek,
     onSpeedChange: handleSpeedChange,
     onAutoSpeedSelect: handleAutoSpeedSelect,
+    onLoopToggle: handleLoopToggle,
     play,
     pause,
     registry,

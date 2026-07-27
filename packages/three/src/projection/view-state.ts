@@ -140,6 +140,61 @@ export function viewStateToCamera(
   return target;
 }
 
+/**
+ * World-unit radius of a globe frame's reference surface. `GlobeProjection`
+ * carries a settable `radius` (a globe.gl-style unit sphere is radius 100, not
+ * 6.37e6), so hard-coding {@link EARTH_RADIUS} would ray-solve against a sphere
+ * millions of units away from the one the geometry sits on.
+ */
+export function surfaceRadius(proj: Projection): number {
+  const r = (proj as { radius?: number }).radius;
+  return typeof r === 'number' && r > 0 ? r : EARTH_RADIUS;
+}
+
+/**
+ * Nearest FORWARD (`t > 0`) intersection of the ray `origin + t·dir` with the
+ * projection's reference surface — the ground plane `z = 0` on a planar frame
+ * (ENU / mercator), the planet sphere on a globe frame — or `null` when the ray
+ * never reaches it (aimed above the horizon, parallel to the plane, or past the
+ * limb).
+ *
+ * `dir` MUST be unit length: the globe branch relies on `a = dir·dir = 1` to
+ * drop the quadratic's leading coefficient.
+ *
+ * This is the ONE surface solve in the package. `cameraToViewport` used to carry
+ * a second, plane-only copy, which is what made every globe camera report
+ * `minLat === maxLat === 0`: on a globe frame the world-space `z = 0` plane is
+ * the ECEF equatorial plane THROUGH THE EARTH'S CENTRE, so `unproject` saw
+ * `asin(0)` for every corner. See docs/roadmap/tile-loading-3d-2026-07.md RC5.
+ */
+export function intersectSurface(
+  proj: Projection,
+  origin: Vector3,
+  dir: Vector3,
+): Vector3 | null {
+  if (proj.kind === 'globe') {
+    const radius = surfaceRadius(proj);
+    const b = 2 * origin.dot(dir);
+    const c = origin.lengthSq() - radius * radius;
+    const disc = b * b - 4 * c;
+    if (disc < 0) return null;
+    const sq = Math.sqrt(disc);
+    const t1 = (-b - sq) / 2;
+    const t2 = (-b + sq) / 2;
+    const t = t1 >= 0 ? t1 : t2;
+    if (!(t >= 0)) return null;
+    return origin.clone().addScaledVector(dir, t);
+  }
+  if (Math.abs(dir.z) < 1e-9) return null;
+  const t = -origin.z / dir.z;
+  // `t <= 0` is the above-horizon case: the plane solve still has an answer, but
+  // it lies BEHIND the camera. Returning it is worse than returning nothing —
+  // the caller can clip at the horizon, but it cannot detect a plausible-looking
+  // point that is actually 180° away.
+  if (!Number.isFinite(t) || t <= 0) return null;
+  return origin.clone().addScaledVector(dir, t);
+}
+
 /** Intersect the camera's forward ray with the ground plane (mercator) or sphere
  *  (globe); fall back to the sub-camera point when the ray misses. */
 function recoverTarget(proj: Projection, camera: PerspectiveCamera): Vector3 {
@@ -147,22 +202,11 @@ function recoverTarget(proj: Projection, camera: PerspectiveCamera): Vector3 {
     .applyQuaternion(camera.quaternion)
     .normalize();
   const p = camera.position;
-  if (proj.kind === 'globe') {
-    const b = 2 * p.dot(forward);
-    const c = p.lengthSq() - EARTH_RADIUS * EARTH_RADIUS;
-    const disc = b * b - 4 * c;
-    if (disc >= 0) {
-      const sq = Math.sqrt(disc);
-      const t1 = (-b - sq) / 2;
-      const t2 = (-b + sq) / 2;
-      const t = t1 >= 0 ? t1 : t2;
-      if (t >= 0) return p.clone().addScaledVector(forward, t);
-    }
-    return p.clone().setLength(EARTH_RADIUS);
-  }
-  if (Math.abs(forward.z) < 1e-9) return new Vector3(p.x, p.y, 0);
-  const t = -p.z / forward.z;
-  return p.clone().addScaledVector(forward, t);
+  const hit = intersectSurface(proj, p, forward);
+  if (hit) return hit;
+  return proj.kind === 'globe'
+    ? p.clone().setLength(surfaceRadius(proj))
+    : new Vector3(p.x, p.y, 0);
 }
 
 /**

@@ -158,13 +158,18 @@ float edgeWidth(int edge) {
 }
 
 // deck's standard index→picking-color encoding (so info.index decodes to edge).
+// Returns BYTE components (0..255), NOT 0..1: picking_setPickingColor divides
+// by 255 itself (deck sets the picking module's useByteColors uniform true),
+// exactly as it does for the instancePickingColors attribute deck's own layers
+// feed it. Normalizing here as well quantized every id to [0,0,0] in the 8-bit
+// picking FBO ("nothing picked") and put autoHighlight off by 255x.
 vec3 encodePick(int index) {
   float i = float(index) + 1.0;
   return vec3(
     mod(i, 256.0),
     mod(floor(i / 256.0), 256.0),
     mod(floor(i / 65536.0), 256.0)
-  ) / 255.0;
+  );
 }
 
 void main(void) {
@@ -279,7 +284,16 @@ type _BundledFlowLinesLayerProps = {
   bucket0Abs: number;
   /** Bucket width in ms. */
   bucketWidth: number;
-  /** Live playhead accessor — read every draw so width animates without setState. */
+  /**
+   * Live playhead accessor — read every draw so width animates without
+   * setState. Declared `compare: false` (see `defaultProps`): the composite
+   * hands over a fresh closure every render and a diffing comparator would
+   * rebuild the layer on every frame. CONSEQUENCE: swapping in a genuinely
+   * DIFFERENT clock source is invisible to deck's prop diff — nothing
+   * invalidates, and the layer keeps calling the new closure only because it
+   * reads `this.props.getCurrentTime` at draw time. If a caller ever needs a
+   * clock swap to invalidate other state, bump a sibling version prop.
+   */
   getCurrentTime: () => number;
   /** Per-segment edge index (binary attribute; declared so deck resolves it). */
   getEdgeIndex?: Accessor<unknown, number>;
@@ -304,6 +318,9 @@ const defaultProps: DefaultProps<BundledFlowLinesLayerProps> = {
   numBuckets: { type: 'number', value: 1, min: 1 },
   bucket0Abs: { type: 'number', value: 0 },
   bucketWidth: { type: 'number', value: 1, min: 0 },
+  // `compare: false` — a per-frame clock closure must never register as a prop
+  // change. The trade-off (a real clock swap never invalidates) is documented
+  // on the prop above.
   getCurrentTime: { type: 'function', value: () => 0, compare: false },
   getEdgeIndex: { type: 'accessor', value: 0 },
   getSegmentIndex: { type: 'accessor', value: 0 },

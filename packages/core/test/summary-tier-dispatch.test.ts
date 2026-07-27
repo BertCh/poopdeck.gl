@@ -1,12 +1,12 @@
 /**
  * Unit tests for the `tier: 'auto' | 'summary' | 'raw'` dispatch in
- * `SpatiotemporalTileset`. We don't need a real archive here — instead we
+ * `SpatioTemporalTileset`. We don't need a real archive here — instead we
  * spy on the `getAvailableTiles` / `getAvailableSummaryTiles` callbacks and
  * make assertions about which one fires at which zoom.
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 
 const BOUNDS: BoundingBox = {
@@ -33,7 +33,7 @@ function makeTileset(opts: {
   );
   const dataSpy = vi.fn(async (_id: TileId) => null);
 
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     tier: opts.tier ?? 'auto',
@@ -47,7 +47,7 @@ function makeTileset(opts: {
   return { tileset, rawSpy, summarySpy };
 }
 
-describe('SpatiotemporalTileset tier dispatch', () => {
+describe('SpatioTemporalTileset tier dispatch', () => {
   it('auto + summary range routes low zooms to summary, high zooms to raw', async () => {
     const { tileset, rawSpy, summarySpy } = makeTileset({
       tier: 'auto',

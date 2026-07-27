@@ -18,20 +18,21 @@ import {
   TimeController,
   PlaybackGovernor,
   decideAutoSpeedMultiplier,
+  resolvePlaybackParams,
 } from '@poopdeck.gl/playback';
 import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 import { getDatasetById } from '../../datasets';
 import { tileLoadingProps } from '../../types';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import { useArchiveMetadata } from '../../lib/useArchiveMetadata';
 import {
   ACTS,
   HERO_FOCUS,
   DAY,
-  DATA_START,
-  DATA_END,
   type GlobeFocus,
   type GlobeMarker,
 } from '../../content/drifterStory';
+import { StoryClock, beatStartTime } from './storyClock';
 
 // One full-sphere quad gives the globe a dark "ocean" body that also occludes
 // the back-side tracks, so the drifter ribbons read as a planet rather than a
@@ -130,16 +131,6 @@ const AUTO_CAP_STEPS = [0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1] as const;
 // rate would stall one rung short on a healthy network.
 const AUTO_CAP_UPSHIFT_DEADBAND = 0.2;
 
-// Full temporal extent of the drifters archive (Unix ms), from the story
-// content. Drift/spin beats play FORWARD from the beat's moment to DATA_END and
-// then hold — no looping, no reset — so the drift just unfolds chronologically
-// and reads as calm. Forward playback is also the always-smooth tile-loading
-// direction (prefetch is aimed the way the head moves), so it never flashes.
-const DATA_TIME_RANGE: { start: number; end: number } = {
-  start: DATA_START,
-  end: DATA_END,
-};
-
 // ── Tile-loading budget (shared recipe, story-wide ceiling) ──────────────────
 // The tileset freezes its prefetch/concurrency options when it is created and
 // the layer never re-threads them on prop updates, so we can't pass per-beat
@@ -196,7 +187,49 @@ interface StoryGlobeProps {
  *   • spin   — drift + a slow globe rotation (hero / planetary beats)
  */
 const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
-  const dataset = useMemo(() => getDatasetById('ocean-drifters'), []);
+  // The story globe draws one TRIPS archive (the drifter tracks); a dataset of
+  // any other family carries none of the trail props the beat animates.
+  const dataset = useMemo(() => {
+    const d = getDatasetById('ocean-drifters');
+    return d?.type === 'trips' ? d : undefined;
+  }, []);
+
+  // ── The story clock's temporal extent, resolved from the ARCHIVE ───────────
+  // Drift/spin beats play FORWARD from the beat's moment to the end of the
+  // record and then hold — no looping, no reset — so the drift just unfolds
+  // chronologically and reads as calm. Forward playback is also the
+  // always-smooth tile-loading direction (prefetch is aimed the way the head
+  // moves), so it never flashes. That makes the END the story's most
+  // load-bearing number: every beat runs into it.
+  //
+  // It used to be hand-typed in the story content, and the typed end sat 6.75
+  // days past the archive's real last fix — so every beat closed on a week of
+  // empty ocean. `/story/drifters` was outside every guard because it never
+  // went through the reconciliation path `/demo/:id` uses. It does now.
+  //
+  // The archive extent is taken DIRECTLY — `dataset.timeRange` is deliberately
+  // NOT handed to the resolver as an authored override once metadata exists.
+  // The resolver's out-of-bounds tolerance is 1% of the archive span, which on
+  // a 43-year record is ~160 days: the very drift this fixes would be waved
+  // through as an "in-bounds editorial sub-window". The authored range serves
+  // only as the placeholder that keeps the clock sane for the render or two
+  // before the manifest lands (and if it never does) — which is why that
+  // literal has to equal the archive extent EXACTLY, pinned by
+  // test/story-clock.test.ts rather than by the tolerant reconcile suite.
+  //
+  // This value changes identity ONCE per cold visit (placeholder → archive).
+  // Everything the beats do with it goes through `storyClock` below, whose
+  // identity is stable, so the swap corrects the beat on the clock without
+  // re-firing the focus effect (which would re-seek a beat in progress).
+  const metadata = useArchiveMetadata(dataset?.url);
+  const dataTimeRange = useMemo(
+    () =>
+      resolvePlaybackParams(metadata, {
+        timeRange: metadata?.timeRange ? undefined : dataset?.timeRange,
+        datasetId: dataset?.id,
+      }).timeRange,
+    [metadata, dataset],
+  );
 
   // Reduce-motion turns the cinematic globe into a sequence of static frames:
   // no autoplay of the drifter trails, no continuous spin, no camera fly-in,
@@ -325,6 +358,42 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     };
   }, []);
 
+  // ── The beat → clock mapping (see components/story/storyClock.ts) ──────────
+  // Owns the archive extent AND which beat is currently on the clock, which is
+  // what lets a late manifest correct that beat's bound in place. Created once;
+  // `seek` reads the governor through its ref so it always routes through the
+  // live instance (StrictMode's remount replaces it).
+  const [storyClock] = useState(
+    () =>
+      new StoryClock(
+        {
+          setTimeRange: (range) => timeController.setTimeRange(range),
+          // Commit the jump through the governor: flushes the old era's stale
+          // prefetch (it must not compete with the destination for the request
+          // pool) and — when playback is intended — re-gates on the new runway.
+          seek: (time) => {
+            const g = governorRef.current;
+            if (g) g.seekTo(time);
+            else timeController.setTime(time);
+          },
+        },
+        dataTimeRange,
+      ),
+  );
+
+  // ── The manifest landing must correct the beat ALREADY on the clock ────────
+  // `dataTimeRange` changes identity exactly once on a cold visit — placeholder
+  // → archive extent, one manifest GET after mount. The focus effect below
+  // cannot carry that: listing the extent among its deps would re-fire the
+  // whole focus application and re-seek the clock to the beat's start mid-beat.
+  // So the correction is its own effect, and `setArchiveRange` pushes only the
+  // RANGE (never a seek) — the first beat of a cold visit, which is applied
+  // against the placeholder, is the one beat that would otherwise never be
+  // corrected. (It ran to the placeholder's end for its whole duration.)
+  useEffect(() => {
+    storyClock.setArchiveRange(dataTimeRange);
+  }, [storyClock, dataTimeRange]);
+
   // The era-switching half of applying a focus: speed + time range + clock. This
   // is what jumps the clock (and thus the resident tile window), so it's the
   // part we defer to the fade trough when cross-dissolving. The camera aim is
@@ -338,32 +407,12 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       const speed = (f.speedDays ?? 8) * (DAY / 1000); // sim-ms per real-ms
       authoredSpeedRef.current = speed;
       timeController.setSpeed(speed);
-      let target: number;
-      if (f.mode === 'sweep' && f.sweep) {
-        timeController.setTimeRange(f.sweep);
-        target = f.sweep.start;
-      } else if (f.mode === 'still') {
-        timeController.setTimeRange({
-          start: f.time - 5 * DAY,
-          end: f.time + 5 * DAY,
-        });
-        target = f.time;
-      } else {
-        // drift / spin — play forward from the beat's moment to the end of the
-        // archive, then hold. No loop, so no reset/snap; the drift simply unfolds
-        // chronologically. (`start` only bounds the lower clamp, which forward
-        // playback never reaches.)
-        timeController.setTimeRange({ start: f.time, end: DATA_END });
-        target = f.time;
-      }
-      // Commit the jump through the governor: flushes the old era's stale
-      // prefetch (it must not compete with the destination for the request
-      // pool) and — when playback is intended — re-gates on the new runway.
-      const g = governorRef.current;
-      if (g) g.seekTo(target);
-      else timeController.setTime(target);
+      // Range + jump. StoryClock records this beat as the applied one, so a
+      // manifest that lands later corrects THIS beat (not a beat still pending
+      // behind a cross-dissolve).
+      storyClock.applyFocus(f);
     },
-    [timeController],
+    [timeController, storyClock],
   );
   // rAF reads the latest applyFocusTime via a ref so the loop need not restart.
   const applyFocusTimeRef = useRef(applyFocusTime);
@@ -392,8 +441,7 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     // such as the slight backward nudge between the all-2016 currents beats once
     // the playhead has drifted forward — keeps enough overlap to avoid a visible
     // gap, so it applies instantly and the globe never blinks.
-    const targetTime =
-      focus.mode === 'sweep' && focus.sweep ? focus.sweep.start : focus.time;
+    const targetTime = beatStartTime(focus, storyClock.archiveRange);
     const jump = Math.abs(targetTime - timeController.getTime());
     const targetWindowMs = Math.max(
       dataset?.timeWindow ?? 200 * DAY,
@@ -442,8 +490,12 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
       });
     }
     mountedRef.current = true;
-    // Play/pause is reconciled by the `active` effect below.
-  }, [focus, timeController, applyFocusTime, dataset]);
+    // Play/pause is reconciled by the `active` effect below. NOTE the extent is
+    // deliberately absent from these deps (it is read through `storyClock`,
+    // whose identity is stable): a manifest landing must not re-fire this
+    // effect — that is what would re-seek a beat in progress. The extent effect
+    // above carries that correction instead.
+  }, [focus, timeController, applyFocusTime, dataset, storyClock]);
 
   // ── Pause when covered (saves GPU); resume per mode when revealed. ──────────
   // Intent routes through the governor so a resume is runway-gated (and a real
@@ -707,7 +759,7 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
           MAX_PLAYBACK_SPEED,
         ),
         timeWindow: windowMs,
-        timeRange: DATA_TIME_RANGE,
+        timeRange: dataTimeRange,
         useGlobalBounds: true,
         zoomOverride: 0,
         ...(g && {
@@ -793,9 +845,16 @@ const StoryGlobe: React.FC<StoryGlobeProps> = ({ focus, active }) => {
     // the container, so the layer instance (and its tile caches) stays stable.
     // `focus.time` is likewise omitted (see the seed note above): listing it would
     // rebuild every layer each beat and wipe the tile caches.
+    // `dataTimeRange` IS a dep and must be: it bounds the layer's own time
+    // domain. It changes at most once per page load — the placeholder→archive
+    // swap when the manifest lands, which is the same moment the layer is
+    // opening that manifest anyway, so the rebuild costs no warm cache. On a
+    // revisit `useArchiveMetadata`'s module cache resolves it on the first
+    // paint and the layer is never rebuilt at all.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     dataset,
+    dataTimeRange,
     coastlines,
     trailMs,
     windowMs,

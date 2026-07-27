@@ -1,15 +1,15 @@
 /**
  * `SharedTilesetSource` — ONE archive + ONE tileset serving N maplibre layers.
  *
- * Today every `STTBaseLayer` owns a private `STTArchive` + `SpatiotemporalTileset`
- * (`base-layer.ts` initTileset), so a map showing points + lines + polygons from
- * the same .stt runs N archives against one URL: N directory fetches, N tile
- * caches holding the same bytes, and N `BufferSource`s that distort governor
- * fairness (the same runway counted N times). This source is the D6a refactor
- * from docs/roadmap/renderer-architecture.md: layers register as
- * *consumers* of one shared tileset and receive the resident set replace-all,
- * exactly like the three renderer's `StreamingTileSource` (the template for
- * this file).
+ * By default every `STTBaseLayer` owns a private `STTArchive` +
+ * `SpatioTemporalTileset` (`base-layer.ts` initTileset), so a map showing
+ * points + lines + polygons from the same .stt runs N archives against one URL:
+ * N directory fetches, N tile caches holding the same bytes, and N
+ * `BufferSource`s that distort governor fairness (the same runway counted N
+ * times). This source is the shared alternative described in
+ * docs/roadmap/renderer-architecture.md: layers register as *consumers* of one
+ * shared tileset and receive the resident set replace-all, exactly like the
+ * three renderer's `StreamingTileSource` (the template for this file).
  *
  * Contracts:
  *  - **Replace-all delivery.** `onTilesChanged(tiles)` always carries the FULL
@@ -42,13 +42,22 @@
 
 import {
   STTArchive,
-  SpatiotemporalTileset,
+  SpatioTemporalTileset,
   type ArchiveMetadata,
   type BoundingBox,
   type BufferedRunway,
   type Tile,
 } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
+
+/**
+ * Selection window used when a caller supplies none AND nothing is configured
+ * — no `timeWindowMs` option and no `temporalBucketMs` in the metadata (an
+ * attached mock, or an archive predating the field). Strictly a default for
+ * "nobody said": it is never composed into the `Math.max` floor, because a
+ * fallback that outranks an explicit request is not a fallback.
+ */
+const DEFAULT_TIME_WINDOW_MS = 3600 * 1000;
 
 /** A map-derived viewport — the input to {@link SharedTilesetSource.update}. */
 export interface SharedViewport {
@@ -58,9 +67,13 @@ export interface SharedViewport {
   /** Play-head time (absolute ms). */
   time: number;
   /**
-   * Temporal window (ms) the tileset selects around `time`. Defaults to
-   * {@link SharedTilesetSourceOptions.timeWindowMs}, then the archive's
-   * `temporalBucketMs`.
+   * Temporal window (ms) the tileset selects around `time`. Composed with
+   * {@link SharedTilesetSourceOptions.timeWindowMs} (then the archive's
+   * `temporalBucketMs`) as a `Math.max`: a CONFIGURED value is a FLOOR, not
+   * merely a default-when-omitted, so a caller asking for a narrower — or
+   * zero — window cannot shrink the shared selection. With neither configured
+   * there is no floor at all and this value is honoured as given; omitting it
+   * then falls back to one hour.
    */
   timeWindow?: number;
 }
@@ -88,8 +101,10 @@ export interface SharedTilesetSourceOptions {
   maxCacheSize?: number;
   maxCacheByteSize?: number;
   /**
-   * Default temporal window (ms) when {@link SharedViewport.timeWindow} is
-   * omitted. Defaults to the archive's `temporalBucketMs`.
+   * FLOOR on the temporal window (ms) the tileset selects with, and the value
+   * used outright when {@link SharedViewport.timeWindow} is omitted. Defaults
+   * to the archive's `temporalBucketMs`; with neither, there is no floor and
+   * an omitted window falls back to {@link DEFAULT_TIME_WINDOW_MS}.
    */
   timeWindowMs?: number;
   /**
@@ -151,7 +166,7 @@ export function residentSetEqual(
 
 /**
  * The minimal tileset surface {@link SharedTilesetSource} drives. The real
- * {@link SpatiotemporalTileset} satisfies it; tests pass a mock. Keeping it
+ * {@link SpatioTemporalTileset} satisfies it; tests pass a mock. Keeping it
  * structural lets the unit tests exercise the update-pump + fan-out without
  * a network/archive.
  */
@@ -181,7 +196,7 @@ export interface DrivableTileset {
 
 /**
  * The readiness/cost surface {@link SharedTilesetBufferSource} delegates to.
- * The real {@link SpatiotemporalTileset} satisfies it; tests pass a mock.
+ * The real {@link SpatioTemporalTileset} satisfies it; tests pass a mock.
  */
 export interface RunwayTileset {
   getBufferedRunway(
@@ -263,7 +278,7 @@ export class SharedTilesetBufferSource {
     this.tileset.setInteractive?.(interactive);
   }
 
-  // Run-ahead fairness + dynamic fair-share weight (multi-source Phase 2).
+  // Run-ahead fairness + dynamic fair-share weight for multi-source playback.
   // Without these forwards the governor's optional-chained calls silently
   // no-op for every maplibre source while the deck path cooperates.
   setPrefetchRunAheadLimit(simMs: number | null): void {
@@ -293,6 +308,10 @@ export class SharedTilesetSource {
    * allocates arrays/Sets/keys N times per frame in the render hot path.
    */
   private lastPublishedFrame: number | null = null;
+  /** A republish is owed (see {@link schedulePublish}) but has not run yet. */
+  private publishPending = false;
+  /** A microtask flush is already queued (one per batch, not one per tile). */
+  private publishScheduled = false;
 
   private readonly opts: SharedTilesetSourceOptions;
   private readonly ownsArchive: boolean;
@@ -349,6 +368,11 @@ export class SharedTilesetSource {
       this.bufferSource = null;
       this.lastDrivenToken = null;
       this.lastPublishedFrame = null;
+      // `prev.finalize()` above routes through its `clear()`, which fires
+      // `onTileUnload` for every header and so arms a republish that belongs
+      // to a tileset this source no longer drives. The re-seed below is the
+      // authoritative publish for the replacement.
+      this.publishPending = false;
       // Re-seed unconditionally (no diff): consumers must swap to the NEW
       // tileset's Tile objects even when the addresses are identical.
       this.resident = tileset.getVisibleTiles();
@@ -392,7 +416,7 @@ export class SharedTilesetSource {
     // the bulk fill through the range coalescer, carry incremental delivery +
     // fetch-priority + cross-source EDF playhead hints, and wire the
     // throughput EWMA + scheduler weight — shared verbatim with deck/three.
-    this.tileset = new SpatiotemporalTileset({
+    this.tileset = new SpatioTemporalTileset({
       maxRequests: this.opts.maxRequests,
       minZoom: metadata.minZoom,
       maxZoom: metadata.maxZoom,
@@ -406,9 +430,10 @@ export class SharedTilesetSource {
       ...makeTilesetCallbacks(archive),
       onBufferChange: (runway) => this.handleBufferChange(runway),
       // Tiles arrive after the synchronous update() returns — re-publish the
-      // resident set so consumers pick them up; ditto evictions.
-      onTileLoad: () => this.publishIfChanged(),
-      onTileUnload: () => this.publishIfChanged(),
+      // resident set so consumers pick them up; ditto evictions. DEFERRED, not
+      // inline — see schedulePublish().
+      onTileLoad: () => this.schedulePublish(),
+      onTileUnload: () => this.schedulePublish(),
     });
     this.loadBuiltTileset = this.tileset;
   }
@@ -476,11 +501,29 @@ export class SharedTilesetSource {
     if (this.dedupeArmed && this.lastDrivenToken === token) return;
     this.lastDrivenToken = token;
 
+    // `Math.max`, not the `??` chain this used to be. A per-frame window is a
+    // REQUEST and the source's configured `timeWindowMs` is the FLOOR under it,
+    // because the source is shared: layer A asking for a narrow window must not
+    // shrink the selection out from under layer B, and a layer whose own
+    // `timeWindow` is 0 (a baked frame sequence, before its
+    // `tileLoadTimeWindow`/mode widening is configured) would otherwise collapse
+    // the whole source's selection to a point — `??` treats 0 as "supplied" and
+    // passes it straight through, so the configured floor never gets a vote.
+    // Same semantics as deck's `getEffectiveTimeWindow` composition.
+    //
+    // The floor is only ever a CONFIGURED value: the explicit `timeWindowMs`,
+    // else the archive's own bucket width. The one-hour literal below is the
+    // last resort for when neither exists, and it is deliberately NOT part of
+    // the floor — a fallback answers "you told me nothing", it does not get to
+    // overrule a caller who did. Folding it in made an unconfigured source
+    // silently select a 1-HOUR window for a layer asking for 5 s: 720× the
+    // requested span, every frame, on the demos whose whole point is a thin
+    // slice.
+    const floor = this.opts.timeWindowMs ?? this.metadata?.temporalBucketMs;
     const timeWindow =
-      viewport.timeWindow ??
-      this.opts.timeWindowMs ??
-      this.metadata?.temporalBucketMs ??
-      3600 * 1000;
+      viewport.timeWindow === undefined
+        ? (floor ?? DEFAULT_TIME_WINDOW_MS)
+        : Math.max(viewport.timeWindow, floor ?? 0);
     // Fresh object, never a reused scratch: tileset.update RETAINS the
     // viewport reference and reads the PREVIOUS object's time for seek
     // detection — mutating a shared scratch would erase every seek.
@@ -494,8 +537,15 @@ export class SharedTilesetSource {
     // update-path publish (see lastPublishedFrame) — skip the diff walk.
     if (frame !== this.lastPublishedFrame) {
       this.lastPublishedFrame = frame;
-      this.publishIfChanged();
+      this.publishPending = true;
     }
+    // Flush here rather than wait for the microtask: `tileset.update()` has
+    // returned, so any eviction it performed is complete AND its registry is
+    // settled, and consumers get the corrected set inside the frame that
+    // caused it. The frame gate above is a pure optimisation — an eviction
+    // does NOT bump the tileset's frame number, so it can only ever arrive
+    // through the pending flag.
+    this.flushPublish();
   }
 
   /** Forward playback animation state (keeps prefetch alive while gated). */
@@ -526,6 +576,43 @@ export class SharedTilesetSource {
       return this.bufferSource;
     }
     return null;
+  }
+
+  /**
+   * Queue a resident-set republish for the end of the current task.
+   *
+   * THE ORDERING THIS EXISTS FOR. Core fires `onTileUnload` with the header
+   * STILL in its registry and deletes it only afterwards
+   * (`packages/core/src/spatiotemporal-tileset.ts` `evictTiles`: callback,
+   * then `tiles.delete(key)`). Publishing from inside the callback therefore
+   * re-read a registry that still contained the evicted tile — so the "new"
+   * set was address-identical to the old one, `residentSetEqual` reported
+   * unchanged, and the correction NEVER WENT OUT. Every consumer went on
+   * drawing a tile whose data was gone until some unrelated change happened
+   * to move the set again.
+   *
+   * A microtask, not a frame callback: the browser cannot paint between a task
+   * and its microtask drain, so the corrected set always beats the next frame
+   * to the screen. It also coalesces a batch of arrivals into one
+   * `getVisibleTiles()` + diff walk instead of one per tile, and {@link update}
+   * flushes it synchronously so a frame that drives the tileset itself never
+   * publishes late.
+   */
+  private schedulePublish(): void {
+    this.publishPending = true;
+    if (this.publishScheduled) return;
+    this.publishScheduled = true;
+    queueMicrotask(() => {
+      this.publishScheduled = false;
+      this.flushPublish();
+    });
+  }
+
+  /** Run a queued republish now, if one is outstanding. */
+  private flushPublish(): void {
+    if (!this.publishPending) return;
+    this.publishPending = false;
+    this.publishIfChanged();
   }
 
   /** Recompute the resident set; fan out to consumers only on a real change. */
@@ -568,6 +655,10 @@ export class SharedTilesetSource {
       else ts.clear?.();
     }
     if (this.archive) this.finalizeArchive(this.archive);
+    // finalize()/clear() above armed a republish per header; there is nobody
+    // left to publish to (consumers are already cleared) and no tileset to
+    // read.
+    this.publishPending = false;
     this.tileset = null;
     this.loadBuiltTileset = null;
     this.archive = null;

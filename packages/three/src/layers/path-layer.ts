@@ -19,7 +19,7 @@ import {
 } from 'three';
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { resolveCategoryColor, type RGBA } from '../lib/color.js';
 
 export interface STTStaticPathLayerOptions {
@@ -35,7 +35,7 @@ export interface STTStaticPathLayerOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 130, 150, 220];
 
-export class STTStaticPathLayer extends BaseSttLayer {
+export class STTStaticPathLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Group();
   private lines: LineSegments;
@@ -66,7 +66,7 @@ export class STTStaticPathLayer extends BaseSttLayer {
     this.object.add(this.lines);
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     const proj = ctx.projection;
 

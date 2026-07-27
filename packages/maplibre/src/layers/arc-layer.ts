@@ -1,10 +1,9 @@
 /**
  * Arc geometry adapter — renders origin→destination flows as raised 3D arcs.
  *
- * Until Wave M3 the backend descriptor fell `arc` back to `line`, i.e. a flat
- * chord between the two endpoints. This layer is the real thing: one instanced
- * ribbon per OD pair, lifted off the ground along its path and (optionally)
- * following the great circle rather than the mercator chord.
+ * An arc is NOT a flat chord between its endpoints: one instanced ribbon per
+ * OD pair, lifted off the ground along its path and (optionally) following the
+ * great circle rather than the mercator chord.
  *
  * ── Topology ────────────────────────────────────────────────────────────────
  * One INSTANCE per feature, one shared strip of `2 * (segments + 1)` vertices
@@ -31,7 +30,7 @@
  * the height into a lateral ground offset — the deck knob for separating arcs
  * that share endpoints.
  *
- * ── Elevation units (the M2 projection kernel's one real trap) ──────────────
+ * ── Elevation units (the projection kernel's one real trap) ─────────────────
  * `projectTileFor3D`'s elevation unit is host-variant dependent, exactly as the
  * polygon layer documents:
  *   - legacy `uMatrix` and the v5 MERCATOR prelude both take MERCATOR-Z;
@@ -73,7 +72,7 @@ import { GeometryType, DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import { deriveSourceTargetPositions } from '@poopdeck.gl/core/geometry';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
   type STTBaseLayerOptions,
   type STTTimeFilterMode,
@@ -98,6 +97,11 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -105,11 +109,11 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 
@@ -557,26 +561,12 @@ const MODE_KERNEL: Readonly<Record<ArcTimeFilterMode, string>> = Object.freeze({
   trail: TIME_TRAIL_GLSL,
 });
 
-/** Uniforms each mode reads; only the active mode's block is declared. */
-const MODE_UNIFORMS: Readonly<Record<ArcTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
+/**
+ * Uniforms each mode reads; only the active mode's block is declared. The
+ * ribbon narrows toward the tail in wake mode, so this is the record carrying
+ * `uWakeTailScale`.
+ */
+const MODE_UNIFORMS = TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE;
 
 /**
  * The `timeAlpha = …` expression per mode. `trail` is the only per-VERTEX one:
@@ -832,7 +822,12 @@ const ID_FS_SOURCE = `
   }
 `;
 
-interface ArcProgramHandles {
+interface ArcProgramHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -865,22 +860,6 @@ interface ArcProgramHandles {
   uUseFeatureColor: WebGLUniformLocation | null;
   uSourceColor: WebGLUniformLocation | null;
   uTargetColor: WebGLUniformLocation | null;
-  // Mode uniforms: only the active mode's are non-null.
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  // DataFilter uniforms: null unless the branch was compiled in.
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface ArcGpuCache extends TileGpuCache {
@@ -900,7 +879,7 @@ interface ArcGpuCache extends TileGpuCache {
   hasFilterColumn: boolean;
   /** One instance per FEATURE — also the pick-id space size for this tile. */
   instanceCount: number;
-  /** Metres → mercator-z at this tile's centre latitude (D10). */
+  /** Metres → mercator-z at this tile's centre latitude. */
   mercatorZPerMeter: number;
   /**
    * Widest per-axis mercator span of any OD pair in this tile. Globe frames
@@ -945,7 +924,7 @@ const FALLBACK_LEGACY_FRAME: HostFrame = createHostFrame();
  * arcs.attach(map);
  * ```
  */
-export class STTArcLayer extends STTBaseLayer {
+export class STTArcLayer extends STTFilterableLayer {
   private arcOpts: {
     sourceColor: [number, number, number, number];
     targetColor: [number, number, number, number];
@@ -968,11 +947,6 @@ export class STTArcLayer extends STTBaseLayer {
     trailLength: number;
     fadeTrail: number;
   };
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private readonly filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
   /** Compiled configuration; drives both program-cache keys. */
   private shaderConfig: ArcShaderConfig;
   private mainKey: string;
@@ -986,7 +960,6 @@ export class STTArcLayer extends STTBaseLayer {
   private readonly wakeLengthOpt?: number;
   private readonly trailLengthOpt?: number;
   private requestedMode: ArcTimeFilterMode;
-  private warnedCategoricalFilter = false;
   /**
    * Shared strip vertex buffers, keyed by segment count. Two entries at most in
    * practice (the configured count and the globe-refined one); rebuilt lazily
@@ -1031,14 +1004,6 @@ export class STTArcLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? halfWindow,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.shaderConfig = {
       // Placeholder — `resolveTimeConfig()` below owns the compiled mode.
@@ -1147,27 +1112,6 @@ export class STTArcLayer extends STTBaseLayer {
    */
   setNumSegments(segments: number): void {
     this.arcOpts.numSegments = clampSegments(segments);
-    this.map?.triggerRepaint();
-  }
-
-  /**
-   * Move the DataFilter bounds (the slider path). Uniform-only — no relink, no
-   * tile rebuild — so it is safe to call every animation frame.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only, like `setFilterRange`. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every arc unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
     this.map?.triggerRepaint();
   }
 
@@ -1316,13 +1260,7 @@ export class STTArcLayer extends STTBaseLayer {
     let hasFilterColumn = false;
     if (this.shaderConfig.filter) {
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-            `categorical column; range filtering needs a numeric one — rendering unfiltered.`,
-        );
-      }
+      if (col.categorical) this.warnCategoricalFilterOnce();
       filterValues = col.values;
       hasFilterColumn = col.hasColumn;
     }
@@ -1443,35 +1381,10 @@ export class STTArcLayer extends STTBaseLayer {
           uUseFeatureColor: glc.getUniformLocation(program, 'uUseFeatureColor'),
           uSourceColor: glc.getUniformLocation(program, 'uSourceColor'),
           uTargetColor: glc.getUniformLocation(program, 'uTargetColor'),
-          uWindowStart: glc.getUniformLocation(program, 'uWindowStart'),
-          uWindowEnd: glc.getUniformLocation(program, 'uWindowEnd'),
-          uFadeIn: glc.getUniformLocation(program, 'uFadeIn'),
-          uFadeOut: glc.getUniformLocation(program, 'uFadeOut'),
-          uCurrentTime: glc.getUniformLocation(program, 'uCurrentTime'),
-          uWakeLength: glc.getUniformLocation(program, 'uWakeLength'),
-          uWakeTailScale: glc.getUniformLocation(program, 'uWakeTailScale'),
-          uTrailLength: glc.getUniformLocation(program, 'uTrailLength'),
-          uFadeTrail: glc.getUniformLocation(program, 'uFadeTrail'),
-          uFilterRange: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.range,
-          ),
-          uFilterSoftRange: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.softRange,
-          ),
-          uFilterEnabled: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.enabled,
-          ),
-          uFilterTransformSize: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.transformSize,
-          ),
-          uFilterTransformColor: glc.getUniformLocation(
-            program,
-            DATA_FILTER_NAMES.transformColor,
-          ),
+          ...resolveTimeUniformLocations(glc, program),
+          ...resolveWakeTailScaleUniformLocation(glc, program),
+          ...resolveDataFilterUniformLocations(glc, program),
+          ...resolveFilterTransformSizeUniformLocation(glc, program),
         };
       },
     );
@@ -1539,29 +1452,6 @@ export class STTArcLayer extends STTBaseLayer {
   }
 
   /**
-   * Upload the DataFilter uniforms for one tile. No-op unless a
-   * `filterProperty` compiled the branch in. A tile that didn't bake the column
-   * resolves to `enabled: 0`, which the kernel reads as "render everything".
-   */
-  private setFilterUniforms(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: ArcProgramHandles,
-    cache: ArcGpuCache,
-  ): void {
-    if (!this.shaderConfig.filter) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
-      cache.hasFilterColumn,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
-  }
-
-  /**
    * Projection + tessellation + sizing + time + filter uniforms — everything
    * the visual and id passes set IDENTICALLY, so the pickable ribbon always
    * matches the drawn one (including on globe, where the prelude owns
@@ -1613,7 +1503,11 @@ export class STTArcLayer extends STTBaseLayer {
       cache.colorBuffer && h.aColor >= 0 ? 1 : 0,
     );
     this.setTimeUniforms(gl, h, cache, ctx);
-    this.setFilterUniforms(gl, h, cache);
+    // A tile that didn't bake the column resolves to `enabled: 0`, which the
+    // kernel reads as "render everything".
+    if (this.shaderConfig.filter) {
+      this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn);
+    }
   }
 
   /**
@@ -1719,7 +1613,7 @@ export class STTArcLayer extends STTBaseLayer {
 
   /**
    * Draw this arc tile into the id-pick FBO, painting feature `i` the flat
-   * colour `encodePickId(idBase + i)` (campaign D11). The id program is built
+   * colour `encodePickId(idBase + i)`. The id program is built
    * from the SAME vertex source as the visual pass — same projection variant,
    * same tessellation, same time mode, same DataFilter branch — so the pickable
    * area is exactly the ribbon the user sees, and time- or range-filtered arcs

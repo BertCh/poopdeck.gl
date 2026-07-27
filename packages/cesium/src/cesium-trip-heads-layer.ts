@@ -86,10 +86,7 @@ export class STTTripHeadsLayer implements SttRenderNode {
 
   /** (Re)build the trip index from decoded tiles (replace-all). */
   setTiles(tiles: Tile[]): void {
-    this.collection.removeAll();
-    this.entries = [];
-
-    this.timeOrigin = 0;
+    let timeOrigin = 0;
     outer: for (const tile of tiles) {
       for (const tl of tile.layers) {
         const b = tl.features;
@@ -98,15 +95,24 @@ export class STTTripHeadsLayer implements SttRenderNode {
           b.featureCount > 0 &&
           b.startIndices
         ) {
-          this.timeOrigin = b.timeOffset;
+          timeOrigin = b.timeOffset;
           break outer;
         }
       }
     }
 
-    const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, {
+    const index = buildTripIndex(tiles, GLOBE, timeOrigin, {
       precision: 'f64',
     });
+    // Index BEFORE the teardown, and keep the standing heads when the new set has
+    // none — selection reports an empty visible set for the frames between a
+    // viewport change and the first decoded tile of the new set, and tearing down
+    // first turns that transient into a blank frame.
+    if (index.trips.length === 0) return;
+
+    this.collection.removeAll();
+    this.entries = [];
+    this.timeOrigin = timeOrigin;
     this.origin = index.origin;
 
     for (const trip of index.trips) {

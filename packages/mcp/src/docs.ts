@@ -10,8 +10,7 @@
  * `docs/spec/*.json` schemas — the prose set the showcase site renders
  * (`examples/showcase/src/docs/content.ts`) widened with the JSON contracts
  * (manifest / scene / tile-matrix-set / render-spec), which are the most
- * directly usable artifacts in the corpus for a machine reader and were
- * previously unreachable from every agent-facing surface. It deliberately
+ * directly usable artifacts in the corpus for a machine reader. It deliberately
  * EXCLUDES `docs/roadmap/` (internal audits / design records).
  *
  * `docsRoot` points at a `docs/` directory: either the copy BUNDLED beside the
@@ -202,17 +201,17 @@ function realpathOfNearestExisting(p: string): string {
  * when `rel` is a published corpus member that is REALLY a regular file inside
  * `root`, and `null` otherwise.
  *
- * This is what keeps the LISTING channel as narrow as the READ channel. The
- * listing (and `search_docs`, which is built on it) used to trust `readdir`
- * names alone, so two entries diverged from what `readDoc` would actually serve:
+ * This is what keeps the LISTING channel as narrow as the READ channel: nothing
+ * may be listed that `readDoc` would refuse to serve. Trusting `readdir` names
+ * alone diverges the two, in two ways:
  *
- *  - a SYMLINK planted under a published dir pointing OUT of `docsRoot` was
- *    listed with the out-of-root file's title and its contents were searchable,
- *    even though {@link resolveDocPath} correctly refused to read it. Running
- *    the candidate through `resolveDocPath` applies the same canonicalized
+ *  - a SYMLINK planted under a published dir pointing OUT of `docsRoot` would be
+ *    listed under the out-of-root file's title and its contents made searchable,
+ *    even though {@link resolveDocPath} refuses to read it. Running the
+ *    candidate through `resolveDocPath` applies the same canonicalized
  *    containment check to the listing;
- *  - a DIRECTORY named `foo.md` / `foo.json` was listed and then failed EISDIR
- *    on read. The `isFile()` check drops it, mirroring the same filter in
+ *  - a DIRECTORY named `foo.md` / `foo.json` would be listed and then fail
+ *    EISDIR on read. The `isFile()` check drops it, mirroring the same filter in
  *    `examples/showcase/src/docs/llms.ts`.
  *
  * `statSync` FOLLOWS symlinks deliberately: a link to a regular file that is

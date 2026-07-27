@@ -3,7 +3,7 @@
 //
 // One controllable `DrivableTileset` mock shared by `streaming-tile-source.test.ts`
 // (drives `StreamingTileSource` directly) and `scene-streaming.test.ts` (drives it
-// through `SttScene`). Both used to hand-roll the same mock; this superset exposes
+// through `STTScene`). Both used to hand-roll the same mock; this superset exposes
 // everything either needs: an `updates` log (+ `updateCount`), a `setVisible` seam
 // to flip the resident set, and `clear`/`setAnimationState` spies (+ `clearCalls`).
 

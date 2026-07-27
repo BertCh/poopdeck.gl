@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import {
-  SpatiotemporalTileset,
+  SpatioTemporalTileset,
   type TileBatchHooks,
 } from '../src/spatiotemporal-tileset';
 import type { TileId } from '../src/types';
@@ -52,7 +52,7 @@ function splitCalls(calls: unknown[][]): {
   return { priority, prefetch };
 }
 
-describe('SpatiotemporalTileset prefetch slicing', () => {
+describe('SpatioTemporalTileset prefetch slicing', () => {
   it('dispatches prefetch in byte-budgeted nearest-first slices sized from measured throughput', async () => {
     const batchSpy = vi.fn(
       async (batch: TileId[], _s?: AbortSignal, _h?: TileBatchHooks) =>
@@ -61,7 +61,7 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
 
     // 2048 B/ms × 1000 ms target = 2 048 000 B budget; 512 000 B per tile
     // ⇒ exactly 4 tiles per slice.
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize: 300, // prefetch planning budget = 150 tiles
@@ -102,7 +102,7 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
       },
     );
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize: 300,
@@ -136,7 +136,7 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
     // 4 MiB / 64 KiB guess = 64 tiles per slice.
     const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize: 300, // planning budget 150 ⇒ slices of 64 / 64 / 22
@@ -160,7 +160,7 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
   it('a tile bigger than the whole slice budget still ships, alone in its own slice', async () => {
     const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize: 300,
@@ -187,7 +187,7 @@ describe('SpatiotemporalTileset prefetch slicing', () => {
   });
 });
 
-describe('SpatiotemporalTileset incremental batch delivery', () => {
+describe('SpatioTemporalTileset incremental batch delivery', () => {
   it('marks a tile loaded the moment onTileReady delivers it, without double-counting on settle', async () => {
     const loaded: TileId[] = [];
     let releaseBatch!: () => void;
@@ -203,7 +203,7 @@ describe('SpatiotemporalTileset incremental batch delivery', () => {
       },
     );
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,

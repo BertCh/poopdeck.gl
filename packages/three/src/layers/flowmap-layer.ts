@@ -44,7 +44,7 @@ import {
   Sphere,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { makeArrowTemplateGeometry } from '../geometry/arrow-template.js';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
 import {
@@ -105,7 +105,7 @@ function toVec4(c: RGBA): [number, number, number, number] {
   ];
 }
 
-export class STTFlowmapLayer extends BaseSttLayer {
+export class STTFlowmapLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Group();
 
@@ -115,7 +115,7 @@ export class STTFlowmapLayer extends BaseSttLayer {
   private nodeBundle: PointMaterialBundle | null = null;
 
   private tiles: Tile[] = [];
-  private projection: SttLayerContext['projection'] | null = null;
+  private projection: STTLayerContext['projection'] | null = null;
   private viewport: [number, number] = [1280, 720];
   private lastStepKey = Number.NaN;
   private readonly opts: STTFlowmapLayerOptions;
@@ -155,7 +155,7 @@ export class STTFlowmapLayer extends BaseSttLayer {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.tiles = tiles;
     this.projection = ctx.projection;

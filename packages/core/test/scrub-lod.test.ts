@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { ScrubLodOptions } from '../src/spatiotemporal-tileset';
 import type { BoundingBox, TemporalLodLevel, TileId } from '../src/types';
 import {
@@ -73,7 +73,7 @@ function makeHarness(opts: HarnessOptions = {}) {
     range: { start: number; end: number };
   }> = [];
   const lodCalls: Array<{ zoom: number; bucketMs: number }> = [];
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -207,7 +207,7 @@ describe('scrub-LOD temporal axis (P2 — the temporal-LOD pyramid on the hot pa
     expect(baseCalls.length).toBe(1); // the base tier was NOT re-queried
     expect(visibleKeys()).toEqual(['10/0/0/4000']); // the coarse-bucket tile renders
     // The LOD id is tier-stamped, so its cache identity can never alias the
-    // base tile sharing z/x/y/t (F9/F10 — tileIdToKey folds bucketMs in).
+    // base tile sharing z/x/y/t: `tileKey` folds `bucketMs` into the key.
     expect(tileset.getVisibleTiles().map((t) => t.id.bucketMs)).toEqual([
       LOD_BUCKET_MS,
     ]);

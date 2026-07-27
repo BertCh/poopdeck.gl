@@ -3,12 +3,18 @@
 The canonical STT container. Machine-checkable manifest
 contract: [`manifest.schema.json`](./manifest.schema.json). Versioning model: §9.
 
-Two packed format versions are current: **formatVersion 1** (the 0.3.x
-layout — frozen; §§2–8 describe it and remain normative for v1 datasets) and
-**formatVersion 2** (the 2026-07 coordinated byte break — object magic §9.2,
-manifest schema templates §3.2, sectioned layer frame §5.2). Everything not
-called out as version-specific is common to both. `manifest.formatVersion`
-is the **authoritative** discriminator between them (§5.2 authority rule).
+**One packed format version is current: `formatVersion` 2** — object magic
+§9.2, manifest schema templates §3.2, sectioned layer frame §5.2.
+`manifest.formatVersion` is the **authoritative** discriminator (§5.2
+authority rule) and readers MUST refuse any other value at open.
+
+> **`formatVersion` 1 read support was WITHDRAWN on 2026-07-26.** It is the
+> one deliberate exception to the deprecation promise of §9.1, recorded in
+> full there and in the §9.3 changelog. v1 material that survives in this
+> document — the v1 layer frame (§5.1), the "no object magic" paragraph of
+> §9.2 — is retained as a **paper record of a retired shape**, not as a
+> reader requirement. It is marked HISTORICAL where it appears and is
+> **non-normative**.
 
 > **Spec license.** The STT specification documents — everything under
 > `docs/spec/` plus the tile-payload spec
@@ -90,9 +96,10 @@ content-addressed objects and rewrites the manifest.
 ```json
 {
   "format": "stt-packed",
-  "formatVersion": 1,
-  "capabilities": ["attr-quant", "coord-quant"],
+  "formatVersion": 2,
+  "capabilities": ["attr-quant", "coord-quant", "time-delta"],
   "compression": "zstd",
+  "schemas": [{ "hash": "<blake3-128 hex>", "data": "<base64>" }],
   "directory": {
     "key": "index/<hash>.sttd",
     "length": 1234567,
@@ -134,10 +141,11 @@ content-addressed objects and rewrites the manifest.
 - **Unknown fields are permitted at every envelope level** and MUST be ignored by
   readers (additive evolution within a `formatVersion`). The JSON Schema encodes
   this: `format` and `directoryVersion` are strict consts, `formatVersion` is
-  the closed enum `[1, 2]`, the envelopes are open.
-- `formatVersion: 2` manifests additionally carry the **`schemas`** table
-  (§3.2) — the dataset's Arrow schema templates, embedded. v1 manifests MUST
-  NOT carry it.
+  the closed enum `[2]`, the envelopes are open.
+- `schemas` (OPTIONAL): the dataset's Arrow schema templates, embedded
+  (§3.2). A writer that emits only **self-contained** frames (every layer
+  inlining its own schema section — `ref_kind 0`, which is what `stt-serve`
+  does) references no template and omits the key.
 
 The manifest envelope is the **cross-language wire contract**. Its authoritative,
 machine-checkable definition is [`manifest.schema.json`](./manifest.schema.json),
@@ -172,19 +180,34 @@ a loud refusal at open.
   by old readers — declaring them here would lock those readers out
   gratuitously.
 
-Registry (`formatVersion` 1):
+Registry (5 entries as of 2026-07-26). The machine-readable copy is the
+top-level `x-stt-capability-registry` array of
+[`manifest.schema.json`](./manifest.schema.json); both reference
+implementations pin their constant lists against it in CI
+(`crates/stt-core/tests/capability_registry.rs`,
+`packages/core/test/manifest-schema.test.ts`), so this table and that array
+cannot drift apart silently.
 
-| capability       | declared when the writer…                                                           | payload mechanism                            |
-| ---------------- | ----------------------------------------------------------------------------------- | -------------------------------------------- |
-| `coord-quant`    | quantized geometry to fixed-point `Int32` (`--quantize-coords`)                     | `stt:quant` metadata on the `geometry` field |
-| `attr-quant`     | quantized any numeric property column (`--quantize-attr` / `--quantize-attrs-auto`) | `stt:qa` metadata on the property field      |
-| `elevation-fold` | folded a property into POINT z (`--point-elevation-column`)                         | 3-component point leaf instead of 2          |
+| capability           | declared when the writer…                                                           | payload mechanism                                                          | since      |
+| -------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------- |
+| `coord-quant`        | quantized geometry to fixed-point `Int32` (`--quantize-coords`)                     | `stt:quant` metadata on the `geometry` field                               | 2026-07    |
+| `attr-quant`         | quantized any numeric property column (`--quantize-attr` / `--quantize-attrs-auto`) | `stt:qa` field metadata → v2 `TILE_META.qa`                                | 2026-07    |
+| `elevation-fold`     | folded a property into POINT z (`--point-elevation-column`)                         | 3-component point leaf instead of 2                                        | 2026-07    |
+| `time-delta`         | emitted compact feature times (ON by default; `--no-compact-times` suppresses both) | `TILE_META.st` / `TILE_META.et` re-type `start_time` / `end_time` (§5.2.4) | 2026-07-26 |
+| `vertex-value-quant` | quantized a per-vertex value column (`--quantize-vertex-values`)                    | `TILE_META.vq` re-types the `vertex_value(_matrix)` list leaf (§5.2.5)     | 2026-07-26 |
+
+Note that `time-delta` is the first capability a **default** build declares:
+compact times are on unless suppressed, so essentially every archive written
+from 2026-07-26 onward carries the key. That is intentional — the two keys
+re-type columns whose misreading is silent (millisecond offsets read as
+absolute Unix ms put every feature in 1970), so the must-understand gate is
+exactly the right mechanism.
 
 The value vocabulary is deliberately open-ended (the envelope rules above
 stay intact): future registry entries are added by spec revision without a
 schema change, and a reader enforces **its own** implemented set — not this
-table's snapshot — so a v1 reader correctly refuses a dataset from a future
-writer that declares a capability the reader has never heard of.
+table's snapshot — so a reader correctly refuses a dataset from a future
+writer that declares a capability it has never heard of.
 
 ### 3.2 Schema templates (`schemas`) — formatVersion 2
 
@@ -216,11 +239,16 @@ the schema **template** is written once, embedded in the manifest:
   then builds the hash → bytes **template registry** the frame decoder
   resolves references against.
 - Templates are keyed per **distinct stripped schema**, not per layer:
-  per-tile type selection (attr-quant `UInt16` vs `Float64` fallback,
-  `vertex_time` u16-delta vs `Int64`, `triangles` u16/u32) legitimately
-  yields several templates per layer. Realized cardinality is expected in
-  the single digits per dataset; at 1–2 templates × ~900 B raw the manifest
-  grows by low KB.
+  per-tile type selection legitimately yields several templates per layer.
+  The selections that fork a template are attr-quant (`UInt16` / `Int32` /
+  `Float64` fallback, §5.2.6), `vertex_time` (`UInt16` / `UInt32` delta vs
+  `Int64`, §5.2.3), `triangles` (`UInt16`/`UInt32`), the presence of
+  `part_offsets` (§5.2.5), and the compact-time forms (§5.2.4 — an
+  `et: "zero"` layer has no `end_time` column at all, and an empty layer
+  keeps the absolute pair, so a dataset with empty tiles mints one extra
+  CORE template per layer shape). Realized cardinality is expected in the
+  single digits per dataset; at a handful of templates × ~900 B raw the
+  manifest grows by low KB.
 - Embedding (rather than an external `schemas/<hash>` object class) is
   deliberate: no new object class for deploy tooling, no template-404
   failure mode that bricks a dataset, no extra cold-start fetch — every
@@ -507,9 +535,18 @@ temporal_bucket_ms)` — the curve alone ties between a cell's base and temporal
    blake3 each finished pack and the at-rest directory → content-addressed filenames.
 6. Emit `manifest.json` (metadata + directory pointer + pack table).
 
-### 5.1 Tile payload layer frame v1 (alignment rule)
+### 5.1 Tile payload layer frame v1 — HISTORICAL, non-normative
 
-A **formatVersion-1** tile blob decompresses to the _layer frame_:
+> **Retired 2026-07-26 (§9.3).** No writer emits this frame and neither
+> reference reader decodes it: Rust `arrow_tile::decode_tile` refuses any
+> payload that does not begin with the v2 `0xFFFF` escape, and
+> `PackedReader::open` refuses a v1 manifest before a payload is ever
+> reached. The shape is kept here so a v1 blob recovered from a backup can
+> still be identified and hand-decoded, and because §5.2's escape rule is
+> only intelligible against it. Nothing in this subsection is a reader
+> requirement.
+
+A formatVersion-1 tile blob decompressed to the _layer frame_:
 
 ```text
 [u16 layer_count | 0x8000]
@@ -523,10 +560,11 @@ begins 8-byte aligned and a reader can hand it to an Arrow implementation zero-c
 (Arrow guarantees buffer alignment only _within_ a stream; a stream at a misaligned
 offset forces a copy of every buffer). The pad length is **never stored** — readers
 derive it as `(8 - pos % 8) % 8` from the position after `ipc_len`; `ipc_len` is the
-exact IPC byte length, padding excluded. Frames with the flag unset carry no padding
-and decode without it; readers MUST accept both. The flag caps the layer count at
-`0x7fff` — v2 writers additionally cap it one lower, because
-`0x7fff | 0x8000 == 0xFFFF` is the v2 escape (§5.2).
+exact IPC byte length, padding excluded. Frames with the flag unset carried no
+padding. The flag capped the layer count at `0x7fff`, one below
+`0x7fff | 0x8000 == 0xFFFF` — which is precisely why `0xFFFF` was free to
+become the v2 escape (§5.2). The v2 frame carries `layer_count` in its own
+`u16` field after the escape, so its ceiling is the full `u16::MAX`.
 
 ### 5.2 Tile payload layer frame v2 (sectioned, template-referencing)
 
@@ -553,10 +591,10 @@ per layer:
 
 **Authority rule.** `manifest.formatVersion` is the authoritative
 discriminator; the `0xFFFF` escape is defense-in-depth, not a negotiation
-channel. A v2 frame reached through a v1-declared manifest is a **hard
-error**, and vice versa. (Deployed 0.3.x readers already hard-reject
-`formatVersion != 1` by name at open — the v2 failure mode for old clients
-is the loud refusal, by design.)
+channel. A payload that does not open with the escape is a **hard error**,
+never a fallback to another frame shape. (Deployed 0.3.x readers hard-reject
+`formatVersion != 1` by name at open, and current readers hard-reject
+`formatVersion != 2` — a loud refusal in both directions, by design.)
 
 **Section tag registry** (unknown tags are SKIPPABLE via their TOC length —
 additive evolution):
@@ -569,11 +607,42 @@ additive evolution):
 | 0x04 | `INLINE_SCHEMA_PROPS` | as 0x01, props schema                               |
 | 0x05 | `PROPS_BATCH`         | as 0x03, props schema                               |
 
-Reserved columns (`id`/times/geometry/`vertex_*`/`triangles`) form the
-**CORE** batch; non-reserved property columns form the **PROPS** batch with
-its own schema/template, emitted only when properties exist
-(`ref_kind_props = 2` otherwise). Alignment follows §5.1: pads to 8 are
-derived, never stored; TOC lengths are exact at-rest byte counts.
+**CORE / PROPS split.** Reserved columns form the **CORE** batch;
+non-reserved property columns form the **PROPS** batch with its own
+schema/template, emitted only when properties exist (`ref_kind_props = 2`
+otherwise). The reserved set is closed, and a CORE batch presents its
+members in exactly this order, each optional member omitted rather than
+null-filled:
+
+```text
+id, start_time, [end_time], geometry,
+[vertex_time], [vertex_value], [vertex_value_matrix],
+[triangles], [part_offsets]
+```
+
+`part_offsets` (§5.2.5) is appended **last** precisely so every pre-existing
+layer shape keeps its exact column order and no already-published template
+changes. Column-level types and presence rules are the tile-payload spec's
+([`data-format.md`](../architecture/data-format.md)); §§5.2.4–5.2.6 below
+specify only what the frame itself discriminates.
+
+**Frame alignment.** Pads to 8 are derived, never stored; TOC lengths are
+exact at-rest byte counts (the same rule §5.1 introduced).
+
+**Arrow IPC buffer alignment = 8 (normative).** Each `*_BATCH` section, and
+each `INLINE_SCHEMA_*` prefix, MUST be written by an Arrow IPC writer
+configured for **8-byte** buffer alignment — _not_ arrow-rs'
+`IpcWriteOptions::default()` of 64. A third-party writer reproducing STT
+bytes will not match content addresses at any other value, and 64 inflates
+uncompressed payloads by 19–39% across the reference fleet (measured:
+hurricanes −38.8%, earthquakes-v2 −32.9%, storm-cells −30.6%,
+nyc-taxi-points −19.4% when re-serialized at 8) — which is what drives
+reader allocation and the client memory budget, even though the compressed
+delta is only ~2–3%. 8 is the Arrow IPC spec's own requirement (64 is a SIMD
+_recommendation_) and is the floor both reference readers need: their
+zero-copy `subarray` paths require each buffer's byte offset to be a
+multiple of its element width, and it matches the frame's own pad. Reference
+constant: `stt_core::arrow_tile::encode::IPC_BUFFER_ALIGNMENT`.
 
 #### 5.2.1 Template splice (normative guards)
 
@@ -595,30 +664,43 @@ hash absent from the registry is a hard error naming the hash.
 #### 5.2.2 `TILE_META` section
 
 Per-tile-varying metadata, hoisted out of the (now dataset-constant) Arrow
-schema. Canonical serialization: JSON, keys sorted, no whitespace. Readers
-MUST ignore unknown keys. A key is present iff the corresponding feature is:
+schema. Canonical serialization: JSON, **keys sorted, no whitespace** — the
+serialized key order is therefore fixed at `et, qa, sorted, st, t0, vb, vq,
+vt`. Readers MUST ignore unknown **keys**; an unrecognized **value** of a
+key the reader does know (`st`, `et`) is a hard decode error, never a
+fallback. A key is present iff the corresponding feature is:
 
-| key      | v1 equivalent                                                              | present iff                                                                |
-| -------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `qa`     | `stt:qa` field metadata, as `{column: [o, s]}`                             | any property column is quantized (absence of a column key = not quantized) |
-| `sorted` | — (new)                                                                    | rows are stable-sorted by `start_time`                                     |
-| `t0`     | `stt:time_offset_ms`                                                       | a start-time column exists                                                 |
-| `vb`     | `stt:vertex_value_buckets`                                                 | a vertex-value matrix exists                                               |
-| `vt`     | `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`, as `[origin, step]` | vertex_time is u16-delta encoded                                           |
+| key      | v1 equivalent                                                              | type                         | present iff                                                                 |
+| -------- | -------------------------------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------- |
+| `et`     | — (new 2026-07-26)                                                         | `"dur32"` \| `"zero"`        | `end_time` is compact (§5.2.4); absent ⇒ absolute non-null `Int64` column   |
+| `qa`     | `stt:qa` field metadata, as `{column: [o, s]}`                             | object of `[number, number]` | any property column is quantized (absence of a column key = not quantized)  |
+| `sorted` | — (new)                                                                    | `true`                       | rows are stable-sorted by `start_time`                                      |
+| `st`     | — (new 2026-07-26)                                                         | `"u32"`                      | `start_time` is compact (§5.2.4); absent ⇒ absolute non-null `Int64` column |
+| `t0`     | `stt:time_offset_ms`                                                       | integer Unix ms              | a start-time column exists — **REQUIRED** whenever `st` is present          |
+| `vb`     | `stt:vertex_value_buckets`                                                 | integer                      | a vertex-value matrix exists                                                |
+| `vq`     | — (new 2026-07-26)                                                         | object of `[number, number]` | a per-vertex value column ships quantized (§5.2.5)                          |
+| `vt`     | `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`, as `[origin, step]` | `[integer, integer]`         | `vertex_time` is delta-encoded — at **either** width, u16 or u32 (§5.2.6)   |
 
 ```json
 {
+  "et": "dur32",
   "qa": { "speed": [0.0, 0.15] },
   "sorted": true,
+  "st": "u32",
   "t0": 1577836800000,
   "vb": 24,
+  "vq": { "vertex_value": [-2.0, 0.00052] },
   "vt": [1577836800000, 1000]
 }
 ```
 
-Readers MUST source these from `TILE_META` in v2; dataset-constant keys
+Readers MUST source these from `TILE_META`; dataset-constant keys
 (`ARROW:extension:name`, `ARROW:extension:metadata`, `stt:quant`,
 `stt:layer`, `stt:geometry`, `stt:has_triangles`) stay in the template.
+
+A tile that uses none of `st`/`et`/`vq` serializes byte-for-byte the same
+`TILE_META` it did before those keys existed — the presence rules are what
+keeps the 2026-07-26 additions from churning a shape that did not change.
 
 #### 5.2.3 Row order
 
@@ -626,6 +708,131 @@ v2 writers stable-sort each layer's rows by `start_time` at encode, AFTER
 feature-id assignment (ids are order-independent), and declare it via
 `TILE_META.sorted: true` — enabling client window slicing and future partial
 decode. Readers MUST NOT assume sortedness without the flag.
+
+#### 5.2.4 Compact feature times (`st` / `et`) — capability `time-delta`
+
+The two feature-time columns are the format's most redundant CORE columns:
+absolute `Int64` Unix ms repeated per feature, with `end_time` equal to
+`start_time` on every instantaneous event. The compact forms re-type them
+against the layer's own `TILE_META.t0` anchor. **The forms are chosen per
+layer, independently of each other, from that layer's own data**, so two
+tiles of one dataset may differ — a reader MUST branch on the keys, never on
+the Arrow `DataType` and never on a form cached from another tile.
+
+| key + value   | wire column                                                       | reconstruction                  |
+| ------------- | ----------------------------------------------------------------- | ------------------------------- |
+| `st: "u32"`   | `start_time`: non-null `UInt32`, ms **offset from `t0`**          | `start = t0 + offset`           |
+| `st` absent   | `start_time`: non-null `Int64`, absolute Unix ms                  | `start = value`                 |
+| `et: "dur32"` | `end_time`: non-null `UInt32`, ms **duration from its own start** | `end = start + dur`             |
+| `et: "zero"`  | `end_time` column **OMITTED from the CORE batch entirely**        | `end = start` for every feature |
+| `et` absent   | `end_time`: non-null `Int64`, absolute Unix ms                    | `end = value`                   |
+
+Normative rules:
+
+- `st: "u32"` **REQUIRES** `t0`. A `TILE_META` carrying `st` without a
+  finite `t0` is malformed and MUST be rejected — the anchor is load-bearing,
+  not an optimization.
+- Durations are measured against **each feature's own start**, not `t0`, so
+  a long-lived feature inside a wide tile still compacts.
+- `et: "zero"` means the column is absent from the batch, not present-and-
+  zero. A reader MUST **synthesize** `end_time` back at CORE index
+  `start_idx + 1` (i.e. immediately after `start_time`, restoring the
+  canonical column order of §5.2) with the reconstructed absolute values. A
+  `TILE_META` declaring `et: "zero"` alongside a present `end_time` column
+  — or `et: "dur32"` with no `end_time` column — is malformed.
+- A writer selects a form only when **every** feature fits: every
+  `start − t0` and every `end − start` must lie in `[0, u32::MAX]`, computed
+  with checked arithmetic. Otherwise it emits the absolute `Int64` column.
+  `et: "zero"` is selected iff every duration is exactly 0.
+- An **empty layer** takes the absolute pair for both columns (no `t0`
+  exists to anchor against, and an "all durations are zero" verdict over
+  zero features would fork the schema template for empty tiles alone).
+- Both keys are suppressed together by `stt-build --no-compact-times`, which
+  also suppresses the `time-delta` capability declaration.
+
+A reader that ignores these keys reads millisecond offsets as absolute Unix
+ms — every feature lands in January 1970 — which is exactly the silent
+class §3.1 exists for; hence the `time-delta` capability.
+
+#### 5.2.5 `part_offsets` (additive — no capability)
+
+`geoarrow.polygon` is `List<List<FixedSizeList>>`: one flat ring list per
+feature, exterior first then holes. A MultiPolygon's parts are flattened
+into that same ring list, so **part-vs-hole is unrecoverable from the
+geometry column alone** — every conformant GeoArrow consumer reads parts
+2..n as holes of part 1. `part_offsets` restores the part boundary.
+
+- **Type** `List<UInt32>`, non-null, one list per feature, **last** among
+  the reserved CORE columns.
+- **Units** RING INDICES relative to that feature's **own first ring**. Part
+  0 therefore always starts at `0`; a single-part feature's list is `[0]`.
+  Values are strictly increasing and the last start is < that feature's ring
+  count.
+- **Presence** emitted iff at least one feature in the layer has more than
+  one part, and only on polygon layers. **Absence means every feature is
+  single-part** — a reader MUST NOT treat it as "unknown".
+- **Purely additive**: an older reader ignores an unknown column, so there
+  is no capability and no `formatVersion` bump. It does fork a CORE template
+  per layer shape between multi-part and single-part tiles, which is the
+  inherent cost of "emit only when it carries information".
+- Holes do **not** make a feature multi-part; the part list describes parts
+  only, and each part's own exterior/holes remain in ring order inside it
+  (feature ⊇ part ⊇ ring).
+
+#### 5.2.6 Per-tile column-width selections
+
+Three CORE columns pick a width from the tile's own data. All three are
+long-standing except where dated; they are collected here because each one
+forks a schema template (§3.2) and a third-party reader must branch on all
+of them.
+
+| column                                 | widths                                          | discriminator                                                                       |
+| -------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `vertex_time`                          | `List<UInt16>` → `List<UInt32>` → `List<Int64>` | `TILE_META.vt` present ⇒ delta at **either** integer width; absent ⇒ absolute Int64 |
+| `triangles`                            | `List<UInt16>` \| `List<UInt32>`                | Arrow leaf type (feature-local indices; no metadata)                                |
+| quantized `<prop>`                     | `UInt16` \| `Int32` \| `Float64` (unquantized)  | a `TILE_META.qa` entry for that column                                              |
+| `vertex_value` / `vertex_value_matrix` | `List<Float32>` \| `List<UInt16>`               | a `TILE_META.vq` entry for that column                                              |
+
+The **`vertex_time` `List<UInt32>` tier is new on 2026-07-26** and sits
+between the u16 tier and the exact-`Int64` fallback: the encoder walks
+`[u16::MAX, u32::MAX]` in order, taking the first width whose smallest
+sufficient step is within the precision ceiling
+(`--vertex-time-precision`, default 1000 ms), and falls back to absolute
+`Int64` only past the widest. It carries `vt` exactly like the u16 tier and
+reconstructs identically (`t = origin + delta * step`); the practical effect
+is that layers spanning ~18.2 h – ~49.7 days now stay delta-coded instead of
+widening 4× to `Int64`. **A reader MUST key "is this a delta column?" off
+`vt`, and "how wide is the leaf?" off the Arrow type — never off the leaf
+type alone.**
+
+**Per-vertex value quantization (`vq`) — capability `vertex-value-quant`.**
+`vertex_value` and `vertex_value_matrix` are the format's only
+`List<Float32>` columns and had no size lever at all. With
+`stt-build --quantize-vertex-values` each ships as `List<UInt16>` under its
+own range-adaptive affine, recorded in `TILE_META.vq`:
+
+- `vq` maps column name → `[o, s]`; `value = o + q * s`. Keys are a
+  **closed set**, `{"vertex_value", "vertex_value_matrix"}` — a `vq` key
+  outside it, or naming a column the layer does not carry, or naming a
+  column whose leaf is not `UInt16`, is malformed and MUST be rejected.
+- The affine is chosen **per column, per layer, independently**, so a tile
+  may carry one column quantized and the other raw `Float32`. Branch on
+  `vq`, not on the Arrow type.
+- The finite range maps onto `[0, 0xFFFE]` (65 535 levels). The reserved
+  index **`0xFFFF` decodes to `NaN`** — the format's "no value at this
+  vertex" marker — and finite values are clamped so none can collide with
+  it. Absent affine for a column ⇒ that column is raw `List<Float32>`.
+- Degenerate cases, so writers agree byte-for-byte: a column with **no**
+  finite value takes `{o: 0, s: 1}` (every entry is the sentinel, so the
+  affine is never applied — pinning it keeps the bytes reproducible instead
+  of serializing `±inf`); a **constant** column, or one whose `span/65534`
+  underflows, takes `{o: min, s: 1}`, where every value maps to index 0 and
+  reconstructs to `o` exactly.
+- This is the one **lossy** encoding in the set, hence off by default.
+
+Both `vq` and the compact-time forms are frame-level: they are discriminated
+by `TILE_META`, which only a frame carries. A layer serialized outside a
+frame (the standalone self-describing IPC shape) MUST NOT use them.
 
 ## 6. Reader flow (identical contract, Rust + TS)
 
@@ -731,19 +938,21 @@ temporal_bucket_ms)`), so given identical payload bytes the pack layout,
 
 STT has **three independent version axes**; this spec governs only the first.
 
-| Axis                        | Where                                      | Current                                                                          | Meaning                                                                                                                        |
-| --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Packed **format** version   | `manifest.formatVersion`                   | **2** (writer default; **1** frozen, kill-switch `stt-build --format-version 1`) | The manifest envelope + object layout + layer-frame shape described here.                                                      |
-| **Directory** codec version | `manifest.directory.directoryVersion`      | **5**                                                                            | The run-length tile index encoding (`crate::directory`). v5 adds the per-run `pack_id` column + pack-relative offsets over v4. |
-| **Tile payload** encoding   | Arrow IPC schema / GeoArrow field metadata | —                                                                                | Per-tile geometry + properties; archive-format-independent.                                                                    |
+| Axis                        | Where                                      | Current                                                                   | Meaning                                                                                                                        |
+| --------------------------- | ------------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Packed **format** version   | `manifest.formatVersion`                   | **2** — the only value written or read (**1** withdrawn 2026-07-26, §9.1) | The manifest envelope + object layout + layer-frame shape described here.                                                      |
+| **Directory** codec version | `manifest.directory.directoryVersion`      | **5**                                                                     | The run-length tile index encoding (`crate::directory`). v5 adds the per-run `pack_id` column + pack-relative offsets over v4. |
+| **Tile payload** encoding   | Arrow IPC schema / GeoArrow field metadata | — (declared per feature via `manifest.capabilities`, §3.1)                | Per-tile geometry + properties; archive-format-independent.                                                                    |
 
-Packed format v1 AND v2 emit directory v5 (v2 wraps the same codec bytes in
-an 8-byte object magic prelude, §9.2). The single-file container (magic
+There is **no writer flag to emit `formatVersion` 1**: the transitional
+`stt-build --format-version` switch was removed with v1 read support, and
+`arrow_tile::encode_tile_cfg` hard-errors on any `format_version` other than 2. Packed format v1 and v2 both emitted directory v5 (v2 wraps the same
+codec bytes in an 8-byte object magic prelude, §9.2), so the directory axis
+did not move. The single-file container (magic
 `STT\x04`, "v4") is a fourth, retired axis — removed from the Rust toolchain
-(no writer, reader, or transcode) and no longer read by either reference reader;
-it survives only as a committed legacy fixture (`sample.stt`) that a test helper
-transcodes to packed. Bumping any axis is a separate, independently-negotiated
-change.
+(no writer, reader, or transcode), read by neither reference reader, and no
+longer represented by any committed fixture. Bumping any axis is a separate,
+independently-negotiated change.
 
 **File extensions:** `.sttp` = pack object (tile blob data), `.sttd` = directory
 object (the v5 index), `manifest.json` = the per-dataset manifest, `.sttb` = the
@@ -758,9 +967,10 @@ extension to a `foo/` dataset directory.
 What bumps each axis, made explicit (§3's "unknown fields are permitted"
 rule generalized):
 
-- **`formatVersion` (packed format)** bumps only when a conformant v1 reader
-  could **misread** a dataset — a changed meaning for an existing manifest
-  field, object layout, or addressing rule. Adding new optional manifest
+- **`formatVersion` (packed format)** bumps only when a conformant reader of
+  the current version could **misread** a dataset — a changed meaning for an
+  existing manifest field, object layout, or addressing rule. Adding new
+  optional manifest
   fields does **not** bump it: every envelope level is open, readers MUST
   ignore unknown fields, and the JSON Schema encodes exactly that. Within a
   `formatVersion`, evolution is **additive-only**.
@@ -776,13 +986,52 @@ rule generalized):
 - **Tile payload** evolves per its own spec
   ([`data-format.md`](../architecture/data-format.md)): new columns and new
   schema-metadata keys are additive; **re-typings of existing columns**
-  (`stt:quant`, `stt:qa`) are the dangerous class — the writer declares each
-  one in `manifest.capabilities` (§3.1) so a reader that lacks it refuses at
-  open instead of misdecoding.
+  (`stt:quant`, `stt:qa`, and the v2 `TILE_META` keys `st`/`et`/`vq`) are the
+  dangerous class — the writer declares each one in `manifest.capabilities`
+  (§3.1) so a reader that lacks it refuses at open instead of misdecoding.
 - **Deprecation promise:** shipped datasets are immutable, so no spec
   revision may retroactively invalidate a dataset that was conformant when
   written. Readers stay backward-compatible within a major axis version;
   writers MAY always emit the older shape.
+
+  **Exception, recorded rather than quietly dropped — `formatVersion` 1 read
+  support was WITHDRAWN on 2026-07-26.** The promise above says a reader
+  stays backward-compatible _within a major axis version_; withdrawing an
+  entire prior `formatVersion` is outside that guarantee, but it is still a
+  real break and is stated here rather than papered over.
+
+  - **What changed.** The reference toolchain removed the v1 writer, the v1
+    frame decoder, and the v1 manifest path in the same expunge. Concretely:
+    `arrow_tile::LAYER_FRAME_VERSION` is 2 and `encode_tile_cfg` errors on
+    anything else, `decode_tile` refuses a payload lacking the `0xFFFF`
+    escape, `pack::directory_codec_bytes` rejects `formatVersion != 2` so
+    `PackedReader::open` cannot open a v1 dataset at all, and
+    `packages/core/src/archive.ts` refuses it on the TS side. This schema's
+    `formatVersion` enum narrowed to `[2]` to match — a schema that still
+    admitted 1 while every conformant reader refused it would be the lie
+    this document's authority rule exists to prevent.
+  - **Why.** v1 emission shipped as an explicitly one-release transitional
+    kill switch (§9.3, "v1 (2026-07)" and the v2 entry). Its job was to let
+    a v2 regression be rolled back by rebuilding. The published fleet was
+    migrated, the v2 writer accumulated a byte pin plus a decode
+    differential, and keeping two frame decoders alive cost a permanently
+    forked reader surface — including a `PackedReader::decode_payload` v1
+    branch that is now unreachable dead code (`self.format_version` can only
+    be 2 after `open`), which is exactly the rot this withdrawal removes.
+  - **What it costs, precisely.** A `formatVersion: 1` dataset that was
+    conformant when written is still a valid v1 dataset; it is simply no
+    longer readable by this toolchain. Recovery is a **rebuild from source**,
+    not a transcode — the transcode paths were removed in the same campaign.
+    Anyone needing to read v1 bytes must pin a 0.3.x/0.4.x reader.
+  - **The promise, amended.** Read it as: _no spec revision may retroactively
+    invalidate a dataset that was conformant when written, and within a major
+    axis version readers stay backward-compatible._ Dropping support for a
+    superseded `formatVersion` is permitted only at a semver-major of the
+    reference implementations, MUST be recorded in §9.3 with its date and
+    reason, and MUST be reflected in `manifest.schema.json` in the same
+    change so no reader and no validator disagree about what is openable.
+    "Writers MAY always emit the older shape" no longer holds for v1: there
+    is no v1 writer to emit it with.
 
 ### 9.2 Media types & magic bytes
 
@@ -819,14 +1068,79 @@ frame's at-rest length — a paged reader's cold root fetch is
 `bytes=0..(8+rootLength-1)`, validating the magic before the root math;
 leaf `rel_offset` stays relative to the end of the root frame.
 
-**formatVersion-1** objects carry **no magic number** — a v1 `.sttp` is
-headerless concatenated zstd frames, and a v1 `.sttd` begins with the bare
-codec version byte (or a zstd frame when `directory.encoding: "zstd"`), so
-`file(1)` cannot identify either; a v1 dataset is identified by its
-`manifest.json` (`"format": "stt-packed"`). The `.sttb` bundle (§13)
-carries its own `STTB` magic prelude from day one under either version.
+**formatVersion-1** objects carried **no magic number** (HISTORICAL) — a v1
+`.sttp` is headerless concatenated zstd frames, and a v1 `.sttd` begins with
+the bare codec version byte (or a zstd frame when
+`directory.encoding: "zstd"`), so `file(1)` cannot identify either; a v1
+dataset was identified by its `manifest.json` (`"format": "stt-packed"`).
+Recorded so an unlabelled object recovered from a backup can still be
+classified; no current reader opens one (§9.1). The `.sttb` bundle (§13)
+carries its own `STTB` magic prelude from day one.
 
 ### 9.3 Changelog
+
+- **v2, payload byte break + v1 withdrawal (2026-07-26)** — decision record:
+  `docs/roadmap/stt-packed-format-decisions.md` §10. **No `formatVersion`
+  bump**: every change either rides a `manifest.capabilities` declaration or
+  is strictly additive, so the envelope, the object layout and the
+  addressing rules are untouched. But **every content address churns**, so
+  operationally this is as expensive as a version bump.
+
+  Wire changes:
+
+  1. **Arrow IPC buffer alignment 64 → 8** (§5.2). Unconditional, and by
+     itself sufficient to change every tile blob's bytes. Refunds a fixed
+     445–1300 B per tile blob; −0.3% to −4% of uncompressed payload on wide
+     tiles, up to −50% of a 1-feature PROPS section.
+  2. **Compact feature times** — `TILE_META.st` / `et` (§5.2.4), capability
+     `time-delta`, **on by default**, kill switch
+     `stt-build --no-compact-times`.
+  3. **`vertex_time` `List<UInt32>` tier** (§5.2.6). Unconditional; keeps
+     ~18.2 h – ~49.7 day layers delta-coded (−14% uncompressed on a 20 h
+     track corpus) instead of widening to `Int64`.
+  4. **`part_offsets`** (§5.2.5) — additive, no capability; present only on
+     polygon layers that actually hold a multi-part feature.
+  5. **`vertex_value` / `vertex_value_matrix` quantization** —
+     `TILE_META.vq` (§5.2.6), capability `vertex-value-quant`, **opt-in**
+     (`stt-build --quantize-vertex-values`) because it is the one lossy
+     encoding here. Exactly halves those columns: measured −48% of total
+     uncompressed tile bytes on `bixi-corridors`, −41% on a corridor-matrix
+     corpus.
+  6. **Attribute-quantization correctness fix** (payload spec: "Numeric
+     attribute quantization"). The range-adaptive mode no longer forces a
+     `UInt16` leaf: integer-valued columns now quantize **exactly** at
+     `s = 1.0` (`UInt16`, widening to `Int32` past a 65 535 span), and
+     identifier-magnitude columns — any column reaching `i32::MAX` — stay
+     `Float64` rather than being range-adapted into nonsense. This
+     **corrects silently wrong values in already-published archives**
+     (measured: an integer `elevation_m` column was off by up to 1.91 units;
+     `nyc-taxi-points.trip_id` by up to ±1.15e14); those archives are not
+     retroactively fixed and carry the wrong values until rebuilt. The
+     refusal is deliberately magnitude-based, never span- or
+     distribution-based, so that it cannot vary between tiles of one column —
+     see the payload spec for why that matters.
+  7. **Builder geometry fixes** (not a wire change, but it changes emitted
+     bytes): MultiPolygon parts are tessellated per part instead of being
+     bridged as holes of part 1, and degenerate/unreadable geometry is
+     dropped-and-counted instead of being replaced with a fabricated
+     placeholder — so `metadata.feature_count` for affected sources drops to
+     an honest number.
+
+  **Deploy consequence, stated plainly: the whole published fleet must be
+  rebuilt and re-synced.** Every pack and directory object gets a new
+  content address, so a re-sync uploads 100% of the objects and every edge
+  cache starts cold. Follow §2's retention contract: a major republish
+  SHOULD defer pruning (`scripts/r2-sync.sh --no-prune`) until the retention
+  window has passed, because the one-deploy grace rule alone does not cover
+  a change where _nothing_ is shared with the previous manifest. Old
+  archives keep decoding on the new readers (verified: all 57 shipped
+  `formatVersion: 2` datasets report byte-identical validator output before
+  and after), so the flip does not have to be atomic.
+
+  **Withdrawn in the same change: `formatVersion` 1 read support** — see the
+  exception recorded under §9.1. The `stt-build --format-version` flag, the
+  v1 frame decoder, the v1 golden fixture and its byte-pin test are gone;
+  `manifest.schema.json` narrowed `formatVersion` to `[2]`.
 
 - **v2 (2026-07)** — the coordinated byte break (decision record:
   `docs/roadmap/stt-packed-format-decisions.md` §4.2; every wire-breaking change
@@ -837,10 +1151,14 @@ carries its own `STTB` magic prelude from day one under either version.
   `TILE_META` and skippable section TOC (§5.2); rows stable-sorted by
   `start_time` (§5.2.3). Directory codec v5 and the manifest envelope are
   otherwise unchanged. `stt-build` emits v2 by default; `--format-version 1`
-  is the one-release transitional kill switch, byte-identical to the 0.3.x
-  writer (golden-pinned). `stt-serve` responses stay v1 frames (the serve
-  protocol has no version channel; see
-  [`stt-serve-protocol.md`](./stt-serve-protocol.md)).
+  was the one-release transitional kill switch, byte-identical to the 0.3.x
+  writer (golden-pinned) — withdrawn 2026-07-26, above. `stt-serve`
+  responses were v1 frames at this revision; they are now **self-contained
+  v2 frames** (inline `INLINE_SCHEMA_*` sections, since a live server has no
+  manifest to carry a `schemas` registry), advertised as `formatVersion` on
+  `/metadata.json`. See [`stt-serve-protocol.md`](./stt-serve-protocol.md) —
+  which still describes the v1 behaviour and still has no `capabilities`
+  channel, so a served tile using compact times declares nothing.
 - **v1, builder-behavior (2026-07)** — synthetic feature ids (string-id and
   id-less features, clipped segments) moved from Rust's toolchain-unspecified
   `DefaultHasher` to a pinned FNV-1a 64. Not a wire change — readers are
@@ -1077,8 +1395,11 @@ silent overflow:
 - **u32 blob caps.** A directory entry's `length` (compressed blob),
   `uncompressed_size`, and `feature_count` are `u32` → a single tile blob and
   its decompressed payload are each capped at **4 GiB − 1**, and a tile at
-  ~4.29 B features. The per-layer `ipc_len` in the layer frame (§5.1) is also
-  `u32`. A writer MUST fail loudly, never wrap, when a tile exceeds these.
+  ~4.29 B features. Each v2 frame section's TOC `length` (§5.2) is also `u32`,
+  capping one layer's IPC stream at the same 4 GiB − 1 (as did the v1 frame's
+  per-layer `ipc_len`). A writer MUST fail loudly, never wrap, when a tile
+  exceeds these.
+- **Frame layer count.** `u16` → at most 65 535 layers per tile.
 - **Single-level page table.** The paged directory (§4.1) has one root and
   one level of leaves. The root grows 52 B/page; at the default 4096
   entries/page the practical ceiling is roughly **5–10 M directory entries**
@@ -1091,7 +1412,8 @@ silent overflow:
   design. The escape hatch is reserved, additive: a future optional
   `packsRef` indirection (a content-addressed `packs.json` object holding the
   table) keeps the mutable manifest tiny; readers that don't know the field
-  ignore it per §3, so it ships under `formatVersion` 1 with a writer opt-in.
+  ignore it per §3, so it ships without a `formatVersion` bump, as a writer
+  opt-in.
 - **Directory entry count.** The codec itself is varint-sized (no hard `N`
   cap below `u64`), but see §11 for the reader-side allocation caps, and the
   fleet-scale note in §4.1 (the whole fleet today is ~560 K entries).
@@ -1147,9 +1469,11 @@ Rules:
   `stt-bundle` re-verifies each blake3 key on both pack and unpack).
 - Packing is deterministic: one dataset ⇒ one bundle byte stream.
 - The container is **object-agnostic** — keys and bytes are opaque to it —
-  so it carries `formatVersion` 1 and 2 datasets (and future manifest
-  revisions) unchanged; the embedded manifest's `formatVersion` governs how
-  the unpacked/bundle-backed dataset is read.
+  so it carries any packed dataset (including future manifest revisions)
+  unchanged; the embedded manifest's `formatVersion` governs how the
+  unpacked/bundle-backed dataset is read. A bundle wrapping a withdrawn
+  `formatVersion` still unpacks byte-identically — the container never
+  inspects it — but the resulting dataset will not open.
 - Consumers MUST apply §11's key rules to header keys before resolving them
   to filesystem paths on unpack: relative paths only, no `..`/`.`/empty
   segments, no absolute keys.

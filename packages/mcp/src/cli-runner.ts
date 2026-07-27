@@ -70,8 +70,8 @@ class CappedOutput {
  * INTERNAL binary that is not one of the published crates lives outside the
  * root Cargo workspace (with its own `[workspace]`, so its dep tree can't
  * force an MSRV on the published crates), and therefore has its own `target/`.
- * `stt-generate` is the one that moved out; without this probe it resolves to
- * a bare PATH lookup and a repo checkout that built it never finds it.
+ * `stt-generate` is such a binary; without this probe it resolves to a bare
+ * PATH lookup and a repo checkout that built it never finds it.
  */
 function findInCargoTarget(
   name: string,
@@ -191,8 +191,8 @@ export function run(
         stdout: stdout.toString(),
         // The spawn failure (typically ENOENT for a binary that isn't on PATH)
         // is appended AFTER the cap, not folded into it — it's the one line the
-        // caller actually needs, and it used to be the first thing dropped when
-        // a chatty child had already filled the buffer.
+        // caller actually needs, and folded in it would be dropped outright
+        // whenever a chatty child had already filled the capped buffer.
         stderr: `${stderr.toString()}\n${err instanceof Error ? err.message : String(err)}`,
         timedOut,
         aborted,

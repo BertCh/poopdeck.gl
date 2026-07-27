@@ -34,6 +34,20 @@ import {
   METERS_PER_DEG_LAT,
   SINGLETON_HOLD_MS,
   DEFAULT_TRACK_COLOR,
+  MOTION_MODES,
+  resolveMotionConfig,
+  deriveMotionState,
+  toMps,
+  toCompassDeg,
+  fromCompassDeg,
+  SPHERE_RADIUS_M,
+  wrapLonDeg,
+  shortestLonDeltaDeg,
+  haversineMeters,
+  initialBearingDeg,
+  destinationPoint,
+  interpolateGreatCircle,
+  greatCircleCourseDeg,
 } from '../src/lib/track-kernel';
 import type {
   Track,
@@ -43,6 +57,13 @@ import type {
   TrackFieldConfig,
   TrackSampleConfig,
   TrackIndexResult,
+  MotionMode,
+  MotionConfig,
+  ResolvedMotionConfig,
+  MotionState,
+  CourseConvention,
+  SpeedUnit,
+  LonLat,
 } from '../src/lib/track-kernel';
 import type { Tile } from '@poopdeck.gl/core';
 
@@ -162,6 +183,88 @@ describe('track-kernel re-export (deck import path → @poopdeck.gl/core)', () =
     expect(lerpAngleDeg(350, 10, 0.5)).toBeCloseTo(360, 9);
     const fallback: TrackColor = [1, 2, 3];
     expect(resolveColor('nope', null, fallback)).toEqual([1, 2, 3, 255]);
+  });
+
+  it('resolves every motion-mode + spherical symbol through the shim', () => {
+    for (const fn of [
+      resolveMotionConfig,
+      deriveMotionState,
+      toMps,
+      toCompassDeg,
+      fromCompassDeg,
+      wrapLonDeg,
+      shortestLonDeltaDeg,
+      haversineMeters,
+      initialBearingDeg,
+      destinationPoint,
+      interpolateGreatCircle,
+      greatCircleCourseDeg,
+    ]) {
+      expect(typeof fn).toBe('function');
+    }
+    expect([...MOTION_MODES]).toEqual(['linear', 'velocity', 'great-circle']);
+    // The sphere the motion path measures on is the trips-kernel mean radius,
+    // NOT the WGS84 semi-major axis the projection kernel uses.
+    expect(SPHERE_RADIUS_M).toBe(6_371_000);
+    // Type-only imports are erased at runtime; naming them in a value position
+    // is what makes the package `tsc --noEmit` prove they re-export.
+    const typeWitness: {
+      mode: MotionMode;
+      cfg: MotionConfig;
+      resolved: ResolvedMotionConfig;
+      state: MotionState;
+      convention: CourseConvention;
+      unit: SpeedUnit;
+      point: LonLat;
+    } = {
+      mode: 'velocity',
+      cfg: { mode: 'velocity' },
+      resolved: resolveMotionConfig({ mode: 'velocity' }, 'rad'),
+      state: { speedMps: 1, courseDeg: 2, atIndex: 0 },
+      convention: 'compass',
+      unit: 'kn',
+      point: { lon: 0, lat: 0 },
+    };
+    expect(typeWitness.resolved.mode).toBe('velocity');
+    expect(typeWitness.resolved.wrapLongitude).toBe(true);
+  });
+
+  it("runs a real {mode:'velocity', maxExtrapolationMs} sample end to end", () => {
+    // Two keyframes 1000 ms apart, plus a `speed` column (10 → 20 m/s). Past the
+    // terminal keyframe the pose must be PREDICTED rather than culled — which is
+    // the whole point of the mode, and is also the assertion that fails loudly
+    // if `@poopdeck.gl/core`'s dist is stale.
+    const track: Track = buildTrackIndex(
+      [trackTile(0, [0, 10])],
+      CFG,
+    ).tracks.get('A')!;
+    // The fixture's heading column is RADIANS (π/2 at the terminal keyframe),
+    // compass convention ⇒ due east, which is the direction the track was
+    // already travelling.
+    const motion: MotionConfig = {
+      mode: 'velocity',
+      maxExtrapolationMs: 5000,
+      courseConvention: 'compass',
+    };
+    // Without motion the track culls the instant it passes its last keyframe.
+    expect(sampleTrack(track, 3000, SAMPLE)).toBeNull();
+
+    const s = sampleTrack(track, 3000, { ...SAMPLE, motion })!;
+    expect(s).not.toBeNull();
+    expect(s.extrapolated).toBe(true);
+    expect(s.extrapolationAgeMs).toBe(2000);
+    // It kept heading east, past the terminal keyframe at lon 10.
+    expect(s.lon).toBeGreaterThan(10);
+    // The pick row now carries the prediction flag; a default-path row does not.
+    expect(makePickRow(s).extrapolated).toBe(true);
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        makePickRow(sampleTrack(track, 500, SAMPLE)!),
+        'extrapolated',
+      ),
+    ).toBe(false);
+    // Past the horizon it culls again.
+    expect(sampleTrack(track, 6001, { ...SAMPLE, motion })).toBeNull();
   });
 
   it('runs the incremental TrackIndexMaintainer through the re-export', () => {

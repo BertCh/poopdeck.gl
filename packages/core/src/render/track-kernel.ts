@@ -11,11 +11,11 @@
  * silently diverges between renderers, and this pooling/interpolation code is a
  * prime candidate (originally lifted from AnimatedTripHeadsLayer).
  *
- * It lives in framework-free `@poopdeck.gl/core` (hoisted out of
- * `@poopdeck.gl/layers` by the maplibre-parity campaign D7) so EVERY renderer
- * backend — deck, maplibre/mapbox, three, Cesium — runs the same motion-glide
- * math instead of hand-copying it. `@poopdeck.gl/layers/src/lib/track-kernel.ts`
- * is now a thin re-export of this module, so deck call sites are unchanged.
+ * It lives in framework-free `@poopdeck.gl/core` rather than in
+ * `@poopdeck.gl/layers` so EVERY renderer backend — deck, maplibre/mapbox,
+ * three, Cesium — runs the same motion-glide math instead of hand-copying it.
+ * `@poopdeck.gl/layers/src/lib/track-kernel.ts` is a thin re-export of this
+ * module, so deck call sites can keep importing it from there.
  *
  * ── THE MODEL ────────────────────────────────────────────────────────────────
  * The AV `objects/` archive carries one POINT feature per tracked object PER
@@ -38,10 +38,33 @@
 
 import type {
   Tile,
+  TileId,
   BinaryFeatures,
   STTTileLayer as TileLayer,
 } from '../types.js';
+import { tileKey } from '../tile-key.js';
 import type { RGBA255 } from './style.js';
+import type { LonLat } from '../geo/spherical.js';
+import {
+  destinationPoint,
+  greatCircleCourseDeg,
+  haversineMeters,
+  initialBearingDeg,
+  interpolateGreatCircle,
+} from '../geo/spherical.js';
+import type {
+  MotionConfig,
+  MotionState,
+  ResolvedMotionConfig,
+} from './motion.js';
+import {
+  clampLat,
+  fromCompassDeg,
+  lerpLonWrapped,
+  resolveMotionConfig,
+  toCompassDeg,
+  toMps,
+} from './motion.js';
 
 /**
  * A color as the track kernel accepts it — RGB or RGBA in the 0–255 range, as a
@@ -121,6 +144,27 @@ export interface Sample {
   /** Appear/disappear fade factor in [0,1] (folded into the instance alpha). */
   alpha: number;
   track: Track;
+  /**
+   * True when this pose was PREDICTED past the track's terminal keyframe rather
+   * than interpolated between two of them (see {@link MotionConfig}).
+   *
+   * OPTIONAL, and set only on the motion path — deliberately. The default
+   * sampler's returned object literal keeps exactly its historical own-property
+   * set, so anything downstream that enumerates a `Sample` (a pick row, a
+   * structured-clone into a worker, a snapshot test) sees no new key unless a
+   * `motion` config asked for one.
+   */
+  extrapolated?: boolean;
+  /**
+   * How far past the terminal keyframe (ms) this pose was predicted — CLAMPED
+   * to `maxExtrapolationMs`. It is the age of the POSE, not of the playhead: a
+   * singleton whose hold band outlives its prediction window keeps being drawn
+   * at the pose the horizon produced, and reports that horizon's age for the
+   * whole freeze. So `position === destinationPoint(terminal, course,
+   * speed × extrapolationAgeMs/1000)` holds for every predicted sample, which is
+   * what a consumer reading this field is actually asking.
+   */
+  extrapolationAgeMs?: number;
 }
 
 /** Flat decoded props attached to `info.object` on a pick (AV inspector shape). */
@@ -132,6 +176,13 @@ export interface TrackPickRow {
   width: number;
   height: number;
   speed: number;
+  /**
+   * Present ONLY when the sampled pose carried {@link Sample.extrapolated} — an
+   * inspector reading a predicted position should be able to see that it is a
+   * prediction. Absent on every default-path row, which therefore keeps exactly
+   * its seven historical keys.
+   */
+  extrapolated?: boolean;
 }
 
 /** Which tile columns to read when pooling snapshots into tracks. */
@@ -177,6 +228,23 @@ export interface TrackSampleConfig {
    * @default Infinity
    */
   maxGapMs?: number;
+  /**
+   * Opt-in motion model. UNSET is not the same as `{mode: 'linear'}` at the
+   * dispatch level (it takes a different code path) but IS the same at the
+   * result level: `motion-linear-parity.test.ts` pins the two byte-identical,
+   * down to which own properties the returned `Sample` has. Setting any config
+   * routes through {@link sampleTrackExtended}.
+   * @default undefined — the historical lerp-only sampler
+   */
+  motion?: MotionConfig;
+  /**
+   * Hold window (ms) for a single-keyframe track, overriding
+   * {@link SINGLETON_HOLD_MS}. Exists because `@poopdeck.gl/three`'s box-tracks
+   * fork shipped 400 ms while the kernel shipped 600: de-forking without this
+   * knob would silently change how long a lone AV box lingers.
+   * @default SINGLETON_HOLD_MS (600)
+   */
+  singletonHoldMs?: number;
 }
 
 /** Outcome of {@link buildTrackIndex}; the caller emits its own telemetry/warns. */
@@ -274,9 +342,18 @@ export function resolveColor(
   return [c[0], c[1], c[2], c[3] ?? 255];
 }
 
-/** Build the flat AV-inspector pick row for one interpolated sample. */
+/**
+ * Build the flat AV-inspector pick row for one interpolated sample.
+ *
+ * The seven-key literal is the historical shape and stays the historical shape:
+ * `extrapolated` is grafted on afterwards and ONLY when the sample actually
+ * carries it, so a row built from a default-path sample is own-property-equal to
+ * what this returned before motion modes existed. Assigning `undefined`
+ * unconditionally would not do — `{a: undefined}` still has the key `a`, and
+ * `Object.keys` (and a `toEqual` against a literal) can tell.
+ */
 export function makePickRow(s: Sample): TrackPickRow {
-  return {
+  const row: TrackPickRow = {
     track_id: s.track.trackId,
     category: s.track.category,
     heading: s.heading,
@@ -285,6 +362,8 @@ export function makePickRow(s: Sample): TrackPickRow {
     height: s.height,
     speed: s.speed,
   };
+  if (s.extrapolated !== undefined) row.extrapolated = s.extrapolated;
+  return row;
 }
 
 /**
@@ -429,13 +508,23 @@ export function sampleTrack(
   now: number,
   cfg: TrackSampleConfig,
 ): Sample | null {
+  // A motion config routes to the extended sampler; EVERYTHING below this line
+  // is the historical body, unchanged except that the singleton hold is now
+  // configurable. The dispatch is the first statement rather than a branch
+  // woven through the body precisely so that "no motion config" cannot pick up
+  // a behaviour change by accident.
+  if (cfg.motion !== undefined)
+    return sampleTrackExtended(track, now, cfg, cfg.motion);
+
   const { times } = track;
   const n = times.length;
   if (n === 0) return null;
 
   const first = times[0];
   const last = times[n - 1];
-  const pad = track.singleton ? SINGLETON_HOLD_MS / 2 : 0;
+  const pad = track.singleton
+    ? (cfg.singletonHoldMs ?? SINGLETON_HOLD_MS) / 2
+    : 0;
   if (now < first - pad || now > last + pad) return null;
 
   const maxGapMs = cfg.maxGapMs ?? Infinity;
@@ -521,6 +610,414 @@ export function sampleTrack(
   };
 }
 
+/* ── Motion modes (the extended sampler) ─────────────────────────────────────
+ * Everything below implements `TrackSampleConfig.motion`. It is a SEPARATE
+ * function rather than branches inside `sampleTrack` for one reason: the
+ * default path must stay provably untouched. `motion-linear-parity.test.ts`
+ * asserts that `sampleTrack(t, n, cfg)` and
+ * `sampleTrack(t, n, {...cfg, motion: {mode: 'linear'}})` agree on every numeric
+ * field under `Object.is`, on null-ness, and on the returned object's own
+ * property set — so the two implementations are kept honest by differential
+ * test rather than by careful reading.
+ *
+ * ⚠ TRACK ARRAYS ARE READ-ONLY VIEWS. A `Track`'s parallel arrays may be
+ * `Float64Array.subarray` views cast through `as unknown as number[]`, and
+ * `heading`/`length`/`width`/`height`/`speed` may be ONE shared all-NaN array
+ * ALIASED BY EVERY TRACK IN A TILE (see
+ * `packages/maplibre/src/layers/trip-heads-layer.ts`). Code here may only INDEX
+ * them. Never push, never assign, and never read `.length` from anything but
+ * `times` — a `subarray` view reports the length of its window, and the shared
+ * NaN array reports whatever the widest tile needed.
+ */
+
+/** Scratch motion state — reused every sample; the motion path allocates nothing. */
+const MOTION_STATE: MotionState = {
+  speedMps: NaN,
+  courseDeg: NaN,
+  atIndex: -1,
+};
+/** Scratch point for `destinationPoint` / `interpolateGreatCircle`. */
+const MOTION_POINT: LonLat = { lon: 0, lat: 0 };
+
+/**
+ * Read one keyframe's instantaneous motion — speed in m/s, course in compass
+ * degrees — preferring the archive's own columns and falling back (when
+ * {@link MotionConfig.deriveVelocity} allows) to a finite difference of the
+ * ADJACENT keyframe pair.
+ *
+ * FORWARD ONLY. The pair is `(index, index+1)` when a next keyframe exists and
+ * otherwise `(index-1, index)` — so at the terminal keyframe, which is the only
+ * place extrapolation happens, the derived velocity is collinear with the last
+ * bracket the entity actually travelled. There is no backward-extrapolation
+ * direction parameter because there is no consumer for one: AIS, ADS-B and AV
+ * archives all predict forward.
+ *
+ * Returns `speedMps: NaN` when neither route yields a value (no column and no
+ * second keyframe — i.e. a singleton with no `speed`). The caller MUST test for
+ * that and fall back to the singleton hold: `NaN * dt` is NaN, and a NaN
+ * position renders as nothing at all, with no error anywhere.
+ *
+ * Writes into and returns `out`; allocates nothing.
+ */
+export function deriveMotionState(
+  track: Track,
+  index: number,
+  cfg: ResolvedMotionConfig,
+  out: MotionState,
+): MotionState {
+  const n = track.times.length;
+  out.atIndex = index;
+  out.speedMps = NaN;
+  out.courseDeg = NaN;
+  if (index < 0 || index >= n) return out;
+
+  const rawSpeed = track.speed[index];
+  if (Number.isFinite(rawSpeed)) out.speedMps = toMps(rawSpeed, cfg.speedUnit);
+  out.courseDeg = toCompassDeg(
+    track.heading[index],
+    cfg.courseUnit,
+    cfg.courseConvention,
+  );
+  if (!cfg.deriveVelocity) return out;
+  if (Number.isFinite(out.speedMps) && Number.isFinite(out.courseDeg))
+    return out;
+
+  const forward = index + 1 < n;
+  const a = forward ? index : index - 1;
+  const b = a + 1;
+  if (a < 0 || b >= n) return out; // a singleton has no pair to difference
+  const dtMs = track.times[b] - track.times[a];
+  if (!(dtMs > 0)) return out; // de-dup guarantees this, but NaN must not divide
+
+  if (!Number.isFinite(out.speedMps)) {
+    out.speedMps =
+      haversineMeters(track.lon[a], track.lat[a], track.lon[b], track.lat[b]) /
+      (dtMs / 1000);
+  }
+  if (!Number.isFinite(out.courseDeg)) {
+    // The wanted course is the one AT `index`, and a great circle's course
+    // TURNS along the arc — the bearing leaving `a` is not the bearing arriving
+    // at `b`. When the pair ends at `index` (the extrapolation case) that means
+    // the arc's FINAL bearing, i.e. the reverse arc's initial bearing turned
+    // 180°. Using the initial bearing there instead sends the prediction off
+    // the great circle the entity was actually travelling — by 0.16° over a
+    // 40 km leg at mid-latitude, growing with leg length.
+    out.courseDeg = forward
+      ? initialBearingDeg(
+          track.lon[a],
+          track.lat[a],
+          track.lon[b],
+          track.lat[b],
+        )
+      : (initialBearingDeg(
+          track.lon[b],
+          track.lat[b],
+          track.lon[a],
+          track.lat[a],
+        ) +
+          180) %
+        360;
+  }
+  return out;
+}
+
+/**
+ * {@link sampleTrack} with a {@link MotionConfig} in play.
+ *
+ * Structurally a copy of the default sampler — same cull test, same bracket
+ * search, same dimension/speed/fade arithmetic — with two dispatch points
+ * grafted on:
+ *
+ *   INTERIOR  `'great-circle'` slerps the bracket instead of lerping lon/lat,
+ *             and (only when the heading column is absent) reads the course off
+ *             the arc. `'velocity'` interpolates exactly as `'linear'` does,
+ *             differing only in that its `wrapLongitude` default is true.
+ *   EXTERIOR  past the terminal keyframe, `'velocity'` and `'great-circle'`
+ *             continue on the entity's own speed + course via
+ *             `destinationPoint` for up to `maxExtrapolationMs`. `'linear'`
+ *             never does, whatever the config says — it is defined as the
+ *             shipped behaviour.
+ *
+ * The singleton hold and the extrapolation window are the SAME axis (both are
+ * "how far past `last` may a pose exist"), so the high cull bound is their max:
+ * a singleton that carries speed + course columns flies on, and one that does
+ * not still gets its ±`singletonHoldMs`/2 of visibility. When the hold is the
+ * longer of the two, the pose flies to the horizon and then FREEZES there for
+ * the remainder of the hold — it never reverts to the raw keyframe.
+ *
+ * `alpha`'s fade-out ramp is measured against whichever of those two bounds the
+ * pose will actually cull at, so it is one monotone descent across the
+ * interior → predicted boundary rather than one ramp per side. See the fade
+ * block at the bottom of this function for the full argument.
+ */
+function sampleTrackExtended(
+  track: Track,
+  now: number,
+  cfg: TrackSampleConfig,
+  motion: MotionConfig,
+): Sample | null {
+  const m = resolveMotionConfig(motion, cfg.angleUnit);
+  const { times } = track;
+  const n = times.length;
+  if (n === 0) return null;
+
+  const first = times[0];
+  const last = times[n - 1];
+  const pad = track.singleton
+    ? (cfg.singletonHoldMs ?? SINGLETON_HOLD_MS) / 2
+    : 0;
+  const extrapMs =
+    m.mode === 'linear' || !(m.maxExtrapolationMs > 0)
+      ? 0
+      : m.maxExtrapolationMs;
+  const highPad = pad > extrapMs ? pad : extrapMs;
+  if (now < first - pad || now > last + highPad) return null;
+
+  const maxGapMs = cfg.maxGapMs ?? Infinity;
+
+  let lo: number;
+  let hi: number;
+  let frac: number;
+  if (n === 1) {
+    lo = hi = 0;
+    frac = 0;
+  } else {
+    const c = now < first ? first : now > last ? last : now;
+    lo = 0;
+    hi = n - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (times[mid] <= c) lo = mid;
+      else hi = mid;
+    }
+    const denom = times[hi] - times[lo];
+    frac = denom > 0 ? (c - times[lo]) / denom : 0;
+    if (denom > maxGapMs) frac = 0;
+  }
+
+  const length = lerpDim(
+    track.length[lo],
+    track.length[hi],
+    frac,
+    cfg.defaultLength,
+  );
+  const width = lerpDim(
+    track.width[lo],
+    track.width[hi],
+    frac,
+    cfg.defaultWidth,
+  );
+  const height = lerpDim(
+    track.height[lo],
+    track.height[hi],
+    frac,
+    cfg.defaultHeight,
+  );
+  const speedLo = track.speed[lo];
+  const speedHi = track.speed[hi];
+  const speed =
+    Number.isFinite(speedLo) || Number.isFinite(speedHi)
+      ? lerpDim(speedLo, speedHi, frac, 0)
+      : NaN;
+
+  const headingLerp = cfg.angleUnit === 'deg' ? lerpAngleDeg : lerpAngle;
+
+  let lon = NaN;
+  let lat = NaN;
+  let alt = NaN;
+  let heading = NaN;
+  let extrapolated = false;
+  let ageMs = 0;
+
+  // ── EXTERIOR: predict past the terminal keyframe ──────────────────────────
+  // Entered for the WHOLE admitted band past `last` (`highPad`), not only for
+  // its first `extrapMs`. The prediction itself still stops at the horizon —
+  // `ageMs` is clamped — so once the window closes the pose FREEZES where the
+  // prediction left it for whatever is left of the singleton hold.
+  //
+  // WHY the clamp instead of the narrower gate it replaces: `pad` and `extrapMs`
+  // are independent knobs, so `extrapMs < pad` is a perfectly ordinary config
+  // (a 60 s hold with a 10 s prediction window). Under the narrow gate the band
+  // `(last + extrapMs, last + pad]` fell through to the INTERIOR branch, where a
+  // singleton has `lo === hi === 0` and `frac === 0` — i.e. the entity flew
+  // forward for `extrapMs` and then teleported BACKWARDS to the keyframe it had
+  // just left, and sat there for the rest of the hold. Culling early instead
+  // would be worse still: carrying speed columns would then SHORTEN a
+  // singleton's visibility relative to one that carries none, inverting the
+  // docblock's promise above.
+  //
+  // Non-singletons are unaffected: `pad` is 0 for them, so `highPad === extrapMs`
+  // and the cull at :774 has already returned null wherever the clamp would bite.
+  if (now > last && extrapMs > 0) {
+    const i = n - 1;
+    const st = deriveMotionState(track, i, m, MOTION_STATE);
+    if (Number.isFinite(st.speedMps) && Number.isFinite(st.courseDeg)) {
+      const dt = now - last;
+      ageMs = dt > extrapMs ? extrapMs : dt;
+      const p = destinationPoint(
+        track.lon[i],
+        track.lat[i],
+        st.courseDeg,
+        st.speedMps * (ageMs / 1000),
+        MOTION_POINT,
+      );
+      lon = p.lon;
+      lat = clampLat(p.lat);
+      alt = track.alt[i];
+      // A real heading column wins: writing the derived course back would
+      // renormalize a perfectly good archive value into [0, 360).
+      const rawHeading = track.heading[i];
+      heading = Number.isFinite(rawHeading)
+        ? rawHeading
+        : fromCompassDeg(st.courseDeg, m.courseUnit, m.courseConvention);
+      extrapolated = true;
+    }
+  }
+
+  // The cull test above admits the WHOLE `max(hold, extrapolation)` band,
+  // because whether a prediction is possible is only known after the columns
+  // have been read. If it turned out not to be — no speed column and no pair to
+  // difference, or `deriveVelocity: false` — the extrapolation band was never
+  // earned, and the track culls at its hold band exactly as `'linear'` would.
+  // Without this the entity would freeze at its last keyframe for the full
+  // `maxExtrapolationMs` instead of disappearing.
+  if (!extrapolated && now > last + pad) return null;
+
+  // ── INTERIOR (and the singleton hold) ─────────────────────────────────────
+  if (!extrapolated) {
+    alt = lerp(track.alt[lo], track.alt[hi], frac);
+    if (m.mode === 'great-circle') {
+      const p = interpolateGreatCircle(
+        track.lon[lo],
+        track.lat[lo],
+        track.lon[hi],
+        track.lat[hi],
+        frac,
+        MOTION_POINT,
+      );
+      lon = p.lon;
+      lat = clampLat(p.lat);
+      const h = headingLerp(track.heading[lo], track.heading[hi], frac);
+      heading =
+        Number.isFinite(h) || lo === hi
+          ? h
+          : fromCompassDeg(
+              greatCircleCourseDeg(
+                track.lon[lo],
+                track.lat[lo],
+                track.lon[hi],
+                track.lat[hi],
+                frac,
+              ),
+              m.courseUnit,
+              m.courseConvention,
+            );
+    } else {
+      lon = m.wrapLongitude
+        ? lerpLonWrapped(track.lon[lo], track.lon[hi], frac)
+        : lerp(track.lon[lo], track.lon[hi], frac);
+      lat = lerp(track.lat[lo], track.lat[hi], frac);
+      heading = headingLerp(track.heading[lo], track.heading[hi], frac);
+    }
+  }
+
+  // CPU appear/disappear fade (playhead-time ramp), folded into the instance alpha.
+  let alpha = 1;
+  const fadeIn = cfg.fadeInDuration;
+  const fadeOut = cfg.fadeOutDuration;
+  if (fadeIn > 0) {
+    const age = now - first;
+    if (age < fadeIn) alpha *= Math.max(0, Math.min(1, age / fadeIn));
+  }
+  if (fadeOut > 0) {
+    // The fade-out ramp is measured against the instant this pose STOPS BEING
+    // DRAWN — one reference for the whole tail, interior and predicted alike.
+    //
+    // The two obvious per-side references are both wrong, and it is worth
+    // writing down why, because each looks right from one side of the boundary:
+    //
+    //   • `last` everywhere. `remaining` is negative for every predicted pose,
+    //     so alpha is 0 and the entire extrapolation window is invisible on any
+    //     layer that fades out (every one of them does: 200–500 ms defaults).
+    //     The failure reads as "extrapolation does nothing".
+    //   • `last` inside, `last + extrapMs` outside. That is DISCONTINUOUS at
+    //     `now === last`: the interior ramp has already driven alpha to 0 there,
+    //     and the first predicted millisecond jumps back up to
+    //     min(1, extrapMs/fadeOut). The entity fades out, pops back to full
+    //     opacity and fades a second time — a ramp is not a ramp if it restarts.
+    //
+    // So the horizon is chosen ONCE, from where the pose will actually cull, and
+    // alpha becomes a single monotone descent that reaches 0 exactly there.
+    // `highPad` (not `extrapMs`) is the bound because a frozen singleton stays
+    // on screen for the rest of its hold — see the exterior branch above.
+    //
+    // EARNED-NESS is part of "will actually cull". The prediction window is only
+    // real if the terminal keyframe yields a finite speed AND course; when it
+    // does not (`deriveVelocity: false`, or a singleton with no speed column)
+    // the guard at :884 culls the track at `last + pad` exactly as `'linear'`
+    // would, and a ramp aimed at a horizon the pose never reaches would pop it
+    // out of existence at full opacity. Interior samples therefore have to ask
+    // the same question the exterior branch asked — but only inside the ramp's
+    // own window, so the extra `deriveMotionState` never runs on the bulk of a
+    // track (and allocates nothing when it does).
+    //
+    // `'linear'` forces `extrapMs` to 0 (:769), so `flyOn` is false, the horizon
+    // is `last`, and the expression is byte-identical to the shipped
+    // `last - now`. The singleton hold's own ramp is likewise untouched: it has
+    // always been measured against `last`, drawing the far half of the hold at
+    // alpha 0, and `motion-linear-parity.test.ts` pins that.
+    let flyOn = extrapolated;
+    if (!flyOn && extrapMs > 0 && now > last - fadeOut) {
+      const st = deriveMotionState(track, n - 1, m, MOTION_STATE);
+      flyOn = Number.isFinite(st.speedMps) && Number.isFinite(st.courseDeg);
+    }
+    const remaining = (flyOn ? last + highPad : last) - now;
+    if (remaining < fadeOut)
+      alpha *= Math.max(0, Math.min(1, remaining / fadeOut));
+  }
+
+  // Same key order as the default sampler's literal — `Object.keys` equality is
+  // half of the parity contract, and key order is observable.
+  const sample: Sample = {
+    lon,
+    lat,
+    alt,
+    heading,
+    length,
+    width,
+    height,
+    speed,
+    alpha,
+    track,
+  };
+  if (extrapolated) {
+    sample.extrapolated = true;
+    sample.extrapolationAgeMs = ageMs;
+  }
+  return sample;
+}
+
+/* ── Motion vocabulary re-exports ────────────────────────────────────────────
+ * The motion types are re-exported from the kernel so a call site that already
+ * imports `sampleTrack` does not need a second import path to spell the config
+ * it passes. `render/motion.ts` remains the definition site.
+ */
+export {
+  MOTION_MODES,
+  resolveMotionConfig,
+  toMps,
+  toCompassDeg,
+  fromCompassDeg,
+} from './motion.js';
+export type {
+  MotionMode,
+  MotionConfig,
+  ResolvedMotionConfig,
+  MotionState,
+  CourseConvention,
+  SpeedUnit,
+} from './motion.js';
+
 /**
  * Permute every parallel array of a track by `order` (index-sort). The output
  * is allocated at `order.length`, NOT `src.length`: when de-dup dropped
@@ -573,7 +1070,7 @@ function reorder(track: Track, order: number[]): void {
  * The ONE intentional divergence is the synthetic key handed to a track-less /
  * NULL-id snapshot: {@link buildTrackIndex} uses a build-global counter (`∅0`,
  * `∅1`, …) whose value depends on how many such snapshots preceded it across the
- * whole tile set; the maintainer uses a tile-stable key (`∅<tileKey>#n`) so a
+ * whole tile set; the maintainer uses a tile-stable `∅<tile-layer key>#n` so a
  * tile can be added/removed without renumbering its neighbours. Each such key is
  * a unique held singleton either way (one keyframe, `singleton: true`, rendered
  * at its lone position), so the emitted geometry is unaffected — only the opaque
@@ -611,13 +1108,27 @@ function resolveTrackFields(cfg: TrackFieldConfig): ResolvedTrackFields {
 }
 
 /**
- * Stable per-(tile, layer) key. MUST match the layers' `makeTileKey`
- * (`${z}/${x}/${y}/${t}:${layer.name}`) so absorb/evict align with the tile
- * lifecycle the loader drives.
+ * The registry key of one (tile, layer): the tile's canonical {@link tileKey}
+ * then `:` then the layer name.
+ *
+ * ONE PRODUCER, ONE SPELLING. Every per-tile registry a renderer keeps — this
+ * maintainer's absorb/evict set, each deck layer's prepared-tile and sublayer
+ * caches — keys on this string, and absorb, lookup and prune run from different
+ * call sites. They align only while all of them spell the key byte-identically,
+ * so a key is produced here or nowhere: a second definition drifts, and a prune
+ * walk whose live set is spelled differently from the entries it walks evicts
+ * every one of them, every frame.
+ *
+ * The tile half folds in the temporal-LOD tier, because {@link tileKey} does.
+ * Spelling it `z/x/y/t` instead gives a scrub-preview tile and the base tile it
+ * shares that address with ONE slot: whichever lands second wins, and the other
+ * is served a payload covering a different span of time.
+ *
+ * In-memory only. {@link tileKey}'s spelling is a persistence contract with the
+ * OPFS tile cache; this composite reaches no cache that outlives the page.
  */
-function tileLayerKey(tile: Tile, layerName: string): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layerName}`;
+export function tileLayerKey(id: TileId, layerName: string): string {
+  return `${tileKey(id)}:${layerName}`;
 }
 
 /**
@@ -667,7 +1178,7 @@ interface MaintainedTrack {
  */
 function poolTileLayer(
   tileLayer: TileLayer,
-  tileKey: string,
+  sourceKey: string,
   R: ResolvedTrackFields,
 ): TilePool {
   const binary = tileLayer.features;
@@ -693,10 +1204,10 @@ function poolTileLayer(
       const idx = trackCol.indices[i];
       key =
         idx === 0xffff
-          ? `∅${tileKey}#${synthetic++}`
-          : (trackCol.categories[idx] ?? `∅${tileKey}#${synthetic++}`);
+          ? `∅${sourceKey}#${synthetic++}`
+          : (trackCol.categories[idx] ?? `∅${sourceKey}#${synthetic++}`);
     } else {
-      key = `∅${tileKey}#${synthetic++}`;
+      key = `∅${sourceKey}#${synthetic++}`;
     }
 
     let g = groups.get(key);
@@ -814,7 +1325,9 @@ function assembleTrack(groups: TileTrackGroup[]): {
  * that maintains the id-keyed track index across tile churn, re-pooling only
  * ADDED tiles and re-sorting only AFFECTED tracks. See the section header for
  * the byte-for-byte-equivalence contract. Used by the point + icon glide render
- * paths; the box/mesh layers keep calling {@link buildTrackIndex} directly.
+ * paths, and by the box + mesh layers. {@link buildTrackIndex} remains the
+ * one-shot form — correct, but O(all resident snapshots) per call, so it is
+ * for cold builds and tests rather than a render path that sees tile churn.
  */
 export class TrackIndexMaintainer {
   /** Live tracks keyed by track id / synthetic key. */
@@ -858,7 +1371,7 @@ export class TrackIndexMaintainer {
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
         if (tileLayer.features.featureCount === 0) continue;
-        const key = tileLayerKey(tile, tileLayer.name);
+        const key = tileLayerKey(tile.id, tileLayer.name);
         if (incoming.has(key)) continue; // guard a duplicated key in one array
         incoming.add(key);
         currentKeys.push(key);

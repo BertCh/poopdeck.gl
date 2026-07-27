@@ -141,6 +141,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
   - a **sublayer cache**, keyed by tile + a _layer-props_ digest (`temporalSigma`, `cumulative`, `revealFade`, `temporalSigmaDynamic`, `sizeScale`, `gaussianFalloff`, `alphaCutoff`, `elevationScale`, `fallbackColor`, `timeWindow`, inherited props, update triggers) — these are shader uniforms, so changing one only rewraps already-prepared tile data in a fresh sublayer, with no re-binding of GPU attributes.
   - Both caches are pruned to the live tile set only when the tile array reference changes, not on every render.
 - **Custom `Model` primitive** — [`SplatPrimitiveLayer`](../../packages/layers/src/layers/internal/splat-primitive-layer.ts) (sublayer short id **`splats`**, for `_subLayerProps` overrides) is a fully custom luma.gl `Model`-based layer, like [`FlowLinesLayer`](./flow-lines-layer.md) — it calls the `picking` module's functions directly rather than riding deck's process-wide `DECKGL_FILTER_*` hooks, so it stays bundler-agnostic. The temporal Gaussian and Worldbuild reveal logic live in this shader, not in `TimeFilterExtension`.
+- **Geometry-kind guard** — tile layers whose `geometryType` is not `Point` are skipped with one named console warning rather than misread as one surfel per feature over a flattened vertex run.
 - **Picking** — resolves through the base `SpatioTemporalLayer.getPickingInfo`; each sublayer carries its `tile` and `sttFeatures` so a hit decodes back to the picked feature's columns.
 
 ## Source

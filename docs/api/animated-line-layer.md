@@ -39,6 +39,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 ## Behavior notes
 
 - Shares endpoint derivation, caching, and picking with `AnimatedArcLayer`; only the rendered geometry differs.
+- **LineString tiles only**: the layer checks each tile layer's `geometryType` and skips any layer that is not `LineString`, emitting one named console warning rather than misreading the position buffer. Tiles predating the geometry-kind tag are trusted.
 - The sublayer short id for `_subLayerProps` overrides is **`lines`**.
 
 ## Source

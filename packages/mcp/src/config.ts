@@ -4,9 +4,9 @@
 
 /**
  * `stt-mcp` server configuration: CLI flags + environment fallbacks. Kept as
- * a plain parser (no `commander`/`yargs` dependency — this package's only
- * dependencies are `@modelcontextprotocol/sdk` + `zod`, per the campaign's
- * ground rules) since the flag surface is small and fixed.
+ * a plain parser since the flag surface is small and fixed: this package's only
+ * dependencies are `@modelcontextprotocol/sdk` + `zod`, and adding
+ * `commander`/`yargs` would break that.
  */
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';

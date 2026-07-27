@@ -231,10 +231,48 @@ describe('AnimatedHexagonLayer composite', () => {
     expect(exts).toContain(userExt);
   });
 
-  it('renders pickable cells (unlike the density heatmap)', () => {
-    const layer = makeLayer();
+  it('INHERITS pickable rather than forcing it on', () => {
+    // Discrete cells do have identity to pick, but anything passed in
+    // sublayerProps beats the inherited value (`Object.assign(newProps,
+    // sublayerProps, …)`), so forcing `true` made
+    // `new AnimatedHexagonLayer({pickable: false})` still allocate picking
+    // colours, run the picking pass on every hover and fire onHover across a
+    // 2M-point tile set.
+    const on = makeLayer({ pickable: true });
+    on.state = { tiles: [bigPointTile(4)] };
+    expect(on.renderLayers()[0].props.pickable).toBe(true);
+
+    const off = makeLayer({ pickable: false });
+    off.state = { tiles: [bigPointTile(4)] };
+    expect(off.renderLayers()[0].props.pickable).toBe(false);
+  });
+
+  it('forwards the auto-ranged domain callbacks (the only handle on colorDomain:null)', () => {
+    const onSetColorDomain = () => {};
+    const onSetElevationDomain = () => {};
+    const layer = makeLayer({ onSetColorDomain, onSetElevationDomain });
     layer.state = { tiles: [bigPointTile(4)] };
-    expect(layer.renderLayers()[0].props.pickable).toBe(true);
+    const p = layer.renderLayers()[0].props;
+    expect(p.onSetColorDomain).toBe(onSetColorDomain);
+    expect(p.onSetElevationDomain).toBe(onSetElevationDomain);
+  });
+
+  it("keeps the caller's updateTriggers instead of replacing them", () => {
+    // getSubLayerProps rebuilds updateTriggers as
+    // `{all, ...sublayerProps.updateTriggers, ...overrides}` — everything but
+    // `all` is REPLACED by what the layer passes, so omitting the spread
+    // silently dropped every trigger the caller set. Both summary layers spread
+    // it; this layer was the odd one out.
+    const layer = makeLayer({
+      updateTriggers: { all: 'A', getColorWeight: 'user-cw', somethingElse: 7 },
+    });
+    layer.state = { tiles: [bigPointTile(4)] };
+    const triggers = layer.renderLayers()[0].props.updateTriggers;
+    expect(triggers.all).toBe('A');
+    expect(triggers.somethingElse).toBe(7);
+    // The user's value is merged INTO the window-keyed array, not replaced by it.
+    expect(triggers.getColorWeight).toContain('user-cw');
+    expect(triggers.getElevationWeight).toContain(0); // window center
   });
 
   it('forwards the HexagonLayer prop surface to the sublayer', () => {

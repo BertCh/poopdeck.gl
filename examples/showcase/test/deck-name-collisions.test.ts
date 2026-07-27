@@ -255,7 +255,7 @@ describe('deck.gl export-name collisions', () => {
             e.name.endsWith('Layer') &&
             !e.name.startsWith('STT') &&
             // The layer CONTRACT / base class, not a concrete layer kind.
-            !['SttLayer', 'BaseSttLayer'].includes(e.name),
+            !['STTLayer', 'BaseSTTLayer'].includes(e.name),
         )
         .map((e) => e.name);
       expect(unprefixed, `${rel} exports unprefixed layer classes`).toEqual([]);

@@ -33,10 +33,27 @@ const DECISIONS: Decision[] = [
     q: 'Why Apache Arrow for the payload?',
     a: (
       <>
-        Columns arrive GPU-shaped and slice zero-copy, the same schema opens in
-        Rust, JS and Python with stock libraries, and field metadata carries the
-        format's affines (<span className="font-mono">stt:quant</span>,{' '}
-        <span className="font-mono">stt:qa</span>) without side files.
+        Columns arrive GPU-shaped and slice zero-copy, and the same schema opens
+        in Rust, JS and Python with stock libraries. Everything the format adds
+        rides in metadata rather than side files — the dataset-constant part in
+        the schema itself (<span className="font-mono">stt:quant</span>), the
+        per-tile part in the frame's own{' '}
+        <span className="font-mono">TILE_META</span> section.
+      </>
+    ),
+  },
+  {
+    q: 'How does the format add features without breaking readers?',
+    a: (
+      <>
+        Two rules. Additive columns need no announcement — a reader that doesn't
+        know <span className="font-mono">part_offsets</span> ignores it. But a
+        feature that <em>re-types</em> an existing column (quantized coordinates
+        become integers) would make an old reader silently misdecode rather than
+        fail, so each one declares itself in{' '}
+        <span className="font-mono">manifest.capabilities</span> and a reader
+        that lacks it must refuse the dataset at open. Silent wrongness is the
+        only failure mode the format treats as unacceptable.
       </>
     ),
   },
@@ -58,11 +75,23 @@ const DECISIONS: Decision[] = [
   },
   {
     q: 'Why four renderers over one kernel?',
-    a: "Teams already own a map stack. Decode, streaming, the clock and the gate math are shared; each backend is a thin dialect of the same kernel — GLSL for deck.gl and MapLibre, TSL for Three's WebGPU path, primitives for Cesium.",
+    a: "Teams already own a map stack. Decode, streaming, the clock and the definition of the gate math are shared; only the last inch is per-host — GLSL for deck.gl and MapLibre, TSL for Three's WebGPU path, a custom Appearance for Cesium — and conformance tests pin every one of those to the same CPU oracle.",
   },
   {
     q: 'Are builds reproducible?',
-    a: 'Deliberately, in layers: blob order and directory order carry total tiebreaks, so identical payload bytes always re-derive identical content addresses. One honest gap remains — Arrow serializes field metadata in hash-map order, which can differ across processes; a cache-efficiency issue (never correctness), tracked for an upstream fix.',
+    a: (
+      <>
+        Byte-for-byte, across processes. Blob order and directory order carry
+        total tiebreaks, and the encoder assembles every metadata key from
+        sorted maps that Arrow ≥59 then serializes in that order — so an
+        unchanged dataset rebuilt in a fresh process re-derives identical
+        content addresses, nothing re-uploads, and identical tiles across
+        datasets share one physical object. (This was the format's one open gap
+        under Arrow 54, whose writer emitted metadata in hash-map order; a
+        formerly-<span className="font-mono">#[ignore]</span>d canary test now
+        guards it.)
+      </>
+    ),
   },
   {
     q: 'What happens if you never tune it?',

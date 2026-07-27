@@ -3,13 +3,13 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * Pure (Three-free) keyframe-texture assembly for GPU motion-glide (Wave 1 item
- * 7). The Three analogue of deck's CPU glide path — but where deck
- * re-interpolates one pose per active entity every frame on the CPU
+ * Pure (Three-free) keyframe-texture assembly for GPU motion-glide. The Three
+ * analogue of deck's CPU glide path — but where deck re-interpolates one pose
+ * per active entity every frame on the CPU
  * (`AnimatedPointLayer.renderInterpolated`), this module bakes each entity's
  * motion ONCE into a keyframe texture so the GPU does the per-frame
  * interpolation from a single `currentTime` uniform, with zero per-frame CPU
- * attribute writes (the roadmap's "storage-buffer / STTTripsLayer pattern" verdict).
+ * attribute writes.
  *
  * ── THE MODEL ────────────────────────────────────────────────────────────────
  * A point/icon archive carries one row per entity PER SAMPLE. Grouping by an

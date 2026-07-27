@@ -20,7 +20,7 @@
  * this backend goes past deck's single-constant-icon limitation, which exists
  * there only because binary tiles cannot run a per-row `getIcon` accessor).
  *
- * ── Wave M3 feature surface ─────────────────────────────────────────────────
+ * ── Feature surface ─────────────────────────────────────────────────────────
  *  - `timeFilterMode` — window (default) / wake / cumulative / trail, one
  *    kernel snippet from `shaders/time-window.glsl.ts` chosen at PROGRAM-BUILD
  *    time (no mode uniform, no dynamic branch), so the mode is part of the
@@ -79,7 +79,7 @@ import {
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import { encodePickId } from '@poopdeck.gl/core/picking';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
   type STTBaseLayerOptions,
   type STTTimeFilterMode,
@@ -98,6 +98,11 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
 import {
@@ -106,11 +111,11 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 import { lngLatToMercatorInto } from '../lib/projection.js';
@@ -362,7 +367,7 @@ export interface IconShaderConfig {
   glide: boolean;
 }
 
-/** Pre-M3 shape: window mode, no column filter, no glide. */
+/** The OFF shape: window mode, no column filter, no glide. */
 const DEFAULT_SHADER_CONFIG: IconShaderConfig = Object.freeze({
   mode: 'window',
   filter: false,
@@ -377,26 +382,13 @@ const MODE_GLSL: Readonly<Record<IconTimeFilterMode, string>> = Object.freeze({
   trail: TIME_TRAIL_GLSL,
 });
 
-/** Uniforms each mode reads. Only the active mode's block is declared. */
+/**
+ * Uniforms each mode reads. Only the active mode's block is declared. The wake
+ * block carries `uWakeTailScale` because this layer shrinks the sprite toward
+ * the tail (`sttWakeSizeScale`).
+ */
 const MODE_UNIFORMS: Readonly<Record<IconTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE;
 
 /** The `vAlpha = …` expression per mode. */
 const MODE_ALPHA: Readonly<Record<IconTimeFilterMode, string>> = Object.freeze({
@@ -703,7 +695,12 @@ const ID_FS_SOURCE = `
  * back -1, which is exactly how a mode/filter combination that doesn't declare
  * them reads.
  */
-interface IconSharedHandles {
+interface IconSharedHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the vertex source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -736,20 +733,6 @@ interface IconSharedHandles {
   uUseFeatureAngle: WebGLUniformLocation | null;
   uUseFeatureColor: WebGLUniformLocation | null;
   uColor: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface IconIdProgramHandles extends IconSharedHandles {
@@ -802,7 +785,7 @@ const entryKeyFor = (tile: Tile, layer: STTLayer): string =>
  * map.addLayer(layer);
  * ```
  */
-export class STTIconLayer extends STTBaseLayer {
+export class STTIconLayer extends STTFilterableLayer {
   private iconOpts: {
     iconAtlas?: STTIconAtlasSource | null;
     iconMapping?: Record<string, IconMappingEntry> | null;
@@ -833,11 +816,6 @@ export class STTIconLayer extends STTBaseLayer {
     maxInterpolationGap: number;
     reducedMotion: boolean;
   };
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
   /** Compiled feature configuration; drives the program-cache keys. */
   private shaderConfig: IconShaderConfig;
   private mainKey: string;
@@ -955,14 +933,6 @@ export class STTIconLayer extends STTBaseLayer {
       idProperty: opts.idProperty ?? '',
       maxInterpolationGap: opts.maxInterpolationGap ?? Infinity,
       reducedMotion: opts.reducedMotion === true,
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.shaderConfig = {
       mode: this.resolveMode(),
@@ -1118,28 +1088,6 @@ export class STTIconLayer extends STTBaseLayer {
     this.iconOpts.reducedMotion = reducedMotion;
     this.resetGlideIndex();
     this.applyShaderConfig();
-  }
-
-  /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only: no relink, no tile rebuild. `null` idles the filter, which
-   * renders everything.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every feature unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
-    this.map?.triggerRepaint();
   }
 
   /**
@@ -1493,29 +1441,10 @@ export class STTIconLayer extends STTBaseLayer {
       uUseFeatureAngle: gl.getUniformLocation(program, 'uUseFeatureAngle'),
       uUseFeatureColor: gl.getUniformLocation(program, 'uUseFeatureColor'),
       uColor: gl.getUniformLocation(program, 'uColor'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 
@@ -1688,13 +1617,7 @@ export class STTIconLayer extends STTBaseLayer {
     if (this.shaderConfig.filter) {
       // One icon == one instance, so the per-FEATURE column binds directly.
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical) {
-        this.warnOnce(
-          'filter-categorical',
-          `filterProperty '${this.filterOpts.filterProperty}' is a categorical column; ` +
-            'range filtering needs a numeric one — rendering unfiltered',
-        );
-      }
+      if (col.categorical) this.warnCategoricalFilterOnce();
       cache.hasFilterColumn = col.hasColumn;
       if (col.values) {
         cache.filterBuffer = this.uploadArrayBuffer(gl, col.values);
@@ -1872,9 +1795,9 @@ export class STTIconLayer extends STTBaseLayer {
   }
 
   /**
-   * Upload the DataFilter uniforms for this tile. No-op unless the filter was
-   * compiled in. A tile that didn't bake the column resolves to `enabled: 0`,
-   * which the kernel reads as "render everything" — never as "hide everything".
+   * Upload the DataFilter uniforms for this tile, unless no filter branch was
+   * compiled — the glide program compiles none whatever `filterProperty` says,
+   * so its program has no filter uniform to write.
    */
   private setFilterUniforms(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -1882,16 +1805,7 @@ export class STTIconLayer extends STTBaseLayer {
     cache: IconGpuCache,
   ): void {
     if (!this.shaderConfig.filter || this.shaderConfig.glide) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
-      cache.hasFilterColumn === true,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
+    this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn === true);
   }
 
   // ── discrete draw ────────────────────────────────────────────────────────
@@ -2137,8 +2051,9 @@ export class STTIconLayer extends STTBaseLayer {
 
   /**
    * Leave the default-VAO attribute slate clean and every divisor back at 0, so
-   * the next visual frame's VAO recording starts from a known state. Skipping
-   * this is exactly the class of bug M2 found on the other kinds.
+   * the next visual frame's VAO recording starts from a known state. Leave a
+   * divisor at 1 and the next non-instanced draw on that slot reads one element
+   * per INSTANCE instead of per vertex.
    */
   private releasePickAttributes(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -2227,11 +2142,13 @@ export class STTIconLayer extends STTBaseLayer {
   }
 
   /**
-   * Refresh {@link glideTiles} from the base's resident set, allocation-free
-   * when nothing moved: the sizes and the per-slot tile IDENTITIES are compared
-   * in place, and the arrays are only rebuilt when they actually differ. Both
-   * ownership modes are covered — per-layer mutates `loadedTiles`, shared-source
-   * replaces it wholesale.
+   * Refresh {@link glideTiles} from the base's drawn set (the tileset's VISIBLE
+   * tiles — see `STTBaseLayer.loadedTiles`), allocation-free when nothing
+   * moved: the sizes and the per-slot tile IDENTITIES are compared in place,
+   * and the arrays are only rebuilt when they actually differ. Both ownership
+   * modes replace `loadedTiles` wholesale on a change, which the identity
+   * compare absorbs — the Tile objects themselves are stable across a
+   * re-derivation that did not actually move anything.
    */
   private refreshGlideTiles(): void {
     const loaded = this.loadedTiles;

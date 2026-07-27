@@ -30,7 +30,7 @@ pnpm --filter @poopdeck.gl/cesium build
 ## Hello world — attachCesiumClock + CesiumPointLayer
 
 ```ts
-import { STTArchive, SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { STTArchive, SpatioTemporalTileset } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import { CesiumPointLayer, attachCesiumClock } from '@poopdeck.gl/cesium';
 
@@ -38,7 +38,7 @@ const layer = new CesiumPointLayer(viewer.scene, { pixelSize: 6 });
 const archive = new STTArchive({ url: manifestUrl });
 const meta = await archive.getMetadata();
 
-const tileset = new SpatiotemporalTileset({
+const tileset = new SpatioTemporalTileset({
   minZoom: meta.minZoom,
   maxZoom: meta.maxZoom,
   temporalBucketMs: meta.temporalBucketMs,

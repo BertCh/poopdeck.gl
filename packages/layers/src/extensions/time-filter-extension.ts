@@ -17,6 +17,7 @@ import {
   MAX_RELATIVE_TIME_MS,
   DEFAULT_WAKE_TAIL_SCALE,
 } from '@poopdeck.gl/core/time-filter';
+import { warnOnce } from '../lib/log.js';
 
 /**
  * Props for layers using TimeFilterExtension
@@ -76,6 +77,19 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
    * In trail mode, whether the trail fades head→tail (`true`, the classic
    * comet trail) or renders at constant opacity along its whole length
    * (`false`, a solid snake). Has no effect outside trail mode.
+   *
+   * DIVERGES from upstream `TripsLayer` under `fadeTrail: false`. Upstream
+   * discards a vertex only when
+   * `vTime > currentTime || (fadeTrail && vTime < currentTime - trailLength)`,
+   * so switching the fade off ALSO switches the tail cull off: the whole
+   * traversed path stays drawn ("ink the route as it is driven"). Here the
+   * tail is ALWAYS culled at `currentTime - trailLength` and `fadeTrail` only
+   * selects the ramped-vs-flat alpha, so `fadeTrail: false` is a fixed-length
+   * SOLID SNAKE, not an ever-growing inked route. Use `cumulative: true` for
+   * the draw-and-persist look. The cull is deliberate and shared: it mirrors
+   * `trailAlpha()` in `@poopdeck.gl/core/time-filter` — the kernel oracle the
+   * three and maplibre backends are pinned against — so it cannot be changed
+   * in deck alone.
    * @default true
    */
   fadeTrail?: boolean;
@@ -123,11 +137,25 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
   timeHeightScale?: number;
   /**
    * Absolute time (Unix ms) mapped to altitude 0 in time-as-height mode —
-   * typically the dataset's timeRange.start. Relativized against `timeOffset`
-   * on the CPU like every other time in this extension.
-   * @default 0
+   * typically the dataset's `timeRange.start`. Relativized against
+   * `timeOffset` on the CPU like every other time in this extension.
+   *
+   * UNSET SENTINEL — `null` (the default) means "anchor altitude 0 at this
+   * tile's own `timeOffset`", i.e. the shader subtracts a relative origin of
+   * exactly `0`. A literal `0` is treated the SAME way: altitude 0 at the Unix
+   * epoch is never a real request, and taking it literally is catastrophic —
+   * with `timeOffset ≈ 1.7e12` the `heightOrigin` uniform becomes ≈ -1.7e12,
+   * whose f32 ULP is 131,072, so every feature within ~131 s collapses to one
+   * altitude AND the whole layer lifts `1.7e12 * timeHeightScale` metres off
+   * the planet. Both spellings therefore idle to the tile-local anchor.
+   *
+   * Pass the dataset's `timeRange.start` for a cube whose altitudes agree
+   * ACROSS temporal chunks — the tile-local fallback anchors each chunk at its
+   * own zero, which is exact for single-chunk datasets and a per-chunk rebase
+   * otherwise.
+   * @default null (anchor at the tile's `timeOffset`)
    */
-  timeHeightOrigin?: number;
+  timeHeightOrigin?: number | null;
   /**
    * Accessor returning a feature's start time.
    * @default 0
@@ -162,7 +190,10 @@ type TimeFilterUniformProps = {
   cumulative: number;
   /** Meters of altitude per sim-ms in time-as-height mode; 0 = off. */
   heightScale: number;
-  /** Relative time (vs the layer timeOffset) mapped to altitude 0. */
+  /**
+   * Relative time (vs the layer timeOffset) mapped to altitude 0. `0` — the
+   * resolved "unset" default — anchors the cube at the tile's own timeOffset.
+   */
   heightOrigin: number;
 };
 
@@ -186,11 +217,36 @@ layout(std140) uniform timeFilterUniforms {
 } timeFilter;
 `;
 
+// Attribute + varying declarations live in the shader MODULE source, NOT in a
+// `vs:#decl` / `fs:#decl` injection. deck's `mergeShaders` concatenates
+// same-key injections with NO dedup, so a layer that ends up with two
+// TimeFilterExtension instances — e.g. `new AnimatedPointLayer({extensions:
+// [new TimeFilterExtension()]})`, which appends the caller's instance to the
+// internal one — would emit these `in`/`out` lines TWICE and fail to link, and
+// the layer would render nothing. luma dedupes shader MODULES by name
+// (`getShaderModuleDependencies` keys a map on `module.name`), so declaring
+// them here makes a duplicated extension harmless. Module sources are emitted
+// ahead of every `#decl` injection and the layer's own source, so everything
+// downstream still sees them. Same placement as upstream
+// `@deck.gl/extensions`' data-filter shader module.
+const glslVertexDecl = `\
+// Per-vertex timestamp, RELATIVE to the layer timeOffset (trail mode).
+in float instanceVertexTime;
+// Feature-level times, RELATIVE to the layer timeOffset.
+in float instanceStartTime;
+in float instanceEndTime;
+out float vTimeAlpha;
+`;
+
+const glslFragmentDecl = `\
+in float vTimeAlpha;
+`;
+
 // Shader module definition for deck.gl 9.x
 const timeFilterUniforms = {
   name: 'timeFilter',
-  vs: glslUniformBlock,
-  fs: glslUniformBlock,
+  vs: `${glslUniformBlock}${glslVertexDecl}`,
+  fs: `${glslUniformBlock}${glslFragmentDecl}`,
   uniformTypes: {
     currentTime: 'f32',
     windowHalf: 'f32',
@@ -219,7 +275,9 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   wakeTailScale: DEFAULT_WAKE_TAIL_SCALE,
   cumulative: false,
   timeHeightScale: 0,
-  timeHeightOrigin: 0,
+  // Permissive {type:'object'} descriptor: holds a number OR the `null` "unset"
+  // sentinel, which the 'number' validator would reject in deck's debug mode.
+  timeHeightOrigin: { type: 'object', value: null, optional: true },
   getInstanceStartTime: { type: 'accessor', value: 0 },
   getInstanceEndTime: { type: 'accessor', value: Infinity },
   // Constant default: window-mode layers never set a per-vertex time, but the
@@ -245,6 +303,61 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
 // of the relativization scheme. Re-exported here to preserve this module's (and
 // the `@poopdeck.gl/layers` barrel's) public API. See renderer-architecture.md.
 export { relativizeTime, MAX_RELATIVE_TIME_MS };
+
+/**
+ * Distance between adjacent Float32 values at magnitude `x` (its ULP). f32
+ * carries a 24-bit mantissa, so within the binade `[2^e, 2^(e+1))` the spacing
+ * is `2^(e-23)`. Used to price the space-time-cube altitude error a far-away
+ * `timeHeightOrigin` costs.
+ */
+function float32Ulp(x: number): number {
+  const magnitude = Math.abs(x);
+  if (!Number.isFinite(magnitude) || magnitude === 0) return 0;
+  return 2 ** (Math.floor(Math.log2(magnitude)) - 23);
+}
+
+/** Altitude error (metres) above which a bad `timeHeightOrigin` is reported. */
+const HEIGHT_ORIGIN_WARN_METERS = 1;
+
+/**
+ * Resolve `timeHeightOrigin` into the RELATIVE origin the shader subtracts
+ * from each vertex's (already relative) time.
+ *
+ * `null` / `0` are both the "unset" sentinel → relative origin `0`, i.e.
+ * altitude 0 sits at the tile's own `timeOffset`. See the prop docstring for
+ * why a literal `0` cannot be taken at face value.
+ *
+ * The 2^24 rule that guards `currentTime` is the WRONG threshold here: a
+ * legitimate multi-day `timeRange.start` is routinely millions of ms away from
+ * a per-chunk `timeOffset` and costs only millimetres of altitude at realistic
+ * height scales. What actually matters is the f32 quantization of
+ * `heightTime - heightOrigin` PRICED IN METRES, so that is what we check.
+ */
+function resolveHeightOrigin(
+  timeHeightOrigin: number | null | undefined,
+  timeOffset: number,
+  heightScale: number,
+  warnKey: string,
+): number {
+  if (timeHeightOrigin == null || timeHeightOrigin === 0) return 0;
+  const relativeOrigin = relativizeTime(timeHeightOrigin, timeOffset);
+  if (heightScale !== 0) {
+    const altitudeErrorM = float32Ulp(relativeOrigin) * Math.abs(heightScale);
+    if (altitudeErrorM > HEIGHT_ORIGIN_WARN_METERS) {
+      warnOnce(
+        `TimeFilterExtension:timeHeightOrigin:${warnKey}`,
+        `[TimeFilterExtension] timeHeightOrigin ${timeHeightOrigin} is ` +
+          `${Math.abs(relativeOrigin)} ms from this tile's timeOffset ` +
+          `${timeOffset}; the f32 space-time-cube lift quantizes to ` +
+          `~${altitudeErrorM.toFixed(0)} m and the whole layer is offset by ` +
+          `${Math.abs(relativeOrigin * heightScale).toFixed(0)} m. Set ` +
+          "timeHeightOrigin to the dataset's timeRange.start (or leave it " +
+          'null to anchor at the tile timeOffset).',
+      );
+    }
+  }
+  return relativeOrigin;
+}
 
 /**
  * Layer extension for GPU-based temporal filtering
@@ -329,15 +442,12 @@ export class TimeFilterExtension extends LayerExtension<
     if (extension.cachedShaders) return extension.cachedShaders;
     const shaders = {
       modules: [timeFilterUniforms],
+      // NOTE: no `vs:#decl` / `fs:#decl` entries — the attribute and varying
+      // declarations live in `timeFilterUniforms.vs/fs` so luma's name-based
+      // module dedup protects a duplicated extension. See `glslVertexDecl`.
+      // Every injection below is written to be idempotent under duplication:
+      // locals are block-scoped, so a doubled injection re-links cleanly.
       inject: {
-        'vs:#decl': `
-          // Per-vertex timestamp, RELATIVE to the layer timeOffset (trail mode).
-          in float instanceVertexTime;
-          // Feature-level times, RELATIVE to the layer timeOffset.
-          in float instanceStartTime;
-          in float instanceEndTime;
-          out float vTimeAlpha;
-        `,
         'vs:#main-start': `
           vTimeAlpha = 1.0;
 
@@ -435,9 +545,6 @@ export class TimeFilterExtension extends LayerExtension<
             gl_Position = vec4(0.);
           }
         `,
-        'fs:#decl': `
-          in float vTimeAlpha;
-        `,
         'fs:#main-start': `
           if (vTimeAlpha <= 0.0) discard;
         `,
@@ -526,8 +633,15 @@ export class TimeFilterExtension extends LayerExtension<
       wakeTailScale = DEFAULT_WAKE_TAIL_SCALE,
       cumulative = false,
       timeHeightScale = 0,
-      timeHeightOrigin = 0,
+      timeHeightOrigin = null,
     } = this.props;
+
+    // Warn-once key. `this.id` is a PER-TILE sublayer id, so it would let one
+    // dataset spam (and, with a constant key, let one dataset permanently mute
+    // every other one). The ROOT composite id is the right granularity: one
+    // warning per STT layer on the map, so a second dataset with a genuinely
+    // mismatched `timeOffset` still reports.
+    const warnKey = (this.root ?? this)?.id ?? 'TimeFilterExtension';
 
     // PERFORMANCE: Use getTime() if provided for dynamic time updates
     // This allows the layer to be cached while time updates each frame
@@ -545,7 +659,7 @@ export class TimeFilterExtension extends LayerExtension<
     assertRelTimeInRange(
       relativeTime,
       cumulative ? 'cumulative' : 'window',
-      'TimeFilterExtension',
+      warnKey,
     );
 
     const timeFilterProps: TimeFilterUniformProps = {
@@ -559,11 +673,16 @@ export class TimeFilterExtension extends LayerExtension<
       wakeTailScale,
       cumulative: cumulative ? 1.0 : 0.0,
       heightScale: timeHeightScale,
-      // Same relativization scheme as currentTime: both sides of the shader
-      // subtraction are small f32-exact numbers. (A multi-day span overflows
-      // ms precision in f32, but at meters-per-hour height scales the error
-      // is micrometers of altitude — irrelevant.)
-      heightOrigin: relativizeTime(timeHeightOrigin, timeOffset),
+      // Same relativization scheme as currentTime, plus the "unset" sentinel
+      // and an altitude-priced precision guard — see resolveHeightOrigin().
+      // (A multi-day span overflows ms precision in f32, but at realistic
+      // metres-per-ms height scales the error is millimetres of altitude.)
+      heightOrigin: resolveHeightOrigin(
+        timeHeightOrigin,
+        timeOffset,
+        timeHeightScale,
+        warnKey,
+      ),
     };
 
     this.setShaderModuleProps({ timeFilter: timeFilterProps });

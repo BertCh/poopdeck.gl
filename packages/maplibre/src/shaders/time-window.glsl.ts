@@ -8,8 +8,8 @@
  *
  *   1. Share *exactly* the same semantics across the two adapters, so a tile
  *      rendered by deck.gl and by maplibre lights up identical features at the
- *      identical instants. Previously each layer inlined a slightly different
- *      `entering`/`leaving` expression; see commit history for the divergence.
+ *      identical instants. A layer that inlines its own `entering`/`leaving`
+ *      expression instead reintroduces cross-adapter divergence.
  *   2. Audit precision / saturation in one place.
  *
  * The snippet expects the *caller* to declare:
@@ -31,7 +31,7 @@
  * The functions return alpha factors only; nothing here projects positions or
  * touches colour. Call them from `main()` after attributes are read.
  *
- * ── MODE SELECTION (campaign D8) ────────────────────────────────────────────
+ * ── MODE SELECTION ──────────────────────────────────────────────────────────
  * All four `TimeFilterMode`s live here as INDEPENDENT functions — there is no
  * mode uniform, because maplibre layers pick their mode when they build the
  * vertex source (`buildPointVertexSource` & friends), the same place they pick
@@ -52,6 +52,8 @@
  * order (core's `assertRelTimeInRange` skips cumulative for exactly this
  * reason). Do NOT introduce a second time origin for it.
  */
+
+import type { STTTimeFilterMode } from '../base-layer.js';
 
 /**
  * Window-mode helper. Compares a feature's [startTime, endTime] against the
@@ -108,9 +110,9 @@ float sttTimeWindowAlpha(
  *
  * `fadeTrail` is a CONTINUOUS 0..1 weight, not a threshold — the same
  * `1*(1-trailFade) + faded*trailFade` blend core `trailAlpha` computes (and
- * deck's `trailFade` uniform). At the two endpoints it is bit-identical to the
- * pre-M2 threshold form, so no existing layer's output moves; the intermediate
- * values are what the numeric `fadeTrail` prop (all five layer classes) needs.
+ * deck's `trailFade` uniform). At `fadeTrail = 0` and `fadeTrail = 1` it is
+ * bit-identical to a threshold form; the intermediate values are what the
+ * numeric `fadeTrail` prop (all five layer classes) needs.
  *
  * A non-positive `trailLength` returns 0 — the trail lights NOTHING. That is
  * core `trailAlpha` for every input except the measure-zero `vertexTime ==
@@ -207,6 +209,122 @@ float sttCumulativeAlpha(
   return 1.0;
 }
 `;
+
+/**
+ * The uniform DECLARATIONS each mode's kernel reads, one block per mode, to
+ * splice into a vertex source next to the matching `TIME_*_GLSL` kernel. A
+ * layer declares ONLY its compiled mode's block, so an unused uniform can
+ * never be silently mis-set.
+ *
+ * Every block ends with a newline: the blocks paste at a line START and the
+ * next declaration follows on its own line. A call site that splices
+ * `${DECLS[mode]}` as a whole template line must `.trimEnd()`, exactly as it
+ * already does for `DATA_FILTER_UNIFORMS_GLSL`, or it emits a blank line.
+ *
+ * `wake` here is the ALPHA-only block. A layer whose geometry also tapers
+ * toward the tail reads `uWakeTailScale` on top and wants
+ * {@link TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE}; a layer whose size is
+ * not a style knob (an aggregated cell's footprint, a polygon's outline) must
+ * NOT declare it, because a wake taper it cannot honour would read as a
+ * shrinking bin.
+ */
+export const TIME_MODE_UNIFORM_DECLS: Readonly<
+  Record<STTTimeFilterMode, string>
+> = Object.freeze({
+  window: `  uniform float uWindowStart;
+  uniform float uWindowEnd;
+  uniform float uFadeIn;
+  uniform float uFadeOut;
+`,
+  wake: `  uniform float uCurrentTime;
+  uniform float uWakeLength;
+`,
+  cumulative: `  uniform float uCurrentTime;
+  uniform float uFadeIn;
+`,
+  trail: `  uniform float uCurrentTime;
+  uniform float uTrailLength;
+  uniform float uFadeTrail;
+`,
+});
+
+/**
+ * The one declaration {@link TIME_WAKE_GLSL}'s `sttWakeSizeScale` adds on top
+ * of the wake alpha block. Last in the block, so appending it to
+ * {@link TIME_MODE_UNIFORM_DECLS}`.wake` yields the full wake declaration.
+ */
+export const WAKE_TAIL_SCALE_UNIFORM_DECL = '  uniform float uWakeTailScale;\n';
+
+/**
+ * {@link TIME_MODE_UNIFORM_DECLS} for a layer that tapers wake geometry toward
+ * the tail. Only `wake` differs; the other three modes are the same blocks, so
+ * a layer picks ONE of the two records and indexes it by its compiled mode.
+ */
+export const TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE: Readonly<
+  Record<STTTimeFilterMode, string>
+> = Object.freeze({
+  ...TIME_MODE_UNIFORM_DECLS,
+  wake: TIME_MODE_UNIFORM_DECLS.wake + WAKE_TAIL_SCALE_UNIFORM_DECL,
+});
+
+/**
+ * Locations of the uniforms {@link TIME_MODE_UNIFORM_DECLS} declares, across
+ * all four modes. Only the compiled mode's members resolve to a real location;
+ * the rest are null, which every `gl.uniform*` call ignores — so one handles
+ * shape serves a layer whose mode is a runtime knob.
+ *
+ * A layer extends this and adds its own locations:
+ *   `interface XxxHandles extends TimeUniformLocations { program: …; … }`
+ */
+export interface TimeUniformLocations {
+  uWindowStart: WebGLUniformLocation | null;
+  uWindowEnd: WebGLUniformLocation | null;
+  uFadeIn: WebGLUniformLocation | null;
+  uFadeOut: WebGLUniformLocation | null;
+  uCurrentTime: WebGLUniformLocation | null;
+  uWakeLength: WebGLUniformLocation | null;
+  uTrailLength: WebGLUniformLocation | null;
+  uFadeTrail: WebGLUniformLocation | null;
+}
+
+/**
+ * The wake taper's location, kept out of {@link TimeUniformLocations} so a
+ * layer that cannot shrink its geometry does not carry a field it never sets.
+ */
+export interface WakeTailScaleUniformLocation {
+  uWakeTailScale: WebGLUniformLocation | null;
+}
+
+/**
+ * Resolve every {@link TimeUniformLocations} member against a linked program.
+ * Names match {@link TIME_MODE_UNIFORM_DECLS} declaration for declaration; an
+ * absent (or compiled-out) uniform resolves to null.
+ */
+export function resolveTimeUniformLocations(
+  gl: WebGLRenderingContext | WebGL2RenderingContext,
+  program: WebGLProgram,
+): TimeUniformLocations {
+  return {
+    uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
+    uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
+    uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
+    uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
+    uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
+    uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
+    uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
+    uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
+  };
+}
+
+/** Resolve the wake taper's location; null unless the program declares it. */
+export function resolveWakeTailScaleUniformLocation(
+  gl: WebGLRenderingContext | WebGL2RenderingContext,
+  program: WebGLProgram,
+): WakeTailScaleUniformLocation {
+  return {
+    uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
+  };
+}
 
 /**
  * Convenience: a JS-side reference implementation of the window-mode shader,

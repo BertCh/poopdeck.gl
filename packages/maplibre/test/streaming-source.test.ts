@@ -6,7 +6,7 @@
  *   - frame-token dedupe (beginFrame / external frameId / unarmed passthrough)
  *   - unregister is leak-free (stale unregister cannot evict a replacement)
  *   - BufferSource delegation to the tileset's runway surface
- *   - load() builds a real SpatiotemporalTileset with base-layer-parity
+ *   - load() builds a real SpatioTemporalTileset with base-layer-parity
  *     options over a stubbed archive (same pattern as tileset-wiring.test.ts)
  *   - dispose() teardown incl. the dispose-during-metadata-await race and
  *     ownsArchive: false
@@ -14,7 +14,8 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  SpatiotemporalTileset,
+  SpatioTemporalTileset,
+  tileKey as coreTileKey,
   type ArchiveMetadata,
   type BufferedRunway,
   type STTArchive,
@@ -29,7 +30,7 @@ import {
   type DrivableTileset,
   type RunwayTileset,
 } from '../src/lib/streaming-source';
-import { makePointTile } from './fixtures';
+import { makePointTile, seedResidentTiles } from './fixtures';
 
 const META = {
   minZoom: 0,
@@ -171,6 +172,22 @@ describe('SharedTilesetSource fan-out', () => {
     tileset.setTiles(set1);
     (source as unknown as { publishIfChanged(): void }).publishIfChanged();
     expect(cb).toHaveBeenCalledWith(set1);
+  });
+
+  it('update() discharges a queued publish inside the frame that drove it', () => {
+    const { source, tileset } = makeAttachedSource();
+    const cb = vi.fn();
+    source.registerConsumer({ id: 'a', onTilesChanged: cb });
+
+    // An async edge armed a republish (deferred — see schedulePublish) and a
+    // frame arrives before the microtask drains. An eviction does NOT bump the
+    // tileset's frame number, so the frame gate cannot deliver this on its own:
+    // `update()` has to flush the pending flag or the correction waits for an
+    // unrelated change.
+    tileset.setTiles([tileAt(2, 0, 0)]);
+    (source as unknown as { schedulePublish(): void }).schedulePublish();
+    source.update(VIEWPORT);
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 
   it('gates the resident-set walk on the tileset frame number (unarmed hot path)', () => {
@@ -360,7 +377,7 @@ describe('attachTileset re-attach', () => {
     const source = new SharedTilesetSource(archive as unknown as STTArchive);
     cleanup.push(() => source.dispose());
     await source.load();
-    const built = source.getTileset() as SpatiotemporalTileset;
+    const built = source.getTileset() as SpatioTemporalTileset;
     const finalizeSpy = vi.spyOn(built, 'finalize');
 
     const replacement = makeMockTileset();
@@ -472,7 +489,7 @@ describe('BufferSource delegation', () => {
   });
 });
 
-describe('load path (stub archive → real SpatiotemporalTileset)', () => {
+describe('load path (stub archive → real SpatioTemporalTileset)', () => {
   it('builds a tileset with base-layer-parity options and adapter callbacks', async () => {
     const archive = makeStubArchive();
     const source = new SharedTilesetSource(archive as unknown as STTArchive);
@@ -480,7 +497,7 @@ describe('load path (stub archive → real SpatiotemporalTileset)', () => {
     await source.load();
 
     const tileset = source.getTileset();
-    expect(tileset).toBeInstanceOf(SpatiotemporalTileset);
+    expect(tileset).toBeInstanceOf(SpatioTemporalTileset);
     expect(source.getMetadata()).toBe(META);
     expect(source.getArchive()).toBe(archive);
 
@@ -496,6 +513,54 @@ describe('load path (stub archive → real SpatiotemporalTileset)', () => {
     expect(options.temporalBucketMs).toBe(3_600_000);
 
     expect(source.getBufferSource()).toBeInstanceOf(SharedTilesetBufferSource);
+  });
+
+  /**
+   * The unload hook re-derived the resident set from INSIDE the callback, and
+   * core fires it while the header is still in `this.tiles`
+   * (`spatiotemporal-tileset.ts` `evictTiles`: callback, then `tiles.delete`).
+   * The re-derived set therefore still contained the evicted tile, so
+   * `residentSetEqual` reported "unchanged" and the correction never went out
+   * at all — every consumer kept drawing a tile whose data was gone.
+   */
+  it('an evicted tile leaves the published set (core deletes the header AFTER the callback)', async () => {
+    const archive = makeStubArchive();
+    const source = new SharedTilesetSource(archive as unknown as STTArchive);
+    cleanup.push(() => source.dispose());
+    await source.load();
+    const tileset = source.getTileset() as any;
+
+    const doomed = tileAt(4, 3, 5);
+    const survivor = tileAt(4, 4, 5);
+    seedResidentTiles(tileset, doomed, survivor);
+
+    const cb = vi.fn();
+    source.registerConsumer({ id: 'a', onTilesChanged: cb });
+    (source as unknown as { publishIfChanged(): void }).publishIfChanged();
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    tileset.evictTiles([coreTileKey(doomed.id)]);
+    await Promise.resolve();
+
+    expect(cb).toHaveBeenCalledTimes(2);
+    expect(cb.mock.calls[1][0]).toEqual([survivor]);
+  });
+
+  it('coalesces a batch of arrivals into ONE resident-set walk', async () => {
+    const archive = makeStubArchive();
+    const source = new SharedTilesetSource(archive as unknown as STTArchive);
+    cleanup.push(() => source.dispose());
+    await source.load();
+    const tileset = source.getTileset() as any;
+
+    // The range coalescer delivers a whole coalesced group, so `onTileLoad`
+    // fires in bursts; publishing inline cost a getVisibleTiles() + address
+    // diff per tile.
+    const visible = vi.spyOn(tileset, 'getVisibleTiles');
+    for (let i = 0; i < 8; i++) tileset.options.onTileLoad(tileAt(4, i, 5));
+    expect(visible).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(visible).toHaveBeenCalledTimes(1);
   });
 
   it('load() is idempotent (one metadata read, one tileset)', async () => {
@@ -543,7 +608,7 @@ describe('load path (stub archive → real SpatiotemporalTileset)', () => {
     const archive = makeStubArchive();
     const source = new SharedTilesetSource(archive as unknown as STTArchive);
     await source.load();
-    const tileset = source.getTileset() as SpatiotemporalTileset;
+    const tileset = source.getTileset() as SpatioTemporalTileset;
     const finalizeSpy = vi.spyOn(tileset, 'finalize');
 
     const cb = vi.fn();

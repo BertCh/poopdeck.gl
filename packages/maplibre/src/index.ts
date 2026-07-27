@@ -57,7 +57,7 @@ export {
 } from './layers/point-layer.js';
 export {
   STTLineLayer,
-  // Progressive path reveal (D-M3): the compiled-mode union widens the four
+  // Progressive path reveal: the compiled-mode union widens the four
   // time modes with `'reveal'`, and the kernel ships its JS references so a
   // subclass (or an app-side scrubber) can predict the frontier on the CPU.
   LINE_REVEAL_GLSL,
@@ -115,7 +115,7 @@ export {
   type ArcTimeFilterMode,
 } from './layers/arc-layer.js';
 
-// ── Wave M4: summary + flow families ─────────────────────────────────────────
+// ── Summary + flow families ──────────────────────────────────────────────────
 
 // Summary tier (h3Summary / quadbinSummary): one abstract cell layer plus the
 // two thin scheme subclasses. `STTH3SummaryLayer` REQUIRES an injected
@@ -159,8 +159,8 @@ export {
 } from './layers/flow-corridor-layer.js';
 
 // Flowmap: one animated OD arrow per pair, width driven by trip volume at the
-// playhead. `liveBundling` (GPU KDEEB) stays a permanent declared fallback
-// (P2) — the layer carries no bundling path.
+// playhead. `liveBundling` (GPU KDEEB) stays a permanent declared fallback —
+// the layer carries no bundling path.
 export {
   STTFlowmapLayer,
   type STTFlowmapLayerOptions,
@@ -173,6 +173,11 @@ export {
   cssToDevicePixel,
   resolveTrailFade,
   expandPickIdColors,
+  // How the tile-LOAD window is derived from the render window plus the time
+  // mode. Exported so a custom subclass composes the same floors instead of
+  // re-deriving them (and so the rule is testable on its own).
+  widenLoadWindowForTimeMode,
+  type TimeModeLoadKnobs,
   type STTBaseLayerOptions,
   // ONE spelling of the mode union for the whole package; every layer's
   // `*TimeFilterMode` alias above resolves to it.
@@ -184,7 +189,7 @@ export {
   type RGBA8,
 } from './base-layer.js';
 
-// Mercator + metric-sizing math (D10). `mercatorZFromAltitude` /
+// Mercator + metric-sizing math. `mercatorZFromAltitude` /
 // `metersToPixelsAtLatitude` are what `radiusUnits`/`widthUnits: 'meters'` and
 // polygon `elevation` (metres) resolve through — exported so an embedder can
 // pre-compute the same factors, and so a custom subclass sizes identically.
@@ -201,7 +206,7 @@ export {
   EARTH_CIRCUMFERENCE_M,
 } from './lib/projection.js';
 
-// GPU DataFilter kernel (D9 `dataFilter`). Every layer's options interface
+// GPU DataFilter kernel. Every layer's options interface
 // EXTENDS `STTDataFilterOptions`, so consumers need to be able to name it (and
 // `DataFilterRange`) to type a filter-driving component; the GLSL + CPU helpers
 // come along for custom subclasses that want the same semantics.
@@ -222,7 +227,7 @@ export {
   type FilterColumn,
 } from './shaders/data-filter.glsl.js';
 
-// Time-filter kernel (D8): the four mode snippets plus their JS reference
+// Time-filter kernel: the four mode snippets plus their JS reference
 // impls, for subclasses that build their own shaders against the same math.
 export {
   TIME_WINDOW_GLSL,
@@ -236,7 +241,7 @@ export {
   cumulativeAlphaJS,
 } from './shaders/time-window.glsl.js';
 
-// Elevated-projection kernel (Wave M3 seam pass): the one implementation of
+// Elevated-projection kernel: the one implementation of
 // the metres-vs-mercator-z split and the globe horizon-clip re-derivation that
 // polygon/column/arc all raise geometry through. Exported for a subclass that
 // wants to leave the ground without re-deriving maplibre's contract.
@@ -257,7 +262,7 @@ export {
   DISC_EDGE_EXPR,
 } from './shaders/billboard.glsl.js';
 
-// Shared tileset source (D6a): ONE archive + ONE tileset serving N layers.
+// Shared tileset source: ONE archive + ONE tileset serving N layers.
 // Construct one per .stt, pass it to each layer as `{ source }`, and register
 // its getBufferSource() with a PlaybackGovernor once per source.
 export {
@@ -272,15 +277,15 @@ export {
   type RunwayTileset,
 } from './lib/streaming-source.js';
 
-// Composite host (D6b, Wave M5): ONE custom layer hosting an ordered list of
-// STT layers, driven in a single render pass so a stacked composite (weather
-// suite, AV substrates) pays MapLibre's per-custom-layer state cycle ONCE
-// instead of N times. Pair it with a SharedTilesetSource (D6a) so the stacked
-// layers also share one archive + governor BufferSource. `setCurrentTime` /
-// `setTimeWindow` fan out to every child behind a single coalesced repaint.
+// Composite host: ONE custom layer hosting an ordered list of STT layers,
+// driven in a single render pass so a stacked composite (weather suite, AV
+// substrates) pays MapLibre's per-custom-layer state cycle ONCE instead of N
+// times. Pair it with a SharedTilesetSource so the stacked layers also share
+// one archive + governor BufferSource. `setCurrentTime` / `setTimeWindow` fan
+// out to every child behind a single coalesced repaint.
 export { STTLayerGroup, type STTLayerGroupOptions } from './layer-group.js';
 
-// Host render-signature adapter (D2): the normalized per-frame shape layers
+// Host render-signature adapter: the normalized per-frame shape layers
 // draw from, public for full-render()-override subclasses and tests.
 export {
   createHostFrame,
@@ -291,7 +296,7 @@ export {
   type HostProjectionData,
 } from './lib/host-adapter.js';
 
-// Mapbox host detection + Standard-style slot vocabulary (D5, Wave M5).
+// Mapbox host detection + Standard-style slot vocabulary.
 // `MapboxSlot` types a `STTBaseLayer.attach({ slot })` / `STTBaseLayer.slot`
 // value; `isMapboxHost` duck-types a Mapbox GL v3 host apart from MapLibre
 // (structural only — no mapbox-gl dependency); `isValidMapboxSlot` is the
@@ -302,7 +307,7 @@ export {
   type MapboxSlot,
 } from './lib/host-slot.js';
 
-// Globe correctness kit (D4): mercator-space subdivision + wrap/granularity
+// Globe correctness kit: mercator-space subdivision + wrap/granularity
 // helpers for custom subclasses targeting v5+ globe hosts.
 export {
   subdivideLineMercator,
@@ -314,7 +319,7 @@ export {
   type LineSubdivisionResult,
 } from './lib/globe.js';
 
-// Cell-geometry kernel (Wave M4 summary/hexbin families): pure CPU decode of
+// Cell-geometry kernel (summary/hexbin families): pure CPU decode of
 // H3 / Quadbin cell ids and the deck-compatible hexbin lattice into mercator
 // rings. `H3CellToBoundary` is the h3-js `cellToBoundary` signature the h3
 // summary layer takes injected (h3-js is not a dependency of this package —
@@ -347,7 +352,7 @@ export {
   type SummaryCellRingOptions,
 } from './lib/cell-geometry.js';
 
-// Flow kernel (Wave M4 flow family): the ref-stable value-matrix packing +
+// Flow kernel (flow family): the ref-stable value-matrix packing +
 // per-frame bucket axis + corridor ribbon tessellation. Geometry is built once
 // per tile; only `uFlowBucket` moves per frame (the re-tessellation bug,
 // designed out). Exported for subclasses driving the same GPU magnitude path.
@@ -371,7 +376,7 @@ export {
   type FlowOdPairs,
 } from './lib/flow-kernel.js';
 
-// Flow GLSL (Wave M4 flow family): the vertex-stage magnitude sampler + width
+// Flow GLSL (flow family): the vertex-stage magnitude sampler + width
 // kernel and their JS references. `flowSamplerCacheKey` MUST appear in a flow
 // program's cache key (a matrix-format permutation axis).
 export {
@@ -390,8 +395,8 @@ export {
 export type { SttPickResult } from '@poopdeck.gl/core/picking';
 
 // Backend capability descriptor — what this adapter declares against the shared
-// `@poopdeck.gl/core/capabilities` vocabulary (renderer-abstraction Phase 5),
-// plus the per-layer feature matrix (D9) mirroring `deckLayerFeatures`.
+// `@poopdeck.gl/core/capabilities` vocabulary, plus the per-layer feature
+// matrix mirroring `deckLayerFeatures`.
 export {
   maplibreBackend,
   maplibreLayerFeatures,

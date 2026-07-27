@@ -34,6 +34,14 @@
  * deck's `composeExtensions` appends it to the corridor PathLayer, and the repo's
  * `extensionsDigest` keys the sublayer cache by constructor + options (not
  * reference), so a fresh `new ChevronFlowExtension(opts)` per render is free.
+ * deck's own diff (`LayerExtension.equals`) compares array options BY REFERENCE,
+ * so `directionColors` is interned by content in the constructor to keep that
+ * side free too — see `canonicalizeDirectionColors`.
+ *
+ * HOST CAPABILITIES: three options compile against symbols only a PathLayer
+ * (and, for `perBucketDirection`, a sibling TimeFilterExtension) provides.
+ * `getShaders` checks for them and degrades with a one-time warning rather than
+ * emitting an undeclared identifier — see {@link HostCapabilities}.
  *
  * PathLayer varyings used (deck.gl 9.x): the fragment receives
  * `geometry.uv = vPathPosition`, where `.x ∈ [-1, 1]` is the position across the
@@ -44,6 +52,7 @@
 
 import { LayerExtension } from '@deck.gl/core';
 import type { Layer } from '@deck.gl/core';
+import { warnOnce } from '../lib/log.js';
 
 /** Tuning options for {@link ChevronFlowExtension}. All are static per demo. */
 export interface ChevronFlowExtensionOptions {
@@ -97,6 +106,11 @@ export interface ChevronFlowExtensionOptions {
    * vertex attribute — it reuses TimeFilterExtension's `instanceVertexTime` slot
    * (unused in flow-corridor window mode), staying under WebGL2's 16-attribute
    * ceiling. When off (default), direction is the static geometry winding.
+   *
+   * HOST REQUIREMENT: a `TimeFilterExtension` must also be installed on the
+   * same layer — it is what declares `instanceVertexTime`. Without one the
+   * option degrades to the static winding with a one-time warning (it used to
+   * emit an undeclared identifier and blank the layer).
    * @default false
    */
   perBucketDirection?: boolean;
@@ -108,9 +122,22 @@ export interface ChevronFlowExtensionOptions {
    * on both segment ends: arrows are never truncated at a joint, adjacent segments
    * meet edge-to-edge, and the density stays ~`1/period` per unit of path length
    * even on many-vertex corridors whose segments are shorter than one `period`
-   * (the common case at an overview zoom). Intended for STATIC chevrons
-   * (`speed: 0`); with a marching phase the per-segment fit makes the march step
-   * at each joint. When off (default), spacing is the raw per-segment `period`.
+   * (the common case at an overview zoom). When off (default), spacing is the
+   * raw per-segment `period`.
+   *
+   * Combines with a marching `speed`: the phase is applied in TURNS
+   * (`phase / period`), not in width-units, so a CPU phase wrap of exactly one
+   * `period` moves the band by exactly one whole chevron and `fract()` is
+   * continuous across it. Arrows therefore advance one arrow-spacing per
+   * `period / speed` seconds on every segment — uniform in ARROWS per second
+   * even where the fitted spacing differs from `period`. (Subtracting the phase
+   * in width-units before dividing by a REFITTED period is what used to make
+   * the march visibly step at each wrap.)
+   *
+   * HOST REQUIREMENT: a PathLayer-family host — the fit reads PathLayer's
+   * `vPathLength` varying. On any other layer the option degrades to the raw
+   * `period` with a one-time warning (it used to emit an undeclared identifier
+   * and blank the layer).
    * @default false
    */
   uniformSpacing?: boolean;
@@ -122,13 +149,26 @@ export interface ChevronFlowExtensionOptions {
    * (`instanceStart/EndPositions`, no new attribute) and flipped by the per-bucket
    * direction sign, so a corridor's arrows recolor as its dominant flow reverses
    * over the day. Applied to the arrowheads only (via the chevron band). When off
-   * (default), chevrons inherit the host color. @default false
+   * (default), chevrons inherit the host color.
+   *
+   * HOST REQUIREMENT: a PathLayer-family host — the bearing is derived from
+   * PathLayer's `instanceStartPositions` / `instanceEndPositions`. On any other
+   * layer (e.g. `AnimatedPointLayer`'s Scatterplot sublayers) the option
+   * degrades to the inherited host color with a one-time warning (it used to
+   * emit an undeclared identifier and blank the layer).
+   * @default false
    */
   directionColor?: boolean;
   /**
    * The four cardinal colors `[N, E, S, W]`, each `[r, g, b]` in 0–255, placed at
    * bearings `offset`, `offset+90`, `offset+180`, `offset+270` and interpolated
-   * cyclically for in-between bearings. @default amber/green/teal/violet
+   * cyclically for in-between bearings.
+   *
+   * The constructor CANONICALIZES this array by content, so an inline literal
+   * written fresh in every React render still yields the same `opts` reference
+   * and `LayerExtension.equals` (a depth-1 `deepEqual`, i.e. by reference for
+   * arrays) keeps reporting equal — otherwise the sublayer would destroy and
+   * recreate its `Model` every frame. @default amber/green/teal/violet
    */
   directionColors?: readonly [
     readonly [number, number, number],
@@ -170,22 +210,59 @@ type ChevronUniformProps = {
   baseAlpha: number;
 };
 
+/** The four cardinal colors, `[N, E, S, W]`. */
+type DirectionColors = NonNullable<
+  ChevronFlowExtensionOptions['directionColors']
+>;
+
 // Shared default cardinal palette [N, E, S, W]. MODULE-level so every default
 // construction reuses the SAME array reference: deck's `LayerExtension.equals`
 // compares opts with `deepEqual(…, 1)`, which tests array values by reference at
 // that depth, so a fresh literal per render would look "changed" and thrash the
-// shader cache. Dataset-provided palettes are likewise stable module refs.
-const DEFAULT_DIRECTION_COLORS: readonly [
-  readonly [number, number, number],
-  readonly [number, number, number],
-  readonly [number, number, number],
-  readonly [number, number, number],
-] = [
+// shader cache.
+const DEFAULT_DIRECTION_COLORS: DirectionColors = [
   [255, 184, 77], // N — amber
   [95, 224, 140], // E — green
   [79, 227, 208], // S — teal
   [175, 124, 226], // W — violet
 ];
+
+/**
+ * Content → canonical-array interning table for `directionColors`.
+ *
+ * A module-level default is not enough: `new ChevronFlowExtension({
+ * directionColors: [[255,0,0], …] })` written inline in a React render mints a
+ * FRESH array every frame, and `LayerExtension.equals`'s depth-1 `deepEqual`
+ * compares arrays BY REFERENCE at that depth — so the extension looked
+ * "changed" every render, `extensionsChanged` fired, and the sublayer silently
+ * destroyed and rebuilt its `Model` each frame. Interning by content makes
+ * equal palettes share one reference. Bounded by the number of DISTINCT
+ * palettes an app uses (a handful).
+ */
+const directionColorsCache = new Map<string, DirectionColors>();
+
+function canonicalizeDirectionColors(colors: DirectionColors): DirectionColors {
+  if (colors === DEFAULT_DIRECTION_COLORS) return colors;
+  const key = colors.map((c) => c.join(',')).join('|');
+  const hit = directionColorsCache.get(key);
+  if (hit) return hit;
+  // Freeze a private copy so a later mutation of the caller's array cannot
+  // desync the interned entry from its key.
+  const canonical = colors.map((c) => [
+    c[0],
+    c[1],
+    c[2],
+  ]) as unknown as DirectionColors;
+  directionColorsCache.set(key, canonical);
+  return canonical;
+}
+
+// Seed the table with the default so an inline literal spelling the default
+// palette interns to the SAME reference the bare constructor uses.
+directionColorsCache.set(
+  DEFAULT_DIRECTION_COLORS.map((c) => c.join(',')).join('|'),
+  DEFAULT_DIRECTION_COLORS,
+);
 
 // std140 uniform block (WebGL2), mirroring the TimeFilterExtension convention.
 const glslUniformBlock = `\
@@ -217,6 +294,56 @@ export const chevronUniforms = {
 } as const;
 
 /**
+ * What the HOST layer can actually supply. This extension is publicly exported
+ * and documented as attachable through the top-level `extensions` prop, so it
+ * has to survive being dropped onto a layer that does not carry the symbols
+ * three of its options compile against. Each was a hard GLSL "undeclared
+ * identifier" — a blank layer, not a warning:
+ *
+ * - `directionColor` reads PathLayer's `instanceStart/EndPositions`
+ * - `uniformSpacing` reads PathLayer's `vPathLength` varying
+ * - `perBucketDirection` reads TimeFilterExtension's `instanceVertexTime`
+ *
+ * Detection is POSITIVE-EVIDENCE-ONLY: we degrade solely when the host proves
+ * it lacks a capability. A host we cannot inspect (a bare test double with no
+ * `props`) is assumed capable, so nothing silently turns itself off.
+ */
+interface HostCapabilities {
+  /** PathLayer-family host: has `vPathLength` + the segment endpoint attributes. */
+  pathVaryings: boolean;
+  /** A sibling TimeFilterExtension declares `instanceVertexTime`. */
+  vertexTime: boolean;
+}
+
+function resolveHostCapabilities(layer: Layer | undefined): HostCapabilities {
+  const props = layer?.props as Record<string, unknown> | undefined;
+  if (!props) return { pathVaryings: true, vertexTime: true };
+  // PathLayer(-family) hosts always carry a `getPath` accessor in their merged
+  // props (it is in PathLayer.defaultProps); ScatterplotLayer / IconLayer /
+  // SolidPolygonLayer never do.
+  const pathVaryings = 'getPath' in props;
+  const extensions = props.extensions;
+  const vertexTime = !Array.isArray(extensions)
+    ? true
+    : extensions.some(
+        (e) =>
+          // Name check rather than `instanceof`: duplicate module instances
+          // (a dep hoisted twice) break identity but never the static name.
+          (e?.constructor as { extensionName?: string } | undefined)
+            ?.extensionName === 'TimeFilterExtension',
+      );
+  return { pathVaryings, vertexTime };
+}
+
+/** Stable, human-readable host label for the warn-once keys. */
+function hostLabel(layer: Layer | undefined): string {
+  return (
+    (layer?.constructor as { layerName?: string } | undefined)?.layerName ??
+    'unknown layer'
+  );
+}
+
+/**
  * A deck.gl {@link LayerExtension} that overlays marching directional chevrons
  * on a path layer. See the file docstring for how it composes with
  * FlowCorridorLayer and where the direction comes from.
@@ -227,15 +354,20 @@ export class ChevronFlowExtension extends LayerExtension<
   static extensionName = 'ChevronFlowExtension';
 
   /**
-   * Memoized shader-injection object — deck.gl calls `getShaders()` on every
+   * Memoized shader-injection objects — deck.gl calls `getShaders()` on every
    * sublayer construction, and a new object literal each time would thrash the
-   * shader cache. Built once per extension instance (identity preserved across
-   * every sublayer that shares it).
+   * shader cache. Keyed by the HOST CAPABILITY signature (see
+   * {@link resolveHostCapabilities}) so every sublayer of a given host family
+   * shares one entry, while a different host kind gets its own correctly
+   * degraded variant instead of silently reusing another's.
    */
-  private cachedShaders: {
-    modules: unknown[];
-    inject: Record<string, string>;
-  } | null = null;
+  private cachedShaders = new Map<
+    string,
+    {
+      modules: unknown[];
+      inject: Record<string, string>;
+    }
+  >();
 
   constructor(options: ChevronFlowExtensionOptions = {}) {
     super({
@@ -248,7 +380,11 @@ export class ChevronFlowExtension extends LayerExtension<
       perBucketDirection: options.perBucketDirection ?? false,
       uniformSpacing: options.uniformSpacing ?? false,
       directionColor: options.directionColor ?? false,
-      directionColors: options.directionColors ?? DEFAULT_DIRECTION_COLORS,
+      // Interned by CONTENT — see canonicalizeDirectionColors() for why a
+      // fresh inline literal per render would otherwise rebuild the Model.
+      directionColors: canonicalizeDirectionColors(
+        options.directionColors ?? DEFAULT_DIRECTION_COLORS,
+      ),
       directionOffsetDegrees: options.directionOffsetDegrees ?? 0,
       perTripLight: options.perTripLight ?? false,
       perTripFloor: options.perTripFloor ?? 0.22,
@@ -256,8 +392,46 @@ export class ChevronFlowExtension extends LayerExtension<
   }
 
   getShaders(this: Layer, extension: ChevronFlowExtension) {
-    if (extension.cachedShaders) return extension.cachedShaders;
-    const perBucket = extension.opts.perBucketDirection;
+    // Host-capability gate. Each option that compiles against a symbol the host
+    // does not own degrades (with a one-time warning) instead of emitting an
+    // undeclared identifier and blanking the layer. See HostCapabilities.
+    const host = resolveHostCapabilities(this);
+    const cacheKey = `${host.pathVaryings ? 'p' : '-'}${host.vertexTime ? 't' : '-'}`;
+    const cached = extension.cachedShaders.get(cacheKey);
+    if (cached) return cached;
+    const label = hostLabel(this);
+
+    const perBucket = extension.opts.perBucketDirection && host.vertexTime;
+    if (extension.opts.perBucketDirection && !host.vertexTime) {
+      warnOnce(
+        `ChevronFlowExtension:perBucketDirection:${label}`,
+        `[ChevronFlowExtension] perBucketDirection needs a TimeFilterExtension ` +
+          `on the same layer (it declares \`instanceVertexTime\`, the slot the ` +
+          `direction sign rides in), but ${label} has none. Falling back to the ` +
+          'static geometry winding.',
+      );
+    }
+    const directionColorRequested = extension.opts.directionColor;
+    const directionColor = directionColorRequested && host.pathVaryings;
+    if (directionColorRequested && !host.pathVaryings) {
+      warnOnce(
+        `ChevronFlowExtension:directionColor:${label}`,
+        `[ChevronFlowExtension] directionColor needs a PathLayer-family host ` +
+          `(the bearing comes from \`instanceStart/EndPositions\`), but ` +
+          `${label} does not have them. Chevrons keep the host color.`,
+      );
+    }
+    const uniformSpacingRequested = extension.opts.uniformSpacing;
+    const fitSpacing = uniformSpacingRequested && host.pathVaryings;
+    if (uniformSpacingRequested && !host.pathVaryings) {
+      warnOnce(
+        `ChevronFlowExtension:uniformSpacing:${label}`,
+        `[ChevronFlowExtension] uniformSpacing needs a PathLayer-family host ` +
+          `(it fits the period to the \`vPathLength\` varying), but ${label} ` +
+          'does not have it. Falling back to the raw per-segment period.',
+      );
+    }
+
     // `chevronDir` is now a CONTINUOUS signed direction ∈ [-1,1] (FlowCorridorLayer's
     // rolling coherence ratio): +1 = full forward ">", 0 = flat dash (no net
     // direction), -1 = full reverse "<". The shader morphs arrow SHAPE (signed
@@ -266,7 +440,6 @@ export class ChevronFlowExtension extends LayerExtension<
     const dirDecl = perBucket
       ? 'float chevronDir = clamp(vChevronDir, -1.0, 1.0);'
       : 'float chevronDir = 1.0;';
-    const directionColor = extension.opts.directionColor;
     const perTripLight = extension.opts.perTripLight;
     // uniformSpacing: snap the period so a whole number of chevrons fits THIS
     // segment (see the option docstring). The base PathLayer varying `vPathLength`
@@ -276,7 +449,6 @@ export class ChevronFlowExtension extends LayerExtension<
     // DECKGL_FILTER_COLOR hook function (which only receives `geometry`), so we
     // read it in `fs:#main-start` and bridge it into the hook via a global. The
     // fit line reads that global; max(…, 0.001) guards degenerate segments.
-    const fitSpacing = extension.opts.uniformSpacing;
     const fit = fitSpacing
       ? `
           chevronPeriod = max(chevronSegLen / max(floor(chevronSegLen / chevronPeriod + 0.5), 1.0), 0.001);`
@@ -297,9 +469,10 @@ export class ChevronFlowExtension extends LayerExtension<
       // `instanceVertexTime` slot — flow-corridor tiles run window mode, where it
       // is registered but never read (only trail mode reads it), so FlowCorridorLayer
       // repurposes it to carry the sign (see its prepareTile). We only declare the
-      // OUT varying here; `instanceVertexTime` is already declared by TimeFilter's
-      // vs:#decl (always present on this layer family), and all #decl injects
-      // precede all #main-start injects, so it is in scope below.
+      // OUT varying here; `instanceVertexTime` is declared in TimeFilterExtension's
+      // shader-MODULE source — which luma emits ahead of every #decl injection —
+      // so it is in scope below. Gated on `host.vertexTime` above: without a
+      // sibling TimeFilterExtension the identifier does not exist at all.
       vsDecl.push('out float vChevronDir;');
       vsMainStart.push('vChevronDir = instanceVertexTime;');
       fsDecl.push('in float vChevronDir;');
@@ -407,12 +580,20 @@ export class ChevronFlowExtension extends LayerExtension<
           // Signed skew (NO along-flip) = smooth arrow -> flat line -> reversed arrow.
           // At dir=0 the shear vanishes -> chevronBand = fract(along/period) is
           // independent of across -> a straight perpendicular dash. March by
-          // sign(chevronDir) (not dir) so the CPU mod-period phase stays an integer
-          // multiple at its wrap -> seam-free; the lone flip lands on the flat zero-cross.
+          // sign(chevronDir) (not dir) so the lone flip lands on the flat zero-cross.
           float chevronS = chevronAlong
-            + abs(chevronAcross) * chevron.skew * chevronDir
-            - chevron.phase * sign(chevronDir);
-          float chevronBand = fract(chevronS / chevronPeriod);
+            + abs(chevronAcross) * chevron.skew * chevronDir;
+          // The march is applied in TURNS, not in width-units: the CPU reduces the
+          // play-head mod the RAW chevron.period, so phase/period wraps 1 -> 0 and
+          // fract() is continuous across it. Subtracting the phase from chevronS
+          // BEFORE dividing only worked while the divisor was the raw period —
+          // under uniformSpacing the divisor is the REFITTED period, so each wrap
+          // shifted the band by fract(rawPeriod/fittedPeriod) and the march visibly
+          // stepped. Identical arithmetic when no fit is applied.
+          float chevronBand = fract(
+            chevronS / chevronPeriod
+              - (chevron.phase / chevron.period) * sign(chevronDir)
+          );
           // Sharp leading edge (band near 0) fading over duty, softened by feather.
           float chevronHead =
             1.0 - smoothstep(chevron.duty - chevron.feather, chevron.duty, chevronBand);
@@ -431,7 +612,7 @@ ${tail}
       inject['fs:#main-start'] =
         `\n        ${fsMainStart.join('\n        ')}\n      `;
     const shaders = { modules: [chevronUniforms], inject };
-    extension.cachedShaders = shaders;
+    extension.cachedShaders.set(cacheKey, shaders);
     return shaders;
   }
 

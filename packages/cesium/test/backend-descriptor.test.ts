@@ -86,6 +86,37 @@ describe('cesiumBackend descriptor', () => {
     });
   });
 
+  it('(c) every declared fallbackKind is itself a kind this backend renders', () => {
+    // `degradeRequest` returns {action:'fallback', toKind} whenever a
+    // fallbackKind is present, so naming an unsupported target hands the caller
+    // a second unrenderable answer instead of the honest skip its `reason`
+    // intends. maplibre's suite ships the identical gate; three's is stricter
+    // (it REQUIRES a fallback for every unsupported kind) because three's
+    // catalog is broad enough that every kind has an approximation. Cesium's
+    // catalog is the movement family only, so skipping is the common case and
+    // the gate checks the target rather than demanding one.
+    for (const kind of LAYER_KINDS) {
+      const support = cesiumBackend.layerKinds[kind];
+      if (support.supported || !support.fallbackKind) continue;
+      expect(
+        cesiumBackend.layerKinds[support.fallbackKind as LayerKind]?.supported,
+        `fallback of "${kind}" (${support.fallbackKind}) must itself be supported`,
+      ).toBe(true);
+    }
+  });
+
+  it('(c) a kind with no in-backend approximation SKIPS rather than naming a dead fallback', () => {
+    // The exact regression this guards: text/mesh/hexbin were copied from the
+    // three descriptor with icon/boundingBox/h3Summary fallbacks that three
+    // supports and this backend does not. None of the three targets is in
+    // Cesium's catalog, so all three must skip.
+    for (const kind of ['text', 'mesh', 'hexbin'] as const) {
+      const support = cesiumBackend.layerKinds[kind];
+      expect(support.supported).toBe(false);
+      if (!support.supported) expect(support.fallbackKind).toBeUndefined();
+    }
+  });
+
   it('passes the over-claim gate against its own proven set', () => {
     const proven: ConformanceEvidence = {
       capabilities: new Set<Capability>(

@@ -9,8 +9,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   quadbinToTile,
+  quadkeyToTile,
   tileToQuadkey,
   quadkeyFromTile,
+  quadkeyToLngLatBounds,
+  quadkeyPolygon,
   type QuadbinTile,
 } from '../src/lib/quadbin-cell';
 
@@ -119,5 +122,113 @@ describe('quadbin-cell: quadkeyFromTile (the layer read path)', () => {
     // Force a zoom field of 31 (0x1f) — outside the valid 0..26 band.
     const bogus = 0x4000000000000000n | (1n << 59n) | (0x1fn << 52n);
     expect(quadkeyFromTile(new BigUint64Array([bogus]), 0)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cell GEOMETRY — the working `coverage` upstream QuadkeyLayer doesn't have.
+// ---------------------------------------------------------------------------
+
+/** Reference slippy-map tile → lng/lat, independent of the implementation. */
+function refLngLat(z: number, xf: number, yf: number): [number, number] {
+  const n = 2 ** z;
+  return [
+    (xf / n) * 360 - 180,
+    (180 / Math.PI) * Math.atan(Math.sinh(Math.PI * (1 - (2 * yf) / n))),
+  ];
+}
+
+describe('quadbin-cell: quadkey → tile (inverse walk)', () => {
+  it('inverts tileToQuadkey for every quadrant and a deep path', () => {
+    const cases: QuadbinTile[] = [
+      { z: 0, x: 0, y: 0 },
+      { z: 1, x: 1, y: 0 },
+      { z: 1, x: 0, y: 1 },
+      { z: 3, x: 3, y: 5 },
+      { z: 12, x: 1204, y: 1539 },
+    ];
+    for (const t of cases) {
+      expect(quadkeyToTile(tileToQuadkey(t))).toEqual(t);
+    }
+  });
+});
+
+describe('quadbin-cell: quadkeyToLngLatBounds', () => {
+  it('coverage 1 reproduces the exact cell edges (no inset)', () => {
+    const tile: QuadbinTile = { z: 3, x: 3, y: 5 };
+    const quadkey = tileToQuadkey(tile);
+    const [w, s, e, n] = quadkeyToLngLatBounds(quadkey, 1);
+    const [refW, refN] = refLngLat(tile.z, tile.x, tile.y);
+    const [refE, refS] = refLngLat(tile.z, tile.x + 1, tile.y + 1);
+    expect(w).toBeCloseTo(refW, 10);
+    expect(e).toBeCloseTo(refE, 10);
+    expect(n).toBeCloseTo(refN, 10);
+    expect(s).toBeCloseTo(refS, 10);
+    // z=3 → 45° of longitude per cell; x=3 is the 4th column.
+    expect(w).toBeCloseTo(-45, 10);
+    expect(e).toBeCloseTo(0, 10);
+  });
+
+  it('coverage < 1 insets toward the CENTROID, not a corner', () => {
+    const quadkey = tileToQuadkey({ z: 3, x: 3, y: 5 });
+    const full = quadkeyToLngLatBounds(quadkey, 1);
+    const half = quadkeyToLngLatBounds(quadkey, 0.5);
+    // Longitude is linear in the tile coordinate, so the arithmetic is exact:
+    // a 0.5 coverage keeps the middle half of the 45°-wide cell.
+    const fullWidth = full[2] - full[0];
+    const halfWidth = half[2] - half[0];
+    expect(halfWidth).toBeCloseTo(fullWidth * 0.5, 10);
+    // Centre preserved — that is what distinguishes a centroid inset from
+    // deck's internal north-west-anchored one (which would keep `full[0]`).
+    expect((half[0] + half[2]) / 2).toBeCloseTo((full[0] + full[2]) / 2, 10);
+    expect(half[0]).toBeGreaterThan(full[0]);
+    expect(half[2]).toBeLessThan(full[2]);
+    // Latitude is non-linear but still strictly inside on both edges.
+    expect(half[1]).toBeGreaterThan(full[1]);
+    expect(half[3]).toBeLessThan(full[3]);
+  });
+
+  it('the default 0.92 coverage leaves an 8% gap between adjacent cells', () => {
+    const a = quadkeyToLngLatBounds(tileToQuadkey({ z: 4, x: 5, y: 6 }), 0.92);
+    const b = quadkeyToLngLatBounds(tileToQuadkey({ z: 4, x: 6, y: 6 }), 0.92);
+    const cellWidth = 360 / 2 ** 4;
+    // Gap = half the inset on each side of the shared edge.
+    expect(b[0] - a[2]).toBeCloseTo(cellWidth * 0.08, 10);
+  });
+});
+
+describe('quadbin-cell: quadkeyPolygon', () => {
+  it('emits deck’s flat XY ring order (E/N, E/S, W/S, W/N, close)', () => {
+    const quadkey = tileToQuadkey({ z: 2, x: 1, y: 2 });
+    const [w, s, e, n] = quadkeyToLngLatBounds(quadkey, 0.8);
+    expect(quadkeyPolygon(quadkey, 0.8)).toEqual([
+      e,
+      n,
+      e,
+      s,
+      w,
+      s,
+      w,
+      n,
+      e,
+      n,
+    ]);
+  });
+
+  it('is a closed 5-vertex ring whose first and last points coincide', () => {
+    const ring = quadkeyPolygon(tileToQuadkey({ z: 5, x: 9, y: 4 }), 0.92);
+    expect(ring).toHaveLength(10);
+    expect(ring.slice(0, 2)).toEqual(ring.slice(8, 10));
+  });
+
+  it('shrinks the drawn ring as coverage drops', () => {
+    const quadkey = tileToQuadkey({ z: 5, x: 9, y: 4 });
+    const width = (c: number) => {
+      const r = quadkeyPolygon(quadkey, c);
+      return r[0] - r[4]; // east - west
+    };
+    expect(width(1)).toBeGreaterThan(width(0.92));
+    expect(width(0.92)).toBeGreaterThan(width(0.5));
+    expect(width(0.5)).toBeCloseTo(width(1) * 0.5, 10);
   });
 });

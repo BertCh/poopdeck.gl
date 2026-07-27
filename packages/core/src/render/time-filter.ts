@@ -206,9 +206,10 @@ const _relTimeWarned = new Set<string>();
  * Guard the f32 precision contract: a relative time past 2^24 ms loses
  * millisecond precision in the shader. Warns ONCE per key when the resolved
  * relative time crosses {@link MAX_RELATIVE_TIME_MS} in a non-cumulative mode
- * (cumulative intentionally spans years). Previously deck-only; hoisted so
- * three and maplibre — which quantized a too-wide span silently — can diagnose
- * it too. Pure/allocation-free on the hot path.
+ * (cumulative intentionally spans years). It lives in framework-free core
+ * rather than the deck package so three and maplibre — which otherwise
+ * quantize a too-wide span silently — can diagnose it too. Pure/allocation-free
+ * on the hot path.
  */
 export function assertRelTimeInRange(
   relativeTime: number,

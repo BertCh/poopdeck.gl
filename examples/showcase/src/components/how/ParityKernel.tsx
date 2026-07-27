@@ -8,15 +8,28 @@ import FigureSvg from '../FigureSvg.tsx';
  * The time→alpha gate (relativize each feature/vertex time against a per-tile
  * offset, then map window | trail | wake | cumulative age to an alpha) lives in
  * ONE framework-free CPU module — @poopdeck.gl/core render/time-filter.ts, the
- * "oracle". It is authored once more as an expression AST in render/
- * shader-codegen.ts, and a set of pure emitters machine-translate that single
- * AST into each backend's shading dialect: deck.gl (emitGLSL100, GLSL ES 1.00
- * inject), MapLibre (emitGLSL300), Three.js (emitTSL — WebGPU node graph), and
- * Cesium (emitGLSL300 fragment shader). No renderer hand-maintains its own gate
- * math. Shared parity/conformance tests (core/test/shader-codegen.test.ts) pin
- * every emission numerically equal to the oracle over thousands of random
- * inputs, so the four can never drift. Mirrors PackagesMap's Box + bezier
- * fan-out. STATIC — no animation, no state.
+ * "oracle". The same math is authored a second time as an expression AST in
+ * render/shader-codegen.ts, whose `evalExpr` is pinned numerically equal to the
+ * oracle over 2000 random envs (core/test/shader-codegen.test.ts).
+ *
+ * What each backend ships is NOT machine-emitted from that AST (except Cesium):
+ *   - deck.gl   — hand-written GLSL ES 1.00 inject (TimeFilterExtension)
+ *   - MapLibre  — hand-written GLSL ES 3.00 (shaders/time-window.glsl.ts)
+ *   - Three.js  — hand-written TSL node graph (tsl/time-filter.ts); an
+ *                 `emitTSL` entry point is referenced in core's source comments
+ *                 but has NO implementation.
+ *   - Cesium    — the one machine-emitted backend: shaders.ts calls
+ *                 `emitGLSL300(ALPHA_EXPR[mode])`.
+ * See docs/api/render-kernel.md, which states this explicitly.
+ *
+ * What actually prevents drift is a LAYERED conformance contract: each backend
+ * keeps a JS reference impl of its shader math, tests pin that reference to the
+ * CPU oracle AND to `evalExpr`, and the shipped GLSL/TSL is locked to the
+ * reference (structurally for GLSL, which can't run headless). See
+ * packages/maplibre/test/time-modes.test.ts for the three-way statement of it,
+ * plus three/test/time-filter-math.test.ts and cesium/test/shaders.test.ts.
+ *
+ * Mirrors PackagesMap's Box + bezier fan-out. STATIC — no animation, no state.
  */
 
 const MONO =
@@ -82,17 +95,34 @@ const Box: React.FC<{
 );
 
 /** The four backends and where each fan-out curve lands. */
-const TARGETS: { name: string; dialect: string; emit: string; cx: number }[] = [
-  { name: 'deck.gl', dialect: 'GLSL ES 1.00', emit: 'emitGLSL100', cx: 58 },
-  { name: 'MapLibre', dialect: 'GLSL ES 3.00', emit: 'emitGLSL300', cx: 172 },
-  { name: 'Three.js', dialect: 'TSL · WebGPU nodes', emit: 'emitTSL', cx: 286 },
-  { name: 'Cesium', dialect: 'GLSL ES 3.00', emit: 'emitGLSL300', cx: 400 },
+const TARGETS: {
+  name: string;
+  dialect: string;
+  emit: string;
+  cx: number;
+  generated?: boolean;
+}[] = [
+  { name: 'deck.gl', dialect: 'GLSL ES 1.00', emit: 'hand-written', cx: 58 },
+  { name: 'MapLibre', dialect: 'GLSL ES 3.00', emit: 'hand-written', cx: 172 },
+  {
+    name: 'Three.js',
+    dialect: 'TSL · WebGPU nodes',
+    emit: 'hand-written',
+    cx: 286,
+  },
+  {
+    name: 'Cesium',
+    dialect: 'GLSL ES 3.00',
+    emit: 'emitGLSL300',
+    cx: 400,
+    generated: true,
+  },
 ];
 
 const BOX_W = 104;
 const TARGET_Y = 158;
 const TARGET_H = 58;
-const EMIT_BOTTOM = 116; // emitter box bottom-center y
+const FANOUT_Y = 112; // where the fan-out curves leave the oracle row
 const BRACKET_Y = 232;
 
 const ParityKernel: React.FC = () => (
@@ -114,7 +144,7 @@ const ParityKernel: React.FC = () => (
       <FigureSvg
         viewBox="0 0 460 270"
         className="w-full min-w-[420px] mt-2"
-        aria-label="Diagram: the time-filter alpha kernel lives in one framework-free core module; a shader codegen emits its single expression AST into deck.gl GLSL, MapLibre GLSL, Three.js TSL, and Cesium GLSL, and shared parity tests pin all four numerically equal."
+        aria-label="Diagram: the time-filter alpha lives in one framework-free CPU oracle, mirrored as an expression AST pinned numerically equal to it. Three backends hand-write their shader math and Cesium machine-emits it; conformance tests pin all four back to the oracle."
       >
         <defs>
           <marker
@@ -130,50 +160,64 @@ const ParityKernel: React.FC = () => (
           </marker>
         </defs>
 
-        {/* ── The kernel: one CPU source of truth ─────────────────────── */}
+        {/* ── The oracle, and its AST twin ─────────────────────────────── */}
         <Box
-          x={90}
+          x={16}
           y={12}
-          w={280}
+          w={200}
           h={44}
           title="render/time-filter.ts"
-          sub="one CPU kernel · relativize + window / trail / wake / cumulative → alpha"
+          sub="THE CPU oracle · window / trail / wake / cumulative → alpha"
           accent
         />
-        <line
-          x1="230"
-          y1="56"
-          x2="230"
-          y2="76"
-          stroke="var(--ink-400)"
-          strokeWidth="1"
-          markerEnd="url(#arr-pk)"
-        />
-
-        {/* ── The emitter: same math authored once as an AST ──────────── */}
         <Box
-          x={148}
-          y={78}
-          w={164}
-          h={38}
+          x={244}
+          y={12}
+          w={200}
+          h={44}
           title="render/shader-codegen.ts"
-          sub="one Expr AST → per-dialect emitters"
+          sub="the same math as an Expr AST"
         />
+        <line
+          x1="216"
+          y1="34"
+          x2="244"
+          y2="34"
+          stroke="var(--accent)"
+          strokeWidth="1.4"
+        />
+        <text
+          x="230"
+          y="76"
+          fontSize="9"
+          fontFamily={MONO}
+          textAnchor="middle"
+          fill="var(--accent)"
+        >
+          evalExpr == oracle over 2000 random envs
+        </text>
 
-        {/* fan-out curves from the emitter to each backend */}
+        {/* fan-out: dashed where the backend hand-writes its own dialect */}
         {TARGETS.map((t) => (
           <path
             key={t.name}
-            d={`M 230 ${EMIT_BOTTOM} C 230 ${EMIT_BOTTOM + 26}, ${t.cx} ${TARGET_Y - 26}, ${t.cx} ${TARGET_Y}`}
+            d={`M 230 ${FANOUT_Y} C 230 ${FANOUT_Y + 22}, ${t.cx} ${TARGET_Y - 22}, ${t.cx} ${TARGET_Y}`}
             fill="none"
-            stroke="var(--accent)"
+            stroke={t.generated ? 'var(--accent)' : 'var(--ink-400)'}
             strokeWidth="1"
-            opacity="0.55"
+            strokeDasharray={t.generated ? undefined : '3 3'}
+            opacity={t.generated ? 0.75 : 0.55}
             markerEnd="url(#arr-pk)"
           />
         ))}
+        <text x="14" y={FANOUT_Y + 22} fontSize="8.5" fill="var(--ink-400)">
+          ╌╌ mirrored by hand
+        </text>
+        <text x="14" y={FANOUT_Y + 34} fontSize="8.5" fill="var(--accent)">
+          — machine-emitted
+        </text>
 
-        {/* ── The four backends: thin dialects of one kernel ──────────── */}
+        {/* ── The four backends ────────────────────────────────────────── */}
         {TARGETS.map((t) => (
           <Box
             key={t.name}
@@ -184,10 +228,11 @@ const ParityKernel: React.FC = () => (
             title={t.name}
             sub={t.dialect}
             foot={t.emit}
+            accent={t.generated}
           />
         ))}
 
-        {/* ── Tie-bar: parity tests pin the emissions numerically equal ── */}
+        {/* ── Tie-bar: conformance tests pin every one to the oracle ───── */}
         {TARGETS.map((t) => (
           <line
             key={t.name}
@@ -216,7 +261,7 @@ const ParityKernel: React.FC = () => (
           textAnchor="middle"
           fill="var(--accent)"
         >
-          shared parity tests pin these numerically equal
+          conformance tests pin all four back to the oracle
         </text>
         <text
           x="230"
@@ -225,8 +270,8 @@ const ParityKernel: React.FC = () => (
           textAnchor="middle"
           fill="var(--ink-400)"
         >
-          core/test/shader-codegen.test.ts — evalExpr == oracle over 2000 random
-          envs
+          each backend's JS reference == oracle, and its shipped shader == that
+          reference
         </text>
       </FigureSvg>
     </div>
@@ -235,13 +280,15 @@ const ParityKernel: React.FC = () => (
       className="mt-2 text-[11px] leading-relaxed"
       style={{ color: 'var(--ink-500)' }}
     >
-      This is the guarantee behind the capability matrix above: the renderers
-      are thin dialects of one kernel, not four parallel gate implementations.
-      The alpha math is authored once — as a framework-free CPU function in{' '}
-      <span className="font-mono">@poopdeck.gl/core</span> and mirrored as an
-      expression AST — and machine-emitted into each backend's shading language.
-      A conformance test asserts every emission returns the same number as that
-      CPU oracle, so a{' '}
+      This is the guarantee behind the capability matrix above. The alpha math
+      is <em>defined</em> once, as a framework-free CPU function in{' '}
+      <span className="font-mono">@poopdeck.gl/core</span>. Cesium emits its
+      shader straight from the AST twin; deck.gl, MapLibre and Three each ship
+      hand-written GLSL or TSL, because each host wants its math inlined its own
+      way. What keeps those three honest is a chain of assertions rather than a
+      compiler: every backend keeps a JS reference of its shader math, tests pin
+      that reference to the oracle numerically, and the shipped shader is locked
+      to the reference. So a{' '}
       <span
         className="rounded px-1.5 py-0.5 font-mono text-[10px]"
         style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
@@ -249,7 +296,8 @@ const ParityKernel: React.FC = () => (
         trail
       </span>{' '}
       looks and times identically whether you draw it in deck.gl or on a Cesium
-      globe. Change the formula once and every renderer inherits it.
+      globe — and changing the formula fails four test suites at once until
+      every renderer follows.
     </p>
   </div>
 );

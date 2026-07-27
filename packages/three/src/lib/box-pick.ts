@@ -19,12 +19,12 @@
  * ENU metric world). This matches `geometry/box-edges.ts`.
  */
 
-import type { SttIdPickInfo } from './id-pick.js';
+import type { STTIdPickInfo } from './id-pick.js';
 
 export type Vec3 = readonly [number, number, number];
 
 /** Fields shared by every pick-hit variant surfaced to `onPick` (click) / `onHover`. */
-export interface SttPickInfoBase {
+export interface STTPickInfoBase {
   /** Id of the STT layer that owns the hit. */
   layerId: string;
   /** World-space hit point (ENU metres), when the pick resolves one. */
@@ -36,7 +36,7 @@ export interface SttPickInfoBase {
  * returns. `worldPoint` is always the ray/box entry point. Structurally a superset
  * of the cockpit's PickedObject.
  */
-export interface SttBoxPickInfo extends SttPickInfoBase {
+export interface STTBoxPickInfo extends STTPickInfoBase {
   kind: 'object' | 'ego';
   category?: string;
   trackId?: string | number;
@@ -53,8 +53,8 @@ export interface SttBoxPickInfo extends SttPickInfoBase {
 }
 
 /**
- * Any hit surfaced by the pick controller: a CPU box hit ({@link SttBoxPickInfo})
- * or a GPU id-buffer hit on any instanced kind ({@link SttIdPickInfo} — point,
+ * Any hit surfaced by the pick controller: a CPU box hit ({@link STTBoxPickInfo})
+ * or a GPU id-buffer hit on any instanced kind ({@link STTIdPickInfo} — point,
  * column, arc, …), discriminated by `kind`.
  *
  * Widened from the old box-only shape — a consumer that narrows on `kind` (the
@@ -62,7 +62,7 @@ export interface SttBoxPickInfo extends SttPickInfoBase {
  * additive. Box kinds (`'object' | 'ego'`) are disjoint from the id kinds, so
  * the discriminated union is unambiguous.
  */
-export type SttPickInfo = SttBoxPickInfo | SttIdPickInfo;
+export type STTPickInfo = STTBoxPickInfo | STTIdPickInfo;
 
 /** A yaw-aligned oriented box to hit-test, plus the metadata to surface on a hit. */
 export interface PickBox {
@@ -73,11 +73,11 @@ export interface PickBox {
   /** Half-extents along the box's local (length, width, height) axes — scaled. */
   halfExtents: Vec3;
   /** Metadata returned when this box is the nearest hit. */
-  meta: Omit<SttBoxPickInfo, 'worldPoint'>;
+  meta: Omit<STTBoxPickInfo, 'worldPoint'>;
 }
 
 /** A layer that contributes pickable boxes for the current frame. */
-export interface SttPickable {
+export interface STTPickable {
   /** Current-frame world-space oriented boxes to hit-test (cheap; few). */
   getPickBoxes(): PickBox[];
 }
@@ -144,7 +144,7 @@ export function pickBoxes(
   origin: Vec3,
   dir: Vec3,
   boxes: readonly PickBox[],
-): SttBoxPickInfo | null {
+): STTBoxPickInfo | null {
   let best: PickBox | null = null;
   let bestT = Infinity;
   for (const box of boxes) {

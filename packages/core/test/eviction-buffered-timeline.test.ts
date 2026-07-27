@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 import { BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
 import { advanceClock, installClock } from './helpers/clock';
@@ -49,8 +49,8 @@ const settle = (ms = 10): Promise<void> =>
 
 function makeTileset(
   opts: { maxCacheSize?: number } = {},
-): SpatiotemporalTileset {
-  return new SpatiotemporalTileset({
+): SpatioTemporalTileset {
+  return new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -66,7 +66,7 @@ function makeTileset(
 }
 
 const loadBucket = async (
-  tileset: SpatiotemporalTileset,
+  tileset: SpatioTemporalTileset,
   bounds: BoundingBox,
   i: number,
   // selectAndLoadTiles fast-paths identical (bounds, zoom, timeRange)
@@ -85,7 +85,7 @@ const loadBucket = async (
 
 /** Coverage index build is async — call a buffer API, then let it land. */
 const enableBufferTracking = async (
-  tileset: SpatiotemporalTileset,
+  tileset: SpatioTemporalTileset,
 ): Promise<void> => {
   tileset.getBufferedRanges();
   await settle();
@@ -95,7 +95,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SpatiotemporalTileset grace eviction vs buffered timeline', () => {
+describe('SpatioTemporalTileset grace eviction vs buffered timeline', () => {
   it('keeps buffered-timeline tiles past the paused grace period (under limits)', async () => {
     installClock();
     const tileset = makeTileset();

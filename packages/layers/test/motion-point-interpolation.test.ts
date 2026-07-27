@@ -360,4 +360,100 @@ describe('AnimatedPointLayer glide (motion interpolation)', () => {
     expect(out.object.icao24).toBe('ABC123');
     expect(out.object.alt).toBe(900);
   });
+
+  // ── Bounded glide pick-row caches ────────────────────────────────────────
+
+  describe('glide pick-row caches are bounded to the resident set', () => {
+    /**
+     * Two samples of one entity in a tile of its own, so each tile can enter and
+     * leave the resident set independently. The entity id doubles as the tile's
+     * x coordinate seed, keeping (tile, layer) keys distinct across the churn.
+     */
+    function entityTile(id: string, x: number): Tile {
+      return makeIdTile(
+        [
+          { id, lon: x, lat: 0, t: 0 },
+          { id, lon: x + 1, lat: 0, t: 1000 },
+        ],
+        { tileId: { z: 6, x, y: 0, t: 0 } },
+      );
+    }
+
+    /**
+     * Drive a real render pass over a NEW tile array (a fresh array ref is what
+     * the layer treats as a tile-set change) against ONE persistent layer, so
+     * the caches live in `state.sttPointCache` across the churn the way they do
+     * under deck's layer matching.
+     */
+    function renderTiles(layer: any, tiles: Tile[]): void {
+      layer.state.tiles = tiles;
+      layer._currentTime = 500;
+      layer.renderLayers();
+    }
+
+    it('returns the pick-row count to its starting value across a load → evict → reload churn cycle', () => {
+      const layer = makeLayer({ interpolate: true, idProperty: 'icao24' });
+
+      // Baseline: two entities resident.
+      const home = [entityTile('A', 0), entityTile('B', 2)];
+      renderTiles(layer, [...home]);
+      const startRows = layer.interpPickRows.size;
+      const startScanned = layer.interpPickRowsScanned.size;
+      expect(startRows).toBe(2);
+      expect(startScanned).toBe(2);
+
+      // Pan away and back, ten times, over entirely disjoint tiles/entities —
+      // the accumulate-only version grew to 22 rows here and never shrank.
+      for (let i = 0; i < 10; i++) {
+        renderTiles(layer, [
+          entityTile(`away-${i}-1`, 10 + i * 2),
+          entityTile(`away-${i}-2`, 11 + i * 2),
+        ]);
+        expect(layer.interpPickRows.size).toBe(2);
+      }
+
+      // Back home: the count is exactly where it started, not the session total.
+      renderTiles(layer, [...home]);
+      expect(layer.interpPickRows.size).toBe(startRows);
+      expect(layer.interpPickRowsScanned.size).toBe(startScanned);
+      expect([...layer.interpPickRows.keys()].sort()).toEqual(['A', 'B']);
+    });
+
+    it('still resolves a pick to the decoded source feature after the churn', () => {
+      // Pruning must not cost the retained rows their purpose: a re-entering
+      // tile is re-scanned, so picking a resident entity still works.
+      const layer = makeLayer({ interpolate: true, idProperty: 'icao24' });
+      const home = makeIdTile(
+        [
+          { id: 'ABC123', lon: 0, lat: 0, t: 0, alt: 900 },
+          { id: 'ABC123', lon: 10, lat: 0, t: 1000, alt: 900 },
+        ],
+        { tileId: { z: 6, x: 0, y: 0, t: 0 } },
+      );
+      renderTiles(layer, [home]);
+      renderTiles(layer, [entityTile('OTHER', 40)]);
+      expect(layer.interpPickRows.has('ABC123')).toBe(false); // evicted
+
+      layer.state.tiles = [home];
+      layer._currentTime = 500;
+      const built = layer.renderLayers()[0];
+      const out = layer.getPickingInfo({
+        info: { index: 0 },
+        sourceLayer: built,
+      });
+      expect(out.object.icao24).toBe('ABC123');
+      expect(out.object.alt).toBe(900);
+    });
+
+    it('does not re-decode an id that stayed resident', () => {
+      const layer = makeLayer({ interpolate: true, idProperty: 'icao24' });
+      const a = entityTile('A', 0);
+      renderTiles(layer, [a]);
+      const rowA = layer.interpPickRows.get('A');
+      // A new array ref forces a re-sync, but `a` is still live and still
+      // scanned, so its row object must be the SAME instance.
+      renderTiles(layer, [a]);
+      expect(layer.interpPickRows.get('A')).toBe(rowA);
+    });
+  });
 });

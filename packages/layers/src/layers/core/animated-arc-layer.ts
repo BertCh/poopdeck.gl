@@ -59,6 +59,10 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
@@ -66,7 +70,12 @@ import type {
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
-import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import {
+  DEFAULT_LINE_PALETTE,
+  GeometryType,
+  tileLayerKey,
+} from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -143,30 +152,34 @@ export interface _AnimatedArcLayerProps {
   /** Clamp arc width to at most this many on-screen pixels. */
   widthMaxPixels?: number;
   /**
-   * Arc height multiplier — `0` makes the arc flat. ArcLayer pass-through
-   * (`getHeight` constant).
+   * Arc height multiplier — `0` makes the arc flat. Constant number, OR a
+   * property name for per-feature height: upstream registers `instanceHeights`
+   * as an ordinary per-instance accessor, so a baked numeric column rides it
+   * zero-copy exactly like {@link width}.
    * @default 1
    */
-  arcHeight?: number;
+  arcHeight?: number | string;
   /**
    * Upstream-vocabulary alias of {@link arcHeight} (ArcLayer's `getHeight`).
-   * Accepts a constant number only; a function warns once and falls back to
-   * `arcHeight`. When set, it wins over `arcHeight`. (No column-name arm —
-   * arc height is a constant multiplier, not a per-feature binary attribute.)
+   * Accepts a constant number OR a property-column NAME — NOT a function
+   * accessor (a function warns once and falls back to `arcHeight`). When set,
+   * it wins over `arcHeight`.
    */
-  getHeight?: number | ((d: unknown) => unknown) | null;
+  getHeight?: NumericAccessorValue | null;
   /**
    * Tilt the arc to the side (degrees), useful for separating arcs that share
-   * source and target — ArcLayer pass-through (`getTilt` constant).
+   * source and target. Constant number, OR a property name for per-feature
+   * tilt (`instanceTilts` is a per-instance accessor upstream) — which is what
+   * actually separates overlapping flows on the same OD pair.
    * @default 0
    */
-  arcTilt?: number;
+  arcTilt?: number | string;
   /**
    * Upstream-vocabulary alias of {@link arcTilt} (ArcLayer's `getTilt`).
-   * Constant only; a function warns once and falls back to `arcTilt`. (No
-   * column-name arm — tilt is a constant, not a per-feature binary attribute.)
+   * Accepts a constant number OR a property-column NAME; a function warns once
+   * and falls back to `arcTilt`. When set, it wins over `arcTilt`.
    */
-  getTilt?: number | ((d: unknown) => unknown) | null;
+  getTilt?: NumericAccessorValue | null;
   /**
    * Color palette for categorical `sourceColor` / `targetColor`.
    */
@@ -235,6 +248,51 @@ export interface _AnimatedArcLayerProps {
 export type AnimatedArcLayerProps = _AnimatedArcLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Where each own prop lands, and therefore whether editing it must throw away
+ * the cached per-tile ArcLayers. The annotation makes the table total over
+ * {@link _AnimatedArcLayerProps}, so a prop added to that interface is a
+ * compile error until it is classified here.
+ */
+const ARC_PROP_EFFECTS: PropEffects<_AnimatedArcLayerProps> = {
+  // Passed straight to the ArcLayer that {@link AnimatedArcLayer.buildSublayer}
+  // constructs, so a cached instance holds a frozen copy.
+  greatCircle: 'sublayer',
+  numSegments: 'sublayer',
+  widthUnits: 'sublayer',
+  widthScale: 'sublayer',
+  widthMinPixels: 'sublayer',
+  widthMaxPixels: 'sublayer',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+  // Constant fallbacks the sublayer is built with (the binary attribute wins
+  // per instance on tiles that baked the column). Keyed through the
+  // alias-resolved value (see the `overrides` at the call site) so a change
+  // confined to the `get*` alias invalidates too.
+  sourceColor: 'sublayer',
+  getSourceColor: 'sublayer',
+  targetColor: 'sublayer',
+  getTargetColor: 'sublayer',
+  width: 'sublayer',
+  getWidth: 'sublayer',
+  arcHeight: 'sublayer',
+  getHeight: 'sublayer',
+  arcTilt: 'sublayer',
+  getTilt: 'sublayer',
+  // Decides whether STTDataFilterExtension is in the sublayer's extension list.
+  filterProperty: 'sublayer',
+  // Filter uniforms ride as sublayer props.
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+  // Read only while building a tile's prepared attributes / gpuPalette, and
+  // covered by the styleKey in prepareTile: a change re-prepares the tile, and
+  // the preparedKey identity check then rebuilds the sublayer.
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+};
+
 const DEFAULT_SOURCE_COLOR: Color = [0, 150, 255, 255];
 const DEFAULT_TARGET_COLOR: Color = [255, 127, 14, 255];
 const DEFAULT_MAPPING_DEFAULT: Color = [120, 120, 120, 255];
@@ -276,11 +334,6 @@ interface PreparedTile {
   /** Source tile + decoded columns — picking enrichment context (references, not copies). */
   tile: Tile;
   features: BinaryFeatures;
-}
-
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
 }
 
 /**
@@ -328,9 +381,11 @@ export class AnimatedArcLayer<
       compare: true,
     },
     getWidth: { type: 'object', value: null, optional: true, compare: true },
-    arcHeight: { type: 'number', value: 1, min: 0 },
+    // Permissive descriptors: like `width`, these legally hold a constant OR a
+    // column-name string, which the 'number' validator would reject.
+    arcHeight: { type: 'object', value: 1, compare: true },
     getHeight: { type: 'object', value: null, optional: true, compare: true },
-    arcTilt: { type: 'number', value: 0 },
+    arcTilt: { type: 'object', value: 0, compare: true },
     getTilt: { type: 'object', value: null, optional: true, compare: true },
     colorPalette: { type: 'array', value: DEFAULT_PALETTE, compare: true },
     // Explicit string→color map. compare:false — its content is folded into the
@@ -418,7 +473,7 @@ export class AnimatedArcLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy prop.
    * Same value domain as the legacy props (constant or column name).
    */
@@ -449,7 +504,7 @@ export class AnimatedArcLayer<
     );
   }
 
-  private heightValue(): number | undefined {
+  private heightValue(): number | string | undefined {
     return resolveAccessorAlias(
       'AnimatedArcLayer',
       'getHeight',
@@ -458,7 +513,7 @@ export class AnimatedArcLayer<
     );
   }
 
-  private tiltValue(): number | undefined {
+  private tiltValue(): number | string | undefined {
     return resolveAccessorAlias(
       'AnimatedArcLayer',
       'getTilt',
@@ -480,51 +535,51 @@ export class AnimatedArcLayer<
     return '';
   }
 
+  /**
+   * Digest of everything baked into a cached sublayer at construction time.
+   * When it changes the whole sublayer cache is dropped.
+   */
   private computeLayerPropsKey(): string {
-    const sourceColor = this.sourceColorValue();
-    const targetColor = this.targetColorValue();
-    const width = this.widthValue();
-    return [
-      this.props.greatCircle,
-      this.props.numSegments,
-      this.props.widthUnits,
-      this.props.widthScale,
-      this.props.widthMinPixels,
-      this.props.widthMaxPixels,
-      this.heightValue(),
-      this.tiltValue(),
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinate system, _subLayerProps, …) plus
-      // the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      // sourceColor/targetColor/width: only the "constant fallback" branch is
-      // baked into the layer; the categorical path lives in `prepared`.
-      Array.isArray(sourceColor) ? sourceColor.join(',') : '',
-      Array.isArray(targetColor) ? targetColor.join(',') : '',
-      typeof width === 'number' ? width : 0,
-      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
-      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
-      // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedArcLayerProps>(
+      this.props,
+      ARC_PROP_EFFECTS,
+      {
+        // The sublayer is constructed from the RESOLVED value, so the key must
+        // track it — keying the raw prop leaves every cached sublayer stale
+        // when only the alias changes.
+        overrides: {
+          sourceColor: this.sourceColorValue(),
+          targetColor: this.targetColorValue(),
+          width: this.widthValue(),
+          arcHeight: this.heightValue(),
+          arcTilt: this.tiltValue(),
+          filterProperty: this.filterPropertyValue(),
+        },
+        // Inputs that are not own props: the composite props getSubLayerProps
+        // bakes into every sublayer (opacity/pickable/visible, coordinate
+        // system, _subLayerProps, …), the user's updateTriggers, and the base
+        // class's time props that buildSublayer forwards.
+        extra: [
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   renderLayers(): Layer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
+      // Drop the derived buffers too (endpoint Float64Arrays, expanded RGBA)
+      // AND the references they hold into tiles the tileset has already
+      // evicted — scrubbing to an empty range or panning away otherwise pins
+      // both indefinitely. Mirrors AnimatedColumnLayer.
+      this.preparedTileCache.clear();
+      this.sublayerCache.clear();
       this.lastTilesRef = null;
       return [];
     }
@@ -535,7 +590,7 @@ export class AnimatedArcLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -593,11 +648,32 @@ export class AnimatedArcLayer<
 
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     const binary = tileLayer.features;
-    if (binary.featureCount === 0 || !binary.startIndices) return null;
+    if (binary.featureCount === 0) return null;
+    // An arc collapses each LINESTRING to its first/last vertex. A point tile
+    // carries no such run — it used to yield zero sublayers with no warning at
+    // all (the blank-render class this repo ships a debugging skill for), so
+    // name the mismatch once and skip.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.LineString],
+        'AnimatedArcLayer',
+        tileLayer.name,
+      )
+    )
+      return null;
+    // Structural backstop for untagged (pre-geometry-kind) archives, which
+    // expectGeometry deliberately trusts: the endpoint derivation indexes
+    // startIndices.
+    if (!binary.startIndices) return null;
 
     const colorProp = this.categoryColorProp();
     const widthValue = this.widthValue();
     const widthProp = typeof widthValue === 'string' ? widthValue : '';
+    const heightValue = this.heightValue();
+    const heightProp = typeof heightValue === 'string' ? heightValue : '';
+    const tiltValue = this.tiltValue();
+    const tiltProp = typeof tiltValue === 'string' ? tiltValue : '';
     const filterProp = this.filterPropertyValue() ?? '';
     // Explicit colorMapping content is baked into the per-tile gpuPalette, so a
     // mapping edit must invalidate the cached tile. Digest is memoized per
@@ -617,13 +693,13 @@ export class AnimatedArcLayer<
     // The filter-column NAME is baked into the `filterValue` attribute, so a
     // change (incl. the unset↔set toggle that adds/removes STTDataFilterExtension)
     // must re-prepare tiles → rebuild sublayers via the new preparedKey.
-    const styleKey = `${colorProp}|${widthProp}|${
+    const styleKey = `${colorProp}|${widthProp}|h${heightProp}|t${tiltProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
     }|${mapSig}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -686,10 +762,28 @@ export class AnimatedArcLayer<
       }
     }
 
+    // Per-feature width / arc height / arc tilt from baked numeric columns.
+    // Upstream registers instanceWidths / instanceHeights / instanceTilts as
+    // ordinary per-instance accessors, so each Float32Array rides zero-copy;
+    // an absent column falls back to the constant passed in buildSublayer.
     if (widthProp) {
       const values = binary.numericProps[widthProp];
       if (values) {
         attributes.getWidth = { value: values, size: 1 };
+      }
+    }
+
+    if (heightProp) {
+      const values = binary.numericProps[heightProp];
+      if (values) {
+        attributes.getHeight = { value: values, size: 1 };
+      }
+    }
+
+    if (tiltProp) {
+      const values = binary.numericProps[tiltProp];
+      if (values) {
+        attributes.getTilt = { value: values, size: 1 };
       }
     }
 
@@ -751,8 +845,12 @@ export class AnimatedArcLayer<
     const constWidth = typeof widthValue === 'number' ? widthValue : 2;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
-    const arcHeight = this.heightValue() ?? 1;
-    const arcTilt = this.tiltValue() ?? 0;
+    // Constant fallbacks for the height/tilt accessors — the binary getHeight /
+    // getTilt attributes win per instance on tiles that baked the column.
+    const heightValue = this.heightValue();
+    const tiltValue = this.tiltValue();
+    const arcHeight = typeof heightValue === 'number' ? heightValue : 1;
+    const arcTilt = typeof tiltValue === 'number' ? tiltValue : 0;
 
     const useGpuCategory = prepared.gpuPalette !== null;
     if (useGpuCategory && prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE) {
@@ -784,15 +882,16 @@ export class AnimatedArcLayer<
     ]);
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate system,
     // highlight props, …) + user `_subLayerProps.arcs` overrides. Only runs
-    // inside this cache-gated build path — never per frame. positionFormat is
-    // passed explicitly (sublayerProps beats inheritance): the composite's
-    // default 'XYZ' would misread 2D tile buffers.
+    // inside this cache-gated build path — never per frame. NOTE: no
+    // positionFormat pass-through. `positionFormat` is consumed only by the
+    // tesselator-based layers (path / polygon); ArcLayer never reads it. What
+    // makes a 2D tile buffer read correctly is `size: dims` on the binary
+    // getSourcePosition / getTargetPosition attributes above.
     const props = this.composeSubLayerProps('arcs', prepared.tileKey, {
       data: prepared.data,
       // Identity comparator pairs with the preparedTileCache: deck.gl skips the
       // entire prop-diff for `data` when the same object reference comes back.
       dataComparator: (a: any, b: any) => a === b,
-      positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
       greatCircle: this.props.greatCircle,
       numSegments: this.props.numSegments,
       // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
@@ -803,8 +902,8 @@ export class AnimatedArcLayer<
 
       // Constants are harmless when the categorical GPU path is active (the
       // shader's useCategoryColor branch overrides them); they drive color on
-      // tiles without the category column. getHeight/getTilt are constant
-      // pass-throughs (ArcLayer accessors accept a constant).
+      // tiles without the category column. Same for width/height/tilt: the
+      // constant is the fallback for tiles that baked no such column.
       getSourceColor: constSourceColor,
       getTargetColor: constTargetColor,
       getWidth: constWidth,

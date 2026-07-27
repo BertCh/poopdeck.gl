@@ -437,3 +437,157 @@ describe.each(COMPARATOR_ONLY_CASES)('$name — shared dataComparator', (c) => {
     expect(cmp(ref, {})).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// `stateSlot` — the chassis's `_transferState`-surviving cache storage.
+//
+// deck's `_transferState` moves `state`/`internalState` onto a freshly
+// CONSTRUCTED layer instance and lets that instance's own field initializers
+// run, so anything a layer keeps in a class FIELD is silently discarded every
+// time an app hands deck an unmemoized `new XxxLayer({...})` (the usual shape
+// of a React render). `stateSlot` is the chassis mechanism that parks those
+// caches on `state` instead. These cases pin the two properties the layers
+// actually depend on — a slot opened BEFORE deck installed `state` is adopted
+// into it, and a slot already on `state` survives the transfer — and that the
+// mechanism is inherited from the chassis rather than re-declared per layer.
+// ---------------------------------------------------------------------------
+
+interface SlotCase {
+  name: string;
+  load: () => Promise<any>;
+  /** the `this.state` key this layer parks its caches under */
+  slot: string;
+  /** touch the layer's own cache accessor; returns the slot-backed Map */
+  touch: (layer: any) => Map<string, unknown>;
+}
+
+const SLOT_CASES: SlotCase[] = [
+  {
+    name: 'AnimatedTripsLayer',
+    load: () =>
+      import('../src/layers/trips/animated-trips-layer').then(
+        (m) => m.AnimatedTripsLayer,
+      ),
+    slot: '_sttTripsCaches',
+    touch: (layer) => layer.preparedTileCache,
+  },
+  {
+    name: 'AnimatedTripHeadsLayer',
+    load: () =>
+      import('../src/layers/trips/animated-trip-heads-layer').then(
+        (m) => m.AnimatedTripHeadsLayer,
+      ),
+    slot: '_sttTripHeadsCaches',
+    touch: (layer) => layer.preparedTileCache,
+  },
+];
+
+describe.each(SLOT_CASES)('$name — chassis stateSlot storage', (c) => {
+  let Ctor: any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    Ctor = await c.load();
+  });
+
+  it('adopts a slot opened before deck installed `state`, keeping identity', () => {
+    // The window between construction and initializeState — and the
+    // Object.create() harnesses, which never get a state at all.
+    const layer: any = Object.create(Ctor.prototype);
+    const detachedCache = c.touch(layer);
+    detachedCache.set('archive|14/1/2/0:trips', 'prepared');
+
+    layer.state = {}; // deck installs state
+
+    expect(c.touch(layer)).toBe(detachedCache);
+    expect(c.touch(layer).get('archive|14/1/2/0:trips')).toBe('prepared');
+    expect(layer.state[c.slot]).toBeDefined();
+    // The detached copy is released on adoption, so a later state swap cannot
+    // resurrect the pre-state slot over whatever `state` now carries.
+    expect(layer._detachedSlots?.[c.slot]).toBeUndefined();
+  });
+
+  it("survives deck's _transferState onto a fresh instance", () => {
+    const previous: any = Object.create(Ctor.prototype);
+    previous.state = {};
+    const cache = c.touch(previous);
+    cache.set('archive|14/1/2/0:trips', 'prepared');
+
+    // _transferState: a brand-new instance (no fields carried over — its own
+    // initializers ran) receives the old layer's `state` object.
+    const next: any = Object.create(Ctor.prototype);
+    next.state = previous.state;
+
+    expect(c.touch(next)).toBe(cache);
+    expect(c.touch(next).get('archive|14/1/2/0:trips')).toBe('prepared');
+  });
+
+  it('starts empty on an instance that did NOT receive the state', () => {
+    // Guards the test above: proves survival travelled through `state` and not
+    // through some module-level or prototype-level sharing.
+    const previous: any = Object.create(Ctor.prototype);
+    previous.state = {};
+    const cache = c.touch(previous);
+    cache.set('archive|14/1/2/0:trips', 'prepared');
+
+    const unrelated: any = Object.create(Ctor.prototype);
+    unrelated.state = {};
+
+    expect(c.touch(unrelated)).not.toBe(cache);
+    expect(c.touch(unrelated).size).toBe(0);
+  });
+});
+
+describe('SpatioTemporalLayer.stateSlot', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('is owned by the chassis, not re-declared per layer', async () => {
+    const { SpatioTemporalLayer } =
+      await import('../src/layers/spatiotemporal-layer');
+    const { AnimatedTripsLayer } =
+      await import('../src/layers/trips/animated-trips-layer');
+    const { AnimatedTripHeadsLayer } =
+      await import('../src/layers/trips/animated-trip-heads-layer');
+    const { FlowCorridorLayer } =
+      await import('../src/layers/trips/flow-corridor-layer');
+
+    const chassisSlot = Object.getOwnPropertyDescriptor(
+      SpatioTemporalLayer.prototype,
+      'stateSlot',
+    );
+    expect(typeof chassisSlot?.value).toBe('function');
+
+    for (const Ctor of [
+      AnimatedTripsLayer,
+      AnimatedTripHeadsLayer,
+      FlowCorridorLayer,
+    ]) {
+      expect(
+        Object.getOwnPropertyDescriptor(Ctor.prototype, 'stateSlot'),
+      ).toBeUndefined();
+      expect((Ctor.prototype as any).stateSlot).toBe(chassisSlot?.value);
+    }
+  });
+
+  it('calls the factory once per key and keeps keys independent', async () => {
+    const { SpatioTemporalLayer } =
+      await import('../src/layers/spatiotemporal-layer');
+    const layer: any = Object.create(SpatioTemporalLayer.prototype);
+    layer.state = {};
+
+    let calls = 0;
+    const first = layer.stateSlot('a', () => {
+      calls++;
+      return { which: 'a' };
+    });
+    expect(layer.stateSlot('a', () => ({ which: 'other' }))).toBe(first);
+    expect(calls).toBe(1);
+
+    const second = layer.stateSlot('b', () => ({ which: 'b' }));
+    expect(second).not.toBe(first);
+    expect(layer.state.a).toBe(first);
+    expect(layer.state.b).toBe(second);
+  });
+});

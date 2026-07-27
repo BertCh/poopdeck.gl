@@ -165,6 +165,9 @@ Every wire-breaking change batched into ONE bump so content addresses churn once
   the 0.3.0 binary (forfeited already by the FNV-1a synthetic-id migration and the
   `Auto`-ordering occupied-extent fix). Reader compatibility is the contract,
   pinned by `v1_golden.rs`; republishing a v1 dataset is a full re-upload anyway.
+  _(Superseded 2026-07-26: the flag, the v1 frame decoder and `v1_golden.rs`
+  are gone — see §10 and the withdrawal record in the spec's §9.1. The
+  one-release deprecation window this bullet describes is what expired.)_
 - **r2-sync prune grace — the bug this prevents.** The prune pass built its
   referenced set from the LOCAL manifest only; a v2 republish makes every v1 object
   unreferenced-and-old → reaped on the first default sync while edge manifests
@@ -178,6 +181,13 @@ Every wire-breaking change batched into ONE bump so content addresses churn once
   `no-store` origin/LAN, so template amortization buys nothing; a serve-v2 must add
   `formatVersion` to `/metadata.json` FIRST. File ≡ DB byte-parity is scoped to
   hold between a `--format-version 1` build and serve.
+  _(Overtaken by events: serve now emits **self-contained v2 frames** — inline
+  schemas remain its only mode, which is the same reasoning applied to the v2
+  frame — and does advertise `formatVersion` on `/metadata.json`. What it still
+  lacks is a `capabilities` channel, so a served tile using compact times
+  declares nothing; see §10.4. Byte parity is now scoped to the default build,
+  which is why `stt-serve` carries no `--no-compact-times` /
+  `--quantize-vertex-values` twins.)_
 
 ### 3.3 Build intelligence: measure, don't model
 
@@ -359,9 +369,13 @@ media types, `capabilities` must-understand (exactly Zarr v3's `must_understand`
 - **`stt-serve` core keys** (`boundingBox`/`minZoom`/`maxZoom`) deliberately mirror
   the loaders.gl `TileSource` shape — decide which schema wins before unifying casing.
 - Enforcement: `spec_conformance.rs`, the compression byte-set freeze,
-  `v1_golden.rs`, `reproducible_build.rs`, and the per-binary
-  `cli_flags_are_documented_in_cli_reference` gates (a new flag fails `cargo test`
-  until documented; the first run caught 6 undocumented flags).
+  `v2_golden.rs` (the byte pin; `v1_golden.rs` went with v1 support on
+  2026-07-26), `capability_registry.rs` + `manifest-schema.test.ts` (the
+  registry ⇄ schema ⇄ both-readers pin), `reproducible_build.rs`, and the
+  `cli_reference_doc.rs` + per-binary
+  `cli_flags_are_documented_in_cli_reference` gates (a new flag fails
+  `cargo test` until documented, and a removed one fails until its doc
+  mention goes; the first run caught 6 undocumented flags).
 
 ## 8. Counted out, with revival triggers
 
@@ -391,6 +405,12 @@ Re-triaged 2026-07-24 against the tree.
   becomes a real problem; it is off the per-session path today.
 - **Manifest-inlined directory root** (saves one RTT) — deferred: couples
   immutable-derived data into the mutable manifest.
+- **Dataset-global dictionary hoist**, **delta-coded quantized coordinates**,
+  and a native **`geoarrow.multipolygon`** geometry type — all three deferred
+  2026-07-26 with measurements and blockers in §10.3. The dictionary hoist is
+  the largest measured win left in the format (43.9% of `earthquakes-v2`
+  uncompressed tile bytes) and is reader-transparent; its blocker is purely
+  that hoisting needs a two-pass build.
 - **Geometry-blob sharing across temporal chunks — a reference, not a delta.** The
   one real cross-timestep duplication the 2026-07-21 audit found: chunked corridor
   datasets re-emit full static geometry per temporal chunk (NWM rivers re-emits the
@@ -403,7 +423,11 @@ Re-triaged 2026-07-24 against the tree.
   _raw f64_; the untested cell is MLT-style deltas over **quantized Int32 world-grid
   coords** — where MLT's residual post-compression edge (1.12–1.96×) lives, on the
   column class that is ~57 % of payload. **Trigger:** run it through the measure
-  fair-share harness against Stage III's <1 % SKIP line. Column-to-column deltas on
+  fair-share harness against Stage III's <1 % SKIP line. _(Re-triaged
+  2026-07-26, §10.3: the zero-copy objection that used to gate this is **void**
+  — the quantized decode path already reconstructs into a fresh `Float64Array`
+  in both readers, so there is no zero-copy view left to protect. Only the
+  measurement is missing.)_ Column-to-column deltas on
   `sub_bucket_*`/matrix columns stay counted out (zstd already sees adjacent columns
   in-blob; the DuckDB precedent says pre-zstd deltas can actively hurt).
 - **Declared reduced temporal tiers (M4 / MinMaxLTTB / spacing).** The bound worth
@@ -461,22 +485,32 @@ backs `inspect`, `diff`, `doctor`, `order-audit`. Removed from the register.
 
 ## 9. Open tail
 
-The open register lives in [README.md](./README.md) (items 1, 4, 6, 8 are this
-record's); not restated. Format-specific notes only:
+The backlog lives in [README.md](./README.md); B1, B2, K1, K2 and K5 are this
+record's, and are not restated here. Format-specific notes only:
 
-- **Demo-fleet republish to packed v2** — verified 2026-07-24: deployed
-  `data-publish` manifests are still `formatVersion: 1` (paged layout, v5
-  directory); only `data-v2/` archives are v2. Everything re-uploads on the flip;
-  prune-grace is shipped, `--no-prune` is the belt-and-braces mode, rollback =
-  re-upload the previous manifest. This gate carries the **requests- /
-  bytes-to-first-frame** capture (the COPC "4 reads" benchmark) — measuring before
-  the flip would just measure the old layout.
+- **Demo-fleet republish to packed v2** — ⚠ **now blocking, not optional**
+  (**B2**). Measured 2026-07-26 by probing all 64 manifest URLs registered in
+  `datasets.ts`: **24 are still `formatVersion: 1`**, 35 are v2, 5 are 404. With
+  v1 read support withdrawn 2026-07-26 (§10, spec §9.1) those 24 are
+  **unopenable by the current readers**, so the flip is a prerequisite for
+  shipping the reader, not a follow-up. The 2026-07-26
+  payload break (§10) makes it a full re-upload regardless — every content
+  address churns, including for the archives already on v2. Prune-grace is
+  shipped but does **not** cover a change where nothing is shared with the
+  previous manifest: use `--no-prune` and let the retention window pass.
+  Rollback = re-upload the previous manifest AND pin the previous reader.
+  This gate carries the **requests- / bytes-to-first-frame** capture (the COPC
+  "4 reads" benchmark) — measure after the flip, since measuring before would
+  just measure the old layout.
 - **Lazy-props client materialization** — format-enabled by the core/props split;
   the reader is eager-only. Already decided: the Arrow parse must run in the decode
   worker and cached tile `byteSize` must be re-accounted through an explicit tileset
   callback, never silently.
-- **serve-v2** — stays v1 by decision (§3.2); `formatVersion` must reach
-  `/metadata.json` first.
+- **serve-v2** — DONE: serve emits self-contained v2 frames and advertises
+  `formatVersion` on `/metadata.json`. What remains open is the
+  **`capabilities` channel** (§10.4) and updating
+  `docs/spec/stt-serve-protocol.md`, which still documents the v1 behaviour —
+  **K1**.
 - **Temporal-LOD reader wiring beyond scrub-LOD P0–P2** — wired and kill-switched,
   but `scrubLod` is set at zero showcase call-sites, so the pyramid is consumed
   nowhere at rest. P3/P4: [playback-and-loading.md](./playback-and-loading.md).
@@ -484,8 +518,8 @@ record's); not restated. Format-specific notes only:
   byte-breaking follow-ups deferred from T1.1 coverage clipping; also the cross-zoom
   clip pyramid and the `geo::BooleanOps` swap (workspace pins geo 0.28; revisit at
   ≥ 0.30). **T5.1 memory heads** (§2) are the next scale target.
-- **Known issue (not a framework):** the AV render-mode set is declared in four-plus
-  drifting places — the `renderModes` existence-probe memo in `AvCockpitImpl.tsx`,
+- **Known issue (not a framework, **K6**):** the AV render-mode set is declared in
+  four-plus drifting places — the `renderModes` existence-probe memo in `AvCockpitImpl.tsx`,
   the `datasets.ts` regex gates (`HELD_BACK_AV_MODES`, `WAYMO_LOCAL_ONLY`), the
   route/mode-param handling, and the deck↔three parity copy. One registry row per
   mode would kill it; nothing else from the retired preprocessing-framework design
@@ -498,3 +532,265 @@ polygon after the clip, using the topology-preserving `SimplifyVwPreserve` varia
 (one R\*-tree shared across exterior + holes, so shell/hole intersections are
 caught), gated to `zoom < simplify_max_zoom` so the max-tiled-zoom tier stays
 bit-exact — which is what the watertight antimeridian seam requires.
+
+## 10. Decision record — 2026-07-26 payload byte break
+
+The second byte-breaking event after packed-v2 (§3.2), and the first that
+**does not bump `formatVersion`**: every change either rides a
+`manifest.capabilities` declaration or is strictly additive, so the envelope,
+object layout and addressing rules are untouched. Normative text lives in
+[`stt-packed-format.md`](../spec/stt-packed-format.md) §5.2.4–§5.2.6 and
+[`data-format.md`](../architecture/data-format.md); this record is rationale,
+measurement, and what was deliberately NOT done.
+
+The batching discipline of §3.2 was applied again: **six wire changes, one
+churn event.** Content addresses churn exactly once, and the whole published
+fleet re-uploads once (§9.3 of the spec spells out the deploy consequence).
+
+### 10.1 What shipped, and what it measured
+
+Baseline = HEAD before the change, built read-only into a scratch tree with
+its own `CARGO_TARGET_DIR`; "new" = the working tree. Two real shipped inputs
+(`bixi-corridors`, `storm4d-isolines`) plus six synthetic corpora mirroring
+the profiles the levers target. Wire-level numbers come from a frame walker
+that reads section bytes directly, **not** from `stt-optimize`'s per-column
+table — that table is computed after `merge_v2_layer` re-inflates, so it is
+structurally blind to compact times and vertex-value quant.
+
+| change                               | default                                       | capability               | headline measurement                                                                                                                                                                                        |
+| ------------------------------------ | --------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Arrow IPC buffer alignment 64 → 8    | unconditional                                 | —                        | fixed **445–1300 B refunded per tile blob**; −4.0% uncompressed on 110-feature event tiles, −0.3% on 400 KB corridor tiles; bixi's 1-feature PROPS sections **halved** (440,544 → 214,624 B over 508 blobs) |
+| compact feature times (`st`/`et`)    | **ON**                                        | `time-delta`             | −13.1% uncompressed on an all-instantaneous corpus; **+3.4% packed** on the same corpus                                                                                                                     |
+| `vertex_time` `List<UInt32>` tier    | unconditional                                 | —                        | −14.25% uncompressed on a 20 h track corpus; **+10.8% compressed** on that column                                                                                                                           |
+| `part_offsets`                       | auto (multi-part layers only)                 | — (additive)             | +7.40 B/feature where emitted; 0 bytes on single-part datasets                                                                                                                                              |
+| `--quantize-vertex-values`           | OFF (lossy)                                   | `vertex-value-quant`     | **−48.2% of ALL uncompressed tile bytes** on bixi-corridors, −41% on a corridor-matrix corpus, −9.8% packed                                                                                                 |
+| exact-integer attribute quantization | unconditional (fixes `--quantize-attrs-auto`) | `attr-quant` (unchanged) | correctness, not size — see below                                                                                                                                                                           |
+
+**The alignment change is a fixed per-blob refund, not a percentage.** That
+is the whole shape of it: 8 is what the Arrow IPC spec requires; 64 is a SIMD
+_recommendation_ arrow-rs defaults to. It pays enormously on many-small-tiles
+datasets and negligibly on few-large-tiles ones. Uncompressed size is the
+metric that matters here — it drives reader allocation, the client memory
+budget and eviction (earthquakes-v2: 73 MB on the wire, 420 MB decoded).
+
+**`--quantize-vertex-values` is exactly a 50% cut, verified to the byte.**
+bixi's `vertex_value_matrix` is 49,658,280 `Float32` values = 198,633,120 B =
+96.1% of all tile bytes; predicted saving 99,316,560 B, measured CORE delta
+**99,316,560 B**. Same on the synthetic corridor corpus (predicted 4,270,950,
+measured 4,270,888).
+
+**Two changes cost compressed bytes on exactly the workload they target, and
+were kept anyway.** Compact times measured **+3.39% packs** on an
+all-instantaneous corpus, and the u32 `vertex_time` tier **+10.8%** on its own
+column. The mechanism is the same in both cases and worth writing down so it
+is not rediscovered: _sorted absolute `Int64` compresses superbly_ — constant
+high byte-planes across the column, and `end_time` is a near-copy of a block
+zstd has just seen — whereas dense small offsets have high entropy per byte.
+It is the same sign flip that killed `rel-times32` (§4). The difference is
+that rel-times32 had **no** compensating win, while these two buy
+uncompressed size, decode work (no `Number(BigInt)` per feature on the TS
+side), and, for `et:"zero"`, an entire column removed from the batch. **The
+decision, stated so it is not relitigated: compact times are a decode/memory
+lever, NOT a wire lever.** Anything gated on `stt-optimize diff
+--fail-on-growth` will trip on them; that is expected, not a regression.
+
+**The attribute-quantizer fix is a correctness change wearing a size
+change's clothes.** The old range-adaptive mode mapped every numeric column
+onto `span/65535`, which for an integer column is a fractional step that
+cannot represent its own inputs. Measured against an unquantized build of the
+same 293,983-feature input:
+
+| column                                 | old max abs error | new max abs error              |
+| -------------------------------------- | ----------------- | ------------------------------ |
+| `count` (int, span 900)                | 0.006851          | **0**                          |
+| `elevation_m` (int, span 251k)         | **1.914**         | **0**                          |
+| `trip_id` (int, id magnitude)          | **2.0**           | **0** (refused, stays Float64) |
+| `outlier_metric` (body 0–10, rare 1e6) | **7.609**         | 7.609 (unchanged — see below)  |
+| `speed_kmh` (well-conditioned)         | 0.000244          | 0.000244 (unchanged)           |
+
+**The refusal threshold went through two revisions; the second is the one that
+shipped, and the reason is worth recording.** The first cut refused on three
+grounds — `max|v| > 2^53`, `span > i32::MAX`, and a `1e-3` median
+relative-error guard against outlier-inflated spans. Adversarial review
+reproduced the consequence with the real binary: the latter two are properties
+of _whichever rows a tile caught_, so the same column shipped `UInt16` in one
+tile and `Float64` in another, and `stt-validate` rates a type-family change as
+structural drift and **hard-fails the archive**. Correctness of a per-tile
+encoding decision is not enough; it also has to be stable.
+
+The shipped rule is therefore a single **magnitude** test at `i32::MAX`
+(≈ 2.147e9): magnitude is a property of the column's domain, so a tile holding
+one id refuses exactly like a tile holding thousands. It is also lower than the
+first cut's `2^53`, which turned out to _miss_ a whole class — OSM node ids
+(≈ 1.2e10) sit comfortably inside `f64`'s exact-integer range but past the
+`Int32` leaf, so they were being range-adapted at a step of ~168k and decoding
+off by ±84k, silently, in every tile. `i32::MAX` is where both encodings fail
+at once: step-1 exactness no longer fits the widest leaf, and the 16-bit
+range-adaptive step is already ≥ ~32 000.
+
+The cost of dropping the median guard is the `outlier_metric` row above: a
+small-magnitude column with a rare huge value still quantizes coarsely (7.609
+median relative error). That is the pre-existing behaviour of an opt-in lossy
+flag, and the honest fix is the dataset-global range pin below — not a
+per-tile heuristic that trades a precision complaint for a broken archive.
+
+**Builder geometry: two silent-wrongness bugs, not size work.** MultiPolygon
+parts were being earcut as one ring list, i.e. parts 2..n bridged as holes of
+part 1 — wrong on **6,583 / 6,583** multi-part features in the probe corpus
+(triangulated area 2.6366 vs. true 2.6633), and the trigger is not exotic:
+the tiler emits a MultiPolygon whenever clipping cuts one source polygon into
+pieces inside a tile. Plain polygons are byte-identical before and after
+(**16,972 / 16,972** index lists identical on a single-part-only dataset).
+Separately, unreadable geometry was being replaced with fabricated
+placeholders (a single-point "line", a one-vertex "ring"); it is now dropped
+and counted, so `metadata.feature_count` for affected sources becomes lower
+and honest.
+
+### 10.2 Design choices worth not relitigating
+
+- **`part_offsets` is a column, not a geometry-type change.** A native
+  `geoarrow.multipolygon` leaf would be the "right" fix and is deferred
+  (§10.3); a side column is additive, needs no capability, costs zero bytes
+  on single-part datasets, and does not fork the GeoArrow interop story.
+- **`part_offsets` values are feature-LOCAL ring indices.** Global indices
+  would have to be rebased by the encode-time row sort; feature-local ones
+  move verbatim under a permutation, which is what lets the existing
+  `permute_nested` handle them with no special case.
+- **`triangles` stays all-or-nothing per layer.** Omitting the trivial
+  single-ring cases measures 40–45% of the column, and the encoder side
+  already tolerates empty lists — but all three reference renderers bind
+  `triangles` as ONE whole-layer index buffer and trust each feature's slice
+  with no fallback, so a feature with an empty slice silently vanishes. The
+  saving is unlocked by **one reader-side change** (backfill an empty list by
+  earcutting that feature's single ring in `packages/core/src/tile.ts`), not
+  by an encoder change. A test pins the current contract with that rationale
+  so nobody "optimises" it before the readers can take it.
+- **Compact times are frame-only.** `st`/`et`/`vq` are discriminated by
+  `TILE_META`, which only a frame carries, so the standalone self-describing
+  layer shape must never use them. The encoder enforces this structurally
+  (the flags live in a `FrameOnlyEncodings` struct that only the frame path
+  fills in) rather than by convention.
+- **Empty layers keep the absolute time pair.** Costs +1 CORE template per
+  layer shape on any dataset with empty tiles, buys unchanged empty-tile
+  bytes and a coherent `t0` semantic. An "every duration is zero" verdict
+  over zero features is a category error.
+- **`vertex-value-quant` is opt-in; `time-delta` is not.** The dividing line
+  is lossiness, not size: compact times are exactly reversible, vertex-value
+  quantization is 16 bits across a range a map colours by. Same rule as §3.3's
+  "quantization is lossy → suggested loudly, never silently applied".
+
+### 10.3 Deferred, with the reason (not silent count-outs)
+
+**Dataset-global dictionary hoist — the biggest measured win left on the
+table.** Per-tile dictionary batches are **43.9%** of `earthquakes-v2` and
+**33.6%** of `hurricanes` uncompressed tile bytes: every tile re-ships the
+complete category list for each dictionary column, and the category set is a
+property of the _dataset_, not the tile. Hoisting the dictionary into the
+manifest (or into the schema template) beside `manifest.schemas` would remove
+essentially all of it.
+
+The encouraging half: it is **reader-transparent by construction**. Both
+reference readers splice `concat(template, tail)` and hand the result to a
+stock Arrow reader without asserting that the template holds only a Schema
+message — so a template that also carried the DictionaryBatch would decode
+today, in both languages, with no reader change. That is a rare property and
+it is why this is deferred rather than counted out.
+
+The blocker is on the **writer** side: hoisting requires knowing the global
+category cardinality (and a stable global code assignment) _before_ the first
+tile is encoded, i.e. a **two-pass build**. The current pipeline is
+single-pass and streams tiles into the `PackWriter` as zoom levels complete.
+A partial pass would be worse than none — a per-tile dictionary that is
+_sometimes_ hoisted forks a template per distinct category subset, which is
+the template-multiplication failure mode. Secondary questions to settle
+before building it: whether the hoisted dictionary lives in the template
+bytes (content-addressed, dedupes for free, but re-hashes the template on any
+category addition) or in a new manifest table; and what happens when the
+global cardinality exceeds `UInt16`. **Trigger:** the build gains a two-pass
+phase for any reason (the dataset-global attribute-range pin below is the
+other candidate customer), or dictionary bytes become the dominant term on a
+dataset that matters.
+
+**Delta-coded quantized coordinates.** §4 recorded coordinate transforms as
+NO-GO, but that experiment tested byte-shuffle / xor+shuffle / delta-bitpack
+on **raw f64** world coordinates, where zstd already models the bit pattern
+well. The untested cell is MLT-style deltas over **quantized `Int32`
+world-grid coords** — which is where MLT's residual post-compression edge
+(1.12–1.96× over gzipped MVT) actually lives, on a column class that is ~57%
+of payload. **The zero-copy objection that used to block it is void:** the
+quantized decode path already reconstructs into a fresh `Float64Array`
+(TS: `readCoordRun`'s quantized branch; Rust: the `stt:quant` affine pass), so
+there is no zero-copy view left to preserve — a delta pass would add
+arithmetic to a loop that is already doing arithmetic. What remains is the
+measurement, against Stage III's <1% SKIP line and with the whole-column
+sign-flip lesson of §4/§10.1 in mind: deltas over a _sorted_ index column may
+well lose to zstd exactly as rel-times32 did. **Trigger:** run it through the
+`measure` fair-share harness; ship only if it clears 1% on a coord-heavy
+dataset _after_ zstd.
+
+**Native `geoarrow.multipolygon` geometry type.** `part_offsets` restores the
+part boundary for STT readers but leaves the tile wrong for every _generic_
+GeoArrow consumer (GeoPandas, lonboard, geoarrow-rs,
+`@geoarrow/deck.gl-layers`), which will keep reading parts 2..n as holes. A
+native `List<List<List<FixedSizeList>>>` leaf tagged
+`geoarrow.multipolygon` is the only fix that makes the tile correct without
+out-of-band knowledge. Deferred because it is a genuine geometry-type
+addition, not a column: it needs a `capabilities` entry (it re-types
+`geometry`), a decision about whether polygon layers become multipolygon
+layers wholesale or per-tile (per-tile forks templates and changes the nesting
+depth a reader walks), matching work in all four renderer backends, and the
+GeoParquet exporter would need a real WKB `MultiPolygon` writer plus `geo`
+metadata `geometry_types` updates. **Trigger:** third-party GeoArrow
+consumption of STT tiles becomes a real use case, or a dataset ships whose
+multi-part features a generic consumer visibly wrecks.
+
+**Dataset-global attribute-range pin.** The per-tile leaf-width choice of the
+exact-integer quantizer can flip `UInt16` ⇄ `Int32` across tiles whose spans
+straddle 65 535, and the refusal path can change the _column set_ — which
+`stt-validate` rates structural drift (§10.4). Taking per-column ranges from
+the tiler and pinning each column's leaf once would eliminate both. Same
+two-pass prerequisite as the dictionary hoist; `cfg.quantize_attrs` is already
+build-global, so there is a place to hang it.
+
+### 10.4 Known rough edges shipped with it
+
+- **Coarse quantization of outlier-inflated columns is not detected.** A
+  small-magnitude column with a rare huge value quantizes at a step sized by
+  the outlier, collapsing the body onto index 0 (measured: 7.609 median
+  relative error). The magnitude refusal does not reach it, and a distribution
+  test cannot be added per tile without reintroducing the schema drift that got
+  the first revision reverted. Fixed properly by the dataset-global range pin
+  above; until then, `--quantize-attr <col>=<prec>` on the offending column is
+  the workaround.
+- **Optional-reserved presence drift is now classified, not errored.**
+  `part_offsets` (multi-part tiles only) joins `triangles`, `vertex_time`,
+  `vertex_value` and `vertex_value_matrix` as columns emitted per tile iff that
+  tile's data needs them. `classify_column_drift` previously rated
+  present-vs-absent as structural for _all_ of them, which was a latent
+  hard-failure on any mixed dataset — `part_offsets` merely made it routine
+  (measured: 532 of 793 sampled `ecco-currents` tiles vary in `vertex_value`
+  presence). It is now reported as an informational note. The residual risk is
+  that a genuine producer bug which drops one of those five columns mid-build
+  no longer errors; property-column and type-family drift still do.
+- **Templates and manifest grow.** An events corpus went 2 → 4 templates,
+  manifest 3,210 → 4,877 B (+52%); a polygon corpus 3 → 4, +25%. `TILE_META`
+  grows 68–112% in the tiles that use the new keys. Small absolutely; the
+  compression _ratio_ degrades across the board (events 2.179 → 1.789) because
+  the highly-redundant material is what was removed.
+- **Shipped archives are not retroactively fixed.** Every published dataset
+  keeps the old quantizer's wrong integer values, the bridged MultiPolygon
+  tessellations, and the inflated `feature_count` until it is rebuilt.
+- **`stt-serve` emits compact times with no capability channel.**
+  `/metadata.json` carries `formatVersion` but has no `capabilities` field, so
+  a served tile using `st`/`et` declares nothing. Safe only because the client
+  decoder ships in this repo. Either add the channel or document the lockstep
+  assumption in `stt-serve-protocol.md`.
+- **`toGeoArrowTable()` leaks the wire shape.** The TS re-inflation lives in
+  `tableToBinaryFeatures` — where the CPU win is — so a GeoArrow consumer
+  going through `toGeoArrowTable` sees a `UInt32` `start_time` and a `UInt16`
+  `vertex_value`. Rust has no such gap (`merge_v2_layer` re-inflates for
+  everyone). Closing it means materializing the very columns the change
+  removed, so it needs a deliberate decision rather than a patch.
+- **`partIndices` is published by the TS reader but consumed by no renderer
+  yet** — `layers`, `three` and `maplibre` still treat every polygon feature
+  as single-part. Relevant to the A3 seam-wall work.

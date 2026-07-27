@@ -18,6 +18,11 @@
  * Smoothness: position is a CONTINUOUS interpolation, so there is none of the
  * per-vertex-alpha pulsing that a short PathLayer trail shows on sparse
  * (bridge/highway) geometry — the dot glides smoothly through the whole trip.
+ * That pulsing is a real parity gap against upstream `TripsLayer`, which
+ * interpolates time ALONG each segment from a twin `vertexOffset: 1` shader
+ * view; STT's single-view `instanceVertexTime` cannot, for attribute-budget
+ * reasons documented at the head of `animated-trips-layer.ts`. This layer is
+ * the sanctioned workaround until that lands.
  *
  * Like {@link FlowCorridorLayer}, this overrides `_handleTimeUpdate` to force a
  * renderLayers() pass each frame: the base point/trips layers are deliberately
@@ -40,7 +45,9 @@ import {
   synthesizeVertexTimes,
   expandGradientColors,
 } from './animated-trips-layer.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import { GeometryType, tileLayerKey } from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -48,6 +55,9 @@ import type {
 } from '@poopdeck.gl/core';
 
 const DEBUG = false;
+
+/** Head dots are interpolated ALONG each trip's vertex run. */
+const LINESTRING_ONLY = [GeometryType.LineString] as const;
 
 /** Props added by {@link AnimatedTripHeadsLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link AnimatedTripHeadsLayerProps}). */
@@ -81,12 +91,15 @@ export interface _AnimatedTripHeadsLayerProps {
   /** Low→high color stops for the gradient ramp. Empty → constant color. @default [] */
   gradientColorRamp?: Color[];
   /**
-   * Units for the head radius. 'pixels' (default) is screen-space; 'meters'
-   * makes the dot world-space so it emerges/shrinks with zoom (clamped by the
-   * pixel bounds), mirroring the maritime point layer's "render by space" look.
+   * Units for the head radius — `ScatterplotLayer.radiusUnits` pass-through.
+   * 'pixels' (default) is screen-space; 'meters' makes the dot world-space so
+   * it emerges/shrinks with zoom (clamped by the pixel bounds), mirroring the
+   * maritime point layer's "render by space" look; 'common' is deck's
+   * projection-space unit. Anything other than 'pixels' reads the radius from
+   * {@link headRadius} (falling back to {@link headRadiusPixels}).
    * @default 'pixels'
    */
-  sizeUnits?: 'pixels' | 'meters';
+  sizeUnits?: 'pixels' | 'meters' | 'common';
   /** Head radius in pixels (used when `sizeUnits === 'pixels'`). @default 4 */
   headRadiusPixels?: number;
   /**
@@ -202,6 +215,21 @@ export type AnimatedTripHeadsLayerProps = _AnimatedTripHeadsLayerProps &
 const DEFAULT_HEAD_COLOR: Color = [253, 128, 93, 255];
 const DEFAULT_HEAD_STROKE_COLOR: Color = [0, 0, 0, 255];
 
+/** `this.state` key the render caches live under. */
+const HEADS_CACHE_SLOT = '_sttTripHeadsCaches';
+
+/** Contents of {@link HEADS_CACHE_SLOT}. */
+interface HeadsCaches {
+  /** Per-tile prepared data. Pruned to the visible tile set each render. */
+  prepared: Map<string, PreparedTile>;
+  /** `state.tiles` identity from the previous render (prune-walk skip). */
+  tilesRef: Tile[] | null;
+}
+
+function freshHeadsCaches(): HeadsCaches {
+  return { prepared: new Map(), tilesRef: null };
+}
+
 /**
  * Per-tile prepared data. The typed arrays are referenced DIRECTLY from the
  * tile's BinaryFeatures (zero-copy); only the synthesized vertex-time fallback
@@ -232,11 +260,39 @@ interface PreparedTile {
   timeOffset: number;
   tile: Tile;
   features: BinaryFeatures;
+
+  /* ── Per-frame scratch, POOLED on the tile ──────────────────────────────
+   * `renderLayers` runs at frame rate here (`_handleTimeUpdate` setStates
+   * every tick, because the dot position is a CPU-computed attribute rather
+   * than a shader uniform). Allocating these per tile per FRAME — a
+   * `Float64Array(featureCount * 3)` sized to ALL features plus an optional
+   * gradient scalar array and RGBA buffer — put ~19 MB/frame of Float64 on the
+   * heap at 40 tiles × 20k features, i.e. a major GC every few seconds. They
+   * are per-tile and fully overwritten every frame, so one allocation per
+   * tile-load serves every frame; `computeHeads` hands back `subarray`s sized
+   * to the ACTIVE dot count so only that much is converted + uploaded. */
+
+  /** Interleaved lon/lat/alt output, capacity `featureCount * 3`. */
+  headPositions: Float64Array | null;
+  /** Per-active-dot gradient scalar, capacity `featureCount`. */
+  headValues: Float32Array | null;
+  /** Per-active-dot RGBA, capacity `featureCount * 4` (grown to fit). */
+  headColors: Uint8Array | null;
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
+/**
+ * Cache key for one (tile, layer) pair: core's canonical {@link tileLayerKey}
+ * under an archive qualifier.
+ *
+ * `archiveKey` (the archive URL) is part of the key because a `data` swap keeps
+ * the SAME layer instance and z/x/y/t collisions across archives are the common
+ * case. This layer is the more dangerous of the two: `prepareTile` has no style
+ * key at all, so nothing else could ever dislodge a stale entry. The tile half
+ * is never spelled here: it carries the temporal-LOD tier only because core's
+ * producer folds it in.
+ */
+function makeTileKey(tile: Tile, layer: TileLayer, archiveKey: string): string {
+  return `${archiveKey}|${tileLayerKey(tile.id, layer.name)}`;
 }
 
 /**
@@ -319,16 +375,60 @@ export class AnimatedTripHeadsLayer<
     },
   };
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS: deck's
+   * `_transferState` moves `state`/`internalState` to the new layer instance
+   * but re-runs field initializers, so a field-held cache is discarded the
+   * moment an app hands deck a freshly-constructed layer (an unmemoized
+   * `new AnimatedTripHeadsLayer({...})` inside a React render). That threw away
+   * every prepared tile — including the pooled per-frame buffers above.
+   *
+   * Slots built before deck installed `state` (the `Object.create(...)` unit
+   * harnesses never create one) are adopted the moment a state exists — see
+   * {@link SpatioTemporalLayer.stateSlot}, the chassis mechanism this rides.
+   */
+  private get caches(): HeadsCaches {
+    return this.stateSlot(HEADS_CACHE_SLOT, freshHeadsCaches);
+  }
+
   /** Per-tile prepared-data cache. Pruned to the visible tile set each render. */
-  private preparedTileCache = new Map<string, PreparedTile>();
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.caches.prepared;
+  }
+  private set preparedTileCache(value: Map<string, PreparedTile>) {
+    this.caches.prepared = value;
+  }
 
   /** Tile-array identity from the previous render — skip the prune walk when
    * the parent hands back the same `state.tiles` reference. */
-  private lastTilesRef: Tile[] | null = null;
+  private get lastTilesRef(): Tile[] | null {
+    return this.caches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.caches.tilesRef = value;
+  }
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
     this.preparedTileCache.clear();
+    this.lastTilesRef = null;
+  }
+
+  /**
+   * Identity of the archive the visible tiles came from — folded into every
+   * tile cache key (see {@link makeTileKey}). A `data` swap keeps this layer
+   * INSTANCE, so without it the new archive can hit the previous one's cached
+   * `Float64Array`s on any repeated `z/x/y/t`.
+   */
+  private archiveKey(): string {
+    const state = this.state as
+      | { archive?: { url?: string } | null; initializingUrl?: string | null }
+      | undefined
+      | null;
+    const url = state?.archive?.url ?? state?.initializingUrl;
+    if (typeof url === 'string') return url;
+    const data = (this.props as { data?: unknown }).data;
+    return typeof data === 'string' ? data : '';
   }
 
   /**
@@ -347,15 +447,38 @@ export class AnimatedTripHeadsLayer<
     }
   }
 
-  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+  private prepareTile(
+    tile: Tile,
+    tileLayer: TileLayer,
+    archiveKey: string = this.archiveKey(),
+  ): PreparedTile | null {
     const binary = tileLayer.features;
-    if (binary.featureCount === 0 || !binary.startIndices) return null;
+    // An empty tile is normal and silent; a MISMATCHED one should say so.
+    if (binary.featureCount === 0) return null;
+    // LineString semantics are load-bearing: `startIndices` delimits each
+    // trip's vertex RUN, and `computeHeads` binary-searches inside it. A point
+    // tile would emit one dot per "trip" pinned to an arbitrary vertex. Checked
+    // BEFORE `startIndices` so the diagnostic fires instead of a bare `null`.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        LINESTRING_ONLY,
+        this.props.id ??
+          (this.constructor as { layerName?: string }).layerName ??
+          'AnimatedTripHeadsLayer',
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
+    if (!binary.startIndices) return null;
 
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = makeTileKey(tile, tileLayer, archiveKey);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached) return cached;
 
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const dims = binary.positionDimensions ?? 2;
     const totalVerts = binary.startIndices[binary.featureCount];
     // Prefer the tile's own per-vertex times (zero-copy); synthesize otherwise.
@@ -395,15 +518,21 @@ export class AnimatedTripHeadsLayer<
       timeOffset: binary.timeOffset,
       tile,
       features: binary,
+      // Per-frame scratch, allocated lazily on the first frame that needs it.
+      headPositions: null,
+      headValues: null,
+      headColors: null,
     };
     this.preparedTileCache.set(tileKey, prepared);
-    emit('tilePrepare', {
-      layer: 'AnimatedTripHeadsLayer',
-      tileKey,
-      cached: false,
-      features: binary.featureCount,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedTripHeadsLayer',
+        tileKey,
+        cached: false,
+        features: binary.featureCount,
+        ms: performance.now() - t0,
+      });
+    }
     return prepared;
   }
 
@@ -414,6 +543,12 @@ export class AnimatedTripHeadsLayer<
    *
    * Output positions are size-3 (lon, lat, alt|0) Float64 — what ScatterplotLayer
    * wants for its fp64 instancePositions split (so no high-zoom jitter).
+   *
+   * Both output buffers are POOLED on the PreparedTile (this runs every frame,
+   * per tile) and returned as `subarray`s trimmed to the ACTIVE dot count, so
+   * only the live dots are fp64-split and uploaded. The subarray is a fresh
+   * view each frame — which is exactly what deck needs to see, since
+   * `Attribute.setExternalBuffer` short-circuits on wrapper identity.
    */
   private computeHeads(
     p: PreparedTile,
@@ -432,12 +567,23 @@ export class AnimatedTripHeadsLayer<
       dims,
       featureCount,
     } = p;
-    // Upper bound = all trips active; the returned `count` trims the draw.
-    const out = new Float64Array(featureCount * 3);
+    // Capacity = all trips active; the returned `count` trims the draw.
+    let out = p.headPositions;
+    if (!out || out.length < featureCount * 3) {
+      out = new Float64Array(featureCount * 3);
+      p.headPositions = out;
+    }
     // Per-dot gradient scalar, in the SAME active-only order as `out` — only
     // allocated when a gradient is configured AND this tile carries the channel.
     const gradient = wantValues && vertexValues ? vertexValues : null;
-    const values = gradient ? new Float32Array(featureCount) : null;
+    let values: Float32Array | null = null;
+    if (gradient) {
+      values = p.headValues;
+      if (!values || values.length < featureCount) {
+        values = new Float32Array(featureCount);
+        p.headValues = values;
+      }
+    }
     let n = 0;
 
     for (let i = 0; i < featureCount; i++) {
@@ -505,34 +651,52 @@ export class AnimatedTripHeadsLayer<
       if (values) values[n] = val;
       n++;
     }
-    return { positions: out, values, count: n };
+    // Trim to the active count so the fp64 split + GPU write are sized to the
+    // dots actually drawn, not to every feature in the tile.
+    return {
+      positions: out.subarray(0, n * 3),
+      values: values ? values.subarray(0, n) : null,
+      count: n,
+    };
   }
 
   renderLayers(): Layer[] {
-    const t0 = performance.now();
-    const { tiles } = this.state;
-    if (!tiles || tiles.length === 0) {
-      this.lastTilesRef = null;
-      return [];
-    }
+    // `emit` no-ops when the probe is off; its payload + performance.now() do not.
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
+    const tiles = this.state.tiles as Tile[] | undefined;
+    const archiveKey = this.archiveKey();
 
-    // Prune the prepared cache against the live tile set — only when the tile
-    // array reference actually changed (a prop/time-only re-render hands back
-    // the same ref, so the live set is identical by construction).
-    if (this.lastTilesRef !== tiles) {
+    // Prune the prepared cache against the live tile set BEFORE the empty-set
+    // early return. The chassis deliberately setStates `tiles: []` on archive
+    // init to signal "the visible set just collapsed"; returning early there
+    // meant this block never re-ran and every entry from the PREVIOUS archive
+    // survived — and `prepareTile` here has NO style key, so nothing else could
+    // ever dislodge one. (The archive is folded into the key too, so a stale
+    // hit is impossible either way.) Otherwise skip the walk when the tile
+    // array reference is unchanged (a prop/time-only re-render hands back the
+    // same ref, so the live set is identical by construction).
+    if (this.lastTilesRef !== (tiles ?? null)) {
       const live = new Set<string>();
-      for (const tile of tiles) {
-        for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+      if (tiles) {
+        for (const tile of tiles) {
+          for (const tileLayer of tile.layers)
+            live.add(makeTileKey(tile, tileLayer, archiveKey));
+        }
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
       }
-      this.lastTilesRef = tiles;
+      this.lastTilesRef = tiles ?? null;
     }
 
+    if (!tiles || tiles.length === 0) return [];
+
     const absTime = this.getCurrentTime();
-    const sizeInMeters = this.props.sizeUnits === 'meters';
+    // Anything other than 'pixels' is a WORLD-space unit ('meters', or deck's
+    // projection-space 'common'), which reads the radius from `headRadius`.
+    const sizeUnits = this.props.sizeUnits ?? 'pixels';
+    const sizeInMeters = sizeUnits !== 'pixels';
     const color = (
       Array.isArray(this.props.headColor)
         ? this.props.headColor
@@ -543,8 +707,8 @@ export class AnimatedTripHeadsLayer<
         ? this.props.headStrokeColor
         : DEFAULT_HEAD_STROKE_COLOR
     ) as Color;
-    // In meters mode pass the meter radius (headRadius); else the pixel value.
-    // The `||` chain is deliberate (headRadius defaults to 0 = unset).
+    // In world-space mode pass the world radius (headRadius); else the pixel
+    // value. The `||` chain is deliberate (headRadius defaults to 0 = unset).
     const radius = sizeInMeters
       ? this.props.headRadius || this.props.headRadiusPixels || 4
       : this.props.headRadiusPixels;
@@ -568,7 +732,7 @@ export class AnimatedTripHeadsLayer<
     const sublayers: Layer[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const prepared = this.prepareTile(tile, tileLayer);
+        const prepared = this.prepareTile(tile, tileLayer, archiveKey);
         if (!prepared) continue;
 
         const relTime = absTime - prepared.timeOffset;
@@ -581,18 +745,28 @@ export class AnimatedTripHeadsLayer<
         if (count === 0) continue;
 
         // A per-dot gradient color buffer when this tile carries the channel;
-        // otherwise the dots use the constant `headColor` below. Built each
-        // frame like the positions — O(active dots), trivial at showcase scale.
-        const gradientColors =
-          useGradient && values
-            ? expandGradientColors(
-                values,
-                gradientDomain,
-                ramp as Color[],
-                count,
-                color,
-              )
-            : null;
+        // otherwise the dots use the constant `headColor` below. Re-expanded
+        // each frame like the positions (O(active dots)) but into the tile's
+        // POOLED buffer, so the frame allocates nothing. The active count
+        // changes as trips start/end, so the pool is capacity-grown and the
+        // exact-length view is handed to `expandGradientColors`.
+        let gradientColors: Uint8Array | null = null;
+        if (useGradient && values) {
+          const need = count * 4;
+          let pool = prepared.headColors;
+          if (!pool || pool.length < need) {
+            pool = new Uint8Array(prepared.featureCount * 4);
+            prepared.headColors = pool;
+          }
+          gradientColors = expandGradientColors(
+            values,
+            gradientDomain,
+            ramp as Color[],
+            count,
+            color,
+            pool.length === need ? pool : pool.subarray(0, need),
+          );
+        }
 
         // Fresh `data` ref every frame (the positions move) — deck.gl matches
         // the ScatterplotLayer by id and re-uploads just the changed buffers.
@@ -622,7 +796,7 @@ export class AnimatedTripHeadsLayer<
           getFillColor: color,
           getRadius: radius,
           radiusScale: this.props.radiusScale,
-          radiusUnits: sizeInMeters ? 'meters' : 'pixels',
+          radiusUnits: sizeUnits,
           radiusMinPixels: this.props.headRadiusMinPixels,
           radiusMaxPixels: this.props.headRadiusMaxPixels,
           billboard: this.props.headBillboard,
@@ -646,12 +820,14 @@ export class AnimatedTripHeadsLayer<
       }
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedTripHeadsLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedTripHeadsLayer',
+        tiles: tiles.length,
+        sublayers: sublayers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(

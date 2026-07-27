@@ -12,11 +12,12 @@ Read this first, then follow the routing table to the canonical docs.
 vector tiles**. A dataset is a tiny `manifest.json` plus many immutable,
 content-addressed **pack** objects (`.stt` archive) that combine a spatial tile
 pyramid with a temporal axis — each tile is addressed by `(zoom, x, y,
-time-bucket)`. Rust CLIs (`stt-build`, `stt-optimize`, `stt-serve`,
-`stt-validate`, `stt-bundle`, `stt-generate`) build / analyze / serve those
-archives; TypeScript packages (`@poopdeck.gl/*`) read and render them into
-deck.gl (plus Three.js/WebGPU, MapLibre, and Cesium backends), with a playback
-clock for animation. A showcase site (`examples/showcase`) carries dozens of
+time-bucket)`. Five Rust CLIs (`stt-build`, `stt-optimize`, `stt-serve`,
+`stt-validate`, `stt-bundle`) build / analyze / serve those archives, and the
+repo-only `stt-generate` rebuilds this repo's showcase datasets. TypeScript
+packages (`@poopdeck.gl/*`) read and render them into deck.gl (plus
+Three.js/WebGPU, MapLibre, and Cesium backends), with a playback clock for
+animation. A showcase site (`examples/showcase`) carries dozens of
 real-dataset demos. Scope is **vector** spatiotemporal data (points, paths,
 polygons, trips, flows, events); time-varying rasters/datacubes are out of scope.
 
@@ -81,21 +82,26 @@ them consistent.
 ## Where the code lives
 
 ```
-crates/                 # Rust workspace (5 crates)
+crates/                 # Rust workspace (5 members)
   stt-core/             # archive + Arrow tile format library (every CLI links it)
   stt-build/            # GeoParquet / PostGIS / DuckDB → packed .stt (library)
   stt-optimize/         # input analysis + archive inspect/doctor/diff (powers --auto)
-  stt-generate/         # bundled showcase-dataset generators
-  spatiotemporal-tiles/ # umbrella crate: re-exports the libs + ships every CLI
+  stt-wasm/             # stt-core → WebAssembly decoder; publish = false (docs/guides/wasm.md)
+  spatiotemporal-tiles/ # umbrella crate: re-exports the libs + ships the published CLIs
     src/bin/            #   stt-build, stt-optimize, stt-validate, stt-bundle, stt-serve
+tools/stt-generate/     # bundled showcase-dataset generators. NOT a root-workspace
+                        #   member: its own [workspace] + lockfile keep its higher
+                        #   MSRV off the published crates, so `-p stt-generate` from
+                        #   the root does not resolve — `cargo install --path` it
 packages/               # TypeScript (@poopdeck.gl/*)
   core/                 # STTArchive reader, decoder pool, OPFS cache, render kernel
   layers/               # deck.gl backend (primary)
   three/ maplibre/ cesium/   # alternate renderer backends
   playback/ react/      # clock + governor + React UI
+  mcp/                  # MCP server (@poopdeck.gl/mcp)
 examples/showcase/      # interactive demo app (deck.gl + MapLibre + Three)
 docs/                   # spec, API reference, guides, architecture
-poopdeck-ai/            # Claude Code plugin (MCP server + Agent Skills)
+poopdeck-ai/            # Claude Code plugin (Agent Skills + MCP server wiring)
 ```
 
 ## Where the docs live — key entry points
@@ -108,7 +114,7 @@ poopdeck-ai/            # Claude Code plugin (MCP server + Agent Skills)
   directory v5; machine-checkable schema: `docs/spec/manifest.schema.json`).
 - `docs/architecture/data-format.md` — the per-tile Arrow layer-frame encoding.
 - `docs/guides/` — task guides (`csv-quickstart`, `tuning-tiles`, `deploying`,
-  `python`, `data-generation`, `ai-suite`).
+  `export`, `python`, `data-generation`, `wasm`, `ai-suite`).
 
 ## Build / test basics
 

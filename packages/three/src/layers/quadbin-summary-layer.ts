@@ -33,7 +33,7 @@ import {
   Sphere,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   buildQuadbinBuffers,
   DEFAULT_QUADBIN_COLOR_RANGE,
@@ -61,7 +61,7 @@ export interface STTQuadbinSummaryLayerOptions {
   opacity?: number;
 }
 
-export class STTQuadbinSummaryLayer extends BaseSttLayer {
+export class STTQuadbinSummaryLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
@@ -99,7 +99,7 @@ export class STTQuadbinSummaryLayer extends BaseSttLayer {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     const buf = buildQuadbinBuffers(
       tiles,

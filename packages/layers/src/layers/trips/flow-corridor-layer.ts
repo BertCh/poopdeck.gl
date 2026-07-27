@@ -34,7 +34,7 @@
 // (~`1/STEP` updates per bucket). The aspirational GPU "A2" two-sample lerp is
 // not implemented.
 
-import type { DefaultProps } from '@deck.gl/core';
+import type { DefaultProps, Layer } from '@deck.gl/core';
 import { AnimatedTripsLayer } from './animated-trips-layer.js';
 import type { AnimatedTripsLayerProps } from './animated-trips-layer.js';
 import {
@@ -42,6 +42,7 @@ import {
   blendMatrixRow,
   trailingMaxMatrixRow,
 } from '../../lib/vertex-value-blend.js';
+import { warnOnce } from '../../lib/log.js';
 import type { BinaryFeatures } from '@poopdeck.gl/core';
 
 /** Props added by {@link FlowCorridorLayer} (own props only — compose with
@@ -105,6 +106,18 @@ export class FlowCorridorLayer<
 
   static defaultProps: DefaultProps<FlowCorridorLayerProps> = {
     ...AnimatedTripsLayer.defaultProps,
+    // A corridor is TIMELESS static geometry animated by colour: it runs the
+    // time filter in WINDOW mode (`timeBoundsForSublayer` feeds the corridor's
+    // full [start,end]) and repurposes `instanceVertexTime` to carry the
+    // chevron direction sign. Inheriting AnimatedTripsLayer's
+    // `trailLength: 180_000` put the shader in TRAIL mode (precedence:
+    // cumulative > wake > trail > window), where it reads that slot as a
+    // relative vertex time — so once the relative playhead passed 180 s every
+    // vertex satisfied `vertexTime < trailStart` and the ENTIRE corridor
+    // network went blank for the rest of playback, silently. Every shipped
+    // dataset config happened to remember `trailLength: 0`; this makes it the
+    // class default. See the guard in `renderLayers` for the override case.
+    trailLength: { type: 'number', value: 0, min: 0 },
     signedFlow: false,
     chevronPerTripLight: false,
     chevronAggregateWindowMs: { type: 'number', value: 240000, min: 0 },
@@ -126,22 +139,56 @@ export class FlowCorridorLayer<
   private static readonly STEP = 0.5;
 
   // Bucket AXIS cached from the first matrix tile seen — used only to gate the
-  // time-driven `setState` in `_handleTimeUpdate`. `_bucketWidth` is the per-
+  // time-driven `setState` in `_handleTimeUpdate`. `bucketWidth` is the per-
   // bucket duration, which is UNIFORM across tiles (whole-range corridors AND
   // time-CHUNKED archives, where each chunk carries a slice of the same uniform
-  // bin), so a single anchor + width gates the whole timeline. `_bucket0Abs` is
+  // bin), so a single anchor + width gates the whole timeline. `bucket0Abs` is
   // an arbitrary-but-stable anchor (the first tile's start); only *relative*
   // sub-step changes matter for the gate, so its absolute value is irrelevant.
-  // NOTE: `_numBuckets` is the first tile's OWN column count — for a chunked
+  // NOTE: `numBuckets` is the first tile's OWN column count — for a chunked
   // archive that is one chunk's worth, NOT the global timeline, so it must never
   // clamp the global gate (doing so froze animation once the playhead left the
   // anchor chunk). Per-tile bucket selection is done self-contained in
   // `posFromBinary`; this axis is purely the re-render trigger.
-  private _bucket0Abs = 0;
-  private _bucketWidth = 0;
-  private _numBuckets = 0;
-  /** Last quantized sub-step we forced a render for (-1 = none yet). */
-  private _lastStep = -1;
+  //
+  // Lives on `state` (not a class field) for the same reason as the tile caches
+  // — deck's `_transferState` re-runs field initializers on the new instance —
+  // and carries the `archiveKey` it was latched from, because `noteAxis` is
+  // idempotent-forever: without the reset, swapping a 1-HOUR-bucket archive for
+  // a 1-MINUTE-bucket one kept `bucketWidth = 3_600_000` and the colours
+  // updated ~60× too slowly.
+  private get axis(): {
+    archiveKey: string;
+    bucket0Abs: number;
+    bucketWidth: number;
+    numBuckets: number;
+    /** Last quantized sub-step we forced a render for (-1 = none yet). */
+    lastStep: number;
+  } {
+    const axis = this.stateSlot(FlowCorridorLayer.AXIS_SLOT, () => ({
+      archiveKey: this.archiveKey(),
+      bucket0Abs: 0,
+      bucketWidth: 0,
+      numBuckets: 0,
+      lastStep: -1,
+    }));
+    const key = this.archiveKey();
+    if (axis.archiveKey !== key) {
+      axis.archiveKey = key;
+      axis.bucket0Abs = 0;
+      axis.bucketWidth = 0;
+      axis.numBuckets = 0;
+      axis.lastStep = -1;
+    }
+    return axis;
+  }
+
+  /**
+   * `this.state` key the bucket axis lives under. Exposed so a test can
+   * pre-anchor the axis on a bare instance without a magic string.
+   * @internal
+   */
+  static readonly AXIS_SLOT = '_sttFlowCorridorAxis';
 
   /** See {@link _FlowCorridorLayerProps.signedFlow}. */
   private get signedFlow(): boolean {
@@ -207,17 +254,66 @@ export class FlowCorridorLayer<
     return pos;
   }
 
-  /** Cache the global bucket axis from the first matrix tile (idempotent). */
+  /**
+   * Cache the global bucket axis from the first matrix tile. Idempotent WITHIN
+   * one archive; the {@link axis} accessor clears it when the archive changes,
+   * so a bin-width swap re-latches instead of animating at the old cadence.
+   */
   private noteAxis(binary: BinaryFeatures): void {
-    if (this._numBuckets > 0) return;
+    const axis = this.axis;
+    if (axis.numBuckets > 0) return;
     const nb = binary.vertexValueBuckets ?? 0;
     if (nb <= 0 || !binary.startTimes || binary.startTimes.length === 0) return;
     const rel0 = binary.startTimes[0];
     const span = binary.endTimes[0] - rel0;
     if (span <= 0) return;
-    this._numBuckets = nb;
-    this._bucketWidth = span / nb;
-    this._bucket0Abs = binary.timeOffset + rel0;
+    axis.numBuckets = nb;
+    axis.bucketWidth = span / nb;
+    axis.bucket0Abs = binary.timeOffset + rel0;
+  }
+
+  /**
+   * Corridor knobs that change what `prepareTile` bakes into the per-vertex
+   * colour / direction buffers. Folded into BOTH tile caches by the base class
+   * — before this, dragging a `persistenceMs` slider while PAUSED hit both and
+   * returned the identical `PathLayer`, so the control read as dead until the
+   * playhead crossed a half-bucket.
+   */
+  protected override subclassStyleKey(): string {
+    return [
+      super.subclassStyleKey(),
+      this.props.signedFlow ? 1 : 0,
+      this.props.chevronPerTripLight ? 1 : 0,
+      this.props.chevronAggregateWindowMs,
+      this.props.chevronInstantDomain,
+      this.props.chevronInstantDecayMs,
+      this.props.chevronDirectionWindowMs,
+      this.props.persistenceMs,
+    ].join(',');
+  }
+
+  override renderLayers(): Layer[] {
+    // `trailLength` must stay 0 here (see defaultProps): a non-zero value puts
+    // the shader in TRAIL mode, which reads `instanceVertexTime` — the slot
+    // this class repurposes for the chevron direction sign — as a relative
+    // vertex time, and blanks the whole network once the relative playhead
+    // passes it.
+    if (this.props.trailLength > 0) {
+      warnOnce(
+        'FlowCorridorLayer:trailLength',
+        `[FlowCorridorLayer] trailLength: ${this.props.trailLength} — a flow ` +
+          'corridor is static geometry animated by COLOUR and runs the time ' +
+          'filter in window mode, so any trailLength > 0 switches the shader ' +
+          'to trail mode' +
+          (this.props.signedFlow
+            ? ' and makes it read the signedFlow DIRECTION SIGNS carried on ' +
+              'instanceVertexTime as vertex timestamps'
+            : '') +
+          '. The corridor network goes blank once the relative playhead passes ' +
+          'trailLength. Leave trailLength at its FlowCorridorLayer default (0).',
+      );
+    }
+    return super.renderLayers();
   }
 
   protected override gradientValuesFor(
@@ -423,20 +519,25 @@ export class FlowCorridorLayer<
     super._handleTimeUpdate(time);
     // Until a matrix tile has populated the axis there's nothing to animate;
     // the first tile's prepareTile will render correctly on load regardless.
-    if (this._numBuckets <= 0 || this._bucketWidth <= 0) return;
+    // (Reading through `this.axis` also clears a stale axis after a data swap,
+    // so the gate can't keep ticking at the previous archive's bin width.)
+    const axis = this.axis;
+    if (axis.numBuckets <= 0 || axis.bucketWidth <= 0) return;
     // Global sub-step of the playhead against the uniform bin width. NOT clamped
-    // to `_numBuckets` (that is one chunk's column count, not the timeline) —
+    // to `axis.numBuckets` (that is one chunk's column count, not the timeline) —
     // clamping froze the re-render gate once the playhead left the anchor
     // chunk. Only whether `step` CHANGED matters; each visible tile then
     // re-expands its own active column via `posFromBinary` (clamped per-tile).
     const step = Math.round(
-      (time - this._bucket0Abs) / this._bucketWidth / FlowCorridorLayer.STEP,
+      (time - axis.bucket0Abs) / axis.bucketWidth / FlowCorridorLayer.STEP,
     );
-    if (step !== this._lastStep) {
-      this._lastStep = step;
+    if (step !== axis.lastStep) {
+      axis.lastStep = step;
       // setState (not setNeedsRedraw) re-runs renderLayers() → prepareTile,
-      // whose styleKey now carries the new sub-step, so the active-column blend
-      // re-expands. Only the per-vertex color buffer re-uploads; geometry stays.
+      // whose `dynamicKey` now carries the new sub-step, so the active-column
+      // blend re-expands into a fresh colour wrapper on the SAME `data` object.
+      // Only that buffer re-uploads; the geometry is neither re-tessellated nor
+      // re-split into fp64 hi/lo.
       this.setState({ flowStep: step });
     }
   }

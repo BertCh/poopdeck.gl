@@ -57,7 +57,38 @@ above):
 @source "../node_modules/@poopdeck.gl/react/src";
 ```
 
-Individual elements also accept `className` overrides.
+`PlaybackControls` takes `className` and `style`, both merged onto its root
+element — `style` is the usual place to re-map the tokens for one instance
+(e.g. a dark bar floated over a map inside an otherwise light app).
+
+Note `--ink-400` is **decorative only** (density bars, the buffered fill). It
+does not clear WCAG contrast for text, and the components never draw text in
+it.
+
+## Keyboard
+
+`usePlaybackHotkeys` installs the media-player map on a **fullscreen** surface
+(never on a scrolling/embed page — `Space` there means "scroll"):
+
+| Keys          | Action                                                      |
+| ------------- | ----------------------------------------------------------- |
+| `Space` / `K` | Play / pause                                                |
+| `←` / `→`     | Seek ∓2% (yielded to the map when the map canvas has focus) |
+| `J` / `L`     | Seek ∓10%                                                   |
+| `,` / `.`     | Fine step ∓0.2%                                             |
+| `Home`/`End`  | Jump to start / end                                         |
+| `<` / `>`     | Slower / faster                                             |
+| `0`–`9`       | Jump to 0–90% of the range                                  |
+
+Speed sits on `<` / `>` rather than `↑` / `↓` because deck.gl, MapLibre and
+Cesium all **pan on the arrow keys** once their canvas has focus; a
+window-level listener claiming `↑`/`↓` would fire in addition to the map's own
+pan. For the same reason `←`/`→` yield to a focused map surface, and `Space`
+yields to a focused button so the transport's own controls stay pressable.
+
+The same map is available as data via `PLAYBACK_SHORTCUTS`; pass
+`keyboardShortcuts` to `PlaybackControls` on surfaces that mount the hook and
+it renders a shortcuts disclosure from exactly that array.
 
 ## Hello world — usePlayback + PlaybackControls
 

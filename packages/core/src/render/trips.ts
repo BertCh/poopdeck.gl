@@ -265,8 +265,9 @@ function buildTileTrips(
 /**
  * Distance-proportional per-vertex times over `[start,end]` (relative-frame),
  * measured in projected world metres — the port of deck's `synthesizeVertexTimes`
- * for tiles without a `vertexTimestamps` column. A single long edge no longer
- * gets the same time delta as a short one (that produced the trips "flash").
+ * for tiles without a `vertexTimestamps` column. A long edge must NOT get the
+ * same time delta as a short one — uniform per-edge deltas make the head jump
+ * across long segments, the trips "flash".
  */
 function synthesizeTimes(
   pos: Float32Array | Float64Array,

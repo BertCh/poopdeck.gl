@@ -98,7 +98,7 @@ resolving the first viewport's tiles at the default playhead
 
 **Not** counted: `SpatiotemporalTileset`'s speculative work — prefetch
 lookahead, coarse parent-fallback levels, the overview storyboard tier. Those
-are spent *after* the first frame is drawable. A real app's first-second traffic
+are spent _after_ the first frame is drawable. A real app's first-second traffic
 is therefore higher than these numbers; what they bound is the critical path.
 
 Committed results, with method, hardware and caveats:

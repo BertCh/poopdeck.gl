@@ -29,7 +29,7 @@ import {
   wakeSizeScaleJS,
   cumulativeAlphaJS,
 } from '../src/shaders/time-window.glsl';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 import { makePointTile, makePropertyPointTile } from './fixtures';
 
 const baseOpts = {
@@ -60,7 +60,7 @@ function makeRenderableLayer(gl: any, opts: Record<string, unknown> = {}): any {
     getVisibleTiles: () => [],
     finalize: vi.fn(),
   };
-  l.loadedTiles.set('k', makePropertyPointTile());
+  publishVisibleTiles(l, makePropertyPointTile());
   return l;
 }
 
@@ -610,8 +610,11 @@ describe('STTHeatmapLayer DataFilter (column range filter)', () => {
       filterProperty: 'magnitude',
       filterRange: [3, 9],
     });
-    // makePointTile has no numericProps at all.
-    layer.loadedTiles.set('no-col', makePointTile());
+    // makePointTile has no numericProps at all. Distinctly addressed so it is
+    // a second entry in the (tile-id-keyed) GPU cache rather than an alias.
+    const noCol = makePointTile();
+    noCol.id = { ...noCol.id, x: noCol.id.x + 1 };
+    publishVisibleTiles(layer, makePropertyPointTile(), noCol);
 
     layer.render(gl, new Float32Array(16));
 
@@ -669,7 +672,7 @@ describe('STTHeatmapLayer DataFilter (column range filter)', () => {
     // so this really does run the column extraction twice.
     const second = makePropertyPointTile();
     second.id = { ...second.id, x: second.id.x + 1 };
-    layer.loadedTiles.set('second', second);
+    publishVisibleTiles(layer, makePropertyPointTile(), second);
 
     layer.render(gl, new Float32Array(16));
 

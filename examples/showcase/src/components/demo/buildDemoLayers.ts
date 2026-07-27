@@ -452,7 +452,8 @@ export function buildDemoLayers({
   // loader's [t-w/2, t+w/2] always covers the whole [start, end] range — at
   // metro/viewport scale this loads the visible city's tiles once and retains
   // them. Non-cumulative datasets keep their per-dataset rolling window.
-  const isCumulative = !!selectedDataset.cumulative;
+  const isCumulative =
+    selectedDataset.type === 'point' && !!selectedDataset.cumulative;
   const authoredTimeWindow = isCumulative
     ? datasetDuration * 2
     : selectedDataset.timeWindow || 86400000;
@@ -591,6 +592,27 @@ export function buildDemoLayers({
     // Space-time cube: 0 (inert) unless the dataset opts in via timeHeight.
     timeHeightScale,
     timeHeightOrigin: selectedDataset.timeRange.start,
+    // Whole-planet tile selection. These two props are a PAIR and must be set
+    // together: `useGlobalBounds` replaces the camera-derived viewport box with
+    // [-180,-90,180,90] (GlobeView's unproject returns a degenerate box at low
+    // zoom, so without it the loader never asks for the polar / back-side
+    // tiles), and `zoomOverride` pins the zoom the whole-world box is scanned
+    // at. Global bounds WITHOUT a zoom pin would enumerate the entire world at
+    // the camera's zoom — 4096×4096 candidate columns at z6 — so the layer
+    // should really enforce the coupling itself; until it does, this is the one
+    // place the showcase applies it, for EVERY layer type rather than only the
+    // `trips` branch that used to own it. `zoomOverride: 0` is safe on the four
+    // datasets that opt in (satellites, animals, drifters, ecco-currents)
+    // because each is a full-duplication archive whose single z0 tile per bucket
+    // already carries the complete feature set at 1 m coordinate quantization —
+    // it would become a lossy overview the moment one is rebuilt with
+    // `--min-zoom-field` or a summary tier.
+    ...(selectedDataset.zoomOverride !== undefined && {
+      zoomOverride: selectedDataset.zoomOverride,
+    }),
+    ...((selectedDataset.useGlobalBounds || useGlobe) && {
+      useGlobalBounds: true,
+    }),
   };
 
   switch (selectedDataset.type) {
@@ -720,17 +742,9 @@ export function buildDemoLayers({
       const tripsLayer = new TripsLayerCtor({
         ...baseProps,
         ...sourceProps(selectedDataset.id, true),
-        // useGlobe / useGlobalBounds / zoomOverride let a dataset opt into
-        // a global tile load without bespoke per-id branching here. Globe
-        // mode forces global bounds because GlobeView's unproject() at low
-        // zoom returns degenerate bounds — without it the tile loader sees
-        // a tiny visible box and never requests the polar/back-side tiles.
-        ...(selectedDataset.zoomOverride !== undefined && {
-          zoomOverride: selectedDataset.zoomOverride,
-        }),
-        ...((selectedDataset.useGlobalBounds || useGlobe) && {
-          useGlobalBounds: true,
-        }),
+        // useGlobe / useGlobalBounds / zoomOverride used to be applied HERE, in
+        // this branch alone — so a non-`trips` dataset that opted in got global
+        // bounds silently dropped. They now ride `baseProps`; see the note there.
         // A categorical `colorProperty` is passed as the property-name form
         // of `tripColor`; `colorMapping` keeps colors stable across tiles.
         tripColor: selectedDataset.colorProperty ??
@@ -1554,13 +1568,18 @@ export function buildDemoLayers({
       // Overlay styling is fixed here (the flat Dataset type's radius/color
       // fields belong to the volume; see the weather case's lightning note).
       //
-      // `refinementStrategy: 'no-overlap'` on EVERY storm4d tileset: these
-      // archives are full-duplication pyramids (every zoom level carries the
-      // complete feature set — 18.3M radar gates per level on the volume), so
-      // deck's best-available parent fallback fetched + decoded + drew up to
-      // 4 extra complete copies of the visible data per bucket for zero
+      // `refinementStrategy: 'no-overlap'` on the nine CONTEXT OVERLAYS, and
+      // deliberately NOT on the volume (see the volume branch below). The
+      // overlays really are full-duplication pyramids: measured off the shipped
+      // directories (feature count summed per zoom), `storm4d-couplet` /
+      // `-reports` / `-stations` / `-sounding` carry a byte-identical feature
+      // set at every zoom, and `-cloudtop` / `-warnings` / `-wind3d` /
+      // `-outages` differ only by polygon clip fragments (a county split across
+      // two deep tiles counts twice) — the DISTINCT set is the same at z3 as at
+      // z8. So deck's best-available parent fallback fetched + decoded + drew up
+      // to 4 extra complete copies of the visible data per bucket for zero
       // information gain. Measured at 4 fps / 2.7 s main-thread stalls before;
-      // exact-zoom loading is what the data shape wants.
+      // exact-zoom loading is what THIS data shape wants.
       const overlayBase = {
         ...baseProps,
         refinementStrategy: 'no-overlap' as const,
@@ -1696,6 +1715,11 @@ export function buildDemoLayers({
         layers.push(
           new AnimatedPathLayer({
             ...baseProps,
+            // `storm4d-isolines` IS a full-duplication pyramid — the shipped
+            // directory carries exactly 100,129 features at z5, z6 AND z7, the
+            // same contour sheets re-clipped — so a parent tile is a byte-for-
+            // byte second copy of what the children already draw. Exact-zoom
+            // loading, unlike the volume below (see its note).
             refinementStrategy: 'no-overlap',
             ...sourceProps(selectedDataset.id, true),
             pathColor:
@@ -1743,8 +1767,25 @@ export function buildDemoLayers({
         layers.push(
           new AnimatedPointLayer({
             ...baseProps,
-            // Full-duplication archive → exact-zoom loading (see overlayBase).
-            refinementStrategy: 'no-overlap',
+            // NO `refinementStrategy: 'no-overlap'` here, unlike every other
+            // storm4d tileset. The two archives this branch renders are the only
+            // ones in the family built with `--min-zoom-field` (see
+            // `lod_min_zoom` in scripts/data-generation/nexrad_volume.py and
+            // mrms_volume.py), which is a cumulative LOD FLOOR: a gate whose
+            // `min_zoom` is z appears at z and at every DEEPER zoom, never
+            // shallower — so a parent tile holds a strict SUBSET of what its
+            // children hold, and is never a duplicate of them.
+            // Measured off the shipped directories, summing feature counts per
+            // zoom: `storm4d-volume-lod` holds 43,245 at z4 against 18,343,623
+            // at z9 (0.2%), and `mrms-storm3d-volume` 1,035 at z2 against
+            // 26,505,283 at z8. That coarse skeleton is the strongest-echo gate
+            // per 3D cell — it is exactly the stand-in you want painted while
+            // the full tier streams, and `no-overlap` threw it away, leaving no
+            // placeholder at all on a zoom crossing. `maxParentTileBytes`
+            // (2 MiB) bounds the cost against a ~31 KB average z8 tile. The
+            // "full-duplication pyramid / 4 fps" measurement that motivated
+            // `no-overlap` was taken on the legacy `--no-lod` build, which no
+            // longer ships. See docs/roadmap/tile-loading-3d-2026-07.md RC9.
             ...sourceProps(selectedDataset.id, true),
             fillColor:
               activeSummaryToggle?.weightProperty ??

@@ -26,7 +26,7 @@ import {
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { TrackIndexMaintainer } from '@poopdeck.gl/core';
 import type { TrackFieldConfig } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -50,8 +50,8 @@ import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
 import {
   resolveIdPick,
-  type SttIdPickInfo,
-  type SttIdPickable,
+  type STTIdPickInfo,
+  type STTIdPickable,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 import type { RGBA } from '../lib/color.js';
@@ -157,12 +157,12 @@ export interface STTPointCloudLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_FALLBACK: RGBA = [150, 160, 175, 220];
 
-export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
+export class STTPointCloudLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
   private bundle: PointMaterialBundle | null = null;
-  // Merged-buffer pick identity (§5.3): merged instance i → (tileKey, featureIndex).
+  // Merged-buffer pick identity: merged instance i → (tileKey, featureIndex).
   private provenance = new InstanceProvenance();
   private binaryByTileKey = new Map<string, BinaryFeatures>();
   // Opt-in GPU id-buffer pick pass (lazily built on first pick; browser-verify).
@@ -306,7 +306,7 @@ export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     if (this.interpolationActive()) {
       this.setTilesGlide(tiles, ctx);
       return;
@@ -380,7 +380,7 @@ export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
    * shared keyframe texture, and build ONE instanced billboard whose centres
    * glide on the GPU. Per-frame advance is a pure uniform write (`setTime`).
    */
-  private setTilesGlide(tiles: Tile[], ctx: SttLayerContext): void {
+  private setTilesGlide(tiles: Tile[], ctx: STTLayerContext): void {
     this.glideActive = true;
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
@@ -531,18 +531,18 @@ export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
 
   // ── Picking (GPU id-buffer catalog: point specialisation) ──────────────────
   //
-  // Two halves: `resolvePick` (pure, unit-tested — merged index → SttIdPickInfo
+  // Two halves: `resolvePick` (pure, unit-tested — merged index → STTIdPickInfo
   // via the provenance buffer, the shared `resolveIdPick` seam) and `pick` (the
   // opt-in GPU id-pass + readback, which needs a live WebGPU device and is
   // browser-verify only).
 
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback)
-   * to a normalised, kind-tagged {@link SttIdPickInfo} (`kind: 'point'`), or
+   * to a normalised, kind-tagged {@link STTIdPickInfo} (`kind: 'point'`), or
    * `null` for a miss. Pure — call it directly if you already have a decoded
    * index from your own pick pass.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -600,7 +600,7 @@ export class STTPointCloudLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.object.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

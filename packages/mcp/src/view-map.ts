@@ -330,10 +330,10 @@ export function buildViewMap(
 
 /**
  * A minimal, self-contained HTML page that presents the composed
- * `@deck.gl/json` spec legibly — deliberately a *spec preview*, NOT a live
- * map. An earlier version instantiated a `deck.Deck` from CDN scripts, but
- * with no `@poopdeck.gl/layers` class catalog available it only ever rendered
- * an empty black canvas that read as a broken render. Instead this page states
+ * `@deck.gl/json` spec legibly — deliberately a *spec preview*, NOT a live map.
+ * Instantiating a `deck.Deck` from CDN scripts here would be worse than useless:
+ * with no `@poopdeck.gl/layers` class catalog available it can only render an
+ * empty black canvas, which reads as a broken render. Instead this page states
  * plainly that live rendering requires the host to register the STT layer
  * classes in its own `@deck.gl/json` `JSONConfiguration` (and an http(s)
  * `--public-base-url` so the manifest URL is browser-loadable), embeds the

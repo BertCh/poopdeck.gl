@@ -173,7 +173,8 @@ default (`common.rs::run_stt_build_with_full_options`): coord quantization
   geometry becomes the dominant column.
 - **Pyramid replication** — the cloud is re-tiled at every zoom with no thinning. Collapsing to
   one/two data zooms is the biggest remaining total-archive lever but changes LOD behaviour;
-  partly attacked since by the scrub-LOD track ([`scrub-lod-2026-07.md`](./scrub-lod-2026-07.md)).
+  partly attacked since by the scrub-LOD track
+  ([playback-and-loading.md §7](./playback-and-loading.md#7-scrub-time-lod--a-motion-tier-that-no-application-enables)).
 - **Additive octree + screen-space-error LOD** (Potree/COPC) — the "proper" fix, but a large
   architectural change to a 2D-mercator-keyed engine. Out of scope.
 - **Browser point codecs** (Draco / G-PCC / range-image) — only Draco is WASM-portable and

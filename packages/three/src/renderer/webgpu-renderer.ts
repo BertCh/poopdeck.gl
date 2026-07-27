@@ -160,8 +160,9 @@ export async function createHighLimitDevice(
     );
     return device;
   } catch (err) {
-    // Falling back to Three's own default device (256 MB cap) — surface why so a
-    // recurring "buffer exceeds max" error isn't mistaken for the fix not landing.
+    // Falling back to Three's own default device (256 MB cap) — surface why, so
+    // a "buffer exceeds max" error downstream is read as the default cap rather
+    // than as a bug in the buffer sizing.
     // eslint-disable-next-line no-console
     console.warn(
       '[stt-three] high-limit WebGPU device request failed; using default device',
@@ -175,7 +176,7 @@ export async function createHighLimitDevice(
  * Create and `init()` a `WebGPURenderer`, returning it plus the backend it
  * resolved to. Always await this before rendering.
  */
-export async function createSttRenderer(
+export async function createSTTRenderer(
   opts: CreateRendererOptions = {},
 ): Promise<CreatedRenderer> {
   const forceWebGL = opts.forceWebGL ?? false;

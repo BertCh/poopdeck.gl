@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { odMatrixTile, TWO_PAIRS } from './fake-od';
+import { odMatrixTile, odStaticTile, TWO_PAIRS } from './fake-od';
+import { _resetWarnOnce } from '../src/lib/log';
 
 vi.mock('@deck.gl/layers', () => {
   class FakeScatterplotLayer {
@@ -44,6 +45,7 @@ describe('FlowmapLayer', () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    _resetWarnOnce();
     const mod = await import('../src/layers/summary/flowmap-layer');
     LayerCtor = mod.FlowmapLayer as any;
 
@@ -58,6 +60,7 @@ describe('FlowmapLayer', () => {
         nodeRadiusMinPixels: 1.5,
         nodeRadiusMaxPixels: 28,
         minFlow: 0.25,
+        flowProperty: null,
         sourceColor: [56, 196, 232, 235],
         targetColor: [255, 142, 64, 245],
         nodeColor: [232, 238, 255, 170],
@@ -70,6 +73,8 @@ describe('FlowmapLayer', () => {
       layer.arcCache = new Map();
       layer.lastTilesRef = null;
       layer.lastPropsKey = '';
+      layer.tileSetKey = '';
+      layer.nodeTable = null;
       layer._bucket0Abs = 0;
       layer._bucketWidth = 0;
       layer._numBuckets = 0;
@@ -79,6 +84,23 @@ describe('FlowmapLayer', () => {
       return layer;
     };
   });
+
+  /** Node overlay rows, decoded from the binary attributes it now carries. */
+  const nodeRows = (
+    nodeLayer: any,
+  ): { position: [number, number, number]; radius: number }[] => {
+    const { length, attributes } = nodeLayer.props.data;
+    const pos = attributes.getPosition.value as Float64Array;
+    const rad = attributes.getRadius.value as Float32Array;
+    return Array.from({ length }, (_, i) => ({
+      position: [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]] as [
+        number,
+        number,
+        number,
+      ],
+      radius: rad[i],
+    }));
+  };
 
   it('emits one FlowLinesLayer per tile plus one node ScatterplotLayer overlay', () => {
     const layer = makeLayer(0);
@@ -125,16 +147,48 @@ describe('FlowmapLayer', () => {
   it('aggregates incident flow into node circles (only active stations appear)', () => {
     const layer = makeLayer(0); // bucket 0: only pair0 (A→B) active at flow 10
     layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
-    const nodeLayer = layer.renderLayers()[1];
-    const nodes = nodeLayer.props.data as {
-      position: number[];
-      radius: number;
-    }[];
+    const nodes = nodeRows(layer.renderLayers()[1]);
     // Two endpoints of the single active arc: A(0,0) and B(1,1).
     expect(nodes.length).toBe(2);
     const radii = nodes.map((n) => n.radius).sort((a, b) => a - b);
     expect(radii[0]).toBeCloseTo(Math.sqrt(10)); // nodeRadiusScale 1 · sqrt(incident)
     expect(radii[1]).toBeCloseTo(Math.sqrt(10));
+    // Positions ride binary XYZ attributes, not per-node JS objects.
+    expect(nodes.map((n) => n.position)).toEqual([
+      [0, 0, 0],
+      [1, 1, 0],
+    ]);
+  });
+
+  it('interns node identity ONCE per tile set, not per playhead sub-step', () => {
+    // The ~1 m coordinate keys are the expensive half of node aggregation and
+    // depend only on the tile set — re-running them at 5–10 Hz was the churn.
+    const layer = makeLayer(0);
+    const tiles = [odMatrixTile(TWO_PAIRS)];
+    layer.state = { tiles };
+    layer.renderLayers();
+    const table = layer.nodeTable;
+    expect(table).toBeTruthy();
+    expect(table.count).toBe(4); // 2 corridors × 2 endpoints, all distinct
+
+    // Advance the playhead (new sub-step, same tiles) — same table object.
+    layer.getCurrentTime = () => 1000;
+    layer.renderLayers();
+    expect(layer.nodeTable).toBe(table);
+
+    // A different tile SET re-interns.
+    layer.state = {
+      tiles: [odMatrixTile(TWO_PAIRS, { z: 12, x: 9, y: 9, t: 0 })],
+    };
+    layer.renderLayers();
+    expect(layer.nodeTable).not.toBe(table);
+  });
+
+  it('gives the node overlay a single-namespaced id', () => {
+    const layer = makeLayer(0);
+    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    // Not `flow-nodes-flow-nodes` — the instanceKey is a short constant.
+    expect(layer.renderLayers()[1].props.id).toBe('flow-nodes-all');
   });
 
   it('caches the FlowLinesLayer instance across renders at the same playhead', () => {
@@ -177,5 +231,127 @@ describe('FlowmapLayer', () => {
     const layer = makeLayer(0);
     layer.state = { tiles: [] };
     expect(layer.renderLayers()).toEqual([]);
+  });
+
+  describe('sublayer cache invalidation', () => {
+    // Everything getSubLayerProps() bakes into a sublayer at construction time
+    // has to be in the cache digest, or the change never reaches the layer tree.
+    const rebuildsOn = (mutate: (props: any) => void): boolean => {
+      const layer = makeLayer(0);
+      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      const first = layer.renderLayers();
+      mutate(layer.props);
+      const second = layer.renderLayers();
+      return second[0] !== first[0];
+    };
+
+    it.each([
+      ['pickable', (p: any) => (p.pickable = true)],
+      ['autoHighlight', (p: any) => (p.autoHighlight = true)],
+      ['highlightColor', (p: any) => (p.highlightColor = [1, 2, 3, 4])],
+      ['coordinateSystem', (p: any) => (p.coordinateSystem = 2)],
+      ['modelMatrix', (p: any) => (p.modelMatrix = [1, 0, 0, 0])],
+      ['parameters', (p: any) => (p.parameters = { depthTest: false })],
+      ['operation', (p: any) => (p.operation = 'mask')],
+      [
+        '_subLayerProps',
+        (p: any) => (p._subLayerProps = { flows: { gap: 3 } }),
+      ],
+      ['updateTriggers', (p: any) => (p.updateTriggers = { all: 7 })],
+      ['widthScale', (p: any) => (p.widthScale = 4)],
+      ['minFlow', (p: any) => (p.minFlow = 9)],
+      ['nodeRadiusScale', (p: any) => (p.nodeRadiusScale = 4)],
+    ])('rebuilds the arrow sublayers when %s changes', (_name, mutate) => {
+      expect(rebuildsOn(mutate as (p: any) => void)).toBe(true);
+    });
+
+    it('rebuilds cached arrows when a NEW tile grows a shared hub', () => {
+      // Endpoint insets are the node radii aggregated across ALL visible tiles,
+      // so a new tile feeding an already-visible station must invalidate the
+      // pre-existing tile's arrows — otherwise its arrowheads stay buried under
+      // the (now larger) node circle.
+      const a = odMatrixTile(TWO_PAIRS, { z: 12, x: 1, y: 1, t: 0 });
+      // Same origin station A(0,0) → a third destination, also active at t=0.
+      const b = odMatrixTile(
+        [{ source: [0, 0], target: [5, 5], flows: [90, 0, 0] }],
+        { z: 12, x: 2, y: 2, t: 0 },
+      );
+
+      const layer = makeLayer(0);
+      layer.state = { tiles: [a] };
+      const alone = layer.renderLayers();
+      const insetAlone = alone[0].props.data.attributes.getEndpointOffsets
+        .value[0] as number;
+
+      layer.state = { tiles: [a, b] };
+      const together = layer.renderLayers();
+      expect(together[0]).not.toBe(alone[0]); // NOT a stale cache hit
+      const insetTogether = together[0].props.data.attributes.getEndpointOffsets
+        .value[0] as number;
+      // A's circle grew (10 → 100 incident flow), so its arrows inset further.
+      expect(insetTogether).toBeGreaterThan(insetAlone);
+    });
+  });
+
+  describe('flow magnitude fallback', () => {
+    it('reads a per-feature numeric column when the tile has no bucket matrix', () => {
+      // An OD archive built WITHOUT the value matrix used to render every
+      // corridor at width 0 — indistinguishable from a failed load.
+      const layer = makeLayer(0);
+      layer.state = {
+        tiles: [
+          odStaticTile(
+            [
+              { source: [0, 0], target: [1, 1] },
+              { source: [2, 2], target: [3, 3] },
+            ],
+            [16, 0],
+          ),
+        ],
+      };
+      const sublayers = layer.renderLayers();
+      const w = sublayers[0].props.data.attributes.getWidth
+        .value as Float32Array;
+      expect(w[0]).toBeCloseTo(4); // widthScale 1 · sqrt(16)
+      expect(w[1]).toBe(0); // below minFlow → still invisible
+      // Node circles come along for the ride.
+      expect(nodeRows(sublayers[1]).length).toBe(2);
+    });
+
+    it('honors an explicit flowProperty over the auto-probe', () => {
+      const layer = makeLayer(0, { flowProperty: 'volume' });
+      layer.state = {
+        tiles: [
+          odStaticTile([{ source: [0, 0], target: [1, 1] }], [25], 'volume'),
+        ],
+      };
+      const w = layer.renderLayers()[0].props.data.attributes.getWidth.value;
+      expect(w[0]).toBeCloseTo(5);
+    });
+
+    it('warns once when neither a matrix nor a magnitude column is present', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layer = makeLayer(0);
+      layer.state = {
+        tiles: [odStaticTile([{ source: [0, 0], target: [1, 1] }], [], null)],
+      };
+      const sublayers = layer.renderLayers();
+      expect(sublayers[0].props.data.attributes.getWidth.value[0]).toBe(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(/neither a per-bucket/);
+      warn.mockRestore();
+    });
+  });
+
+  it('strips forwarded extensions (they can never reach the custom shaders)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    class FakeDataFilterExtension {}
+    const layer = makeLayer(0, { extensions: [new FakeDataFilterExtension()] });
+    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    const flow = layer.renderLayers()[0];
+    expect(flow.props.extensions).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/FakeDataFilterExtension/);
+    warn.mockRestore();
   });
 });

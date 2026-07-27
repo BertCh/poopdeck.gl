@@ -27,7 +27,7 @@ const layer = new QuadbinSummaryLayer({
 
 ## Cell encoding
 
-The Quadbin cell id is a **CARTO Quadbin u64** (header `0b100`, mode bit, 5-bit zoom at bits 56–52, 52-bit left-aligned Morton x/y). The Rust aggregator (`stt-build`) encodes it and the TS [`quadbin-cell`](../../packages/layers/src/lib/quadbin-cell.ts) helper decodes it to `(z, x, y)` → Bing quadkey string. The encode/decode are exact mirror-images, validated against CARTO's reference value `(0,0,0) → 0x480fffffffffffff`.
+The Quadbin cell id is a **CARTO Quadbin u64** (header `0b100`, mode bit, 5-bit zoom at bits 56–52, 52-bit left-aligned Morton x/y). ⚠️ Because the header and zoom bits live in the **high half**, [`BinaryFeatures.featureIds`](./binary-features.md#feature-identity-read-featureids64-not-featureids) — a masked low 32 bits — is meaningless for **every** Quadbin id; `featureIds64` is the only correct source, which is what this layer reads. The Rust aggregator (`stt-build`) encodes it and the TS [`quadbin-cell`](../../packages/layers/src/lib/quadbin-cell.ts) helper decodes it to `(z, x, y)` → Bing quadkey string. The encode/decode are exact mirror-images, validated against CARTO's reference value `(0,0,0) → 0x480fffffffffffff`.
 
 ## Properties
 

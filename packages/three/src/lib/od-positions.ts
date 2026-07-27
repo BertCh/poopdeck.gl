@@ -44,10 +44,10 @@ import type {
   LineSegmentBuffers,
 } from './geo-line-buffers.js';
 
-// Dense source/target endpoint derivation now lives in the framework-free
-// `@poopdeck.gl/core/geometry` kernel (Phase 2 dedup — byte-identical port,
-// see docs/roadmap/renderer-architecture.md). Re-exported here so OD
-// consumers keep a single three-side import surface.
+// Dense source/target endpoint derivation lives in the framework-free
+// `@poopdeck.gl/core/geometry` kernel, one copy shared by every backend (see
+// docs/roadmap/renderer-architecture.md). Re-exported here so OD consumers keep
+// a single three-side import surface.
 export {
   deriveSourceTargetPositions,
   type SourceTargetPositions,

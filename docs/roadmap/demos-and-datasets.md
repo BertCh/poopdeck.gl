@@ -49,13 +49,21 @@ nothing about license (nuScenes is the counterexample).
 - **NODD labeling duties** — derived tiles must not be presented as original NOAA data; no
   implied endorsement; attribute.
 
-### 1.3 Live defects (verified against tiles.poopdeck.gl, 2026-07-24)
+### 1.3 Live defects (verified against tiles.poopdeck.gl, 2026-07-26)
 
-- **`rainfall-2019` and `gtfs-ch` 404 on R2.** Both are registered in `datasets.ts` with live
-  URLs and `LOCAL_ONLY_DATASETS` is empty (`new Set<string>([])`), so the gate that exists
-  precisely to prevent this is not holding them back. `/demos` therefore ships two dead demos:
-  `rain-flood-2019` (its rain field is missing; the `nwm-rivers-2019` overlay is 200) and
-  `gtfs-ch`. Fix is r2-sync of both stems, or re-gating them until the sync lands.
+- **The demo-id gate holds; the overlay-stem gate does not exist.** `rain-flood-2019`,
+  `gtfs-ch` and `storm-4d-isolines` are in `LOCAL_ONLY_DATASETS`, so the three demos whose
+  archives are unsynced are correctly withheld from the public deploy. But
+  **`wpc-fronts` and `wpc-fronts-pips` 404 while un-gated**: they are overlay stems inside
+  `severe-weather-2024` (`datasets.ts:3058-3059`), which is itself un-gated, and the gate keys
+  on demo ids — so the composite ships a 404-stalling fronts overlay. Recorded as **L1** in the
+  [roadmap README](./README.md); fix is r2-sync of both stems, or gating the composite until
+  the sync lands. Standing lesson: a demo is only as gated as its _least_ synced archive, and
+  the r2-sync-both-or-neither rule for `wpc-fronts` + `wpc-fronts-pips` predates this defect.
+- **24 of 59 reachable archives are still `formatVersion: 1`** and therefore unopenable by the
+  current reader — the fleet republish, **B2** in the [roadmap README](./README.md). The BIXI
+  family, `av-synthetic`, `cosmos-drive-dreams`, the three `storm-*` archives, `gtfs-nl`,
+  `nwm-rivers-2019` and `comma-280-1641/ego` are the affected demos.
 - **`flights` / `adsb-paths` are OpenSky-derived and live on R2** (both 200).
   `crates/stt-generate/src/datasets/flights.rs` pulls `s3.opensky-network.org/data-samples/`.
   That is in tension with §1.1's HARD BLOCKER verdict on OpenSky. Either the data-samples
@@ -204,7 +212,7 @@ archive:
   are FULL-DUPLICATION pyramids (every zoom carries every feature — 18.3 M gates per level on the
   volume), so deck's best-available parent fallback fetched, decoded and drew up to 4 extra
   complete copies of the visible data per bucket.
-- `SpatiotemporalTileset.getVisibleTiles` pass-2 parent-cover scan is now clamped to the
+- `SpatioTemporalTileset.getVisibleTiles` pass-2 parent-cover scan is now clamped to the
   viewport's primary-zoom tile range. The bug this prevents: a parent spatially larger than the
   viewport always contains child cells outside it, which are never selected and so can never
   enter `primaryCover` — without the clamp such a parent passes the "some child uncovered" test

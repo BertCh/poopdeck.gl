@@ -45,17 +45,41 @@ Binary input (one instanced buffer per attribute) is also supported via deck.gl'
 
 ## Properties
 
-| Prop                 | Type                         | Default                   | Description                                                                                         |
-| -------------------- | ---------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| `getSourcePosition`  | `Accessor<Position>`         | `d.sourcePosition`        | Origin position.                                                                                    |
-| `getTargetPosition`  | `Accessor<Position>`         | `d.targetPosition`        | Destination position.                                                                               |
-| `getWidth`           | `Accessor<number>`           | `1`                       | Per-flow width in **pixels** (already scaled, not normalized).                                      |
-| `getEndpointOffsets` | `Accessor<[number, number]>` | `[0, 0]`                  | `[sourceInset, targetInset]` in pixels — pulls the ends in so the arrow meets the node-circle edge. |
-| `sourceColor`        | `Color`                      | `[0,150,255,255]`         | Origin / tail color.                                                                                |
-| `targetColor`        | `Color`                      | `[255,127,14,255]`        | Destination / arrowhead color.                                                                      |
-| `gap`                | `number`                     | `0.5`                     | Perpendicular separation of the two directions, in units of the arrow width.                        |
-| `widthMinPixels`     | `number`                     | `0`                       | Clamp width to at least this many pixels.                                                           |
-| `widthMaxPixels`     | `number`                     | `Number.MAX_SAFE_INTEGER` | Clamp width to at most this many pixels.                                                            |
+| Prop                 | Type                               | Default                   | Description                                                                                                                                             |
+| -------------------- | ---------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getSourcePosition`  | `Accessor<Position>`               | `d.sourcePosition`        | Origin position.                                                                                                                                        |
+| `getTargetPosition`  | `Accessor<Position>`               | `d.targetPosition`        | Destination position.                                                                                                                                   |
+| `getWidth`           | `Accessor<number>`                 | `1`                       | Per-flow width in **pixels** (already scaled, not normalized).                                                                                          |
+| `getEndpointOffsets` | `Accessor<[number, number]>`       | `[0, 0]`                  | `[sourceInset, targetInset]` in pixels — pulls the ends in so the arrow meets the node-circle edge.                                                     |
+| `sourceColor`        | `Color`                            | `[0,150,255,255]`         | Origin / tail color.                                                                                                                                    |
+| `targetColor`        | `Color`                            | `[255,127,14,255]`        | Destination / arrowhead color.                                                                                                                          |
+| `gap`                | `number`                           | `0.5`                     | Perpendicular separation of the two directions, in units of the arrow width.                                                                            |
+| `widthUnits`         | `'pixels' \| 'meters' \| 'common'` | `'pixels'`                | Units of `getWidth`, matching deck's `LineLayer.widthUnits`. `'pixels'` keeps a constant on-screen thickness; `'meters'`/`'common'` scale with the map. |
+| `widthScale`         | `number`                           | `1`                       | Multiplier applied to `getWidth` before the pixel clamp. Zero-width (inactive) flows stay invisible whatever the scale.                                 |
+| `widthMinPixels`     | `number`                           | `0`                       | Clamp width to at least this many pixels — **active flows only**.                                                                                       |
+| `widthMaxPixels`     | `number`                           | `Number.MAX_SAFE_INTEGER` | Clamp width to at most this many pixels.                                                                                                                |
+
+**A width of exactly `0` stays `0`.** `widthMinPixels` deliberately does not
+raise it, which is what makes `FlowmapLayer`'s "below `minFlow` → invisible"
+animation work: inactive arrows genuinely render nothing rather than being
+clamped up to a hairline.
+
+## Extensions are not supported
+
+This is a fully custom-`Model` layer: it calls luma's `picking` module functions
+directly (`picking_setPickingAttribute` / `picking_setPickingColor` in the VS,
+`picking_filterHighlightColor` / `picking_filterPickingColor` in the FS) rather
+than going through deck's globally-registered `DECKGL_FILTER_*` shader hooks.
+Those hooks live on a process-wide luma `ShaderAssembler` singleton, which a
+bundler can duplicate for a separately-bundled package — leaving the hooks
+undefined and the shader failing to compile. Calling the module functions
+directly makes the layer self-contained and bundler-agnostic.
+
+The trade-off: deck **extensions** that inject into `DECKGL_FILTER_*`
+(`DataFilterExtension`, `TimeFilterExtension`, `CategoryColorExtension`) have no
+effect here — their injections are silently dropped. The composites that own
+this primitive therefore **strip a forwarded `extensions` list, with a one-time
+warning**, instead of passing along something inert.
 
 ## See also
 

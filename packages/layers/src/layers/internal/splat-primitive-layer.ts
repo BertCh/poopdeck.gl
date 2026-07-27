@@ -17,7 +17,10 @@
  * **depth-tested with depth-write ON** and an alpha cutoff: the z-buffer gives
  * correct occlusion for free, so there is NO per-frame back-to-front sort (the
  * hard part of volumetric 3DGS). Soft rims below `alphaCutoff` are discarded so
- * they never write depth (no halo); the confident disk core does.
+ * they never write depth (no halo); the confident disk core does. That GPU
+ * state is {@link SPLAT_DRAW_PARAMETERS}, declared as the `parameters` prop
+ * default — see its docstring for why the `Model` constructor is the wrong
+ * place for it.
  *
  * ── INSTANCE GEOMETRY (object-space, not screen-space) ───────────────────────
  * Each instance is a hexagon (circumscribing the unit disk, ~13% less rasterised
@@ -73,8 +76,8 @@ import { Model, Geometry } from '@luma.gl/engine';
  * centre, 1 at the rim. Every fragment the disk actually paints (`r ≤ 1`) lies
  * inside the hexagon, so the visible result is pixel-identical to a quad — but
  * the rasterised envelope is `2√3 ≈ 3.46` vs the quad's `4`, i.e. **~13 % fewer
- * fragments enter the shader**, all of them previously-discarded `r² > 1`
- * corners. Pure overdraw win, zero fidelity cost.
+ * fragments enter the shader**, all of them `r² > 1` corners the fragment
+ * shader would discard anyway. Pure overdraw win, zero fidelity cost.
  *
  * Vertices in triangle-strip order `0,1,5,2,4,3` (the standard zig-zag
  * triangulation of a convex hexagon → 4 triangles, 6 vertices).
@@ -361,7 +364,40 @@ type _SplatPrimitiveLayerProps<DataT> = {
   alphaCutoff?: number;
 };
 
+/**
+ * The GPU state surface splatting depends on: depth-test + depth-WRITE on (the
+ * z-buffer gives correct occlusion with NO back-to-front sort), standard
+ * src-over alpha blend, two-sided disks.
+ *
+ * These MUST live in `defaultProps.parameters`, not in the `Model` constructor.
+ * deck calls `applyModelParameters(this.getModels(), …, this.props.parameters)`
+ * before every draw, and luma's `Model.setParameters` REPLACES `model.parameters`
+ * wholesale — so anything set at construction time is wiped after frame 1 and
+ * the sort-free depth-write contract silently reverts to whatever deck's global
+ * defaults happen to be. Declaring them as the prop default keeps them
+ * authoritative AND overridable (`_subLayerProps.splats.parameters`).
+ */
+export const SPLAT_DRAW_PARAMETERS = {
+  depthWriteEnabled: true,
+  depthCompare: 'less-equal',
+  cullMode: 'none',
+  blend: true,
+  blendColorOperation: 'add',
+  blendColorSrcFactor: 'src-alpha',
+  blendColorDstFactor: 'one-minus-src-alpha',
+  blendAlphaOperation: 'add',
+  blendAlphaSrcFactor: 'one',
+  blendAlphaDstFactor: 'one-minus-src-alpha',
+} as const;
+
 const defaultProps: DefaultProps<SplatPrimitiveLayerProps> = {
+  // Deep-compare like deck's own `parameters` descriptor (Layer.defaultProps),
+  // so an equal-valued object from a caller doesn't churn the pipeline.
+  parameters: {
+    type: 'object',
+    value: { ...SPLAT_DRAW_PARAMETERS },
+    compare: 2,
+  },
   getPosition: { type: 'accessor', value: (d: any) => d.position },
   getElevation: { type: 'accessor', value: 0 },
   getQuaternion: { type: 'accessor', value: [0, 0, 0, 1] },
@@ -533,20 +569,10 @@ export class SplatPrimitiveLayer<
         },
       }),
       isInstanced: true,
-      // Surface splatting: depth-test + depth-WRITE on (z-buffer gives correct
-      // occlusion with NO sort), standard src-over alpha blend, two-sided disks.
-      parameters: {
-        depthWriteEnabled: true,
-        depthCompare: 'less-equal',
-        cullMode: 'none',
-        blend: true,
-        blendColorOperation: 'add',
-        blendColorSrcFactor: 'src-alpha',
-        blendColorDstFactor: 'one-minus-src-alpha',
-        blendAlphaOperation: 'add',
-        blendAlphaSrcFactor: 'one',
-        blendAlphaDstFactor: 'one-minus-src-alpha',
-      },
+      // NO `parameters` here: deck's per-draw `applyModelParameters` replaces
+      // whatever the constructor set with `this.props.parameters`. The surface-
+      // splatting state lives in {@link SPLAT_DRAW_PARAMETERS} via defaultProps
+      // so it survives — and stays overridable.
     });
   }
 }

@@ -21,6 +21,12 @@ export type { FlowStrokeLayerProps } from './layers/trips/flow-stroke-layer.js';
 // frame rendered through a stock ScatterplotLayer (fp64, no jitter, globe,
 // circular markers). Draws one moving marker at the head of each active trip.
 export { AnimatedTripHeadsLayer } from './layers/trips/animated-trip-heads-layer.js';
+// PathLayer subclass that drops the `instancePickingColors` vertex attribute so
+// the animated path/trips sublayers fit WebGL2's 16-slot minimum. The animated
+// layers select it automatically from `pickable`; it is exported for callers who
+// hit the same attribute ceiling with their own PathLayer stack and want the
+// stripped variant directly. (Its own docstring still carries a stale
+// `@internal` tag — the export is public and supported.)
 export { NoPickingPathLayer } from './layers/internal/no-picking-path-layer.js';
 // Tapered half-arrow primitive (flowmap.gl-style) used by FlowmapLayer to draw
 // weighted OD flows with triangular arrowheads instead of arcs. Exposed for
@@ -167,7 +173,7 @@ export {
 } from './extensions/collision-filter-extension.js';
 
 // NOTE: the playback engine (TimeController, PlaybackGovernor, SttPlayer,
-// decideAutoSpeedMultiplier) lives in @poopdeck.gl/playback and is NO LONGER
+// decideAutoSpeedMultiplier) lives in @poopdeck.gl/playback and is NOT
 // re-exported here — import it directly from @poopdeck.gl/playback. Layer code
 // in this package still depends on the engine internally.
 
@@ -189,12 +195,20 @@ export type { OverviewPreloadResult } from '@poopdeck.gl/core';
 
 // Governor-wiring callback parameter types: what `onTilesetReady` /
 // `onBufferChange` hand you, re-exported so a consumer can type its handlers
-// (`(tileset: SpatiotemporalTileset & BufferSource) => …`) without adding
+// (`(tileset: SpatioTemporalTileset & BufferSource) => …`) without adding
 // @poopdeck.gl/core or /playback as a direct dependency.
-export type { SpatiotemporalTileset } from '@poopdeck.gl/core';
+export type { SpatioTemporalTileset } from '@poopdeck.gl/core';
+export type {
+  /**
+   * @deprecated Use {@link SpatioTemporalTileset} — the project noun is spelled
+   * `SpatioTemporal` (capital T) everywhere now, matching the product name
+   * "SpatioTemporal Tiles" and this package's own `SpatioTemporalLayer`.
+   */
+  SpatioTemporalTileset as SpatiotemporalTileset,
+} from '@poopdeck.gl/core';
 export type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 
-// Accessor-named prop aliases (audit B1): value-domain unions for the
+// Accessor-named prop aliases: value-domain unions for the
 // upstream-vocabulary props (getFillColor/getColor/getWidth/…) — constant or
 // column-name string; function accessors warn once and are ignored.
 export type {
@@ -219,7 +233,12 @@ export type {
   AnimatedHeatmapLayerProps,
   HeatmapChannelSpec,
 } from './layers/summary/heatmap-layer.js';
-export type { AnimatedHexagonLayerProps } from './layers/summary/animated-hexagon-layer.js';
+export type {
+  AnimatedHexagonLayerProps,
+  // The value union behind `hexagonAggregation` / `colorAggregation` /
+  // `elevationAggregation`.
+  HexagonAggregationType,
+} from './layers/summary/animated-hexagon-layer.js';
 export type { H3SummaryLayerProps } from './layers/summary/h3-summary-layer.js';
 export type { QuadbinSummaryLayerProps } from './layers/summary/quadbin-summary-layer.js';
 export type { FlowmapLayerProps } from './layers/summary/flowmap-layer.js';
@@ -234,19 +253,49 @@ export type {
 export type { FlowLinesLayerProps } from './layers/internal/flow-lines-layer.js';
 export type { AnimatedArcLayerProps } from './layers/core/animated-arc-layer.js';
 export type { AnimatedLineLayerProps } from './layers/core/animated-line-layer.js';
-export type { AnimatedIconLayerProps } from './layers/core/animated-icon-layer.js';
+export type {
+  AnimatedIconLayerProps,
+  // Both appear on `AnimatedIconLayerProps` itself: `iconMapping` is a
+  // `Record<string, IconMappingEntry>` and `getPixelOffset` takes a
+  // `PixelOffsetAccessorValue`. Without these a consumer cannot type the object
+  // literal it passes.
+  IconMappingEntry,
+  PixelOffsetAccessorValue,
+  // What `iconMapping` accepts as a whole: the entry map, or a URL string that
+  // the sublayer resolves asynchronously.
+  IconMappingValue,
+  // The argument shape handed to `onIconError`.
+  IconLoadErrorContext,
+} from './layers/core/animated-icon-layer.js';
 export type { AnimatedColumnLayerProps } from './layers/core/animated-column-layer.js';
 export type { AnimatedBoundingBoxLayerProps } from './layers/core/animated-bounding-box-layer.js';
 export type { SplatLayerProps } from './layers/core/splat-layer.js';
 export type { SplatPrimitiveLayerProps } from './layers/internal/splat-primitive-layer.js';
 export type { AnimatedTextLayerProps } from './layers/core/animated-text-layer.js';
-export type { AnimatedMeshLayerProps } from './layers/core/animated-mesh-layer.js';
+export type {
+  AnimatedMeshLayerProps,
+  // What `mesh` / `meshMapping` accept (URL, parsed geometry, or a promise).
+  MeshSource,
+} from './layers/core/animated-mesh-layer.js';
 export type { AnimatedPointCloudLayerProps } from './layers/core/animated-point-cloud-layer.js';
-export type { TimeFilterExtensionProps } from './extensions/time-filter-extension.js';
+export type {
+  TimeFilterExtensionProps,
+  // The constructor-options type + its `mode` union. Every SIBLING extension
+  // already exports its options type (ChevronFlowExtensionOptions,
+  // STTDataFilterExtensionOptions, CollisionFilterOptions); this one was the
+  // odd one out even though `new TimeFilterExtension({mode: 'trail'})` is the
+  // documented way to configure it.
+  TimeFilterExtensionOptions,
+  TimeFilterMode,
+} from './extensions/time-filter-extension.js';
 export type { CategoryColorExtensionProps } from './extensions/category-color-extension.js';
 export type {
   STTDataFilterExtensionProps,
   STTDataFilterExtensionOptions,
+  // Upstream options accepted for source-compatibility but NOT implemented
+  // (each warns once). Referenced by `{@link}` from the public options JSDoc,
+  // so it has to be nameable from the barrel.
+  STTDataFilterUnsupportedOptions,
   DataFilterRange,
 } from './extensions/data-filter-extension.js';
 export type {

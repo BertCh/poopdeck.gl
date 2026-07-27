@@ -23,6 +23,74 @@
  * Streaming is now additive: a new tile creates one new sublayer and one
  * GPU upload. Existing tiles' GPU buffers are untouched. The previous
  * consolidation path rebuilt every buffer on every tile arrival.
+ *
+ * TWO-TIER TILE CACHE (structural vs playhead-driven)
+ * ---------------------------------------------------
+ * A prepared tile carries TWO keys. `styleKey` is STRUCTURAL — colour/width
+ * column names, palettes, ramps, the filter column, subclass knobs — and a
+ * change there rebuilds the whole `data` object (a new reference ⇒
+ * `changeFlags.dataChanged` ⇒ re-tessellation + a full attribute re-upload,
+ * which is correct because the geometry-shaped buffers really did change).
+ * `dynamicKey` is the quantized PLAYHEAD sub-step (`gradientStyleSuffix`),
+ * which the flow-corridor subclasses advance ~5×/second. Crossing a sub-step
+ * must NOT look like a data change: `refreshDynamicAttributes` keeps
+ * `prepared.data` AND every unchanged attribute wrapper
+ * (`getPath`, `filterValue`, …) reference-identical and swaps only the
+ * playhead-driven wrappers, then `buildSublayer` invalidates exactly those
+ * attributes via `updateTriggers`. Upstream then skips both
+ * `pathTesselator.updateGeometry()` (PathLayer's `geometryChanged` only reacts
+ * to `dataChanged || updateTriggersChanged.getPath`) and the fp64 hi/lo split
+ * of the position buffer (`Attribute.setBinaryValue` /
+ * `setExternalBuffer` short-circuit on WRAPPER-OBJECT identity, so a fresh
+ * wrapper around an unchanged `Float64Array` defeats them). A ~500k-vertex
+ * corridor tile used to pay ~1M doubles → 2M floats plus a multi-MB GPU write
+ * about five times a second to change 4 bytes/vertex of colour — the tail half
+ * of the "re-tessellates the whole network at ~6 Hz" regression.
+ *
+ * DEFAULT DRIFT vs upstream `PathLayer`/`TripsLayer` (deliberate, documented)
+ * --------------------------------------------------------------------------
+ *   `widthUnits`      'meters' → 'pixels'  (screen-stable trails at every zoom)
+ *   `widthMinPixels`  0 → 2                (hairlines vanish on hidpi)
+ *   `widthMaxPixels`  MAX_SAFE_INTEGER → 10
+ *   `jointRounded`    false → true
+ *   `capRounded`      false → true
+ * The `widthMaxPixels` cap is the one that bites: a caller who switches to
+ * `widthUnits: 'meters'` and scales up silently clamps at 10 px. That
+ * combination warns once (see `buildSublayer`). Trail semantics also diverge
+ * from upstream `TripsLayer` under `fadeTrail: false` — see that prop's doc.
+ *
+ * KNOWN PARITY GAP — per-SEGMENT trail time (deferred, attribute-budget bound)
+ * ---------------------------------------------------------------------------
+ * Upstream `TripsLayer` registers its `timestamps` attribute with TWO shader
+ * views of the same buffer — `instanceTimestamps {vertexOffset: 0}` and
+ * `instanceNextTimestamps {vertexOffset: 1}` — and interpolates along the
+ * segment quad:
+ *   `vTime = instanceTimestamps + (next - instanceTimestamps)
+ *            * vPathPosition.y / vPathLength;`
+ * STT's {@link TimeFilterExtension} registers ONE view (`instanceVertexTime`,
+ * no `shaderAttributes`), so each segment instance reads only its START
+ * vertex's time and `vTimeAlpha` is CONSTANT across the quad: the trail head
+ * advances one whole segment at a time and the fade is a staircase, not a
+ * glide. On sparse geometry (bridges, highways, coarse-sampled trips) that
+ * reads as popping — which is precisely why {@link AnimatedTripHeadsLayer}
+ * exists (its dot is a CPU-interpolated position, so it glides).
+ *
+ * Closing it costs ONE more vertex-attribute slot (a second `in` declaration
+ * gets its own slot even though it shares the GL buffer), and the budget has
+ * none free: NoPickingPathLayer 12 + TimeFilterExtension 3 = 15, and
+ * CategoryColorExtension's `instanceCategoryIndex` — installed by default on
+ * this layer — takes it to WebGL2's guaranteed 16-slot floor. A twin view
+ * would be 17: a fatal link failure (blank trips) on GPUs that report exactly
+ * 16. Freeing a slot means dropping `instanceStartTime`/`instanceEndTime` from
+ * the shader inject for trail-only pipelines, but this layer's single
+ * `TimeFilterExtension({mode:'trail'})` singleton is ALSO what
+ * {@link FlowCorridorLayer} runs in WINDOW mode (it feeds those very
+ * attributes via `timeBoundsForSublayer`), so the drop has to be a genuine
+ * per-mode shader variant, not a registration tweak. That is an extension-side
+ * change with real link-failure blast radius, so it is deferred rather than
+ * half-landed here; there is no layer-side wiring to do in the meantime (the
+ * twin view is derived from the SAME buffer via `vertexOffset`, so no new tile
+ * attribute is involved).
  */
 
 import { PathLayer } from '@deck.gl/layers';
@@ -36,21 +104,30 @@ import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import { CategoryColorExtension } from '../../extensions/category-color-extension.js';
 import { STTDataFilterExtension } from '../../extensions/data-filter-extension.js';
 import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
 import {
   colorListDigest,
   colorMappingDigest,
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
-import { DEFAULT_TRIPS_PALETTE } from '@poopdeck.gl/core';
+import {
+  DEFAULT_TRIPS_PALETTE,
+  GeometryType,
+  tileLayerKey,
+} from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -58,6 +135,9 @@ import type {
 } from '@poopdeck.gl/core';
 
 const DEBUG = false;
+
+/** These layers index `positions` as a flattened vertex run per feature. */
+const LINESTRING_ONLY = [GeometryType.LineString] as const;
 
 /** Props added by {@link AnimatedTripsLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link AnimatedTripsLayerProps}). */
@@ -81,6 +161,12 @@ export interface _AnimatedTripsLayerProps {
   widthMinPixels?: number;
   /**
    * Maximum on-screen path width in pixels.
+   *
+   * NOTE the drift from upstream `PathLayer` (`MAX_SAFE_INTEGER`): 10 px keeps
+   * pixel-space trails from blowing out, but it is also a HARD clamp on the
+   * world-space path — `widthUnits: 'meters'` with a large `widthScale` will
+   * silently top out at 10 px unless this is raised too. That combination
+   * warns once.
    * @default 10
    */
   widthMaxPixels?: number;
@@ -141,19 +227,42 @@ export interface _AnimatedTripsLayerProps {
   trailLength?: number;
   /**
    * Fade the trail older→transparent.
+   *
+   * DIVERGENCE from upstream `TripsLayer` — read before porting. Upstream
+   * discards a vertex only when `vTime > currentTime || (fadeTrail && vTime <
+   * currentTime - trailLength)`, so `fadeTrail: false` never culls the tail:
+   * the whole traversed path stays drawn at full opacity ("ink the route as it
+   * is driven"). STT's {@link TimeFilterExtension} ALWAYS culls at
+   * `vertexTime < trailStart` and uses this prop only to pick a ramped vs a
+   * flat alpha, so `fadeTrail: false` yields a fixed-length SOLID SNAKE, not an
+   * accumulating path. For the upstream "accumulating" look use
+   * {@link SpatioTemporalLayerProps.cumulative} (whole-feature reveal) or set
+   * `trailLength` to the dataset's full span. The cull is shared with the
+   * `trailAlpha()` kernel oracle in `@poopdeck.gl/core/time-filter` that the
+   * three/maplibre backends are pinned against, so it is not a deck-only knob.
    * @default true
    */
   fadeTrail?: boolean;
   /**
-   * Rounded line caps.
+   * Rounded line caps. Upstream `PathLayer` defaults to `false`; trails read
+   * better round, so STT flips it.
    * @default true
    */
   capRounded?: boolean;
   /**
-   * Rounded line joints.
+   * Rounded line joints. Upstream `PathLayer` defaults to `false`; see
+   * {@link capRounded}.
    * @default true
    */
   jointRounded?: boolean;
+  /**
+   * Path closure — `PathLayer._pathType` pass-through. `'open'` draws each
+   * LineString as-is; `'loop'` closes it back onto its first vertex. STT tiles
+   * arrive pre-normalized, so upstream's third mode (`undefined` ⇒ "normalize
+   * on the CPU") is deliberately not offered — it would re-walk every path.
+   * @default 'open'
+   */
+  pathType?: 'open' | 'loop';
   /**
    * Miter-joint length cap (multiples of line width) — PathLayer pass-through,
    * applies when `jointRounded` is false.
@@ -216,6 +325,55 @@ export interface _AnimatedTripsLayerProps {
 export type AnimatedTripsLayerProps = _AnimatedTripsLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Sublayer-cache effect of every own prop, exhaustive by type: a prop added to
+ * {@link _AnimatedTripsLayerProps} without an entry here fails to compile.
+ *
+ * `'sublayer'` — read by {@link AnimatedTripsLayer.buildSublayer}, so a cached
+ * `PathLayer` freezes the value and a change must drop the sublayer cache.
+ *
+ * `'prepare'` — read only by `prepareTile`/`applyDynamicAttributes`, where the
+ * value is baked into the tile's CPU-expanded per-vertex buffers. Each of these
+ * is a component of the per-tile `styleKey` (`colorPalette` via
+ * `colorListDigest`, `colorMapping` via `mapSig`, `colorMappingDefault` via
+ * `mapDefault`, the three `gradient*` props via `gradSig`), so a change rebuilds
+ * `prepared` — and the sublayer cache hit tests `prepared` by object identity,
+ * which is what invalidates the sublayer. Moving one of these to `'sublayer'`
+ * is safe; moving a `'sublayer'` prop here is only safe while `styleKey`
+ * genuinely contains it.
+ *
+ * The three accessor-alias props (`tripColor`, `tripWidth`, `filterProperty`)
+ * are additionally keyed on their RESOLVED value through the `overrides`
+ * channel — see {@link AnimatedTripsLayer.computeLayerPropsKey}.
+ */
+const TRIPS_PROP_EFFECTS: PropEffects<_AnimatedTripsLayerProps> = {
+  widthUnits: 'sublayer',
+  widthScale: 'sublayer',
+  widthMinPixels: 'sublayer',
+  widthMaxPixels: 'sublayer',
+  tripColor: 'sublayer',
+  getColor: 'sublayer',
+  tripWidth: 'sublayer',
+  getWidth: 'sublayer',
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+  gradientProperty: 'prepare',
+  gradientDomain: 'prepare',
+  gradientColorRamp: 'prepare',
+  trailLength: 'sublayer',
+  fadeTrail: 'sublayer',
+  capRounded: 'sublayer',
+  jointRounded: 'sublayer',
+  pathType: 'sublayer',
+  miterLimit: 'sublayer',
+  billboard: 'sublayer',
+  filterProperty: 'sublayer',
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+};
+
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
 const DEFAULT_PALETTE: Color[] = DEFAULT_TRIPS_PALETTE;
@@ -240,10 +398,26 @@ function paletteFromMapping(
  * to decide whether to re-tessellate / re-upload GPU buffers.
  */
 interface PreparedTile {
-  /** Resolved (tile, layer) cache key */
+  /** Resolved (archive, tile, layer) cache key */
   tileKey: string;
-  /** Hash of style props that affect the prepared `attributes` (color/width prop names + palette ref) */
+  /**
+   * Hash of the STRUCTURAL style props that shape the prepared `attributes`
+   * (color/width/filter column names, palette + ramp content, subclass knobs).
+   * Playhead-INDEPENDENT: a change here rebuilds the whole `data` object.
+   */
   styleKey: string;
+  /**
+   * Quantized playhead sub-step (`gradientStyleSuffix`). A change here swaps
+   * ONLY the playhead-driven attribute wrappers in place — see the
+   * two-tier-cache note in the module docstring.
+   */
+  dynamicKey: string;
+  /**
+   * Bumped on every dynamic swap. Rides into the sublayer as an
+   * `updateTriggers` value so deck invalidates exactly the swapped attributes
+   * (and nothing else) without seeing a data change.
+   */
+  dynamicVersion: number;
   /** Reference-stable data object for PathLayer's binary interface */
   data: {
     length: number;
@@ -253,6 +427,13 @@ interface PreparedTile {
       { value: any; size: number; normalized?: boolean }
     >;
   };
+  /**
+   * Pooled per-vertex RGBA scratch for the gradient path, reused across
+   * sub-steps (`expandGradientColors` overwrites every byte, so sharing it is
+   * pixel-identical to reallocating). The WRAPPER around it is still fresh on
+   * every swap — that is what makes deck re-upload it.
+   */
+  colorBuffer: Uint8Array | null;
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
   /** 2 or 3 — drives `positionFormat`. */
@@ -264,9 +445,19 @@ interface PreparedTile {
   features: BinaryFeatures;
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
+/**
+ * Cache key for one (tile, layer) pair: core's canonical {@link tileLayerKey}
+ * under an archive qualifier.
+ *
+ * `archiveKey` (the archive URL) is part of the key because a `data` swap keeps
+ * the SAME layer instance — and z/x/y/t collisions between two archives are the
+ * common case, not the rare one. Without it, the new archive's first render
+ * could hit a `PreparedTile` whose `getPath.value` still points at the PREVIOUS
+ * archive's `Float64Array`. The tile half is never spelled here: it carries the
+ * temporal-LOD tier only because core's producer folds it in.
+ */
+function makeTileKey(tile: Tile, layer: TileLayer, archiveKey: string): string {
+  return `${archiveKey}|${tileLayerKey(tile.id, layer.name)}`;
 }
 
 /**
@@ -468,6 +659,13 @@ function expandFeatureWidthsMemo(
  * `getColor` as a per-vertex attribute and interpolates it across segments).
  * Each value is normalized into `[0,1]` over `domain`, then piecewise-lerped
  * across the ramp stops. `NaN` (no value) gets `fallback`.
+ *
+ * `pool` lets a caller that re-expands the SAME tile every sub-step (the flow
+ * corridors) or every frame (the head dots) hand back its previous buffer
+ * instead of allocating megabytes per pass. Every byte is overwritten below, so
+ * reuse is bit-identical to a fresh allocation; it is only accepted when the
+ * length matches EXACTLY, so a shorter pool can never leave stale trailing
+ * vertices in the draw.
  */
 export function expandGradientColors(
   values: Float32Array,
@@ -475,8 +673,12 @@ export function expandGradientColors(
   ramp: Color[],
   totalVerts: number,
   fallback: Color,
+  pool?: Uint8Array | null,
 ): Uint8Array {
-  const out = new Uint8Array(totalVerts * 4);
+  const out =
+    pool && pool.length === totalVerts * 4
+      ? pool
+      : new Uint8Array(totalVerts * 4);
   const [lo, hi] = domain;
   const span = hi - lo;
   const n = ramp.length;
@@ -541,6 +743,52 @@ export function expandGradientColors(
 const EMPTY_EXTENSIONS: unknown[] = [];
 const EMPTY_SUBLAYER_PROPS: Record<string, unknown> = {};
 
+/** One cached sublayer plus the keys it was built from. */
+interface CachedSublayer {
+  layer: PathLayer;
+  preparedKey: PreparedTile;
+  /** `prepared.dynamicVersion` at build time — a swap must re-emit updateTriggers. */
+  preparedVersion: number;
+  layerPropsKey: string;
+}
+
+/**
+ * Everything the render path caches between frames, kept in ONE bag so it can
+ * live on `this.state`.
+ *
+ * deck's `_transferState` moves only `state`/`internalState` to the new layer
+ * instance; class-FIELD initializers re-run on it. Holding these as fields
+ * meant that any unmemoized `new AnimatedTripsLayer({...})` in a React render
+ * threw away every prepared tile and cached sublayer — re-running
+ * `expandCategoryColors`/`expandGradientColors` over every visible tile and
+ * re-uploading every GPU buffer, i.e. exactly the 30-60%-of-frame-time cost the
+ * caches exist to avoid. On `state` they survive the swap.
+ */
+interface TripsCaches {
+  /** Per-tile prepared data. Pruned to the currently-visible tile set each render. */
+  prepared: Map<string, PreparedTile>;
+  /**
+   * Per-tile sublayer instances. Returning the SAME `PathLayer` reference lets
+   * deck short-circuit layer matching + the whole prop-diff pass for that tile.
+   */
+  sublayers: Map<string, CachedSublayer>;
+  /** Digest of the layer-level props baked into every sublayer at build time. */
+  layerPropsKey: string;
+  /** `state.tiles` identity from the previous render (prune-walk skip). */
+  tilesRef: Tile[] | null;
+}
+
+const TRIPS_CACHE_SLOT = '_sttTripsCaches';
+
+function freshTripsCaches(): TripsCaches {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    layerPropsKey: '',
+    tilesRef: null,
+  };
+}
+
 export class AnimatedTripsLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<
@@ -583,6 +831,7 @@ export class AnimatedTripsLayer<
     fadeTrail: true,
     capRounded: true,
     jointRounded: true,
+    pathType: 'open',
     miterLimit: { type: 'number', value: 4, min: 0 },
     billboard: false,
     // Column range filter (STTDataFilterExtension). Unset ⇒ not installed.
@@ -604,33 +853,59 @@ export class AnimatedTripsLayer<
     filterEnabled: true,
   };
 
+  // `stateSlot` (and its pre-state detached bag) now live on the chassis —
+  // see SpatioTemporalLayer.stateSlot. Every layer in the family gets the same
+  // `_transferState`-surviving storage without re-declaring the mechanism.
+
+  /** State-resident render caches — see {@link TripsCaches}. */
+  private get tripsCaches(): TripsCaches {
+    return this.stateSlot(TRIPS_CACHE_SLOT, freshTripsCaches);
+  }
+
+  // The four accessors below keep the historical field NAMES (they are part of
+  // this family's de-facto internal contract — the shared test harnesses and
+  // sibling layers all speak them) while the storage lives on `state`.
+
   /** Per-tile prepared-data cache. Pruned to the currently-visible tile set on each render. */
-  private preparedTileCache = new Map<string, PreparedTile>();
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.tripsCaches.prepared;
+  }
+  private set preparedTileCache(value: Map<string, PreparedTile>) {
+    this.tripsCaches.prepared = value;
+  }
 
   /**
    * Per-tile sublayer-instance cache. Returning the SAME `PathLayer`
    * reference across renderLayers() calls lets deck.gl short-circuit layer
    * matching + the entire prop-diff pass for that tile. Allocating a fresh
-   * PathLayer per visible tile per frame (as the previous code did) showed
-   * up as 30-60% of frame time once 50+ tiles were on screen — the JS-side
-   * constructor + props object literal dominated even though the GPU buffer
-   * upload was already short-circuited via `prepared.data`.
+   * PathLayer per visible tile per frame instead costs 30-60% of frame time
+   * once 50+ tiles are on screen — the JS-side constructor + props object
+   * literal dominate even when the GPU buffer upload is already
+   * short-circuited via `prepared.data`.
    *
-   * Cache key is the tileKey (z/x/y/t:layer). The value carries the cache
-   * keys we baked into the layer at construction time (`preparedKey`,
-   * `layerPropsKey`); we reuse the cached layer iff BOTH still match.
+   * Cache key is the tileKey (archive|z/x/y/t:layer). The value carries the
+   * cache keys we baked into the layer at construction time (`preparedKey`,
+   * `preparedVersion`, `layerPropsKey`); we reuse the cached layer iff ALL
+   * still match.
    */
-  private sublayerCache = new Map<
-    string,
-    { layer: PathLayer; preparedKey: PreparedTile; layerPropsKey: string }
-  >();
+  private get sublayerCache(): Map<string, CachedSublayer> {
+    return this.tripsCaches.sublayers;
+  }
+  private set sublayerCache(value: Map<string, CachedSublayer>) {
+    this.tripsCaches.sublayers = value;
+  }
 
   /**
    * Cached digest of every prop on `this.props` that we bake into a sublayer
    * at construction time. When this changes, every cached PathLayer is
    * invalidated and rebuilt on the next render.
    */
-  private lastLayerPropsKey: string = '';
+  private get lastLayerPropsKey(): string {
+    return this.tripsCaches.layerPropsKey;
+  }
+  private set lastLayerPropsKey(value: string) {
+    this.tripsCaches.layerPropsKey = value;
+  }
 
   /**
    * Tile-array identity from the previous render. When the parent layer
@@ -638,7 +913,12 @@ export class AnimatedTripsLayer<
    * render cycle) we skip the prune walks over `preparedTileCache` and
    * `sublayerCache` entirely — the live set is unchanged by construction.
    */
-  private lastTilesRef: Tile[] | null = null;
+  private get lastTilesRef(): Tile[] | null {
+    return this.tripsCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.tripsCaches.tilesRef = value;
+  }
 
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
@@ -689,10 +969,33 @@ export class AnimatedTripsLayer<
     super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+    this.lastTilesRef = null;
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Identity of the archive the currently-visible tiles came from — folded into
+   * every tile cache key (see {@link makeTileKey}). A `data` swap keeps this
+   * layer INSTANCE, so without it the new archive can hit the previous one's
+   * cached buffers on any repeated `z/x/y/t`.
+   *
+   * `state.archive.url` is authoritative once the archive resolves;
+   * `initializingUrl` covers the window between the swap and the load, and the
+   * `data` prop is the last resort (and the only source the unit-test harnesses
+   * ever have).
+   */
+  protected archiveKey(): string {
+    const state = this.state as
+      | { archive?: { url?: string } | null; initializingUrl?: string | null }
+      | undefined
+      | null;
+    const url = state?.archive?.url ?? state?.initializingUrl;
+    if (typeof url === 'string') return url;
+    const data = (this.props as { data?: unknown }).data;
+    return typeof data === 'string' ? data : '';
+  }
+
+  /**
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy
    * prop. Same value domain as the legacy props (constant or column name).
    */
@@ -729,47 +1032,45 @@ export class AnimatedTripsLayer<
   }
 
   /**
-   * Compute a digest of the layer-level props that affect every sublayer.
-   * When this changes we throw away the entire sublayer cache.
+   * Digest of the layer-level inputs baked into every sublayer. When it
+   * changes, every cached PathLayer holds a frozen copy of a stale value, so
+   * the whole sublayer cache is thrown away.
+   *
+   * Which props participate is decided by {@link TRIPS_PROP_EFFECTS} rather
+   * than by an enumeration here, so a new prop cannot silently miss the key.
+   * The accessor-alias props go in through `overrides` carrying the RESOLVED
+   * value (`getColor` beats `tripColor`, `getWidth` beats `tripWidth`) —
+   * exactly what `buildSublayer` reads. The rest of the key's inputs are not
+   * props of this layer at all: the subclass style knobs and the inherited
+   * composite/time props ride the positional `extra` channel.
    */
   private computeLayerPropsKey(): string {
-    const color = this.colorValue();
-    const width = this.widthValue();
-    return [
-      this.props.widthUnits,
-      this.props.widthScale,
-      this.props.widthMinPixels,
-      this.props.widthMaxPixels,
-      this.props.capRounded,
-      this.props.jointRounded,
-      this.props.miterLimit,
-      this.props.billboard,
-      this.props.trailLength,
-      this.props.fadeTrail,
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
-      // plus the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      // tripColor / tripWidth: only their "constant fallback" branch is
-      // baked into the layer. The categorical/property-driven path lives
-      // in `prepared` and is keyed via preparedKey.
-      Array.isArray(color) ? color.join(',') : '',
-      typeof width === 'number' ? width : 0,
-      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
-      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
-      // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedTripsLayerProps>(
+      this.props,
+      TRIPS_PROP_EFFECTS,
+      {
+        overrides: {
+          tripColor: this.colorValue(),
+          tripWidth: this.widthValue(),
+          filterProperty: this.filterPropertyValue(),
+        },
+        extra: [
+          // Subclass knobs (flow-corridor / flow-stroke). These reach BOTH
+          // caches: some of them (offsetWidths) decide the sublayer's
+          // EXTENSION SET, which is baked at construction time.
+          this.subclassStyleKey(),
+          // Composite props that getSubLayerProps bakes into every sublayer
+          // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
+          // plus the user's updateTriggers.
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          // Inherited time props that `buildSublayer` forwards directly.
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   /**
@@ -784,21 +1085,31 @@ export class AnimatedTripsLayer<
   }
 
   renderLayers(): Layer[] {
-    const t0 = performance.now();
-    const { tiles } = this.state;
-    if (!tiles || tiles.length === 0) {
-      this.lastTilesRef = null;
-      return [];
-    }
+    // `emit` no-ops when the probe is off; building its payload and calling
+    // performance.now() unconditionally would not.
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
+    const tiles = this.state.tiles as Tile[] | undefined;
+    const archiveKey = this.archiveKey();
 
-    // Skip the O(cacheSize) prune walk when the parent handed us the SAME
-    // tile-array reference (no setState since the last render). The live set
+    // Prune BEFORE the empty-set early return. The chassis deliberately
+    // setStates `tiles: []` on archive init to signal "the visible set just
+    // collapsed"; an early return there meant this block never re-ran, so every
+    // entry from the PREVIOUS archive stayed cached (and `finalizeState` does
+    // not fire — the layer instance is reused across a `data` swap). Folding
+    // the archive into the tile key makes a stale hit impossible regardless;
+    // pruning here also stops the dead entries from leaking.
+    //
+    // Otherwise: skip the O(cacheSize) walk when the parent handed us the SAME
+    // tile-array reference (no setState since the last render) — the live set
     // is then identical to the cached set by construction.
-    if (this.lastTilesRef !== tiles) {
+    if (this.lastTilesRef !== (tiles ?? null)) {
       const live = new Set<string>();
-      for (const tile of tiles) {
-        for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+      if (tiles) {
+        for (const tile of tiles) {
+          for (const tileLayer of tile.layers)
+            live.add(makeTileKey(tile, tileLayer, archiveKey));
+        }
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -806,8 +1117,10 @@ export class AnimatedTripsLayer<
       for (const key of this.sublayerCache.keys()) {
         if (!live.has(key)) this.sublayerCache.delete(key);
       }
-      this.lastTilesRef = tiles;
+      this.lastTilesRef = tiles ?? null;
     }
+
+    if (!tiles || tiles.length === 0) return [];
 
     // If any layer-level prop changed since the last render, every cached
     // sublayer is stale — drop them all so the loop below rebuilds.
@@ -820,16 +1133,18 @@ export class AnimatedTripsLayer<
     const sublayers: Layer[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const prepared = this.prepareTile(tile, tileLayer);
+        const prepared = this.prepareTile(tile, tileLayer, archiveKey);
         if (!prepared) continue;
         const cached = this.sublayerCache.get(prepared.tileKey);
-        // Two-part hit check: the prepared-data object reference (which
-        // captures style key + tile identity) AND the layer-level props
-        // digest. We pass the SAME PathLayer reference back unless either
-        // changed.
+        // Three-part hit check: the prepared-data object reference (which
+        // captures structural style key + tile identity), its dynamic version
+        // (a playhead sub-step swapped attribute wrappers in place, so the
+        // sublayer must re-emit its updateTriggers) AND the layer-level props
+        // digest. We pass the SAME PathLayer reference back unless one changed.
         if (
           cached &&
           cached.preparedKey === prepared &&
+          cached.preparedVersion === prepared.dynamicVersion &&
           cached.layerPropsKey === layerPropsKey
         ) {
           sublayers.push(cached.layer);
@@ -839,18 +1154,21 @@ export class AnimatedTripsLayer<
         this.sublayerCache.set(prepared.tileKey, {
           layer,
           preparedKey: prepared,
+          preparedVersion: prepared.dynamicVersion,
           layerPropsKey,
         });
         sublayers.push(layer);
       }
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedTripsLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedTripsLayer',
+        tiles: tiles.length,
+        sublayers: sublayers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(
@@ -912,11 +1230,33 @@ export class AnimatedTripsLayer<
   }
 
   /**
-   * Extra token folded into the prepared-tile `styleKey` so a time-driven
-   * gradient invalidates the CPU-expanded per-vertex colors as the playhead
-   * advances. Base: '' (the static gradient never varies with time).
+   * Per-tile token identifying the PLAYHEAD sub-step, so the CPU-expanded
+   * per-vertex colors (and the dynamic width / chevron-direction buffers)
+   * re-expand as the playhead advances. Base: '' (the static gradient never
+   * varies with time).
+   *
+   * This is NOT part of the structural `styleKey` — a change here swaps only
+   * the playhead-driven attribute wrappers on the EXISTING `data` object, so
+   * the geometry never re-tessellates or re-uploads. See the two-tier-cache
+   * note in the module docstring.
    */
   protected gradientStyleSuffix(_binary: BinaryFeatures): string {
+    return '';
+  }
+
+  /**
+   * Digest of SUBCLASS props that change what `prepareTile` bakes into the
+   * per-vertex buffers or what `buildSublayer` installs. Folded into BOTH the
+   * prepared-tile `styleKey` and `computeLayerPropsKey`, because some of these
+   * (e.g. {@link FlowStrokeLayer}'s `offsetWidths`) decide the sublayer's
+   * EXTENSION SET — which is baked at construction time and must not change
+   * under a cached instance. Base: '' (no subclass props).
+   *
+   * Without this, dragging a `widthExponent` / `persistenceMs` slider while
+   * PAUSED hit both caches and handed back the identical `PathLayer` — the
+   * control read as dead until the playhead crossed a half-bucket.
+   */
+  protected subclassStyleKey(): string {
     return '';
   }
 
@@ -944,10 +1284,19 @@ export class AnimatedTripsLayer<
    * time-bucket volume (√-scaled) and taper along each trunk, reusing the same
    * sub-step cache machinery as the gradient color (recomputes exactly when
    * `gradientStyleSuffix` changes). Anything shorter than `totalVerts` is ignored.
+   *
+   * `gradientValues` is the array {@link gradientValuesFor} just produced in
+   * THIS pass (or `undefined` when the gradient path is idle). It is threaded
+   * through because both hooks want the same blend: `FlowStrokeLayer` used to
+   * call `gradientValuesFor` a second time, paying another
+   * `trailingMaxMatrixRow` sweep (O(totalVerts × windowBuckets)) or rolling
+   * mean (O(totalVerts × (2w+1))) plus another `Float32Array(totalVerts)`, per
+   * tile per sub-step.
    */
   protected widthsFor(
     _binary: BinaryFeatures,
     _featureCount: number,
+    _gradientValues?: Float32Array,
   ): Float32Array | undefined {
     return undefined;
   }
@@ -985,9 +1334,107 @@ export class AnimatedTripsLayer<
     return true;
   }
 
-  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+  /**
+   * (Re)compute the PLAYHEAD-DRIVEN attribute slots on an already-built
+   * `attributes` object, IN PLACE.
+   *
+   * Exactly three slots vary with the playhead: the gradient `getColor`, the
+   * dynamic per-vertex `getWidth`, and — for `signedFlow` corridors — the
+   * direction sign that rides the otherwise-idle `instanceVertexTime` slot.
+   * Everything else (`getPath`, the static width splat, `filterValue`) keeps
+   * its WRAPPER OBJECT, which is what lets deck short-circuit its re-upload
+   * (`Attribute.setExternalBuffer` / `setBinaryValue` compare wrapper
+   * identity, not contents).
+   */
+  private applyDynamicAttributes(
+    prepared: PreparedTile,
+    binary: BinaryFeatures,
+    totalVerts: number,
+  ): void {
+    const attributes = prepared.data.attributes;
+
+    // Per-bucket chevron direction (FlowCorridorLayer signedFlow) reuses the
+    // instanceVertexTime slot: flow-corridor tiles run window mode, where
+    // TimeFilterExtension never reads it (only trail mode does), so
+    // ChevronFlowExtension({ perBucketDirection }) reads it for the sign —
+    // no extra attribute (PathLayer already sits at WebGL2's link ceiling).
+    const chevronDirs = this.chevronDirectionsFor(binary, totalVerts);
+    if (chevronDirs && chevronDirs.length >= totalVerts) {
+      attributes.instanceVertexTime = { value: chevronDirs, size: 1 };
+    }
+
+    // Per-vertex gradient color: map each vertex's scalar through the ramp so
+    // the line shades along its length. Per-VERTEX for the same reason as the
+    // categorical path — PathLayer instances are segments, not features.
+    const ramp = this.props.gradientColorRamp;
+    const gradientValues = this.gradientValuesFor(binary, totalVerts);
+    if (
+      gradientValues &&
+      gradientValues.length >= totalVerts &&
+      ramp &&
+      ramp.length > 0
+    ) {
+      const gradientColorBuffer = expandGradientColors(
+        gradientValues,
+        this.props.gradientDomain ?? [0, 1],
+        ramp,
+        totalVerts,
+        this.props.colorMappingDefault ?? [120, 120, 120, 255],
+        prepared.colorBuffer,
+      );
+      prepared.colorBuffer = gradientColorBuffer;
+      // Seam for a second per-vertex signal packed into alpha (FlowCorridorLayer
+      // per-trip lighting). No-op in the base class.
+      this.finalizeGradientColorBuffer(gradientColorBuffer, binary, totalVerts);
+      attributes.getColor = {
+        value: gradientColorBuffer,
+        size: 4,
+        normalized: true,
+      };
+    }
+
+    // Dynamic PER-VERTEX width hook (FlowStrokeLayer: active-bucket volume).
+    // MUST be per-vertex (length totalVerts), NOT per-feature: PathLayer's
+    // `instanceStrokeWidths` is a per-SEGMENT-instanced attribute, so a
+    // featureCount-length buffer is too small for the draw ("vertex buffer is
+    // not big enough"). Per-vertex mirrors the getColor path exactly (and lets
+    // width taper along the line). Handed the blend the gradient just computed
+    // so the subclass never recomputes it.
+    const dynWidths = this.widthsFor(
+      binary,
+      binary.featureCount,
+      gradientValues,
+    );
+    if (dynWidths && dynWidths.length >= totalVerts) {
+      attributes.getWidth = { value: dynWidths, size: 1 };
+    }
+  }
+
+  private prepareTile(
+    tile: Tile,
+    tileLayer: TileLayer,
+    archiveKey: string = this.archiveKey(),
+  ): PreparedTile | null {
     const binary = tileLayer.features;
-    if (binary.featureCount === 0 || !binary.startIndices) return null;
+    // An empty tile is normal and silent; a MISMATCHED one should say so.
+    if (binary.featureCount === 0) return null;
+    // LineString semantics are load-bearing here: `startIndices` delimits each
+    // trip's vertex RUN inside a flattened position buffer. A point tile would
+    // render as a handful of degenerate paths, silently — and it is checked
+    // BEFORE `startIndices` so the diagnostic fires instead of a bare `null`.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        LINESTRING_ONLY,
+        this.props.id ??
+          (this.constructor as { layerName?: string }).layerName ??
+          'AnimatedTripsLayer',
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
+    if (!binary.startIndices) return null;
 
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
@@ -1003,13 +1450,19 @@ export class AnimatedTripsLayer<
       : '';
     // Gradient signature: property + domain + ramp content. Including the
     // domain invalidates the cached per-vertex colors when the scale changes.
-    const gradSig = this.props.gradientProperty
-      ? `g${this.props.gradientProperty}:${(this.props.gradientDomain ?? [0, 1]).join(',')}:${
-          this.props.gradientColorRamp
-            ? colorListDigest(this.props.gradientColorRamp)
-            : ''
-        }`
-      : '';
+    // Gated on the RAMP being present as well as on `gradientProperty`: the
+    // flow subclasses source their per-vertex scalar from the value MATRIX and
+    // never set `gradientProperty`, yet their colour buffers still bake the
+    // domain + ramp — so keying on the property alone left a ramp/domain swap
+    // serving the previous colours until the playhead moved.
+    const gradientRamp = this.props.gradientColorRamp;
+    const hasRamp = !!gradientRamp && gradientRamp.length > 0;
+    const gradSig =
+      this.props.gradientProperty || hasRamp
+        ? `g${this.props.gradientProperty ?? ''}:${(
+            this.props.gradientDomain ?? [0, 1]
+          ).join(',')}:${hasRamp ? colorListDigest(gradientRamp!) : ''}`
+        : '';
     // colorMappingDefault is baked into the CPU-expanded per-vertex RGBA
     // buffers (categorical fallback + gradient fallback), so a change in
     // isolation must invalidate the prepared tile — otherwise the cache keeps
@@ -1021,98 +1474,121 @@ export class AnimatedTripsLayer<
     // attribute, so a change (incl. the unset↔set toggle that adds/removes
     // STTDataFilterExtension) must re-prepare tiles → rebuild sublayers via the
     // new preparedKey.
+    //
+    // STRUCTURAL key only — the playhead sub-step is tracked separately as
+    // `dynamicKey` so crossing it never rebuilds `data` (module docstring).
+    // `subclassStyleKey()` carries the flow-corridor / flow-stroke knobs
+    // (`signedFlow`, `persistenceMs`, `widthExponent`, `minFlow`, the chevron
+    // window/decay props, …), which all feed these per-vertex buffers.
     const styleKey = `${colorProp}|${widthProp}|${
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapSig}|${gradSig}${this.gradientStyleSuffix(binary)}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(
+    }|${mapSig}|${gradSig}|d${mapDefault}|f${filterProp}|s${this.subclassStyleKey()}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
+    const dynamicKey = this.gradientStyleSuffix(binary);
 
-    const tileKey = makeTileKey(tile, tileLayer);
+    const probe = isProbeEnabled();
+    const tileKey = makeTileKey(tile, tileLayer, archiveKey);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', {
-        layer: 'AnimatedTripsLayer',
-        tileKey,
-        cached: true,
-        ms: 0,
-      });
+      if (cached.dynamicKey !== dynamicKey) {
+        // Playhead crossed a sub-step. Swap ONLY the playhead-driven wrappers;
+        // `data`, `getPath`, `filterValue` and the static width splat keep
+        // their identity, so deck skips the re-tessellation AND the fp64
+        // hi/lo re-split of the position buffer. `dynamicVersion` rides into
+        // the sublayer's updateTriggers to invalidate exactly what changed.
+        this.applyDynamicAttributes(
+          cached,
+          binary,
+          binary.startIndices[binary.featureCount],
+        );
+        cached.dynamicKey = dynamicKey;
+        cached.dynamicVersion++;
+      }
+      if (probe) {
+        emit('tilePrepare', {
+          layer: 'AnimatedTripsLayer',
+          tileKey,
+          cached: true,
+          ms: 0,
+        });
+      }
       return cached;
     }
 
-    const t0 = performance.now();
+    const t0 = probe ? performance.now() : 0;
     const dims = binary.positionDimensions ?? 2;
     const totalVerts = binary.startIndices[binary.featureCount];
-
-    // Per-vertex time: prefer the tile's own array (zero-copy from Arrow).
-    // Fallback synthesizes from feature start/end times; allocated once and
-    // cached on the PreparedTile so subsequent renders reuse it.
-    //
-    // EXCEPTION — per-bucket chevron direction (FlowCorridorLayer signedFlow):
-    // this slot carries the per-vertex DIRECTION SIGN instead. Flow-corridor tiles
-    // run window mode, where TimeFilterExtension never reads instanceVertexTime
-    // (only trail mode does), so ChevronFlowExtension({ perBucketDirection }) reads
-    // it for the sign — reusing an allocated-but-idle attribute rather than adding
-    // one (PathLayer already sits at WebGL2's 16-attribute link ceiling).
-    const chevronDirs = this.chevronDirectionsFor(binary, totalVerts);
-    const vertexTimes: Float32Array =
-      chevronDirs && chevronDirs.length >= totalVerts
-        ? chevronDirs
-        : binary.vertexTimestamps &&
-            binary.vertexTimestamps.length >= totalVerts
-          ? binary.vertexTimestamps
-          : // Static per-vertex times: memoized per tile so the haversine loop
-            // runs once per tile-load, not on every playback sub-step re-prepare.
-            synthesizeVertexTimesMemo(binary);
 
     const attributes: PreparedTile['data']['attributes'] = {
       // PathLayer's positions attribute — keyed by ACCESSOR NAME `getPath`.
       // Float64Array is required so deck.gl's fp64 attribute populates the
       // hi/lo split correctly; a Float32Array buffer leaves the low half
       // zero and renders coordinates with ~m-scale jitter at high zoom.
+      // This wrapper is built ONCE per (tile, structural style) and never
+      // reallocated on a sub-step — see the module docstring.
       getPath: { value: binary.positions, size: dims },
+    };
+
+    // The GPU CategoryColorExtension stays installed (constant extension list
+    // keeps shader pipelines cached) but idle for trips: its instanced index
+    // can't ride PathLayer's segment tessellation, so we color via getColor.
+    const gpuPalette: Color[] | null = null;
+
+    const prepared: PreparedTile = {
+      tileKey,
+      styleKey,
+      dynamicKey,
+      dynamicVersion: 0,
+      data: {
+        length: binary.featureCount,
+        startIndices: binary.startIndices,
+        attributes,
+      },
+      colorBuffer: null,
+      timeOffset: binary.timeOffset,
+      dims,
+      gpuPalette,
+      tile,
+      features: binary,
+    };
+
+    // Playhead-driven slots FIRST, so the static fallbacks below only run when
+    // the dynamic hooks left the slot empty — notably, a signedFlow corridor
+    // never pays the synthesizeVertexTimes haversine sweep for a slot it is
+    // about to overwrite with direction signs.
+    this.applyDynamicAttributes(prepared, binary, totalVerts);
+
+    if (!attributes.instanceVertexTime) {
+      // Per-vertex time: prefer the tile's own array (zero-copy from Arrow).
+      // Fallback synthesizes from feature start/end times, memoized per tile so
+      // the haversine loop runs once per tile-LOAD, not per re-prepare.
       // Extension-registered attribute — keyed by the EXACT registered
       // attribute name `instanceVertexTime` (see TimeFilterExtension
       // .initializeState). The accessor name `getInstanceVertexTime` does
       // NOT work for the binary interface.
-      instanceVertexTime: { value: vertexTimes, size: 1 },
-    };
-
-    // Per-vertex gradient color takes precedence over categorical: map each
-    // vertex's scalar (currently only `vertexValues`, e.g. SST) through the
-    // ramp so the line shades along its length. Built per-vertex for the same
-    // reason as the categorical path below — PathLayer needs per-vertex colors.
-    const gradientValues = this.gradientValuesFor(binary, totalVerts);
-    if (
-      gradientValues &&
-      gradientValues.length >= totalVerts &&
-      this.props.gradientColorRamp &&
-      this.props.gradientColorRamp.length > 0
-    ) {
-      const gradientColorBuffer = expandGradientColors(
-        gradientValues,
-        this.props.gradientDomain ?? [0, 1],
-        this.props.gradientColorRamp,
-        totalVerts,
-        this.props.colorMappingDefault ?? [120, 120, 120, 255],
-      );
-      // Seam for a second per-vertex signal packed into alpha (FlowCorridorLayer
-      // per-trip lighting). No-op in the base class.
-      this.finalizeGradientColorBuffer(gradientColorBuffer, binary, totalVerts);
-      attributes.getColor = {
-        value: gradientColorBuffer,
-        size: 4,
-        normalized: true,
+      attributes.instanceVertexTime = {
+        value:
+          binary.vertexTimestamps &&
+          binary.vertexTimestamps.length >= totalVerts
+            ? binary.vertexTimestamps
+            : synthesizeVertexTimesMemo(binary),
+        size: 1,
       };
-    } else if (colorProp) {
-      // Property-driven categorical color. PathLayer instances are SEGMENTS,
-      // not features, so the GPU per-feature `instanceCategoryIndex` path
-      // (correct for the point layer) under-sizes the instanced buffer here and
-      // throws "vertex buffer is not big enough". Resolve each feature's color
-      // on the CPU and expand it per-vertex instead — PathLayer's tessellator
-      // maps a per-vertex `getColor` onto its segment instances natively. The
-      // extra 4 bytes/vertex is negligible at trip-dataset scale.
+    }
+
+    // Property-driven categorical color — playhead-INDEPENDENT, so it only
+    // applies where the gradient path above did not claim `getColor`.
+    // PathLayer instances are SEGMENTS, not features, so the GPU per-feature
+    // `instanceCategoryIndex` path (correct for the point layer) under-sizes
+    // the instanced buffer here and throws "vertex buffer is not big enough".
+    // Resolve each feature's color on the CPU and expand it per-vertex instead
+    // — PathLayer's tessellator maps a per-vertex `getColor` onto its segment
+    // instances natively. The extra 4 bytes/vertex is negligible at
+    // trip-dataset scale.
+    if (!attributes.getColor && colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
         // Explicit colorMapping → stable per-tile palette (resolved against
@@ -1138,39 +1614,24 @@ export class AnimatedTripsLayer<
         };
       }
     }
-    // The GPU CategoryColorExtension stays installed (constant extension list
-    // keeps shader pipelines cached) but idle for trips: its instanced index
-    // can't ride PathLayer's segment tessellation, so we color via getColor.
-    const gpuPalette: Color[] | null = null;
 
     // Property-driven width is a per-FEATURE column (length featureCount).
     // PathLayer's `instanceStrokeWidths` is per-SEGMENT-instanced (sized to the
     // tessellated vertex count) and deck.gl's binary path binds a size-1 buffer
     // DIRECTLY, so a featureCount-length buffer under-sizes the draw ("vertex
     // buffer is not big enough"). Splat the feature scalar across its vertices,
-    // exactly like the categorical-color / gradient paths above.
-    if (widthProp) {
+    // exactly like the categorical-color / gradient paths above. The dynamic
+    // per-vertex `widthsFor` hook wins when it produced a buffer.
+    if (!attributes.getWidth && widthProp) {
       const values = binary.numericProps[widthProp];
       if (values) {
         attributes.getWidth = {
           // Static per-feature width: memoized per tile (same rationale as the
-          // vertex-time cache) so a sub-step re-prepare reuses the splat.
+          // vertex-time cache) so a re-prepare reuses the splat.
           value: expandFeatureWidthsMemo(binary, widthProp, values, totalVerts),
           size: 1,
         };
       }
-    }
-    // Dynamic PER-VERTEX width hook (FlowStrokeLayer: active-bucket volume). Wins
-    // over the static `widthProp` when present; recomputed on each sub-step
-    // because gradientStyleSuffix folds the playhead into the styleKey above.
-    // MUST be per-vertex (length totalVerts), NOT per-feature: PathLayer's
-    // `instanceStrokeWidths` is a per-SEGMENT-instanced attribute, so a
-    // featureCount-length buffer is too small for the draw ("vertex buffer is not
-    // big enough"). Per-vertex mirrors the getColor path exactly (and lets width
-    // taper along the line).
-    const dynWidths = this.widthsFor(binary, binary.featureCount);
-    if (dynWidths && dynWidths.length >= totalVerts) {
-      attributes.getWidth = { value: dynWidths, size: 1 };
     }
 
     // Column range filter (STTDataFilterExtension): bind the named numeric column
@@ -1206,29 +1667,17 @@ export class AnimatedTripsLayer<
     // instanceVertexTime attribute above — see the comment there. No separate
     // attribute is added, to stay under WebGL2's 16-attribute ceiling.
 
-    const prepared: PreparedTile = {
-      tileKey,
-      styleKey,
-      data: {
-        length: binary.featureCount,
-        startIndices: binary.startIndices,
-        attributes,
-      },
-      timeOffset: binary.timeOffset,
-      dims,
-      gpuPalette,
-      tile,
-      features: binary,
-    };
     this.preparedTileCache.set(tileKey, prepared);
-    emit('tilePrepare', {
-      layer: 'AnimatedTripsLayer',
-      tileKey,
-      cached: false,
-      features: binary.featureCount,
-      gpuPalette: gpuPalette !== null,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedTripsLayer',
+        tileKey,
+        cached: false,
+        features: binary.featureCount,
+        gpuPalette: gpuPalette !== null,
+        ms: performance.now() - t0,
+      });
+    }
     return prepared;
   }
 
@@ -1238,9 +1687,27 @@ export class AnimatedTripsLayer<
     const constColor = (
       Array.isArray(colorValue) ? colorValue : [253, 128, 93, 255]
     ) as Color;
-    const constWidth = typeof widthValue === 'number' ? widthValue : 2;
+    // Fallback for tiles that don't bake a width buffer. MUST stay equal to
+    // the documented `tripWidth` default (3): if the two drift apart, a
+    // column-named `tripWidth` renders at a different width on tiles missing
+    // that column than the default does.
+    const constWidth = typeof widthValue === 'number' ? widthValue : 3;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
+
+    // The `widthMaxPixels: 10` default (upstream: MAX_SAFE_INTEGER) is a HARD
+    // screen-space clamp, so a world-space width silently tops out at 10 px —
+    // the "my meters width does nothing" trap. Warn once for that combination.
+    if (this.props.widthUnits !== 'pixels' && this.props.widthMaxPixels <= 10) {
+      warnOnce(
+        'AnimatedTripsLayer:metersWidthClamped',
+        `[AnimatedTripsLayer] widthUnits: '${this.props.widthUnits}' with ` +
+          `widthMaxPixels: ${this.props.widthMaxPixels} (the STT default is 10, ` +
+          "not upstream PathLayer's MAX_SAFE_INTEGER) clamps every world-space " +
+          'trail to at most 10 screen pixels, so widthScale appears to do ' +
+          'nothing past that. Raise widthMaxPixels alongside widthUnits.',
+      );
+    }
     // Per-feature [start,end] for the window-mode filter (null for trail trips).
     const timeBounds = this.timeBoundsForSublayer(prepared.features);
 
@@ -1297,17 +1764,63 @@ export class AnimatedTripsLayer<
       ...this.extraTripsExtensions(),
     ]);
 
+    // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
+    // strips `instancePickingColors`, so forwarding pickable:true into it
+    // produced silently-broken picking (zeroed picking colors). The stock
+    // layer's extra attribute can push the fp64 + TimeFilter + CategoryColor
+    // combo past WebGL2's 16-slot minimum on GPUs that report exactly 16 —
+    // accepted, with a warning. The picked instance index is the trip index
+    // within the tile; getPickingInfo decodes its properties from there.
+    // A `_subLayerProps: { trips: { type } }` override beats both defaults.
+    if (this.props.pickable) {
+      warnOnce(
+        'AnimatedTripsLayer:pickableAttributeBudget',
+        '[AnimatedTripsLayer] pickable:true renders through the stock PathLayer ' +
+          'so picking works, but its instancePickingColors attribute can exceed ' +
+          "WebGL2's 16-vertex-attribute minimum on some GPUs (link warning).",
+      );
+    }
+    const SubLayerClass = this.getSubLayerClass(
+      'trips',
+      this.props.pickable ? PathLayer : NoPickingPathLayer,
+    );
+    // The resolved CLASS rides in the sublayer id. deck matches a new layer to
+    // an old one by id alone and then runs `_transferState` + `_update`, never
+    // `_initialize` — so flipping `pickable` under a stable id would hand the
+    // stripped shader + AttributeManager (no `instancePickingColors`) to a
+    // stock PathLayer and leave picking dead for the life of the layer, and the
+    // mirror image on the reverse flip. Folding the class into the id makes the
+    // swap a REPLACEMENT. Derived from the RESOLVED class so a
+    // `_subLayerProps.trips.type` override — the same class in both branches —
+    // keeps a stable id. See `no-picking-path-layer.ts`.
+    const instanceKey = `${prepared.tileKey}:${
+      SubLayerClass === NoPickingPathLayer ? 'np' : 'pk'
+    }`;
+
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.trips` overrides.
     // Only runs inside this cache-gated build path — never per frame.
     // positionFormat is passed explicitly (sublayerProps beats inheritance):
     // PathLayer's default 'XYZ' would misread 2D tile buffers.
-    const props = this.composeSubLayerProps('trips', prepared.tileKey, {
+    const props = this.composeSubLayerProps('trips', instanceKey, {
       data: prepared.data,
       // Identity comparator: deck.gl skips prop-diff on `data` when the same
       // object reference comes back. Pairs with preparedTileCache.
       dataComparator: (a: any, b: any) => a === b,
-      _pathType: 'open',
+      // Playhead-driven invalidation. `data` stays reference-identical across a
+      // sub-step, so deck sees NO data change (and PathLayer's `geometryChanged`
+      // — `dataChanged || updateTriggersChanged.getPath` — stays false, i.e. no
+      // re-tessellation). These triggers name the ATTRIBUTE IDS rather than the
+      // accessors (deck accepts either) so a caller's own `getColor`/`getWidth`
+      // updateTriggers, forwarded wholesale by composeSubLayerProps, are left
+      // untouched — invalidating `instanceColors` is exactly equivalent.
+      updateTriggers: {
+        ...this.props.updateTriggers,
+        instanceColors: prepared.dynamicVersion,
+        instanceStrokeWidths: prepared.dynamicVersion,
+        instanceVertexTime: prepared.dynamicVersion,
+      },
+      _pathType: this.props.pathType ?? 'open',
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
       // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
       widthUnits: this.props.widthUnits,
@@ -1338,9 +1851,10 @@ export class AnimatedTripsLayer<
       timeHeightScale: this.props.timeHeightScale,
       timeHeightOrigin: this.props.timeHeightOrigin,
       trailLength: this.props.trailLength,
-      // Whether the trail fades head→tail or renders solid. Previously this
-      // prop was baked into the sublayer cache key but never reached the
-      // TimeFilterExtension, so `fadeTrail: false` was a silent no-op.
+      // Whether the trail fades head→tail or renders solid. This prop is baked
+      // into the sublayer cache key, so it MUST also be forwarded to the
+      // TimeFilterExtension here — keyed but not forwarded, `fadeTrail: false`
+      // is a silent no-op.
       fadeTrail: this.props.fadeTrail,
       // Static-geometry layers (FlowCorridorLayer) feed the corridor's full
       // [start,end] so the window-mode filter never hides it; trail trips leave
@@ -1370,30 +1884,12 @@ export class AnimatedTripsLayer<
           }
         : {}),
     });
-    // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
-    // strips `instancePickingColors`, so forwarding pickable:true into it
-    // produced silently-broken picking (zeroed picking colors). The stock
-    // layer's extra attribute can push the fp64 + TimeFilter + CategoryColor
-    // combo past WebGL2's 16-slot minimum on GPUs that report exactly 16 —
-    // accepted, with a warning. The picked instance index is the trip index
-    // within the tile; getPickingInfo decodes its properties from there.
-    // A `_subLayerProps: { trips: { type } }` override beats both defaults.
-    if (this.props.pickable) {
-      warnOnce(
-        'AnimatedTripsLayer:pickableAttributeBudget',
-        '[AnimatedTripsLayer] pickable:true renders through the stock PathLayer ' +
-          'so picking works, but its instancePickingColors attribute can exceed ' +
-          "WebGL2's 16-vertex-attribute minimum on some GPUs (link warning).",
-      );
-      const SubLayerClass = this.getSubLayerClass('trips', PathLayer);
-      return new SubLayerClass(props as any);
-    }
-    // NoPickingPathLayer frees the `instancePickingColors` attribute slot,
-    // which keeps the fp64 + TimeFilter + CategoryColor combo under WebGL2's
-    // 16-attribute minimum. Sublayers here are non-pickable, so dropping the
-    // picking buffer is a no-op behaviourally. See `no-picking-path-layer.ts`
-    // for the upstream-fix timeline.
-    const SubLayerClass = this.getSubLayerClass('trips', NoPickingPathLayer);
+    // NoPickingPathLayer (the non-pickable branch) frees the
+    // `instancePickingColors` attribute slot, which keeps the fp64 +
+    // TimeFilter + CategoryColor combo under WebGL2's 16-attribute minimum.
+    // Sublayers there are non-pickable, so dropping the picking buffer is a
+    // no-op behaviourally. See `no-picking-path-layer.ts` for the upstream-fix
+    // timeline.
     return new SubLayerClass(props as any);
   }
 }

@@ -109,7 +109,7 @@ export interface BackendDescriptor {
 }
 
 /**
- * The ONLY shared runtime shape — duck-typed, NOT a base class. A three `SttLayer`,
+ * The ONLY shared runtime shape — duck-typed, NOT a base class. A three `STTLayer`,
  * a deck sublayer wrapper, a maplibre `STTBaseLayer`, a Cesium `Primitive` all
  * satisfy it. `index` in a returned {@link SttPickResult} joins to columns via
  * `getFeatureProperties(binary, index)`.

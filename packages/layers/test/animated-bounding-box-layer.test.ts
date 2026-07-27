@@ -832,9 +832,15 @@ describe('AnimatedBoundingBoxLayer', () => {
       { track: 'A', lon: 0, lat: 0, t: 0, length: 4, width: 2, height: 1.6 },
       { track: 'A', lon: 0, lat: 0, t: 1000, length: 4, width: 2, height: 1.6 },
     ]);
-    const layers = render([tile], 500, { filled: true, stroked: true });
+    const layers = render([tile], 500, {
+      filled: true,
+      stroked: true,
+      pickable: true,
+    });
     expect(layers.length).toBe(2);
     expect(layers[0].constructor.layerName).toBe('SimpleMeshLayer');
+    // The fill is the pick target — it INHERITS the composite's pickable
+    // rather than forcing it (see the pickable-inheritance suite).
     expect(layers[0].props.pickable).toBe(true); // solid box is the easy pick target
     expect(layers[1].constructor.layerName).toBe('LineLayer');
     expect(layers[1].props.pickable).toBe(false);
@@ -887,6 +893,7 @@ describe('AnimatedBoundingBoxLayer', () => {
       colorProperty: 'category',
       filled: false,
       stroked: true,
+      pickable: true,
     });
     layer.state = { tiles: [tile] };
     layer._currentTime = 500;
@@ -1058,7 +1065,7 @@ describe('AnimatedBoundingBoxLayer', () => {
 
   // ── Caching / lifecycle ──────────────────────────────────────────────────
 
-  it('rebuilds the pooled index when the tile set changes', () => {
+  it('re-syncs the pooled index when the tile set changes', () => {
     const layer = makeLayer();
     const a = makeObjTile(
       [
@@ -1071,10 +1078,13 @@ describe('AnimatedBoundingBoxLayer', () => {
     layer._currentTime = 500;
     (layer as any).renderLayers();
     const firstIndex = (layer as any).trackIndex;
-    // Same tiles ref → cached index reused.
+    expect([...firstIndex.keys()]).toEqual(['A']);
+    // Same tiles ref → no sync at all.
     (layer as any).renderLayers();
     expect((layer as any).trackIndex).toBe(firstIndex);
-    // New tiles array → rebuild.
+    // New tiles array → re-sync. TrackIndexMaintainer owns ONE map across
+    // syncs (it is the render index), so identity is deliberately stable —
+    // the CONTENT is what must follow the tile set.
     layer.state = {
       tiles: [
         a,
@@ -1088,11 +1098,217 @@ describe('AnimatedBoundingBoxLayer', () => {
       ],
     };
     (layer as any).renderLayers();
-    expect((layer as any).trackIndex).not.toBe(firstIndex);
     expect((layer as any).trackIndex.size).toBe(2);
+    expect([...(layer as any).trackIndex.keys()].sort()).toEqual(['A', 'B']);
+    // …and evicting a tile drops only its tracks.
+    layer.state = { tiles: [a] };
+    (layer as any).renderLayers();
+    expect([...(layer as any).trackIndex.keys()]).toEqual(['A']);
   });
 
   it('returns [] for an empty tile set', () => {
     expect(render([], 0)).toEqual([]);
+  });
+
+  it('re-pools only ADDED tiles and re-sorts only AFFECTED tracks', () => {
+    // The whole point of TrackIndexMaintainer: a sliding loader window changes
+    // the tile ARRAY identity every churn, and the previous full
+    // buildTrackIndex re-pooled every resident tile + re-sorted every track
+    // inside one synchronous render frame.
+    const layer = makeLayer();
+    const tileFor = (track: string, y: number) =>
+      makeObjTile(
+        [
+          { track, lon: 0, lat: 0, t: 0 },
+          { track, lon: 10, lat: 0, t: 1000 },
+        ],
+        { tileId: { z: 16, x: 1, y, t: 0 } },
+      );
+    const a = tileFor('A', 2);
+    const b = tileFor('B', 3);
+    layer.state = { tiles: [a, b] };
+    layer._currentTime = 500;
+    (layer as any).renderLayers();
+    expect((layer as any).indexMaintainer.resortedTrackIds.sort()).toEqual([
+      'A',
+      'B',
+    ]);
+
+    // Add ONE tile: only its track is rebuilt; A and B are left alone.
+    layer.state = { tiles: [a, b, tileFor('C', 4)] };
+    (layer as any).renderLayers();
+    expect((layer as any).indexMaintainer.resortedTrackIds).toEqual(['C']);
+    expect((layer as any).trackIndex.size).toBe(3);
+
+    // Evict one: nothing needs re-sorting, the track is simply dropped.
+    layer.state = { tiles: [a, b] };
+    (layer as any).renderLayers();
+    expect((layer as any).indexMaintainer.resortedTrackIds).toEqual([]);
+    expect([...(layer as any).trackIndex.keys()].sort()).toEqual(['A', 'B']);
+  });
+
+  it('a feeding style prop change forces a full re-pool (baked colors are stale)', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car' },
+      { track: 'A', lon: 10, lat: 0, t: 1000, category: 'car' },
+    ]);
+    const layer = makeLayer({
+      colorProperty: 'category',
+      colorMapping: { car: [1, 2, 3, 255] },
+    });
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 500;
+    let boxes = (layer as any).renderLayers()[0];
+    expect([...boxes.props.data.attributes.getColor.value]).toEqual([
+      1, 2, 3, 255,
+    ]);
+    // Same tiles ref, but the mapping (which is BAKED into each track) changed.
+    layer.props = {
+      ...layer.props,
+      colorMapping: { car: [9, 8, 7, 255] },
+    };
+    boxes = (layer as any).renderLayers()[0];
+    expect([...boxes.props.data.attributes.getColor.value]).toEqual([
+      9, 8, 7, 255,
+    ]);
+  });
+
+  // ── Picking inheritance ──────────────────────────────────────────────────
+
+  it('pickable:false on the layer is HONORED by the boxes sublayer', () => {
+    // getSubLayerProps merges sublayerProps OVER the inherited composite props,
+    // so a hard `pickable: true` would beat the caller — and an AV cockpit that
+    // wants clicks to fall through to the LiDAR beneath would still get box
+    // hits (and still pay instancePickingColors + the picking pass).
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    const layers = render([tile], 500, { pickable: false });
+    expect(layers[0].constructor.layerName).toBe('SimpleMeshLayer');
+    expect(layers[0].props.pickable).toBe(false);
+  });
+
+  it('pickable:false is honored by the edges sublayer too (no fill underneath)', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    const layers = render([tile], 500, {
+      filled: false,
+      stroked: true,
+      pickable: false,
+    });
+    expect(layers[0].constructor.layerName).toBe('LineLayer');
+    expect(layers[0].props.pickable).toBe(false);
+  });
+
+  it('the NON-picking sublayer stays false even when the layer is pickable', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    const layers = render([tile], 500, {
+      filled: true,
+      stroked: true,
+      pickable: true,
+    });
+    expect(layers[0].props.pickable).toBe(true); // fill takes picks
+    expect(layers[1].props.pickable).toBe(false); // edges restricted
+  });
+
+  // ── Labels: stable data, live positions, dormant text ────────────────────
+
+  it('reuses ONE data array and ONE row object per slot across frames', () => {
+    // A fresh array sets deck's changeFlags.dataChanged, which invalidates
+    // every attribute REGARDLESS of updateTriggers — so TextLayer re-ran its
+    // whole string → glyph expansion at tick rate and the updateTriggers were
+    // dead code.
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car' },
+      { track: 'A', lon: 10, lat: 0, t: 1000, category: 'car' },
+    ]);
+    const layer = makeLayer({ showLabels: true });
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 250;
+    const first = (layer as any).renderLayers()[1];
+    const firstRow = first.props.data[0];
+    const firstPos = firstRow.position;
+    const firstLon = firstPos[0];
+
+    layer._currentTime = 750;
+    const second = (layer as any).renderLayers()[1];
+    expect(second.props.data).toBe(first.props.data); // same array
+    expect(second.props.data[0]).toBe(firstRow); // same row object
+    expect(second.props.data[0].position).toBe(firstPos); // mutated in place
+    // …and the position genuinely advanced with the playhead.
+    expect(second.props.data[0].position[0]).toBeGreaterThan(firstLon);
+  });
+
+  it('bumps getPosition every frame but leaves getText alone while the text set holds', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car' },
+      { track: 'A', lon: 10, lat: 0, t: 1000, category: 'car' },
+    ]);
+    const layer = makeLayer({ showLabels: true });
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 250;
+    const first = (layer as any).renderLayers()[1].props.updateTriggers;
+    layer._currentTime = 750;
+    const second = (layer as any).renderLayers()[1].props.updateTriggers;
+    expect(second.getPosition).not.toBe(first.getPosition);
+    // TextLayer re-runs _updateText only on dataChanged or a getText trigger
+    // change — an unchanged text set must cost nothing.
+    expect(second.getText).toBe(first.getText);
+    // Primitive triggers, so deck's compareProps diff is O(1) per key rather
+    // than walking the row array in both directions.
+    expect(typeof second.getPosition).toBe('number');
+    expect(typeof second.getText).toBe('string');
+  });
+
+  it('changes the getText trigger when the TEXT SET changes', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, category: 'car' },
+      { track: 'A', lon: 0, lat: 0, t: 2000, category: 'car' },
+      { track: 'B', lon: 1, lat: 1, t: 1000, category: 'pedestrian' },
+      { track: 'B', lon: 1, lat: 1, t: 2000, category: 'pedestrian' },
+    ]);
+    const layer = makeLayer({ showLabels: true });
+    layer.state = { tiles: [tile] };
+    // t=500: only A is active.
+    layer._currentTime = 500;
+    const one = (layer as any).renderLayers()[1];
+    expect(one.props.data.length).toBe(1);
+    // t=1500: B has entered.
+    layer._currentTime = 1500;
+    const two = (layer as any).renderLayers()[1];
+    expect(two.props.data.length).toBe(2);
+    expect(two.props.updateTriggers.getText).not.toBe(
+      one.props.updateTriggers.getText,
+    );
+    // The row array shrinks IN PLACE — still the same reference.
+    expect(two.props.data).toBe(one.props.data);
+  });
+
+  it('the getText signature is length-prefixed, so distinct label sets never collide', () => {
+    const build = (labels: string[]) => {
+      const layer = makeLayer({ showLabels: true });
+      const rows = labels.map((label, i) => ({
+        lon: i,
+        lat: 0,
+        alt: 0,
+        heading: NaN,
+        length: 4,
+        width: 2,
+        height: 1.6,
+        speed: 0,
+        alpha: 1,
+        track: { color: [1, 2, 3, 255], label },
+      }));
+      return (layer as any).buildLabels(rows as any).props.updateTriggers
+        .getText;
+    };
+    // A plain separator would fuse these two into the same signature.
+    expect(build(['a b'])).not.toBe(build(['a', 'b']));
   });
 });

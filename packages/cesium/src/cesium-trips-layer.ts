@@ -154,17 +154,23 @@ export class STTTripsLayer implements SttRenderNode {
 
   /** (Re)build the trip index from decoded tiles (replace-all). */
   setTiles(tiles: Tile[]): void {
+    // Scene-wide time origin = first LineString layer's timeOffset (the same
+    // convention as every other layer in this package).
+    const timeOrigin = lineStringTimeOrigin(tiles);
+    const index = buildTripIndex(tiles, GLOBE, timeOrigin, {
+      precision: 'f64',
+    });
+    // Index BEFORE the teardown, and keep the standing trails when the new set
+    // has none: selection reports an empty visible set for the frames between a
+    // viewport change and the first decoded tile of the new set, and tearing down
+    // first turns that transient into a blank frame (the "tiles in view flash
+    // out" symptom). Trails held this way stay at their true ECEF positions.
+    if (index.trips.length === 0) return;
+
     this.collection.removeAll();
     this.entries = [];
     this.destroyMaterials();
-
-    // Scene-wide time origin = first LineString layer's timeOffset (the same
-    // convention as every other layer in this package).
-    this.timeOrigin = lineStringTimeOrigin(tiles);
-
-    const index = buildTripIndex(tiles, GLOBE, this.timeOrigin, {
-      precision: 'f64',
-    });
+    this.timeOrigin = timeOrigin;
     this.origin = index.origin;
 
     let maxVerts = 0;

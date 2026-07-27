@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { STTArchive } from '../src/archive';
+import { KNOWN_MANIFEST_CAPABILITIES, STTArchive } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
 import {
   directoryObject,
@@ -328,6 +328,26 @@ describe('manifest version gates (conformance reader-MUST)', () => {
     });
     const meta = await archive.getMetadata();
     expect(meta.version).toBe(2);
+  });
+
+  it('opens a dataset built by the CURRENT writer (every capability it can declare)', async () => {
+    // The gate is a refusal by default: a capability the reader has not
+    // implemented aborts the open. So every capability the writer can emit
+    // must be in `KNOWN_MANIFEST_CAPABILITIES` or a freshly built dataset
+    // fails to open at all — the loudest possible regression, and the one
+    // this asserts. `time-delta` (compact `st`/`et`) and `vertex-value-quant`
+    // (`vq`) both RE-TYPE existing columns, which is exactly why they are
+    // must-understand rather than additive; `part_offsets`, being a new
+    // column, deliberately declares nothing.
+    for (const cap of KNOWN_MANIFEST_CAPABILITIES) {
+      const archive = datasetWithManifest((m) => {
+        m.capabilities = [cap];
+      });
+      const meta = await archive.getMetadata();
+      expect(meta.version, `capability ${cap}`).toBe(2);
+    }
+    expect(KNOWN_MANIFEST_CAPABILITIES).toContain('time-delta');
+    expect(KNOWN_MANIFEST_CAPABILITIES).toContain('vertex-value-quant');
   });
 
   it('accepts the golden formatVersion=2 / directoryVersion=5 manifest', async () => {

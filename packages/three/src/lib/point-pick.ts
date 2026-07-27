@@ -7,7 +7,7 @@
  * a decoded merged-instance index → an {@link SttPickResult}. The GPU id-buffer
  * render + readback (needs a live device) lives in the layer / `GpuPicker`; this
  * module joins the resolved index back to columns and geographic coordinates, so
- * it is the unit-tested seam of §5.3's merged-buffer picking.
+ * it is the unit-tested seam of merged-buffer picking.
  *
  * The flow: `provenance.resolve(mergedIndex)` → `(tileKey, featureIndex)` →
  * `binaryByTileKey.get(tileKey)` → `getFeatureProperties(binary, featureIndex)`.
@@ -81,9 +81,8 @@ export function resolvePointPick(
   return result;
 }
 
-// NOTE: the point-only `pointPickToInfo` adapter (core `SttPickResult` →
-// `SttPointPickInfo`) was retired when picking generalised: the layer now
-// resolves straight to a kind-tagged `SttIdPickInfo` via `resolveIdPick`
-// (`./id-pick.ts`), which carries the merged-buffer `tileKey` / `featureIndex`
-// a bare `SttPickResult` can't supply. `resolvePointPick` above stays as the
-// lower-level index → `SttPickResult` utility.
+// NOTE: there is no point-only adapter from a core `SttPickResult` to a
+// `STTPointPickInfo`. A layer resolves straight to a kind-tagged `STTIdPickInfo`
+// via `resolveIdPick` (`./id-pick.ts`), which carries the merged-buffer
+// `tileKey` / `featureIndex` a bare `SttPickResult` can't supply.
+// `resolvePointPick` above is the lower-level index → `SttPickResult` utility.

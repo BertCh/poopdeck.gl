@@ -4,14 +4,13 @@
 
 /**
  * The `@poopdeck.gl/three` backend's self-declaration against the shared
- * `@poopdeck.gl/core/capabilities` contract — Phase 5 of
- * docs/roadmap/renderer-architecture.md. This is a *retro-documenting*
- * descriptor: it records what the three backend (Three.js + TSL on WebGPU,
- * WebGL2 fallback) actually ships today, and the structural conformance gate in
+ * `@poopdeck.gl/core/capabilities` contract (docs/roadmap/renderer-architecture.md).
+ * It records what the three backend (Three.js + TSL on WebGPU, WebGL2 fallback)
+ * actually ships, and the structural conformance gate in
  * `test/backend-descriptor.test.ts` proves every claim against the real
  * `src/index.ts` exports via `assertDescriptorConsistent`.
  *
- * Divergences from the deck backend, all deliberate (see §1.2 of the roadmap):
+ * Divergences from the deck backend, all deliberate:
  *  - CPU projection (LocalEnu / Mercator / Globe), so `projectsOnCpu: true`.
  *  - TSL compiles only on `WebGPURenderer`, so the basemap is a camera-synced
  *    overlay canvas (`interleavedBasemap: false`), NOT interleaved into a shared
@@ -108,16 +107,13 @@ export const threeBackend: BackendDescriptor = {
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Layer-feature matrix (2026-07 kind-parity campaign)
+ * Layer-feature matrix
  *
- * The deck reference backend gained per-layer prop families (glide
+ * The per-layer prop families the deck reference backend exposes (glide
  * interpolation, icon wake, GPU DataFilter, space-time height, stable
- * categorical colour, progressive path reveal). The three-backend SoTA campaign
- * (2026-07) ported them all: as of Wave 1 every family is `supported: true` on
- * its full deck kind set — motionInterpolation, iconWake, timeHeightScale,
- * stableColorMapping, pathReveal, and dataFilter (icon included). Each entry is
- * the honest, machine-checkable complement to deck's declaration. The vocabulary
- * is redeclared locally because `@poopdeck.gl/three` deliberately does not depend
+ * categorical colour, progressive path reveal). Each entry is the honest,
+ * machine-checkable complement to deck's declaration. The vocabulary is
+ * redeclared locally because `@poopdeck.gl/three` deliberately does not depend
  * on `@poopdeck.gl/layers`; the conformance gate asserts exhaustiveness.
  * ────────────────────────────────────────────────────────────────────────── */
 
@@ -148,11 +144,11 @@ export type LayerFeatureSupport =
     };
 
 /**
- * Campaign-feature support (three-backend SoTA campaign, 2026-07). Entries that
- * remain `supported: false` are deliberate typed fallbacks, not silent gaps;
- * `timeHeightScale` in particular is consistent with `capabilities.timeAsHeight
- * === false` above. `motionInterpolation` landed in Wave 1 (GPU keyframe glide);
- * `dataFilter` is supported on the kinds listed (icon still pending).
+ * Per-feature support for this backend. An entry may only be `supported: false`
+ * as a deliberate typed fallback, never a silent gap, and each entry must stay
+ * consistent with the coarse `capabilities` flags above — `timeHeightScale`
+ * with `capabilities.timeAsHeight` in particular. Every family is supported
+ * here, each on the kinds listed.
  */
 export const threeLayerFeatures: Readonly<
   Record<LayerFeature, LayerFeatureSupport>
@@ -176,7 +172,7 @@ export const threeLayerFeatures: Readonly<
     // Wired end-to-end (layer props → buffer builder → `sttFilterValue`
     // attribute → filter-enabled material → per-frame uniforms) on the full deck
     // set. icon's static path is covered; icon+glide filtering is a documented
-    // no-op (glide keyframes carry no per-sample filter column).
+    // no-op, because glide keyframes carry no per-sample filter column.
     kinds: ['arc', 'line', 'trips', 'column', 'polygon', 'icon'],
     prop: 'filterProperty (+filterRange/filterSoftRange/filterEnabled)',
     summary:

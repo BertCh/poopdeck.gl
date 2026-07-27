@@ -25,8 +25,11 @@
   --page-bg: #fbfbf9; /* app background behind translucent panels */
   --surface: #ffffff; /* panel / control surfaces */
   --ink-900: #15171c; /* strongest text */
-  --ink-500: #6b7280; /* muted text / labels */
-  --ink-400: #9aa1ad; /* faint text / captions */
+  --ink-500: #6b7280; /* muted text / labels — the FAINTEST token used for text */
+  /* DECORATIVE ONLY — density bars, buffered fill, non-gating runway tracks.
+   * At 2.6:1 on --surface it does not clear WCAG 1.4.3 (4.5:1), so nothing
+   * legible is drawn in it; keep any re-theme of it out of the text path too. */
+  --ink-400: #9aa1ad;
   --hairline: #e7e6e0; /* 1px separators, control outlines */
   --accent: #0a7790; /* play button, active states, scrubber fill */
   --accent-soft: rgba(10, 119, 144, 0.08); /* hover / selected washes */

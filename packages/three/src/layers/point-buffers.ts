@@ -53,7 +53,7 @@ export interface PointBuffers {
   origin: [number, number, number];
   bbox: { min: [number, number, number]; max: [number, number, number] } | null;
   /**
-   * Per-merged-instance provenance (the §5.3 pick-identity buffer). Merged
+   * Per-merged-instance provenance (the pick-identity buffer). Merged
    * instance `i` — the same `i` a GPU id-buffer pick decodes — resolves via
    * `provenance.resolve(i)` to its source `(tileKey, featureIndex)`. Populated
    * in the EXACT order instances are written to {@link centers}, so index

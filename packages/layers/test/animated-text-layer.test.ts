@@ -2,20 +2,28 @@
  * AnimatedTextLayer tests.
  *
  * The layer renders time-filtered map LABELS over binary POINT tiles. deck's
- * `TextLayer` cannot consume the binary attribute interface (it needs CPU string
- * ROWS + a FontAtlasManager), so this layer DECODES each tile's categorical
- * string column into a reference-stable full row array ONCE, then FILTERS that
- * set on the CPU against the playhead every frame (a row is visible while its
- * absolute `[startTime, endTime]` overlaps `[now ± timeWindow/2]`). Styling is
- * forwarded to the TextLayer sublayer as pass-throughs; per-feature color/size/
- * angle bake into the rows and ride simple `(d) => d.field` readers.
+ * `TextLayer` DOES accept a binary payload — `_updateText` has an explicit
+ * branch for `data = {length, startIndices, attributes: {getText: {value}}}` —
+ * so this layer DECODES each tile into flat typed columns ONCE (positions,
+ * absolute times, a per-CATEGORY colour table, a UTF-32 code-point buffer) and
+ * then FILTERS membership on the CPU against the playhead every frame (a row is
+ * visible while its absolute `[startTime, endTime]` overlaps
+ * `[now ± timeWindow/2]`). Styling is forwarded to the TextLayer sublayer as
+ * pass-throughs; per-feature colour/size/angle ride index-based accessors over
+ * the flat columns — there are no per-feature row objects.
  *
  * These tests exercise `renderLayers()` directly (via Object.create, bypassing
  * CompositeLayer's lifecycle) with a deck.gl mock that captures the constructed
  * sublayer props. They pin: construction defaults, one sublayer per tile, the
- * decoded text/position rows, CPU time-window filtering, the constant + column
- * color/size/angle paths, the appear/disappear fade, the full style pass-through
- * surface, reference-stable data reuse, and the picking object shape.
+ * decoded text/position columns, CPU time-window filtering, the constant +
+ * column colour/size/angle paths, the appear/disappear fade, the full style
+ * pass-through surface, reference-stable data + sublayer reuse, and the picking
+ * object shape.
+ *
+ * The review-fix behaviours (binary getText payload shape, membership
+ * signature + early-out, sorted-path binary search, per-category expansion,
+ * sublayer-instance cache, float formatting, geometry guard) are pinned in
+ * `animated-text-review-fixes.test.ts`.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -74,6 +82,25 @@ function categorical(values: string[]): {
   return { indices, categories };
 }
 
+/** Read back the labels deck would derive from the binary `getText` payload. */
+export function textsOf(layer: any): string[] {
+  const { length, startIndices, attributes } = layer.props.data;
+  const codes: Uint32Array = attributes.getText.value;
+  const out: string[] = [];
+  for (let i = 0; i < length; i++) {
+    const slice = Array.from(
+      codes.subarray(startIndices[i], startIndices[i + 1]),
+    );
+    out.push(String.fromCodePoint(...slice));
+  }
+  return out;
+}
+
+/** Invoke an index-based accessor the way deck's attribute updater does. */
+export function readAccessor(fn: any, index: number): any {
+  return typeof fn === 'function' ? fn(undefined, { index, target: [] }) : fn;
+}
+
 interface LabelRow {
   lon: number;
   lat: number;
@@ -88,7 +115,7 @@ interface LabelRow {
 }
 
 /** Build a fake point tile of label features. */
-function makeLabelTile(
+export function makeLabelTile(
   rows: LabelRow[],
   opts: {
     timeOffset?: number;
@@ -121,6 +148,69 @@ function makeLabelTile(
   return tile;
 }
 
+/** The props the layer's constructor would have set from defaultProps. */
+export const TEXT_LAYER_PROPS: Record<string, any> = {
+  id: 'test',
+  textProperty: 'text',
+  getText: null,
+  textPrecision: null,
+  color: [0, 0, 0, 255],
+  getColor: null,
+  colorMapping: null,
+  colorMappingDefault: [0, 0, 0, 0],
+  size: 32,
+  getSize: null,
+  angle: 0,
+  getAngle: null,
+  getTextAnchor: 'middle',
+  getAlignmentBaseline: 'center',
+  getPixelOffset: [0, 0],
+  background: false,
+  backgroundColor: [255, 255, 255, 255],
+  getBackgroundColor: null,
+  backgroundPadding: [0, 0, 0, 0],
+  backgroundBorderRadius: 0,
+  borderColor: [0, 0, 0, 255],
+  getBorderColor: null,
+  borderWidth: 0,
+  getBorderWidth: null,
+  outlineColor: [0, 0, 0, 255],
+  outlineWidth: 0,
+  fontFamily: 'Monaco, monospace',
+  fontWeight: 'normal',
+  lineHeight: 1,
+  fontSettings: {},
+  characterSet: 'auto',
+  sizeScale: 1,
+  sizeUnits: 'pixels',
+  sizeMinPixels: 0,
+  sizeMaxPixels: Number.MAX_SAFE_INTEGER,
+  wordBreak: 'break-word',
+  maxWidth: -1,
+  getContentBox: [0, 0, -1, -1],
+  contentCutoffPixels: [0, 0],
+  contentAlignHorizontal: 'none',
+  contentAlignVertical: 'none',
+  billboard: true,
+  fadeInDuration: 0,
+  fadeOutDuration: 0,
+  // A wide window so a single-timestamp feature is visible near its time.
+  timeWindow: 2000,
+  opacity: 1,
+  visible: true,
+};
+
+/** Initialise the instance fields CompositeLayer's lifecycle would have set. */
+export function initTextLayerFields(layer: any): void {
+  layer._currentTime = 0;
+  layer.decodedCache = new Map();
+  layer.visibleCache = new Map();
+  layer.sublayerCache = new Map();
+  layer.lastLayerPropsKey = '';
+  layer.lastTilesRef = null;
+  layer.lastFrameTime = NaN;
+}
+
 // ---------------------------------------------------------------------------
 describe('AnimatedTextLayer', () => {
   let LayerCtor: any;
@@ -136,53 +226,8 @@ describe('AnimatedTextLayer', () => {
       // Object.create bypasses CompositeLayer's lifecycle — drive renderLayers
       // (and its decode/filter) directly.
       const layer = Object.create(LayerCtor.prototype);
-      layer.props = {
-        id: 'test',
-        textProperty: 'text',
-        getText: null,
-        color: [0, 0, 0, 255],
-        getColor: null,
-        colorMapping: null,
-        colorMappingDefault: [0, 0, 0, 0],
-        size: 32,
-        getSize: null,
-        angle: 0,
-        getAngle: null,
-        getTextAnchor: 'middle',
-        getAlignmentBaseline: 'center',
-        getPixelOffset: [0, 0],
-        background: false,
-        backgroundColor: [255, 255, 255, 255],
-        backgroundPadding: [0, 0, 0, 0],
-        borderColor: [0, 0, 0, 255],
-        borderWidth: 0,
-        outlineColor: [0, 0, 0, 255],
-        outlineWidth: 0,
-        fontFamily: 'Monaco, monospace',
-        fontWeight: 'normal',
-        fontSettings: {},
-        characterSet: 'auto',
-        sizeScale: 1,
-        sizeUnits: 'pixels',
-        sizeMinPixels: 0,
-        sizeMaxPixels: Number.MAX_SAFE_INTEGER,
-        wordBreak: 'break-word',
-        maxWidth: -1,
-        billboard: true,
-        fadeInDuration: 0,
-        fadeOutDuration: 0,
-        // A wide window so a single-timestamp feature is visible near its time.
-        timeWindow: 2000,
-        opacity: 1,
-        visible: true,
-        ...opts,
-      };
-      layer._currentTime = 0;
-      layer.decodedCache = new Map();
-      layer.visibleCache = new Map();
-      layer.fadeCache = new Map();
-      layer.lastTilesRef = null;
-      layer.lastFrameTime = NaN;
+      layer.props = { ...TEXT_LAYER_PROPS, ...opts };
+      initTextLayerFields(layer);
       return layer;
     };
 
@@ -230,12 +275,11 @@ describe('AnimatedTextLayer', () => {
     expect(layers.length).toBe(1);
     expect(layers[0].constructor.layerName).toBe('TextLayer');
     const data = layers[0].props.data;
-    expect(Array.isArray(data)).toBe(true);
+    // deck's binary interface — NOT an array of CPU rows.
     expect(data.length).toBe(2);
-    // getText / getPosition are CPU-row readers.
-    expect(layers[0].props.getText(data[0])).toBe('alpha');
-    expect(layers[0].props.getText(data[1])).toBe('beta');
-    expect(layers[0].props.getPosition(data[1])).toEqual([1, 2, 0]);
+    expect(data.attributes.getText.value).toBeInstanceOf(Uint32Array);
+    expect(textsOf(layers[0])).toEqual(['alpha', 'beta']);
+    expect(readAccessor(layers[0].props.getPosition, 1)).toEqual([1, 2, 0]);
   });
 
   it('reads a custom textProperty column', () => {
@@ -249,8 +293,7 @@ describe('AnimatedTextLayer', () => {
       'Montréal',
     ]);
     const layers = render([tile], 0, { textProperty: 'name' });
-    const data = layers[0].props.data;
-    expect(layers[0].props.getText(data[0])).toBe('Montréal');
+    expect(textsOf(layers[0])).toEqual(['Montréal']);
   });
 
   it('lets the getText alias win over textProperty (column name)', () => {
@@ -267,8 +310,7 @@ describe('AnimatedTextLayer', () => {
       textProperty: 'text',
       getText: 'label',
     });
-    const data = layers[0].props.data;
-    expect(layers[0].props.getText(data[0])).toBe('via-alias');
+    expect(textsOf(layers[0])).toEqual(['via-alias']);
   });
 
   it('stringifies a numeric text column', () => {
@@ -280,8 +322,7 @@ describe('AnimatedTextLayer', () => {
     });
     tile.layers[0].features.numericProps['depth'] = new Float32Array([42]);
     const layers = render([tile], 0, { textProperty: 'depth' });
-    const data = layers[0].props.data;
-    expect(layers[0].props.getText(data[0])).toBe('42');
+    expect(textsOf(layers[0])).toEqual(['42']);
   });
 
   // ── CPU time-window filtering ──────────────────────────────────────────────
@@ -294,9 +335,9 @@ describe('AnimatedTextLayer', () => {
       { lon: 2, lat: 0, t: 5500, text: 'soon' }, // inside
       { lon: 3, lat: 0, t: 9000, text: 'late' }, // outside
     ]);
-    const data = render([tile], 5000)[0].props.data;
-    expect(data.length).toBe(2);
-    expect(data.map((d: any) => d.text)).toEqual(['now', 'soon']);
+    const sub = render([tile], 5000)[0];
+    expect(sub.props.data.length).toBe(2);
+    expect(textsOf(sub)).toEqual(['now', 'soon']);
   });
 
   it('keeps a feature whose [start,end] span straddles the window', () => {
@@ -304,9 +345,8 @@ describe('AnimatedTextLayer', () => {
       { lon: 0, lat: 0, t: 0, end: 10000, text: 'spanning' },
     ]);
     // now=5000, window [4000,6000] — the feature's [0,10000] overlaps.
-    const data = render([tile], 5000)[0].props.data;
-    expect(data.length).toBe(1);
-    expect(data[0].text).toBe('spanning');
+    const sub = render([tile], 5000)[0];
+    expect(textsOf(sub)).toEqual(['spanning']);
   });
 
   it('rebases relative tile times by timeOffset for the filter', () => {
@@ -328,14 +368,8 @@ describe('AnimatedTextLayer', () => {
 
   it('bakes a constant color into every row', () => {
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }]);
-    const data = render([tile], 0, { color: [10, 20, 30, 255] })[0].props.data;
-    expect(data[0].color).toEqual([10, 20, 30, 255]);
-    // Constant color rides the reader too (fade folds into it per-frame).
-    expect(
-      render([tile], 0, { color: [10, 20, 30, 255] })[0].props.getColor(
-        data[0],
-      ),
-    ).toEqual([10, 20, 30, 255]);
+    const sub = render([tile], 0, { color: [10, 20, 30, 255] })[0];
+    expect(readAccessor(sub.props.getColor, 0)).toEqual([10, 20, 30, 255]);
   });
 
   it('bakes per-category color via colorMapping when color names a column', () => {
@@ -343,42 +377,42 @@ describe('AnimatedTextLayer', () => {
       { lon: 0, lat: 0, t: 0, text: 'a', category: 'road' },
       { lon: 1, lat: 0, t: 0, text: 'b', category: 'river' },
     ]);
-    const data = render([tile], 0, {
+    const sub = render([tile], 0, {
       color: 'category',
       colorMapping: { road: [200, 200, 0, 255], river: [0, 120, 255, 255] },
-    })[0].props.data;
-    expect(data[0].color).toEqual([200, 200, 0, 255]);
-    expect(data[1].color).toEqual([0, 120, 255, 255]);
+    })[0];
+    expect(readAccessor(sub.props.getColor, 0)).toEqual([200, 200, 0, 255]);
+    expect(readAccessor(sub.props.getColor, 1)).toEqual([0, 120, 255, 255]);
   });
 
   it('uses colorMappingDefault for categories absent from colorMapping', () => {
     const tile = makeLabelTile([
       { lon: 0, lat: 0, t: 0, text: 'a', category: 'trail' },
     ]);
-    const data = render([tile], 0, {
+    const sub = render([tile], 0, {
       color: 'category',
       colorMapping: { road: [1, 2, 3, 255] },
       colorMappingDefault: [9, 9, 9, 255],
-    })[0].props.data;
-    expect(data[0].color).toEqual([9, 9, 9, 255]);
+    })[0];
+    expect(readAccessor(sub.props.getColor, 0)).toEqual([9, 9, 9, 255]);
   });
 
   it('lets the getColor alias win over color', () => {
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }]);
-    const data = render([tile], 0, {
+    const sub = render([tile], 0, {
       color: [1, 1, 1, 255],
       getColor: [255, 0, 0, 255],
-    })[0].props.data;
-    expect(data[0].color).toEqual([255, 0, 0, 255]);
+    })[0];
+    expect(readAccessor(sub.props.getColor, 0)).toEqual([255, 0, 0, 255]);
   });
 
   it('falls back to color when getColor is a function accessor', () => {
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }]);
-    const data = render([tile], 0, {
+    const sub = render([tile], 0, {
       color: [7, 8, 9, 255],
       getColor: () => [0, 0, 0, 255],
-    })[0].props.data;
-    expect(data[0].color).toEqual([7, 8, 9, 255]);
+    })[0];
+    expect(readAccessor(sub.props.getColor, 0)).toEqual([7, 8, 9, 255]);
   });
 
   // ── Size / angle: constant vs column ───────────────────────────────────────
@@ -396,9 +430,8 @@ describe('AnimatedTextLayer', () => {
     ]);
     const layer = render([tile], 0, { size: 'size' })[0];
     expect(typeof layer.props.getSize).toBe('function');
-    const data = layer.props.data;
-    expect(layer.props.getSize(data[0])).toBe(12);
-    expect(layer.props.getSize(data[1])).toBe(24);
+    expect(readAccessor(layer.props.getSize, 0)).toBe(12);
+    expect(readAccessor(layer.props.getSize, 1)).toBe(24);
   });
 
   it('forwards a constant angle and binds a per-feature angle column', () => {
@@ -411,7 +444,7 @@ describe('AnimatedTextLayer', () => {
     ]);
     const layer = render([colTile], 0, { angle: 'angle' })[0];
     expect(typeof layer.props.getAngle).toBe('function');
-    expect(layer.props.getAngle(layer.props.data[1])).toBe(30);
+    expect(readAccessor(layer.props.getAngle, 1)).toBe(30);
   });
 
   it('lets the getSize alias win over size', () => {
@@ -429,27 +462,27 @@ describe('AnimatedTextLayer', () => {
     const tile = makeLabelTile([
       { lon: 0, lat: 0, t: 0, text: 'a', end: 10000 },
     ]);
-    const data = render([tile], -600, {
+    const sub = render([tile], -600, {
       color: [80, 170, 255, 255],
       fadeInDuration: 800,
-    })[0].props.data;
-    expect(data[0].color[0]).toBe(80);
-    expect(data[0].color[3]).toBeGreaterThan(100);
-    expect(data[0].color[3]).toBeLessThan(160);
+    })[0];
+    const c = readAccessor(sub.props.getColor, 0);
+    expect(c[0]).toBe(80);
+    expect(c[3]).toBeGreaterThan(100);
+    expect(c[3]).toBeLessThan(160);
   });
 
   it('keeps full alpha when no fade is set (default)', () => {
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }]);
-    const data = render([tile], 0, { color: [80, 170, 255, 255] })[0].props
-      .data;
-    expect(data[0].color[3]).toBe(255);
+    const sub = render([tile], 0, { color: [80, 170, 255, 255] })[0];
+    expect(readAccessor(sub.props.getColor, 0)[3]).toBe(255);
   });
 
-  it('keeps the fade-mode rows array + objects reference-stable across frames (no glyph re-layout)', () => {
-    // With fade active the alpha animates every frame, but the row ARRAY + row
-    // OBJECT identity must stay stable while membership is unchanged — else
-    // TextLayer re-runs its per-glyph `_updateText` (fires on any `data`-ref
-    // change) every frame. Only the colour re-uploads, via the getColor trigger.
+  it('keeps the binary data payload reference-stable across a fade frame (no glyph re-layout)', () => {
+    // With a fade ACTIVELY ramping the alpha changes every frame, but the
+    // `data` object (and therefore the glyph layout + the membership-keyed
+    // triggers) must stay identical — else TextLayer re-runs `_updateText`
+    // (which fires on any `data`-ref change) every frame.
     const layer = makeLayer({
       color: [80, 170, 255, 255],
       fadeInDuration: 800,
@@ -460,27 +493,23 @@ describe('AnimatedTextLayer', () => {
     layer.state = { tiles: [tile] };
     layer._currentTime = -600; // ~50% into the fade-in
     const s1 = (layer as any).renderLayers()[0];
-    const rows1 = s1.props.data;
-    const row = rows1[0];
-    const alpha1 = row.color[3]; // snapshot the primitive before the next frame
+    const data1 = s1.props.data;
+    const alpha1 = readAccessor(s1.props.getColor, 0)[3];
     expect(alpha1).toBeGreaterThan(100);
     expect(alpha1).toBeLessThan(160);
 
     layer._currentTime = -200; // fade-in complete → alpha ramps to full
     const s2 = (layer as any).renderLayers()[0];
-    // Reference-stable: same rows array + same row object (TextLayer skips
-    // _updateText), so the membership-keyed triggers are UNCHANGED.
-    expect(s2.props.data).toBe(rows1);
-    expect(s2.props.data[0]).toBe(row);
+    expect(s2.props.data).toBe(data1);
     expect(s2.props.updateTriggers.getText).toBe(
       s1.props.updateTriggers.getText,
     );
     expect(s2.props.updateTriggers.getPosition).toBe(
       s1.props.updateTriggers.getPosition,
     );
-    // But the alpha ramped up in place and its updateTrigger changed (carries the
-    // clock) so deck re-uploads only the colour.
-    expect(s2.props.data[0].color[3]).toBeGreaterThan(alpha1);
+    // The alpha ramped up and its updateTrigger changed (carries the clock) so
+    // deck re-uploads only the colour.
+    expect(readAccessor(s2.props.getColor, 0)[3]).toBeGreaterThan(alpha1);
     expect(s2.props.updateTriggers.getColor).not.toBe(
       s1.props.updateTriggers.getColor,
     );
@@ -500,12 +529,11 @@ describe('AnimatedTextLayer', () => {
     layer.state = { tiles: [tile] };
     layer._currentTime = -600; // ~50% into the fade-in
     const s = (layer as any).renderLayers()[0];
-    const row = s.props.data[0];
-    // Per-row readers (not constants) when fade is active.
+    // Per-row readers (not constants) while a row is actually ramping.
     expect(typeof s.props.getBackgroundColor).toBe('function');
     expect(typeof s.props.getBorderColor).toBe('function');
-    const bg = s.props.getBackgroundColor(row);
-    const bd = s.props.getBorderColor(row);
+    const bg = readAccessor(s.props.getBackgroundColor, 0);
+    const bd = readAccessor(s.props.getBorderColor, 0);
     // RGB preserved; alpha scaled by the ~0.5 ramp — matches the glyph fade,
     // instead of a solid rectangle popping while the text fades.
     expect(bg.slice(0, 3)).toEqual([200, 200, 200]);
@@ -545,20 +573,26 @@ describe('AnimatedTextLayer', () => {
       background: true,
       backgroundColor: [10, 10, 10, 200],
       backgroundPadding: [2, 3, 2, 3],
+      backgroundBorderRadius: 6,
       borderColor: [1, 2, 3, 255],
       borderWidth: 2,
       outlineColor: [9, 9, 9, 255],
       outlineWidth: 4,
       fontFamily: 'Helvetica',
       fontWeight: 700,
+      lineHeight: 1.4,
       fontSettings: { sdf: true },
-      characterSet: 'auto',
+      characterSet: 'ab',
       sizeScale: 2,
       sizeUnits: 'meters',
       sizeMinPixels: 8,
       sizeMaxPixels: 64,
       wordBreak: 'break-all',
       maxWidth: 12,
+      getContentBox: [1, 2, 30, 40],
+      contentCutoffPixels: [5, 6],
+      contentAlignHorizontal: 'center',
+      contentAlignVertical: 'end',
       billboard: false,
     })[0];
     const p = layer.props;
@@ -566,23 +600,30 @@ describe('AnimatedTextLayer', () => {
     expect(p.getAlignmentBaseline).toBe('bottom');
     expect(p.getPixelOffset).toEqual([4, -8]);
     expect(p.background).toBe(true);
-    // Deprecated `backgroundColor` maps to the modern getBackgroundColor accessor.
+    // Legacy `backgroundColor` maps to the modern getBackgroundColor accessor.
     expect(p.getBackgroundColor).toEqual([10, 10, 10, 200]);
     expect(p.backgroundPadding).toEqual([2, 3, 2, 3]);
+    expect(p.backgroundBorderRadius).toBe(6);
     expect(p.getBorderColor).toEqual([1, 2, 3, 255]);
     expect(p.getBorderWidth).toBe(2);
     expect(p.outlineColor).toEqual([9, 9, 9, 255]);
     expect(p.outlineWidth).toBe(4);
     expect(p.fontFamily).toBe('Helvetica');
     expect(p.fontWeight).toBe(700);
+    expect(p.lineHeight).toBe(1.4);
     expect(p.fontSettings).toEqual({ sdf: true });
-    expect(p.characterSet).toBe('auto');
+    // A pinned characterSet is forwarded verbatim (no derivation).
+    expect(p.characterSet).toBe('ab');
     expect(p.sizeScale).toBe(2);
     expect(p.sizeUnits).toBe('meters');
     expect(p.sizeMinPixels).toBe(8);
     expect(p.sizeMaxPixels).toBe(64);
     expect(p.wordBreak).toBe('break-all');
     expect(p.maxWidth).toBe(12);
+    expect(p.getContentBox).toEqual([1, 2, 30, 40]);
+    expect(p.contentCutoffPixels).toEqual([5, 6]);
+    expect(p.contentAlignHorizontal).toBe('center');
+    expect(p.contentAlignVertical).toBe('end');
     expect(p.billboard).toBe(false);
   });
 
@@ -619,18 +660,18 @@ describe('AnimatedTextLayer', () => {
     ]);
     layer.state = { tiles: [tile] };
     layer._currentTime = 5000;
-    const first = (layer as any).renderLayers()[0].props.data;
-    expect(first.map((d: any) => d.text)).toEqual(['a']);
+    const s1 = (layer as any).renderLayers()[0];
+    expect(textsOf(s1)).toEqual(['a']);
     // Move the playhead so 'b' enters and 'a' leaves the window.
     layer._currentTime = 9000;
-    const second = (layer as any).renderLayers()[0].props.data;
-    expect(second).not.toBe(first);
-    expect(second.map((d: any) => d.text)).toEqual(['b']);
+    const s2 = (layer as any).renderLayers()[0];
+    expect(s2.props.data).not.toBe(s1.props.data);
+    expect(textsOf(s2)).toEqual(['b']);
   });
 
   // ── Caching / lifecycle ────────────────────────────────────────────────────
 
-  it('reuses the decoded full-row set across renders (same styleKey)', () => {
+  it('reuses the decoded columns across renders (same styleKey)', () => {
     const layer = makeLayer();
     const tile = makeLabelTile([{ lon: 0, lat: 0, t: 0, text: 'a' }], {
       tileId: { z: 16, x: 1, y: 2, t: 0 },
@@ -649,13 +690,13 @@ describe('AnimatedTextLayer', () => {
     const tile = makeLabelTile([
       { lon: 0, lat: 0, t: 0, text: 'a', category: 'road' },
     ]);
-    const a = render([tile], 0, { color: [1, 1, 1, 255] })[0].props.data;
-    expect(a[0].color).toEqual([1, 1, 1, 255]);
+    const a = render([tile], 0, { color: [1, 1, 1, 255] })[0];
+    expect(readAccessor(a.props.getColor, 0)).toEqual([1, 1, 1, 255]);
     const b = render([tile], 0, {
       color: 'category',
       colorMapping: { road: [50, 60, 70, 255] },
-    })[0].props.data;
-    expect(b[0].color).toEqual([50, 60, 70, 255]);
+    })[0];
+    expect(readAccessor(b.props.getColor, 0)).toEqual([50, 60, 70, 255]);
   });
 
   it('returns [] for an empty tile set', () => {
@@ -675,9 +716,9 @@ describe('AnimatedTextLayer', () => {
     layer.state = { tiles: [tile] };
     layer._currentTime = 5000;
     const sublayer = (layer as any).renderLayers()[0];
-    const rows = sublayer.props.sttRows;
-    expect(rows.length).toBe(1);
-    expect(rows[0].i).toBe(1); // original feature index
+    const rowIndices = sublayer.props.sttRowIndices;
+    expect(rowIndices.length).toBe(1);
+    expect(rowIndices[0]).toBe(1); // original feature index
 
     const info: any = { index: 0 };
     const out = (layer as any).getPickingInfo({ info, sourceLayer: sublayer });

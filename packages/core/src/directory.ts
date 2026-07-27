@@ -38,7 +38,7 @@ export const DIRECTORY_VERSION = 5;
 const COVER_SECTION_TMIN = 1;
 
 // ----------------------------------------------------------------------------
-// Paged directory — root page (Wave 2). Mirrors the Rust
+// Paged directory — root page. Mirrors the Rust
 // `crates/stt-core/src/directory_page.rs` container: a `.sttd` is
 // `[root frame][leaf 0 frame]...`, each an independent (zstd) frame. The root is
 // a fixed-width table of page descriptors carrying each leaf's byte range plus

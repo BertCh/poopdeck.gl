@@ -36,7 +36,7 @@ import {
   metersToPixelsAtLatitude,
   tileCenterLatitude,
 } from '../src/lib/projection';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 
 const TIME_OFFSET = 1_700_000_000_000;
 
@@ -270,8 +270,6 @@ function makeTrackTile(opts: {
   };
 }
 
-const tileKey = (t: Tile) => `${t.id.z}/${t.id.x}/${t.id.y}/${t.id.t}`;
-
 /** Wire the GL capability stubs the direct-hook tests bypass (onAdd does it). */
 function stubCaps(layer: any, gl: any): void {
   layer.supports32BitIndices = true;
@@ -320,8 +318,9 @@ function makeRenderableLayer(extra: Record<string, unknown>, tiles: Tile[]) {
   const gl = makeMockGl();
   stubCaps(layer, gl);
   layer.map = makeMockMap();
-  layer.tileset = { update: vi.fn() };
-  layer.loadedTiles = new Map(tiles.map((t) => [tileKey(t), t]));
+  // The drawn set is DERIVED from the tileset's visible set, so tiles are
+  // published there rather than poked into `loadedTiles`.
+  publishVisibleTiles(layer, ...tiles);
   return { layer, gl };
 }
 
@@ -1465,7 +1464,7 @@ describe('motion glide', () => {
         startTime: 20_000,
         id: 'B',
       });
-      layer.loadedTiles.set(tileKey(extra), extra);
+      publishVisibleTiles(layer, ...tiles, extra);
       layer.render(gl, new Float32Array(16));
       expect(sync).toHaveBeenCalledTimes(2);
     } finally {
@@ -1561,7 +1560,7 @@ describe('motion glide', () => {
     );
     layer.render(gl, new Float32Array(16));
 
-    layer.loadedTiles.delete(tileKey(tiles[0]));
+    publishVisibleTiles(layer, ...tiles.slice(1));
     layer.render(gl, new Float32Array(16));
     expect(layer.glideCount).toBe(1); // still on screen
 

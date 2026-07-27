@@ -28,7 +28,8 @@ import {
   collectTransferables,
   forEachBufferView,
 } from '../src/tile-transferables';
-import { GeometryType, type Tile } from '../src/types';
+import { estimateTileSize } from '../src/archive';
+import { GeometryType, type BinaryFeatures, type Tile } from '../src/types';
 
 function makeMinimalTile(): Tile {
   const positions = new Float64Array([0, 0, 1, 1]);
@@ -150,6 +151,33 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
   // The helper now skips non-typed-array entries instead of crashing.
   // ---------------------------------------------------------------------------
 
+  it('transfers the polygon boundary arrays (ringIndices / partIndices)', () => {
+    // `partIndices` shipped with the `part_offsets` column but was never
+    // added to `forEachBufferView`, so the worker structured-CLONE-COPIED it
+    // for every multi-part polygon tile — the exact regression that
+    // enumeration exists to prevent — and `estimateTileSize` undercounted
+    // each such tile by 4 * (totalParts + 1) bytes against the memory budget.
+    const tile = makeMinimalTile();
+    const f = tile.layers[0].features;
+    f.startIndices = new Uint32Array([0, 15, 20]);
+    f.ringIndices = new Uint32Array([0, 5, 10, 15, 20]);
+    f.partIndices = new Uint32Array([0, 10, 15, 20]);
+    const transferables = collectTransferables(tile);
+    expect(transferables).toContain(f.startIndices.buffer);
+    expect(transferables).toContain(f.ringIndices.buffer);
+    expect(transferables).toContain(f.partIndices.buffer);
+  });
+
+  it('counts partIndices toward the tile byte estimate', () => {
+    // `estimateTileSize` is `forEachBufferView` + a per-layer constant, and
+    // it feeds the cache budget / eviction: an unlisted column is a tile the
+    // tileset believes is smaller than it is.
+    const tile = makeMinimalTile();
+    const before = estimateTileSize(tile);
+    tile.layers[0].features.partIndices = new Uint32Array([0, 10, 15, 20]);
+    expect(estimateTileSize(tile) - before).toBe(4 * 4);
+  });
+
   it('transfers pre-tessellated mesh + 64-bit id buffers (polygon/summary tiles)', () => {
     // triangles is often the LARGEST buffer in a --pre-tessellate polygon
     // tile, and featureIds64 carries H3 cell indices on summary tiles. These
@@ -227,49 +255,86 @@ describe('collectTransferables (worker tile-transfer helper)', () => {
   });
 });
 
+/**
+ * EVERY field of {@link BinaryFeatures}, each buffer on its own backing
+ * `ArrayBuffer`.
+ *
+ * The `Required<>` annotation is the load-bearing part: it is a COMPILE-TIME
+ * exhaustiveness check, so adding an optional field to the interface — the
+ * way `ringIndices` and then `partIndices` were added — fails `tsc` here
+ * until the fixture is extended, at which point the runtime assertion below
+ * fails until `forEachBufferView` learns about it too. Between them, the
+ * "can never drift when a new column lands" claim in that function's doc is
+ * enforced rather than merely asserted (both `ringIndices` and `partIndices`
+ * were in fact missing from the hand-written enumeration this replaces).
+ */
+function everyFieldPopulated(): Required<BinaryFeatures> {
+  return {
+    featureCount: 2,
+    geometryType: GeometryType.Point,
+    positionDimensions: 2,
+    positions: new Float64Array(4),
+    featureIds: new Uint32Array(2),
+    startTimes: new Float32Array(2),
+    endTimes: new Float32Array(2),
+    startIndices: new Uint32Array(3),
+    ringIndices: new Uint32Array(4),
+    partIndices: new Uint32Array(3),
+    coordQuantStep: [1e-6, 1e-6],
+    vertexTimestamps: new Float32Array(2),
+    vertexValues: new Float32Array(2),
+    vertexValueMatrix: new Float32Array(4),
+    vertexValueBuckets: 2,
+    globalFeatureIds: new Uint32Array(2),
+    triangles: new Uint32Array(3),
+    triangleOffsets: new Uint32Array(2),
+    featureIds64: new BigUint64Array(2),
+    timeOffset: 0,
+    timesSorted: true,
+    numericProps: { speed: new Float32Array(2) },
+    vectorProps: { quat: { value: new Float32Array(8), size: 4 } },
+    categoricalProps: {
+      kind: { indices: new Uint16Array(2), categories: ['a'] },
+    },
+  };
+}
+
 describe('forEachBufferView (shared buffer enumeration)', () => {
   it('visits exactly the buffer set collectTransferables transfers (drift guard)', () => {
-    // Every buffer-bearing BinaryFeatures field populated, each on its own
-    // backing buffer — if a future column is added to one enumeration but
-    // not the shared helper, the set comparison here fails.
-    const features = {
-      featureCount: 2,
-      geometryType: GeometryType.Point,
-      positionDimensions: 2,
-      positions: new Float64Array(4),
-      featureIds: new Uint32Array(2),
-      startTimes: new Float32Array(2),
-      endTimes: new Float32Array(2),
-      startIndices: new Uint32Array(3),
-      vertexTimestamps: new Float32Array(2),
-      vertexValues: new Float32Array(2),
-      vertexValueMatrix: new Float32Array(4),
-      globalFeatureIds: new Uint32Array(2),
-      triangles: new Uint32Array(3),
-      triangleOffsets: new Uint32Array(2),
-      featureIds64: new BigUint64Array(2),
-      timeOffset: 0,
-      numericProps: { speed: new Float32Array(2) },
-      vectorProps: { quat: { value: new Float32Array(8), size: 4 } },
-      categoricalProps: {
-        kind: { indices: new Uint16Array(2), categories: ['a'] },
-      },
-    };
+    const features = everyFieldPopulated();
     const tile: Tile = {
       id: { z: 0, x: 0, y: 0, t: 0 },
       timeRange: { start: 0, end: 1 },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      layers: [{ name: 'l', extent: 0, features: features as any }],
+      layers: [{ name: 'l', extent: 0, features, geometryExtensionName: '' }],
     };
     const visited = new Set<ArrayBufferLike>();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    forEachBufferView(features as any, (v) => visited.add(v.buffer));
+    forEachBufferView(features, (v) => visited.add(v.buffer));
     const transferred = new Set(collectTransferables(tile));
     // collectTransferables = forEachBufferView + the Layer-level arrowIpc /
     // arrowIpcProps (absent on this synthetic layer), so the sets must be
     // identical.
     expect(new Set(transferred)).toEqual(visited);
     // And nothing was silently skipped: one buffer per populated field.
-    expect(visited.size).toBe(15);
+    expect(visited.size).toBe(17);
+  });
+
+  it('leaves no typed-array field of BinaryFeatures unvisited', () => {
+    // The structural half of the guard: walk the fully-populated fixture and
+    // demand that every value that IS a typed array was visited. A new
+    // buffer column added to the interface (and therefore to the fixture,
+    // which `Required<>` forces) fails here until it is enumerated.
+    const features = everyFieldPopulated();
+    const visited = new Set<ArrayBufferLike>();
+    forEachBufferView(features, (v) => visited.add(v.buffer));
+    const missed = Object.entries(features)
+      .filter(([, v]) => ArrayBuffer.isView(v) && !visited.has(v.buffer))
+      .map(([name]) => name);
+    expect(missed).toEqual([]);
+    // The nested record-valued fields, which the walk has to descend into.
+    expect(visited.has(features.numericProps['speed'].buffer)).toBe(true);
+    expect(visited.has(features.vectorProps['quat'].value.buffer)).toBe(true);
+    expect(visited.has(features.categoricalProps['kind'].indices.buffer)).toBe(
+      true,
+    );
   });
 });

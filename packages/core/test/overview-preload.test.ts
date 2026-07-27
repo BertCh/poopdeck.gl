@@ -1,6 +1,6 @@
 /**
  * Tests for the overview (storyboard) preview tier (player buffering WS-C4):
- * `preloadOverviewTier()` on SpatiotemporalTileset.
+ * `preloadOverviewTier()` on SpatioTemporalTileset.
  *
  * The overview tier is the data player's analog of a video storyboard: the
  * coarsest tiles (z0..z1) across the FULL dataset time range, loaded once
@@ -16,8 +16,8 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
-import type { SpatiotemporalTilesetOptions } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
+import type { SpatioTemporalTilesetOptions } from '../src/spatiotemporal-tileset';
 import type { TileId, Tile } from '../src/types';
 import {
   BOUNDS,
@@ -57,7 +57,7 @@ interface GatedBatch {
   resolve: () => void;
 }
 
-interface HarnessOptions extends Partial<SpatiotemporalTilesetOptions> {
+interface HarnessOptions extends Partial<SpatioTemporalTilesetOptions> {
   /** When set, batch loads stay PENDING until each batch is released. */
   gateBatches?: boolean;
 }
@@ -69,7 +69,7 @@ function makeHarness(opts: HarnessOptions = {}) {
   const gated: GatedBatch[] = [];
   const loaded: TileId[] = [];
   const unloaded: TileId[] = [];
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -109,7 +109,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SpatiotemporalTileset.preloadOverviewTier', () => {
+describe('SpatioTemporalTileset.preloadOverviewTier', () => {
   it('rejects an over-budget tier from directory math alone — nothing is fetched', async () => {
     const { tileset, batchCalls } = makeHarness();
 

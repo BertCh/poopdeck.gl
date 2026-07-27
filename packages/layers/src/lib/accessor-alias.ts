@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/layers contributors
 
 /**
- * Accessor-named prop aliases (audit B1).
+ * Accessor-named prop aliases.
  *
  * Upstream deck.gl styles through `getFillColor`/`getRadius`/`getColor`-style
  * accessors; the STT layers style through constant-or-column-name props

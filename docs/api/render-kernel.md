@@ -1,8 +1,8 @@
 # Render Kernel (`@poopdeck.gl/core`)
 
 `@poopdeck.gl/core` has two halves. One is the **reader** — `STTArchive`,
-`SpatiotemporalTileset`, `decodeTile` — documented in
-[Tile decoding](./stt-loader.md), [SpatiotemporalTileset](./spatiotemporal-tileset.md),
+`SpatioTemporalTileset`, `decodeTile` — documented in
+[Tile decoding](./stt-loader.md), [SpatioTemporalTileset](./spatiotemporal-tileset.md),
 and [Binary Features](./binary-features.md). This page documents the other
 half: the **render kernel**, a set of framework-free modules under
 `packages/core/src/render/` and `packages/core/src/geo/` that hold the CPU
@@ -514,7 +514,7 @@ Cesium's id-buffer) stays per-backend outside this kernel.
 
 ```typescript
 type TilesetFetchCallbacks = Pick<
-  SpatiotemporalTilesetOptions,
+  SpatioTemporalTilesetOptions,
   | 'getAvailableTiles'
   | 'getTileData'
   | 'getTileDataBatch'
@@ -526,7 +526,7 @@ function makeTilesetCallbacks(archive: STTArchive): TilesetFetchCallbacks;
 ```
 
 The single adapter that wires an `STTArchive` onto the fetch-callback subset
-of `SpatiotemporalTilesetOptions` (see [SpatiotemporalTileset](./spatiotemporal-tileset.md)):
+of `SpatioTemporalTilesetOptions` (see [SpatioTemporalTileset](./spatiotemporal-tileset.md)):
 `getAvailableTiles` routes through the archive's bulk range coalescer
 (`getTileIdsInBounds`); `getTileData`/`getTileDataBatch` forward the batch
 hooks (`onTileReady`, `fetchPriority`, `playheadTime`, `playheadDirection`)
@@ -535,7 +535,7 @@ archives; `getTileByteSize`/`getThroughput` proxy directly. All three
 renderer backends (`@poopdeck.gl/layers`'s `SpatioTemporalLayer`,
 `@poopdeck.gl/three`'s `StreamingTileSource`, `@poopdeck.gl/maplibre`'s
 `STTBaseLayer`) call this and then spread the result into their own
-`SpatiotemporalTileset` options alongside the layout/lifecycle fields it
+`SpatioTemporalTileset` options alongside the layout/lifecycle fields it
 does not cover — `minZoom`/`maxZoom`, `refinementStrategy`,
 `onTileLoad`/`onTileUnload`, `onBufferChange`, and so on.
 
@@ -640,7 +640,7 @@ interface SttRenderNode {
 ```
 
 `SttRenderNode` is the one shared runtime shape — duck-typed, not a base
-class. A three `SttLayer`, a deck sublayer wrapper, a maplibre
+class. A three `STTLayer`, a deck sublayer wrapper, a maplibre
 `STTBaseLayer`, and a Cesium `Primitive` all satisfy it.
 
 ```typescript
@@ -676,7 +676,7 @@ actually proves.
 Every sub-path above resolves through `packages/core/package.json`'s
 `exports` map to a `dist/render/*` or `dist/geo/*` build output — none of
 them are re-exported from the package's `.` entry point (`@poopdeck.gl/core`
-itself only exports the reader surface: `STTArchive`, `SpatiotemporalTileset`,
+itself only exports the reader surface: `STTArchive`, `SpatioTemporalTileset`,
 `decodeTile`, the default palettes, and so on). Import the sub-path
 directly:
 

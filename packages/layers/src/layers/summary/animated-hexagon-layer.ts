@@ -19,6 +19,10 @@
  * consolidated `getWeight` buffer is aliased to BOTH of HexagonLayer's weight
  * accessors (`getColorWeight` + `getElevationWeight`) — one weight column
  * drives both colour and elevation, matching the spec's one-buffer contract.
+ * That helper also owns the geometry-kind guard: point tiles bin one entry per
+ * feature, LineString tiles bin one per VERTEX (so a trip archive hexbins track
+ * density rather than the head of the first few tracks), and polygon tiles are
+ * skipped with a named warning instead of mis-read.
  *
  * ### Weight column (accessor-alias convention)
  * Per the divergence philosophy there are no per-feature JS accessors. The
@@ -103,7 +107,15 @@ export interface _AnimatedHexagonLayerProps {
   radius?: number;
   /** Cell size multiplier, clamped 0–1. @default 1 */
   coverage?: number;
-  /** Whether to extrude cells by their aggregated weight. @default true */
+  /**
+   * Whether to extrude cells by their aggregated weight.
+   *
+   * DELIBERATE DEFAULT DRIFT: `true` here vs deck's `HexagonLayer` default of
+   * `false`. The extruded 3-D hexbin is this layer's whole reason to exist next
+   * to {@link AnimatedHeatmapLayer} (which is the flat-density answer), so the
+   * iconic look is the out-of-box one. Pass `extruded: false` for deck parity.
+   * @default true
+   */
   extruded?: boolean;
   /** Cell elevation multiplier. @default 1 */
   elevationScale?: number;
@@ -171,6 +183,30 @@ export interface _AnimatedHexagonLayerProps {
    * win over it.
    */
   weightProperty?: string | null;
+
+  /**
+   * Fired with the auto-ranged `[min, max]` colour domain every time the
+   * aggregator recomputes it — HexagonLayer pass-through. The only way to build
+   * a legend for the DEFAULT (`colorDomain: null`) auto-ranging mode, since the
+   * domain is derived on the GPU from whatever is inside the current time
+   * window and is not otherwise observable.
+   */
+  onSetColorDomain?: ((domain: [number, number]) => void) | null;
+
+  /**
+   * Fired with the auto-ranged `[min, max]` elevation domain — the elevation
+   * twin of {@link onSetColorDomain}. HexagonLayer pass-through.
+   */
+  onSetElevationDomain?: ((domain: [number, number]) => void) | null;
+
+  /* NOT SURFACED (deliberate): upstream's `hexagonAggregator`, `getColorValue`
+   * and `getElevationValue` are CPU-aggregation-only hooks — `HexagonLayer`
+   * routes them through its CPUAggregator, and this layer forces
+   * `gpuAggregation: true` because the DataFilterExtension that carries the time
+   * window is a GPU-shader construct the CPU aggregator never reads. Forwarding
+   * them would present props that either do nothing or silently disable the
+   * animation. Use `getColorWeight`/`getElevationWeight` + `colorAggregation`/
+   * `elevationAggregation` instead, which the GPU aggregator does honour. */
 }
 
 /** Complete props accepted by {@link AnimatedHexagonLayer}. */
@@ -213,7 +249,11 @@ const defaultProps: DefaultProps<AnimatedHexagonLayerProps> = {
   lowerPercentile: { type: 'number', value: 0, min: 0, max: 100 },
   elevationUpperPercentile: { type: 'number', value: 100, min: 0, max: 100 },
   elevationLowerPercentile: { type: 'number', value: 0, min: 0, max: 100 },
-  material: true,
+  // Permissive descriptor, matching every other layer in the package (and
+  // SolidPolygonLayer upstream): a bare `true` parses as `{type: 'boolean'}`,
+  // whose comparator is `Boolean(a) === Boolean(b)` — so swapping one material
+  // SPEC OBJECT for another diffs as unchanged and lighting never updates.
+  material: { type: 'object', value: true, compare: true },
   hexagonAggregation: 'SUM',
   colorAggregation: {
     type: 'object',
@@ -246,6 +286,8 @@ const defaultProps: DefaultProps<AnimatedHexagonLayerProps> = {
     optional: true,
     compare: true,
   },
+  onSetColorDomain: { type: 'function', value: null, optional: true },
+  onSetElevationDomain: { type: 'function', value: null, optional: true },
 };
 
 /**
@@ -410,12 +452,18 @@ export class AnimatedHexagonLayer<
       gpuAggregation = true;
     }
 
-    // getSubLayerProps inheritance (opacity/visible, coordinate system,
-    // modelMatrix, …) + user `_subLayerProps.hexbin` overrides. pickable is
-    // forced true (discrete cells have feature identity to pick, unlike the
-    // heatmap's density pixels). Fresh props objects per render are inherent to
-    // this layer's prop-driven filterRange animation (renderLayers is wall-clock
-    // capped via _handleTimeUpdate).
+    // getSubLayerProps inheritance (opacity/pickable/visible, coordinate system,
+    // modelMatrix, …) + user `_subLayerProps.hexbin` overrides. `pickable` is
+    // deliberately NOT in sublayerProps: anything passed there beats the
+    // inherited value (`Object.assign(newProps, sublayerProps, …)`), so forcing
+    // it made `new AnimatedHexagonLayer({pickable: false})` still allocate
+    // picking colours, run the picking pass on every hover and fire onHover on
+    // a 2M-point tile set. Discrete cells DO have identity to pick — pass
+    // `pickable: true` to pick them, exactly as with every sibling STT layer.
+    // (The heatmap's mirror-image force to `false` stays: density pixels have no
+    // feature identity, so there is nothing to opt into.) Fresh props objects
+    // per render are inherent to this layer's prop-driven filterRange animation
+    // (renderLayers is wall-clock capped via _handleTimeUpdate).
     const subProps = this.composeSubLayerProps('hexbin', 'cells', {
       data,
       radius: this.props.radius,
@@ -437,7 +485,10 @@ export class AnimatedHexagonLayer<
       colorAggregation,
       elevationAggregation,
       gpuAggregation,
-      pickable: true,
+      // Auto-ranged domain callbacks — the only handle on the DEFAULT
+      // (`colorDomain: null`) domain, which the aggregator derives per window.
+      onSetColorDomain: this.props.onSetColorDomain ?? undefined,
+      onSetElevationDomain: this.props.onSetElevationDomain ?? undefined,
       // The DataFilterExtension is what animates the hexbin (filterRange); user
       // extensions from the top-level prop are appended.
       extensions: this.composeExtensions([this._dataFilter]),
@@ -449,9 +500,18 @@ export class AnimatedHexagonLayer<
       // aggregator.setNeedsUpdate, even if a future deck skips the dataChanged
       // attribute walk. (The fresh wrapper is what stops setBinaryValue from
       // short-circuiting the re-bind.)
+      //
+      // The user's own triggers are SPREAD IN FIRST: getSubLayerProps replaces
+      // everything except `all` with what we pass here, so omitting the spread
+      // silently dropped `updateTriggers` the caller set (both summary layers
+      // spread it — this was the odd one out).
       updateTriggers: {
-        getColorWeight: center,
-        getElevationWeight: center,
+        ...this.props.updateTriggers,
+        getColorWeight: [center, this.props.updateTriggers?.getColorWeight],
+        getElevationWeight: [
+          center,
+          this.props.updateTriggers?.getElevationWeight,
+        ],
       },
     });
     // `_subLayerProps: { hexbin: { type } }` swaps the sublayer class.
@@ -520,6 +580,7 @@ export class AnimatedHexagonLayer<
       { intensity: 1 },
       weightProp,
       layerTimeOffset,
+      this.props.id,
     );
     if (!consolidated) {
       this._cache = null;

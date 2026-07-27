@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { Tile, TileId, BoundingBox } from '../src/types';
 import { BUCKET_MS, fakeTile, makeAvailableTiles } from './helpers/fixtures';
 import { advanceClock, installClock } from './helpers/clock';
@@ -46,8 +46,8 @@ const settle = (ms = 10): Promise<void> =>
 /** "x:bucketIndex" label for a tile id — the assertion currency below. */
 const label = (id: TileId): string => `${id.x}:${id.t / BUCKET_MS}`;
 
-function makeTileset(unloads: string[]): SpatiotemporalTileset {
-  return new SpatiotemporalTileset({
+function makeTileset(unloads: string[]): SpatioTemporalTileset {
+  return new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -61,7 +61,7 @@ function makeTileset(unloads: string[]): SpatiotemporalTileset {
 }
 
 const loadBucket = async (
-  tileset: SpatiotemporalTileset,
+  tileset: SpatioTemporalTileset,
   bounds: BoundingBox,
   i: number,
   // A 1 ms nudge defeats the identical-params selection fast-path (see the
@@ -79,7 +79,7 @@ const loadBucket = async (
 
 /** Coverage index build is async — call a buffer API, then let it land. */
 const enableBufferTracking = async (
-  tileset: SpatiotemporalTileset,
+  tileset: SpatioTemporalTileset,
 ): Promise<void> => {
   tileset.getBufferedRanges();
   await settle();
@@ -98,7 +98,7 @@ const enableBufferTracking = async (
 async function buildFixture(
   unloads: string[],
   { coverage = true } = {},
-): Promise<SpatiotemporalTileset> {
+): Promise<SpatioTemporalTileset> {
   const tileset = makeTileset(unloads);
   for (const [bounds, i] of [
     [EAST, 0],
@@ -124,7 +124,7 @@ async function buildFixture(
 
 /** Tighten the cache limit and run one eviction pass at the bucket-30 playhead. */
 async function evictAt(
-  tileset: SpatiotemporalTileset,
+  tileset: SpatioTemporalTileset,
   unloads: string[],
   maxCacheSize: number,
   nudge: number,
@@ -138,7 +138,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SpatiotemporalTileset playhead-relative over-limit eviction', () => {
+describe('SpatioTemporalTileset playhead-relative over-limit eviction', () => {
   it('evicts tier A first (LRU), leaving every coverage tile resident', async () => {
     installClock();
     const unloads: string[] = [];

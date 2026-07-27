@@ -17,7 +17,7 @@ import type { Projection } from '../projection/local-enu.js';
  * (`absolute - timeOrigin`) drives the whole layer. AV spans are seconds, so the
  * rebased f32 times stay exact.
  */
-export interface SttLayerContext {
+export interface STTLayerContext {
   projection: Projection;
   timeOrigin: number;
 }
@@ -26,7 +26,7 @@ export interface SttLayerContext {
  * A renderable STT layer: owns one Three {@link Object3D}, (re)builds it from
  * decoded tiles, and advances cheaply per frame via a time uniform.
  */
-export interface SttLayer {
+export interface STTLayer {
   /** Stable id (mostly for debugging / scene introspection). */
   readonly id: string;
   /** The object to add to the scene graph. */
@@ -35,7 +35,7 @@ export interface SttLayer {
    * Rebuild GPU buffers from the given decoded tiles. Called when the resident
    * tile set changes (for AV: once, after the eager full-scene load).
    */
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void;
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void;
   /**
    * Advance to an absolute playhead time (epoch-ms). The layer subtracts its
    * `timeOrigin` and writes the time uniform(s) — no geometry rebuild.
@@ -46,12 +46,12 @@ export interface SttLayer {
 }
 
 /** Convenience base that holds the common state every layer needs. */
-export abstract class BaseSttLayer implements SttLayer {
+export abstract class BaseSTTLayer implements STTLayer {
   abstract readonly id: string;
   abstract readonly object: Object3D;
   protected timeOrigin = 0;
 
-  abstract setTiles(tiles: Tile[], ctx: SttLayerContext): void;
+  abstract setTiles(tiles: Tile[], ctx: STTLayerContext): void;
   abstract setTime(absoluteTimeMs: number): void;
   abstract dispose(): void;
 

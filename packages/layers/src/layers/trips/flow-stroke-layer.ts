@@ -67,10 +67,19 @@ export class FlowStrokeLayer<
    * length. Length `totalVerts`, aligned 1:1 with positions like the gradient
    * getColor buffer (PathLayer's stroke-width attribute is per-segment-instanced,
    * so a per-feature buffer under-sizes the draw). Reuses the parent's bucket
-   * blend so width and colour stay in sync. */
+   * blend so width and colour stay in sync.
+   *
+   * `gradientValues` is that blend, already computed for the COLOUR path in the
+   * same prepare pass. Recomputing it here (the old shape) ran the parent's
+   * `trailingMaxMatrixRow` sweep — O(totalVerts × windowBuckets) under
+   * `persistenceMs`, or an O(totalVerts × (2w+1)) rolling mean under
+   * `chevronPerTripLight` — a SECOND time per tile per sub-step, plus a second
+   * `Float32Array(totalVerts)`. The recompute is kept only as a fallback for a
+   * caller that invokes this hook outside the prepare pass. */
   protected override widthsFor(
     binary: BinaryFeatures,
     featureCount: number,
+    gradientValues?: Float32Array,
   ): Float32Array | undefined {
     const nb = binary.vertexValueBuckets ?? 0;
     if (nb <= 0 || !binary.vertexValueMatrix || !binary.startIndices)
@@ -78,7 +87,10 @@ export class FlowStrokeLayer<
     const totalVerts = binary.startIndices[featureCount];
     // Active-bucket (quantized + blended) per-vertex traveller counts — exactly
     // the values the inherited gradient colours the corridor with.
-    const perVertex = this.gradientValuesFor(binary, totalVerts);
+    const perVertex =
+      gradientValues && gradientValues.length >= totalVerts
+        ? gradientValues
+        : this.gradientValuesFor(binary, totalVerts);
     if (!perVertex || perVertex.length < totalVerts) return undefined;
 
     const exp = this.props.widthExponent;
@@ -89,6 +101,22 @@ export class FlowStrokeLayer<
       widths[v] = val > minFlow ? Math.pow(val, exp) : 0;
     }
     return widths;
+  }
+
+  /**
+   * Stroke knobs that change the per-vertex width buffer AND the sublayer's
+   * extension set. `offsetWidths` in particular gates
+   * {@link extraTripsExtensions} / {@link includeCategoryColorExtension}, both
+   * documented as "must be constant per instance (shader-pipeline cache)" —
+   * toggling it used to change the extension SET under a cached sublayer.
+   */
+  protected override subclassStyleKey(): string {
+    return [
+      super.subclassStyleKey(),
+      this.props.widthExponent,
+      this.props.minFlow,
+      this.props.offsetWidths,
+    ].join(',');
   }
 
   protected override extraTripsExtensions(): unknown[] {

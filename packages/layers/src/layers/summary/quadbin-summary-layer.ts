@@ -28,10 +28,35 @@
  * Quadbin-native layer (no `@deck.gl/carto`), so QuadkeyLayer is the canonical
  * renderer; the conversion is exact (a fixed bit re-pack), not lossy.
  *
+ * COVERAGE. `QuadkeyLayer` has no `coverage` prop: `indexToBounds()` hardcodes
+ * `const coverage = extruded ? 0.99 : 1`, and `GeoCellLayer.renderLayers()`
+ * destructures a fixed prop list that doesn't include it — a `coverage` value
+ * handed to QuadkeyLayer lands on the sublayer's props and is never read (it
+ * forwards, which is exactly why it looked wired). So the default sublayer here
+ * is {@link CoverageQuadkeyLayer}, a three-line QuadkeyLayer subclass whose
+ * `indexToBounds()` builds the ring from {@link quadkeyPolygon} at the
+ * requested coverage. `_subLayerProps.quadbins.type` still swaps it, and a
+ * plain QuadkeyLayer swapped in simply loses the gap.
+ *
  * Coloring: `colorRange + colorDomain` drive a built-in ramp that quantises
  * `count` (or the configured `weightProperty`) into N color buckets. There is
  * no custom color-callback prop — restyle via `colorRange`/`colorDomain`/
  * `weightProperty`.
+ *
+ * TIME INSIDE A TILE — sub-buckets. A summary tile is one OUTER temporal
+ * bucket, so residency alone gives a map that jumps at bucket boundaries and
+ * does nothing while the play head scrubs INSIDE one. `stt-build --summary-tier
+ * … --summary-sub-buckets N` therefore bakes `bucket_0..bucket_<N-1>` count
+ * columns per cell (`crates/stt-build/src/summary.rs`), and
+ * `SummaryTier.subBuckets` declares N. When N > 1 this layer selects the column
+ * the play head is inside — `floor((t − tile.id.t) / (temporalBucketMs / N))`,
+ * the exact inverse of the builder's binning — drives the ramp from it, and
+ * drops cells with no activity in that slice. With N == 1 (the default) there is
+ * no baked intra-bucket signal, the play head changes nothing inside a tile, and
+ * the layer costs exactly what it did before — `--summary-sub-buckets` is how an
+ * archive opts into intra-bucket animation. Identical to {@link H3SummaryLayer}'s
+ * handling, deliberately; see that file for why the per-cell `[startTimes,
+ * endTimes]` extents are NOT used as a second, always-on gate.
  *
  * ARCHITECTURE: extends {@link SpatioTemporalLayer} and reuses ALL of its
  * archive/tileset plumbing (init + supersession race guards, rAF-coalesced
@@ -65,15 +90,16 @@ import type {
 import { QuadkeyLayer } from '@deck.gl/geo-layers';
 import {
   getFeatureProperties,
+  tileKey,
   DEFAULT_SUMMARY_COLOR_RANGE,
 } from '@poopdeck.gl/core';
 import type {
   ArchiveMetadata,
   BinaryFeatures,
-  SpatiotemporalTilesetOptions,
+  SpatioTemporalTilesetOptions,
   Tile,
 } from '@poopdeck.gl/core';
-import { quadkeyFromTile } from '../../lib/quadbin-cell.js';
+import { quadkeyFromTile, quadkeyPolygon } from '../../lib/quadbin-cell.js';
 import {
   SpatioTemporalLayer,
   type SpatioTemporalLayerProps,
@@ -93,7 +119,43 @@ import type {
 } from '../../lib/accessor-alias.js';
 import { warnOnce } from '../../lib/log.js';
 
-const DEBUG = false;
+/**
+ * `QuadkeyLayer` with a working `coverage`.
+ *
+ * Upstream's `indexToBounds()` hardcodes `coverage = extruded ? 0.99 : 1` and
+ * `GeoCellLayer.renderLayers()` never destructures a `coverage` prop, so the
+ * only way to inset the cell is to build the ring ourselves. `boundsProps` is
+ * the LAST argument to the inner `PolygonLayer` constructor, which is why
+ * `_subLayerProps.cell.getPolygon` can't reach it either — the override has to
+ * live in `indexToBounds`.
+ *
+ * Kept a subclass (rather than a bare PolygonLayer) so `getQuadkey`, the
+ * `'cell'` sublayer id, the winding, and `instanceof QuadkeyLayer` all stay
+ * exactly as callers and `_subLayerProps` expect.
+ */
+export class CoverageQuadkeyLayer<DataT = any> extends QuadkeyLayer<DataT> {
+  static layerName = 'CoverageQuadkeyLayer';
+
+  static defaultProps = {
+    coverage: { type: 'number', value: 1, min: 0, max: 1 },
+  } as any;
+
+  indexToBounds(): Partial<QuadkeyLayer['props']> | null {
+    const { data, extruded, getQuadkey, coverage } = this.props as any;
+    // Deck's own z-fighting guard for extruded cells: never draw a full-size
+    // footprint when extruding. A caller-supplied coverage below 0.99 already
+    // satisfies it, so this only clamps the top of the range.
+    const inset = extruded ? Math.min(coverage ?? 1, 0.99) : (coverage ?? 1);
+    return {
+      data,
+      _normalize: false,
+      positionFormat: 'XY',
+      getPolygon: (x: DataT, objectInfo: any) =>
+        quadkeyPolygon(getQuadkey(x, objectInfo), inset),
+      updateTriggers: { getPolygon: inset },
+    } as any;
+  }
+}
 
 /** Props added by {@link QuadbinSummaryLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link QuadbinSummaryLayerProps}). */
@@ -103,6 +165,13 @@ export interface _QuadbinSummaryLayerProps {
    * Defaults to `'count'` (the implicit cell-count column). Any aggregated
    * column from the summary tier is also valid (`'mean_magnitude'`,
    * `'sum_value'`, ...).
+   *
+   * SUB-BUCKETS: on an archive built with `--summary-sub-buckets N`, the
+   * default `'count'` is replaced per frame by the `bucket_<k>` column the play
+   * head is inside, so the ramp tracks activity WITHIN the tile's time bucket.
+   * A non-`'count'` column keeps its own (bucket-wide) aggregate value — no
+   * per-sub-bucket aggregates are baked for it — but its cells are still
+   * shown/hidden by the active sub-bucket's activity.
    */
   weightProperty?: string;
 
@@ -119,15 +188,32 @@ export interface _QuadbinSummaryLayerProps {
    */
   colorDomain?: [number, number] | null;
 
-  /** Extrusion enabled? Defaults to false (flat quads). */
+  /**
+   * Extrusion enabled?
+   *
+   * DELIBERATE DEFAULT DRIFT: `false` here, matching {@link H3SummaryLayer}
+   * (deck's own `QuadkeyLayer`/`PolygonLayer` also default to `false`, so this
+   * is only a drift relative to the H3 sibling's upstream). The summary tier's
+   * job is a legible planet-scale choropleth at low zoom.
+   * @default false
+   */
   extruded?: boolean;
 
   /** Extrusion scale (meters per weight unit). Only used when `extruded`. */
   elevationScale?: number;
 
   /**
-   * Coverage of each quad in its cell (0..1). Lower values leave a gap
-   * between adjacent quads — useful for a heatmap-style look at low zooms.
+   * Coverage of each quad in its cell (0..1), inset toward the cell CENTROID.
+   * Lower values leave a gap between adjacent quads — the heatmap-style look at
+   * low zooms, and the reason {@link CoverageQuadkeyLayer} exists (upstream
+   * `QuadkeyLayer` has no `coverage` prop at all). `1` reproduces upstream's
+   * gapless grid.
+   *
+   * NOTE: deck's internal quadkey inset is anchored at the cell's north-west
+   * corner; this one is centred, so cells shrink in place instead of drifting
+   * up-left as coverage drops. That also matches `H3HexagonLayer.coverage`, so
+   * the two summary layers look alike at the same value.
+   * @default 0.92
    */
   coverage?: number;
 
@@ -235,9 +321,14 @@ export interface _QuadbinSummaryLayerProps {
    * for the default phong material, `false` to disable lighting, or a
    * material spec `{ambient, diffuse, shininess, specularColor}`. Only takes
    * effect when `extruded`.
+   *
+   * Typed `Material | boolean` (matching {@link H3SummaryLayer} and the
+   * `{type:'object', value:true}` default): the doc has always said `false`
+   * disables lighting, but the narrower `Material` type made `material: false`
+   * a compile error here while it type-checked on the H3 sibling.
    * @default true
    */
-  material?: Material;
+  material?: Material | boolean;
 
   /** Fired once per archive init with the decoded metadata. */
   onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
@@ -247,7 +338,7 @@ export interface _QuadbinSummaryLayerProps {
 export type QuadbinSummaryLayerProps = _QuadbinSummaryLayerProps &
   SpatioTemporalLayerProps;
 
-// Shared with H3SummaryLayer via @poopdeck.gl/core (audit F2) so the two
+// Shared with H3SummaryLayer via @poopdeck.gl/core so the two
 // summary-tier ramps can't drift apart.
 const DEFAULT_COLOR_RANGE = DEFAULT_SUMMARY_COLOR_RANGE as Color[];
 
@@ -284,9 +375,28 @@ interface PreparedTile {
   features: BinaryFeatures;
 }
 
+/**
+ * The tile's canonical identity, from core's single producer — which folds the
+ * temporal-LOD tier in, so a scrub-preview tile and the base tile sharing its
+ * `z/x/y/t` occupy separate cache slots instead of overwriting each other.
+ */
 function makeTileKey(tile: Tile): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}`;
+  return tileKey(tile.id);
+}
+
+/**
+ * Cache key for one prepared tile. The weight column and the active sub-bucket
+ * both change the rows, so both ride the key — and the prune walk in
+ * {@link QuadbinSummaryLayer.renderLayers} must build the live set with this
+ * same function or it evicts nothing.
+ */
+function prepareKey(
+  tile: Tile,
+  weightProp: string,
+  subBucket: number | null,
+): string {
+  const base = `${makeTileKey(tile)}:${weightProp}`;
+  return subBucket === null ? base : `${base}:b${subBucket}`;
 }
 
 // Upstream idiom: module-level const typed `DefaultProps<XxxLayerProps>` then
@@ -302,7 +412,11 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
   colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
   colorDomain: { type: 'array', value: null, compare: true, optional: true },
   extruded: false,
-  elevationScale: 1,
+  // Descriptor form, matching every sibling layer: a bare numeric literal
+  // parses as `{type:'number'}` with no bounds, so deck's debug validator
+  // accepted a negative elevationScale / lineWidthScale here while rejecting it
+  // everywhere else in the package.
+  elevationScale: { type: 'number', value: 1, min: 0 },
   coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
   filled: true,
   stroked: true,
@@ -311,11 +425,15 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
   lineWidth: { type: 'number', value: 1, min: 0 },
   getLineWidth: { type: 'object', value: null, optional: true, compare: true },
   lineWidthUnits: 'meters',
-  lineWidthScale: 1,
+  lineWidthScale: { type: 'number', value: 1, min: 0 },
   lineWidthMinPixels: { type: 'number', value: 0, min: 0 },
-  lineWidthMaxPixels: { type: 'number', value: Number.MAX_SAFE_INTEGER },
+  lineWidthMaxPixels: {
+    type: 'number',
+    value: Number.MAX_SAFE_INTEGER,
+    min: 0,
+  },
   lineJointRounded: false,
-  lineMiterLimit: 4,
+  lineMiterLimit: { type: 'number', value: 4, min: 0 },
   lineDashJustified: false,
   wireframe: false,
   // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
@@ -330,8 +448,9 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
  *
  * Sublayer short id for `_subLayerProps` overrides: **`quadbins`**.
  * `_subLayerProps: { quadbins: { type: MyLayer, ...props } }` swaps the
- * sublayer class (default `QuadkeyLayer`) / overrides sublayer props (deck's
- * CompositeLayer contract).
+ * sublayer class (default {@link CoverageQuadkeyLayer}, a `QuadkeyLayer` with a
+ * working `coverage`) / overrides sublayer props (deck's CompositeLayer
+ * contract).
  */
 export class QuadbinSummaryLayer<
   ExtraPropsT extends {} = {},
@@ -369,12 +488,80 @@ export class QuadbinSummaryLayer<
   >();
   private lastTilesRef: Tile[] | null = null;
 
+  /**
+   * Weight column + active sub-bucket at the last prune. Both are baked into
+   * the cache keys but neither changes `state.tiles`' identity, so gating the
+   * prune on the tile reference alone leaked one cache generation per distinct
+   * value — bounded only by `#tiles × #weight-columns-ever-used`, which defeats
+   * the byte budget under a column-cycling UI.
+   */
+  private lastPruneKey: string | null = null;
+
+  /**
+   * Global sub-bucket index at the last tick that forced a re-render. Only
+   * meaningful when the tier declares sub-buckets; `null` otherwise.
+   */
+  private lastSubBucketTick: number | null = null;
+
   finalizeState(context: LayerContext): void {
     // Base handles controller unsubscribe, the pending tile-load rAF, and
     // tileset/archive teardown.
     super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+  }
+
+  /**
+   * Sub-bucket width in ms, or null when this archive carries none (the common
+   * case — `subBuckets` defaults to 1). Integer-divided and floored at 1, byte
+   * for byte the builder's `(bucket_ms / sub_buckets).max(1)`.
+   */
+  protected subBucketMs(): number | null {
+    const metadata = this.state.metadata as ArchiveMetadata | undefined;
+    const tier = metadata?.summaryTier;
+    const n = tier?.subBuckets ?? 1;
+    if (!tier || !(n > 1)) return null;
+    const bucketMs = metadata?.temporalBucketMs;
+    if (!bucketMs || !(bucketMs > 0)) return null;
+    return Math.max(1, Math.floor(bucketMs / n));
+  }
+
+  /**
+   * Index of the `bucket_<k>` column the play head is inside for `tile`, or
+   * null when the archive has no sub-buckets. `tile.id.t` IS the builder's
+   * `bucket_start`, so this inverts `summary.rs`'s
+   * `(timestamp - bucket_start) / sub_bucket_ms` exactly; out-of-range play
+   * heads clamp to the tile's first/last slice (a tile only stays resident
+   * while it overlaps the window, so the clamp is the tile's own edge).
+   */
+  protected activeSubBucket(tile: Tile, subMs: number | null): number | null {
+    if (subMs === null) return null;
+    const n =
+      (this.state.metadata as ArchiveMetadata | undefined)?.summaryTier
+        ?.subBuckets ?? 1;
+    const time = this.getCurrentTime();
+    if (!Number.isFinite(time)) return 0;
+    const idx = Math.floor((time - tile.id.t) / subMs);
+    return Math.max(0, Math.min(n - 1, idx));
+  }
+
+  /**
+   * Base tick handler + a re-render on every sub-bucket CROSSING. The base only
+   * calls `setNeedsRedraw()` for time-only ticks, which never re-runs
+   * `renderLayers()` — so without this the selected `bucket_<k>` column would be
+   * frozen at whatever it was when the tile set last changed. Gated on the
+   * index actually changing (not on wall-clock), so a 30-sub-bucket archive
+   * re-renders 30× per outer bucket and a non-sub-bucketed one never pays
+   * anything at all.
+   */
+  protected _handleTimeUpdate(time: number): void {
+    super._handleTimeUpdate(time);
+    const subMs = this.subBucketMs();
+    if (subMs === null) return;
+    const tick = Math.floor(time / subMs);
+    if (tick === this.lastSubBucketTick) return;
+    this.lastSubBucketTick = tick;
+    this.setState({ frameNumber: (this.state.frameNumber || 0) + 1 });
   }
 
   /**
@@ -403,7 +590,7 @@ export class QuadbinSummaryLayer<
    */
   protected getTilesetOptionOverrides(
     metadata: ArchiveMetadata,
-  ): Partial<SpatiotemporalTilesetOptions> {
+  ): Partial<SpatioTemporalTilesetOptions> {
     const tier = metadata.summaryTier;
     return {
       tier: 'summary',
@@ -426,9 +613,20 @@ export class QuadbinSummaryLayer<
   /**
    * Build (or fetch from cache) the per-tile data array consumed by
    * QuadkeyLayer. One entry per cell: { quadkey, weight }.
+   *
+   * Every `return null` here means a blank map, so each one names itself once
+   * on the console. The failure modes are all silent otherwise: a typo'd
+   * `weightProperty`, an archive whose `id` column decoded as UInt32 (so every
+   * `quadkeyFromTile` returns null), or a `summaryTier.layerName` that doesn't
+   * match the tile — none of which fire the archive-level "no summary tier"
+   * warning, because the tier IS present.
    */
-  private prepareTile(tile: Tile, weightProp: string): PreparedTile | null {
-    const tileKey = `${makeTileKey(tile)}:${weightProp}`;
+  private prepareTile(
+    tile: Tile,
+    weightProp: string,
+    subBucket: number | null,
+  ): PreparedTile | null {
+    const tileKey = prepareKey(tile, weightProp, subBucket);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached) return cached;
 
@@ -438,7 +636,16 @@ export class QuadbinSummaryLayer<
     const summaryLayerName =
       this.state.metadata?.summaryTier?.layerName ?? 'summary';
     const layer = tile.layers.find((l) => l.name === summaryLayerName);
-    if (!layer) return null;
+    if (!layer) {
+      warnOnce(
+        `QuadbinSummaryLayer:noSummaryLayer:${this.props.id}:${summaryLayerName}`,
+        `[QuadbinSummaryLayer] tile ${makeTileKey(tile)} carries no layer ` +
+          `named '${summaryLayerName}' (has: ${tile.layers.map((l) => l.name).join(', ') || 'none'}). ` +
+          "A one-off is a zoom-race artefact; a blank map means the tier's " +
+          '`layer_name` and the tile contents disagree.',
+      );
+      return null;
+    }
     const binary = layer.features;
     const n = binary.featureCount;
     if (n === 0) return null;
@@ -448,15 +655,45 @@ export class QuadbinSummaryLayer<
     // (header + zoom + interleaved x/y), so the 32-bit `featureIds` mirror —
     // which carries only the low half — is deliberately NOT used here.
     const featureIds64 = binary.featureIds64;
+    if (!featureIds64) {
+      warnOnce(
+        `QuadbinSummaryLayer:noFeatureIds64:${this.props.id}`,
+        `[QuadbinSummaryLayer] summary tile ${makeTileKey(tile)} has no ` +
+          '`featureIds64` — the Quadbin cell index IS the 64-bit `id` column, ' +
+          'so there is nothing to render. Usually means the archive wrote `id` ' +
+          'as UInt32 (or omitted it); rebuild the summary tier with a current ' +
+          '`stt-build`.',
+      );
+      return null;
+    }
 
     const weights = binary.numericProps[weightProp];
     if (!weights) {
-      if (DEBUG) {
-        console.warn(
-          `[QuadbinSummaryLayer] tile missing weight property '${weightProp}'`,
+      warnOnce(
+        `QuadbinSummaryLayer:missingWeight:${this.props.id}:${weightProp}`,
+        `[QuadbinSummaryLayer] summary tiles carry no numeric column ` +
+          `'${weightProp}' (weightProperty). Available: ` +
+          `${Object.keys(binary.numericProps).join(', ') || 'none'}. ` +
+          'Nothing will render until it names one of those.',
+      );
+      return null;
+    }
+
+    // Sub-bucket column for the play head's slice, when the tier bakes them.
+    let subWeights: Float32Array | undefined;
+    if (subBucket !== null) {
+      subWeights = binary.numericProps[`bucket_${subBucket}`] as
+        | Float32Array
+        | undefined;
+      if (!subWeights) {
+        warnOnce(
+          `QuadbinSummaryLayer:missingSubBucket:${this.props.id}`,
+          `[QuadbinSummaryLayer] summaryTier.subBuckets declares sub-buckets ` +
+            `but tile ${makeTileKey(tile)} has no 'bucket_${subBucket}' ` +
+            'column. Falling back to the whole-bucket aggregate (the map will ' +
+            'jump at outer-bucket boundaries instead of animating within them).',
         );
       }
-      return null;
     }
 
     const rows: PreparedQuadRow[] = [];
@@ -465,12 +702,33 @@ export class QuadbinSummaryLayer<
     for (let i = 0; i < n; i++) {
       const quadkey = quadkeyFromTile(featureIds64, i);
       if (quadkey === null) continue;
-      const w = weights[i];
+      // A cell with no activity in the active slice is not drawn at all —
+      // that (not a colour change) is what makes the summary tier animate
+      // INSIDE a temporal tile instead of only at bucket boundaries.
+      if (subWeights && !(subWeights[i] > 0)) continue;
+      // `count` is the sub-bucketed quantity; any other aggregate keeps its
+      // bucket-wide value (the builder bakes no per-sub-bucket aggregates).
+      const w =
+        subWeights && weightProp === 'count' ? subWeights[i] : weights[i];
       rows.push({ quadkey, weight: w, sourceIndex: i });
       if (w < weightMin) weightMin = w;
       if (w > weightMax) weightMax = w;
     }
-    if (rows.length === 0) return null;
+    if (rows.length === 0) {
+      // Empty because the slice is empty is normal; empty because NO cell id
+      // decoded is a bug worth naming.
+      if (!subWeights) {
+        warnOnce(
+          `QuadbinSummaryLayer:noDecodableCells:${this.props.id}`,
+          `[QuadbinSummaryLayer] none of tile ${makeTileKey(tile)}'s ${n} cell ` +
+            'ids decoded to a valid Quadbin index. The `id` column must carry ' +
+            'the CARTO Quadbin cell index verbatim — check that the archive ' +
+            'was built with `--summary-tier quadbin` (an h3 tier needs ' +
+            'H3SummaryLayer).',
+        );
+      }
+      return null;
+    }
 
     const prepared: PreparedTile = {
       tileKey,
@@ -498,7 +756,7 @@ export class QuadbinSummaryLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy
    * `lineColor` constant. Column-name strings are not meaningful for a cell
    * outline color (a single numeric cell column can't be RGBA), so a
@@ -534,13 +792,28 @@ export class QuadbinSummaryLayer<
     if (!tiles || tiles.length === 0) return [];
 
     const weightProp = this.props.weightProperty ?? 'count';
+    // Active sub-bucket column, per tile (each tile has its own bucket start).
+    const subMs = this.subBucketMs();
+    const subBucketOf = (tile: Tile) => this.activeSubBucket(tile, subMs);
 
-    // Skip the O(cacheSize) prune walk when the tile list reference is
-    // unchanged from the last render — the live set and cached set are
-    // necessarily identical.
-    if (this.lastTilesRef !== tiles) {
+    // Skip the O(cacheSize) prune walk when NOTHING that keys the caches has
+    // changed. The tile-list reference alone is not enough: `weightProperty`
+    // and the active sub-bucket are both baked into the cache keys but neither
+    // touches `state.tiles`, so gating on the reference alone retained one full
+    // cache generation per value ever used.
+    //
+    // The sub-bucket half of the signature is the GLOBAL slice tick, not a
+    // per-tile index: every tile shares `subMs`, so it advances exactly when any
+    // tile's column selection can change — and unlike a per-tile index it can't
+    // sit clamped at a band edge while its neighbours move.
+    const pruneKey = `${weightProp}|${
+      subMs === null ? '' : Math.floor(this.getCurrentTime() / subMs)
+    }`;
+    if (this.lastTilesRef !== tiles || this.lastPruneKey !== pruneKey) {
       const live = new Set<string>();
-      for (const tile of tiles) live.add(`${makeTileKey(tile)}:${weightProp}`);
+      for (const tile of tiles) {
+        live.add(prepareKey(tile, weightProp, subBucketOf(tile)));
+      }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
       }
@@ -548,6 +821,7 @@ export class QuadbinSummaryLayer<
         if (!live.has(key)) this.sublayerCache.delete(key);
       }
       this.lastTilesRef = tiles;
+      this.lastPruneKey = pruneKey;
     }
 
     // Resolve the color domain ONCE per render. When the caller pins it via
@@ -561,7 +835,7 @@ export class QuadbinSummaryLayer<
       let lo = Infinity;
       let hi = -Infinity;
       for (const tile of tiles) {
-        const prepared = this.prepareTile(tile, weightProp);
+        const prepared = this.prepareTile(tile, weightProp, subBucketOf(tile));
         if (!prepared) continue;
         if (prepared.weightMin < lo) lo = prepared.weightMin;
         if (prepared.weightMax > hi) hi = prepared.weightMax;
@@ -598,7 +872,7 @@ export class QuadbinSummaryLayer<
 
     const out: Layer[] = [];
     for (const tile of tiles) {
-      const prepared = this.prepareTile(tile, weightProp);
+      const prepared = this.prepareTile(tile, weightProp, subBucketOf(tile));
       if (!prepared) continue;
       const cached = this.sublayerCache.get(prepared.tileKey);
       if (
@@ -629,6 +903,8 @@ export class QuadbinSummaryLayer<
           ? (d: PreparedQuadRow) => d.weight * (this.props.elevationScale ?? 1)
           : 0,
         extruded: !!this.props.extruded,
+        // Read by CoverageQuadkeyLayer.indexToBounds(), NOT by upstream
+        // QuadkeyLayer (which has no coverage prop) — see the class doc.
         coverage: this.props.coverage ?? 0.92,
         // Fill / stroke / extrusion-lighting pass-throughs → QuadkeyLayer →
         // GeoCellLayer → PolygonLayer. `stroked` (default true upstream) is
@@ -653,7 +929,12 @@ export class QuadbinSummaryLayer<
           getFillColor: [
             domain[0],
             domain[1],
-            this.props.colorRange,
+            // CONTENT digest, not the array itself: trigger elements are
+            // strict-compared, but `colorRange` is `{type:'array',
+            // compare:true}` — so the ordinary React idiom of a fresh-but-equal
+            // array literal flipped this trigger every render and rebuilt the
+            // fill-colour attribute for every cell in every tile.
+            colorListDigest(this.props.colorRange ?? DEFAULT_COLOR_RANGE),
             weightProp,
             this.props.updateTriggers?.getFillColor,
           ],
@@ -672,7 +953,7 @@ export class QuadbinSummaryLayer<
       // `_subLayerProps: { quadbins: { type } }` swaps the sublayer class.
       const SubLayerClass = this.getSubLayerClass(
         'quadbins',
-        QuadkeyLayer as any,
+        CoverageQuadkeyLayer as any,
       );
       const layer = new SubLayerClass(
         subProps as any,
@@ -694,6 +975,13 @@ export class QuadbinSummaryLayer<
    * for the cell's FULL aggregated columns (decoded via `row.sourceIndex` —
    * the rows array skips undecodable cells, so its index is not the feature
    * index), keeping `quadkey`/`weight` keys for continuity.
+   *
+   * `id` is DECIMAL-STRINGIFIED. `getFeatureProperties` reads it from
+   * `featureIds64`, which summary tiles always carry, so `info.object.id` was
+   * always a `bigint` — and the first `JSON.stringify(info.object)` in a
+   * `getTooltip` or a devtools panel threw `TypeError: Do not know how to
+   * serialize a BigInt`. A string keeps all 64 bits (a Number would not) and
+   * the canonical `cell` / `quadkey` keys carry the readable cell address.
    */
   getPickingInfo({
     info,
@@ -709,7 +997,13 @@ export class QuadbinSummaryLayer<
       if (row && typeof row.sourceIndex === 'number' && sprops?.sttFeatures) {
         const props = getFeatureProperties(sprops.sttFeatures, row.sourceIndex);
         if (props) {
-          out.object = { ...props, quadkey: row.quadkey, weight: row.weight };
+          out.object = {
+            ...props,
+            id: typeof props.id === 'bigint' ? props.id.toString() : props.id,
+            cell: row.quadkey,
+            quadkey: row.quadkey,
+            weight: row.weight,
+          };
         }
       }
     }

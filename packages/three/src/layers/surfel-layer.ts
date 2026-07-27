@@ -15,7 +15,7 @@
 
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { makeHexDiskGeometry } from '../geometry/hex-disk.js';
 import { buildSurfelBuffers } from './surfel-buffers.js';
 import {
@@ -61,7 +61,7 @@ export interface STTSurfelLayerOptions {
 
 const DEFAULT_FALLBACK: [number, number, number] = [200, 205, 215];
 
-export class STTSurfelLayer extends BaseSttLayer {
+export class STTSurfelLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -112,7 +112,7 @@ export class STTSurfelLayer extends BaseSttLayer {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
 
     const buf = buildSurfelBuffers(tiles, ctx.projection, ctx.timeOrigin, {
@@ -164,7 +164,7 @@ export class STTSurfelLayer extends BaseSttLayer {
       new InstancedBufferAttribute(buf.dynamic, 1),
     );
     // Real cloud bounds (the base hexagon's are metre-scale and would mis-cull /
-    // mis-frame). Lets `SttScene.computeBounds()` frame the camera correctly.
+    // mis-frame). Lets `STTScene.computeBounds()` frame the camera correctly.
     if (buf.bbox) {
       geometry.boundingBox = new Box3(
         new Vector3(...buf.bbox.min),

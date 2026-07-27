@@ -2,7 +2,7 @@
 
 The `AnimatedTextLayer` renders **time-filtered map labels** at point features — each feature's text is drawn from a categorical (string) property column and shown only while the playhead is inside its keyframe window. It draws through deck.gl's `TextLayer` (`@deck.gl/layers`), one sublayer per resident tile.
 
-It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md). Unlike its instanced siblings ([`AnimatedPointLayer`](./animated-point-layer.md), [`AnimatedIconLayer`](./animated-icon-layer.md)), `TextLayer` cannot consume the binary `{ length, attributes }` interface — it needs CPU string rows. So this layer decodes each tile's string column into a reference-stable row set **once** (cached by a style digest) and filters that set against the playhead on the **CPU** every frame. See [How it works](#how-it-works) for the decode-once / filter-per-frame model.
+It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md). `TextLayer` does have a **binary** branch — given `data = { length, startIndices, attributes: { getText: { value: Uint8Array | Uint16Array | Uint32Array } } }` it derives every label (and the auto character set) straight from the code points, with no per-row JS accessor. So this layer decodes each `(tile, layer)` pair **once** (cached by a style digest) into flat typed arrays — a UTF-32 code-point buffer plus per-row char offsets, positions, times, RGBA colors, optional size/angle — and **never materializes a per-feature row object**. Only the time filter is on the CPU (`TextLayer` has no per-instance time attribute); the visible subset is handed over as deck's binary `getText` payload. See [How it works](#how-it-works).
 
 ## Installation
 
@@ -26,7 +26,8 @@ const layer = new AnimatedTextLayer({
   },
   size: 20,
   background: true,
-  backgroundColor: [0, 0, 0, 160],
+  getBackgroundColor: [0, 0, 0, 160], // NOT `backgroundColor` — see the note below
+  backgroundBorderRadius: 4,
   fontFamily: 'Inter, sans-serif',
 });
 ```
@@ -39,18 +40,19 @@ Per-feature JS function accessors are **not** supported — every styling prop i
 
 ### Text & Data Accessors
 
-| Property              | Type                            | Default          | Description                                                                                                                                                                              |
-| :-------------------- | :------------------------------ | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `textProperty`        | `string`                        | `'text'`         | Property column NAME drawn as each label's text. Reads a categorical (string) column; a numeric column is stringified. Rows whose value is absent/empty still render as an empty string. |
-| `getText`             | `string \| null`                | `null`           | Upstream-vocabulary alias of `textProperty`. Accepts a property-column NAME — not a function accessor. When set, it wins.                                                                |
-| `color`               | `Color \| string`               | `[0, 0, 0, 255]` | Label color — a constant RGBA, or a property-column NAME resolved through `colorMapping` for categorical coloring.                                                                       |
-| `getColor`            | `Color \| string \| null`       | `null`           | Upstream-vocabulary alias of `color` (constant Color or column NAME; not a function). When set, it wins.                                                                                 |
-| `colorMapping`        | `Record<string, Color> \| null` | `null`           | Category-string → color map used when `color`/`getColor` names a column. Categories absent from the map fall back to `colorMappingDefault`.                                              |
-| `colorMappingDefault` | `Color`                         | `[0, 0, 0, 0]`   | Color for categories not present in `colorMapping` (transparent by default, so unmapped labels disappear rather than mislead).                                                           |
-| `size`                | `number \| string`              | `32`             | Label size — a constant number, or a numeric property-column NAME for per-feature size. Interpreted in `sizeUnits`.                                                                      |
-| `getSize`             | `number \| string \| null`      | `null`           | Upstream-vocabulary alias of `size` (constant or numeric column NAME; not a function). When set, it wins.                                                                                |
-| `angle`               | `number \| string`              | `0`              | Label rotation in DEGREES — a constant number, or a numeric property-column NAME for per-feature angle.                                                                                  |
-| `getAngle`            | `number \| string \| null`      | `null`           | Upstream-vocabulary alias of `angle` (constant or numeric column NAME; not a function). When set, it wins.                                                                               |
+| Property              | Type                            | Default          | Description                                                                                                                                                                                                                                                                                                                                      |
+| :-------------------- | :------------------------------ | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `textProperty`        | `string`                        | `'text'`         | Property column NAME drawn as each label's text. Reads a categorical (string) column; a numeric column is formatted (see `textPrecision`). Rows whose value is absent/empty draw **nothing** and are dropped from the visible set — deck's binary-text reader mis-slices a leading run of zero-length rows.                                      |
+| `getText`             | `string \| null`                | `null`           | Upstream-vocabulary alias of `textProperty`. Accepts a property-column NAME — not a function accessor. When set, it wins.                                                                                                                                                                                                                        |
+| `textPrecision`       | `number \| null`                | `null`           | Decimal places used when `textProperty` names a NUMERIC column. `null` prints the **shortest decimal string that round-trips** back to the stored `float32` — without it `String(v)` renders a `1.1` stored as float32 as `1.100000023841858`, which is both wrong on screen and inflates the derived character set. A number pins `toFixed(n)`. |
+| `color`               | `Color \| string`               | `[0, 0, 0, 255]` | Label color — a constant RGBA, or a property-column NAME resolved through `colorMapping` for categorical coloring.                                                                                                                                                                                                                               |
+| `getColor`            | `Color \| string \| null`       | `null`           | Upstream-vocabulary alias of `color` (constant Color or column NAME; not a function). When set, it wins.                                                                                                                                                                                                                                         |
+| `colorMapping`        | `Record<string, Color> \| null` | `null`           | Category-string → color map used when `color`/`getColor` names a column. Categories absent from the map fall back to `colorMappingDefault`.                                                                                                                                                                                                      |
+| `colorMappingDefault` | `Color`                         | `[0, 0, 0, 0]`   | Color for categories not present in `colorMapping` (transparent by default, so unmapped labels disappear rather than mislead).                                                                                                                                                                                                                   |
+| `size`                | `number \| string`              | `32`             | Label size — a constant number, or a numeric property-column NAME for per-feature size. Interpreted in `sizeUnits`.                                                                                                                                                                                                                              |
+| `getSize`             | `number \| string \| null`      | `null`           | Upstream-vocabulary alias of `size` (constant or numeric column NAME; not a function). When set, it wins.                                                                                                                                                                                                                                        |
+| `angle`               | `number \| string`              | `0`              | Label rotation in DEGREES — a constant number, or a numeric property-column NAME for per-feature angle.                                                                                                                                                                                                                                          |
+| `getAngle`            | `number \| string \| null`      | `null`           | Upstream-vocabulary alias of `angle` (constant or numeric column NAME; not a function). When set, it wins.                                                                                                                                                                                                                                       |
 
 ### Layout & Anchoring
 
@@ -62,13 +64,26 @@ Per-feature JS function accessors are **not** supported — every styling prop i
 
 ### Background & Border
 
-| Property            | Type                                                   | Default                | Description                                                                              |
-| :------------------ | :----------------------------------------------------- | :--------------------- | :--------------------------------------------------------------------------------------- |
-| `background`        | `boolean`                                              | `false`                | Whether to render a background rectangle behind each label.                              |
-| `backgroundColor`   | `Color`                                                | `[255, 255, 255, 255]` | Background rectangle color (`TextLayer` `getBackgroundColor`).                           |
-| `backgroundPadding` | `[number, number] \| [number, number, number, number]` | `[0, 0, 0, 0]`         | Padding around the text for the background, in pixels (`TextLayer` `backgroundPadding`). |
-| `borderColor`       | `Color`                                                | `[0, 0, 0, 255]`       | Background border color (`TextLayer` `getBorderColor`).                                  |
-| `borderWidth`       | `number`                                               | `0`                    | Background border width in pixels (`TextLayer` `getBorderWidth`).                        |
+| Property                 | Type                                                   | Default                | Description                                                                                                                                                                          |
+| :----------------------- | :----------------------------------------------------- | :--------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `background`             | `boolean`                                              | `false`                | Whether to render a background rectangle behind each label.                                                                                                                          |
+| `backgroundColor`        | `Color`                                                | `[255, 255, 255, 255]` | Background rectangle color. ⚠️ **Read the naming note below** — this is _not_ upstream's prop of the same name. Prefer `getBackgroundColor`.                                         |
+| `getBackgroundColor`     | `Color \| null`                                        | `null`                 | Upstream-vocabulary alias of `backgroundColor`. A constant Color — not a function accessor. When set, it wins.                                                                       |
+| `backgroundPadding`      | `[number, number] \| [number, number, number, number]` | `[0, 0, 0, 0]`         | Padding around the text for the background, in pixels (`TextLayer` `backgroundPadding`). Only effective when no content box is set.                                                  |
+| `backgroundBorderRadius` | `number \| [number, number, number, number]`           | `0`                    | Corner radius of the background rectangle in pixels — a single number for all corners, or `[bottom_right, top_right, bottom_left, top_left]` (`TextLayer` `backgroundBorderRadius`). |
+| `borderColor`            | `Color`                                                | `[0, 0, 0, 255]`       | Background border color — the legacy STT name for upstream's `getBorderColor`, which is what it is forwarded as. Prefer `getBorderColor`.                                            |
+| `getBorderColor`         | `Color \| null`                                        | `null`                 | Upstream-vocabulary alias of `borderColor`. A constant Color. When set, it wins.                                                                                                     |
+| `borderWidth`            | `number`                                               | `0`                    | Background border width in pixels — the legacy STT name for upstream's `getBorderWidth`, which is what it is forwarded as. Prefer `getBorderWidth`.                                  |
+| `getBorderWidth`         | `number \| null`                                       | `null`                 | Upstream-vocabulary alias of `borderWidth`. A constant number. When set, it wins.                                                                                                    |
+
+> ⚠️ **`backgroundColor` is a name collision, not a pass-through.** In upstream
+> deck.gl, `TextLayer.backgroundColor` is a **deprecated alias of a different
+> thing** — `background` + `getBackgroundColor` combined. Here it is the legacy
+> STT name for the modern `getBackgroundColor` accessor, and it is forwarded to
+> the sublayer as `getBackgroundColor`, never as `backgroundColor` (which would
+> trip deck's deprecation path). If you are reading upstream docs, the prop you
+> want here is **`getBackgroundColor`**; use `background: true` to turn the
+> rectangle on.
 
 ### SDF Outline
 
@@ -79,12 +94,23 @@ Per-feature JS function accessors are **not** supported — every styling prop i
 
 ### Font
 
-| Property       | Type                                          | Default               | Description                                                                                                                                                       |
-| :------------- | :-------------------------------------------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fontFamily`   | `string`                                      | `'Monaco, monospace'` | CSS font family (`TextLayer` `fontFamily`).                                                                                                                       |
-| `fontWeight`   | `number \| string`                            | `'normal'`            | CSS font weight (`TextLayer` `fontWeight`).                                                                                                                       |
-| `fontSettings` | `Record<string, unknown>`                     | `{}`                  | Font atlas tuning (`sdf`, `fontSize`, `buffer`, …) — `TextLayer` `fontSettings`. Set `{ sdf: true }` to enable the `outlineWidth`/`outlineColor` glyph outline.   |
-| `characterSet` | `string \| string[] \| Set<string> \| 'auto'` | `'auto'`              | Characters baked into the font atlas (`TextLayer` `characterSet`). `'auto'` derives it from the visible labels — the safe default for arbitrary categorical text. |
+| Property       | Type                                          | Default               | Description                                                                                                                                                                               |
+| :------------- | :-------------------------------------------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fontFamily`   | `string`                                      | `'Monaco, monospace'` | CSS font family (`TextLayer` `fontFamily`).                                                                                                                                               |
+| `fontWeight`   | `number \| string`                            | `'normal'`            | CSS font weight (`TextLayer` `fontWeight`).                                                                                                                                               |
+| `lineHeight`   | `number`                                      | `1`                   | Unitless multiplier of the text size that sets the LINE HEIGHT of a wrapped / multi-line label (`TextLayer` `lineHeight`). Without it, multi-line labels (see `maxWidth`) are unstylable. |
+| `fontSettings` | `Record<string, unknown>`                     | `{}`                  | Font atlas tuning (`sdf`, `fontSize`, `buffer`, …) — `TextLayer` `fontSettings`. Set `{ sdf: true }` to enable the `outlineWidth`/`outlineColor` glyph outline.                           |
+| `characterSet` | `string \| string[] \| Set<string> \| 'auto'` | `'auto'`              | Characters baked into the font atlas (`TextLayer` `characterSet`). **Diverges from upstream's ASCII 32–127 default** — see below.                                                         |
+
+**`characterSet: 'auto'` is a deliberate divergence.** Upstream `TextLayer`
+defaults to ASCII 32–127; STT label columns hold arbitrary text (place names,
+vessel names, CJK), so `'auto'` is the safe default here. And unlike deck's own
+`'auto'` — which re-derives the set from the currently _visible_ rows, handing
+`_updateFontAtlas` a fresh `Set` on every membership change and bumping
+`styleVersion` (a full glyph re-layout) each time — this layer derives the
+**exact** set from the tile's distinct label values once at decode and reuses
+that array reference, so the atlas settles after the first update. Pass an
+explicit set to pin it.
 
 ### Size System
 
@@ -103,6 +129,15 @@ Per-feature JS function accessors are **not** supported — every styling prop i
 | `maxWidth`  | `number`                      | `-1`           | Width limit (multiples of text size) before wrapping (`TextLayer` `maxWidth`). `-1` disables wrapping. |
 | `billboard` | `boolean`                     | `true`         | Whether labels always face the camera (`TextLayer` `billboard`).                                       |
 
+### Content box (per-label clipping & alignment)
+
+| Property                 | Type                                       | Default          | Description                                                                                                                                                                                                                                                                                                                              |
+| :----------------------- | :----------------------------------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getContentBox`          | `[number, number, number, number] \| null` | `[0, 0, -1, -1]` | Clipping box for every label, as **meter offsets from its anchor**: `[x, y, width, height]`. Characters that overflow it are not drawn; a negative width/height disables clipping (the default). `TextLayer` `getContentBox` pass-through — **constant only**, per the accessor-alias convention (a function warns once and falls back). |
+| `contentCutoffPixels`    | `[number, number]`                         | `[0, 0]`         | Minimum visible extent of the content box in screen pixels, `[width, height]`. A label whose visible box falls below either is hidden entirely, which keeps clipped labels readable.                                                                                                                                                     |
+| `contentAlignHorizontal` | `'none' \| 'start' \| 'center' \| 'end'`   | `'none'`         | Horizontal alignment of the text within the **visible region** of the content box.                                                                                                                                                                                                                                                       |
+| `contentAlignVertical`   | `'none' \| 'start' \| 'center' \| 'end'`   | `'none'`         | Vertical alignment of the text within the visible region of the content box.                                                                                                                                                                                                                                                             |
+
 ### Time Fades
 
 | Property          | Type     | Default | Description                                                                                                                                                                |
@@ -112,8 +147,11 @@ Per-feature JS function accessors are **not** supported — every styling prop i
 
 ## How it works
 
-- **Decode once, filter per frame**: each resident `(tile, layer)` pair's categorical string column is decoded into a full row array `[{ position, text, startTime, endTime, color, ... }]` a single time, cached by a style digest. That row set is then filtered on the CPU against the playhead every frame — a row is visible while its absolute `[startTime, endTime]` overlaps the window `[now - timeWindow/2, now + timeWindow/2]`, the same overlap test the [`TimeFilterExtension`](./time-filter-extension.md) window-mode shader runs.
-- **Reference-stable rows**: the visible set changes only when the playhead crosses a row's start or end. While the membership signature is unchanged (and no fade is animating the alpha), the filtered array's identity is kept stable frame-to-frame, so deck.gl compares `data` by reference and skips glyph re-layout and GPU re-upload.
+- **Point tiles only**: tile layers whose `geometryType` is not `Point` are skipped with one named console warning.
+- **Decode once, filter per frame**: each resident `(tile, layer)` pair is decoded a single time (cached by a style digest) into **flat typed arrays** — a UTF-32 code-point buffer + per-row char offsets, xyz positions, absolute `[start, end]` times, RGBA colors, optional size/angle. No per-feature row object is ever built. That set is then filtered on the CPU against the playhead every frame — a row is visible while its absolute `[startTime, endTime]` overlaps the window `[now - timeWindow/2, now + timeWindow/2]`, the same overlap test the [`TimeFilterExtension`](./time-filter-extension.md) window-mode shader runs.
+- **Binary search when the tile is sorted**: when the tile declares [`timesSorted`](./binary-features.md#row-ordering-timessorted), the membership pass is two binary searches over `startTimes` (widened by the tile's longest feature duration) instead of a full scan.
+- **Cheap membership signature**: the visible set is summarized by a contiguous-run token, or count + first/last + an FNV-1a hash of the indices — never by concatenating indices into a multi-KB string. An early-out reuses the previous frame's prepared payload whenever the signature is unchanged, so `updateTriggers.getText` (which upstream maps onto `updateTriggers.all` for the characters sublayer) holds steady and the per-glyph `transformParagraph` layout does not re-run. Sublayer instances are cached on the same gate, so an unchanged frame costs zero prop diffing.
+- **GPU time filtering is deferred**: `TimeFilterExtension` cannot compose through `TextLayer` → `MultiIconLayer` as a zero-copy attribute — its `instanceStartTime`/`instanceEndTime` are per-FEATURE while `MultiIconLayer` instances are per-CHARACTER, and deck expands a per-object binary buffer across a row's characters only through the accessor auto-updater, which `Attribute.setBinaryValue` short-circuits past when `data.startIndices` is the array the layer already reports.
 - **Fades**: when `fadeInDuration`/`fadeOutDuration` is active, the appear/disappear ramp is folded into each row's glyph color alpha and applied in lock-step to the background and border colors. The SDF glyph `outlineColor` is a layer-level uniform and does not fade.
 - **Picking**: `getPickingInfo` maps a hit's index in the filtered row subset back to the original feature index and decodes that feature's binary columns into `info.object`.
 - The sublayer short id for `_subLayerProps` overrides is **`text`** — one `TextLayer` per resident `(tile, layer)` pair.

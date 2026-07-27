@@ -42,16 +42,13 @@ import { NoPickingPathLayer } from '../internal/no-picking-path-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
 import { STTDataFilterExtension } from '../../extensions/data-filter-extension.js';
 import type { DataFilterRange } from '../../extensions/data-filter-extension.js';
-import {
-  CategoryColorExtension,
-  CATEGORY_PALETTE_SIZE,
-} from '../../extensions/category-color-extension.js';
 // Progressive-reveal / trail mode reuses the trips layer's per-vertex time
 // synthesis (interpolate a feature's [startTime,endTime] span along its path by
 // cumulative distance) so a timeless line inks itself in over the play window.
 import { synthesizeVertexTimes } from '../trips/animated-trips-layer.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
 import {
   colorListDigest,
   colorMappingDigest,
@@ -59,13 +56,21 @@ import {
   structuralDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
-import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
+import {
+  DEFAULT_LINE_PALETTE,
+  GeometryType,
+  tileLayerKey,
+} from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -83,16 +88,25 @@ export interface _AnimatedPathLayerProps {
    */
   widthScale?: number;
   /**
-   * Units for path width.
+   * Units for path width — the full upstream `Unit` domain.
+   *
+   * DEFAULT DRIFT: `'pixels'`, where upstream PathLayer defaults to `'meters'`.
+   * Deliberate — tile-sourced paths are drawn as map furniture (routes, lane
+   * lines, contours) whose on-screen weight should not collapse as you zoom out.
+   * Pass `'meters'` explicitly for ground-truth widths.
    * @default 'pixels'
    */
-  widthUnits?: 'pixels' | 'meters';
+  widthUnits?: 'pixels' | 'meters' | 'common';
   /** Clamp path width to at least this many on-screen pixels. */
   widthMinPixels?: number;
   /** Clamp path width to at most this many on-screen pixels. */
   widthMaxPixels?: number;
   /**
    * Path color — constant {@link Color}, or property name for categorical coloring.
+   *
+   * DEFAULT DRIFT: STT blue, where upstream PathLayer's `getColor` defaults to
+   * opaque black `[0, 0, 0, 255]`. Deliberate — a black default is invisible on
+   * the dark basemaps these tiles are usually drawn over.
    * @default [0, 150, 255, 255]
    */
   pathColor?: Color | string;
@@ -105,7 +119,13 @@ export interface _AnimatedPathLayerProps {
    */
   getColor?: ColorAccessorValue | null;
   /**
-   * Path width — constant number, or property name for per-feature width.
+   * Path width — constant number, or property name for per-feature width. In
+   * {@link widthUnits}; also the fallback width for tiles that do not carry the
+   * named column.
+   *
+   * DEFAULT DRIFT: `3`, where upstream PathLayer's `getWidth` defaults to `1`.
+   * Deliberate — `1` in the `'pixels'` units this layer defaults to is a hairline
+   * that all but disappears on a HiDPI display.
    * @default 3
    */
   pathWidth?: number | string;
@@ -170,6 +190,34 @@ export interface _AnimatedPathLayerProps {
    * @default false
    */
   billboard?: boolean;
+  /**
+   * Path topology, forwarded to PathLayer's `_pathType`.
+   *
+   * `'open'` (default) draws a START_CAP at the first vertex and an END_CAP at
+   * the last. On CLOSED geometry (contour rings, lane loops, footprints baked as
+   * LineStrings) that leaves a visible notch at the ring seam where a mitred
+   * joint belongs. `'loop'` closes the joint instead.
+   *
+   * ⚠ `'loop'` is NOT a drop-in for arbitrary tiles, for two reasons:
+   *
+   *  1. **It is tile-WIDE, not per-feature.** STT tiles feed PathLayer binary
+   *     data (`normalize: false`), and its tessellator then reads closedness from
+   *     the `loop` flag alone rather than comparing each path's endpoints
+   *     (`path-tesselator.ts` `isClosed()`). Every feature in every tile is
+   *     treated as closed — so only set it for datasets that are ALL rings.
+   *  2. **The buffer must already carry the +2 wrap vertices.** For a closed path
+   *     the tessellator expects `numPoints + 2` vertices — the ring followed by a
+   *     repeat of its first TWO vertices (`B0 B1 B2 B3 B0 B1`) — and it reads
+   *     that padding out of the tile's own `positions`/`startIndices`; the binary
+   *     path never synthesizes it (`getGeometrySize` is bypassed when
+   *     `startIndices` is supplied). A ring baked in the usual first-vertex-
+   *     repeated-last form does NOT satisfy this and renders a short, mis-capped
+   *     final segment. The layer checks the tile's buffers for the padding and
+   *     warns once when it is missing.
+   *
+   * @default 'open'
+   */
+  pathType?: 'open' | 'loop';
   /**
    * Lift every vertex of a path to a per-FEATURE elevation (metres of altitude),
    * sourced from this property column. Turns flat ground-plane lines into a 3D
@@ -237,20 +285,21 @@ export interface _AnimatedPathLayerProps {
    * Unset (default) ⇒ the extension is not installed: zero cost.
    *
    * ATTRIBUTE-BUDGET: PathLayer's fp64 position split leaves the per-pipeline
-   * vertex-attribute count tight. On the default non-pickable path
-   * (`NoPickingPathLayer`, which reclaims the picking slot) the count sits at 15
-   * with `TimeFilterExtension`, and adding the CategoryColorExtension attribute
-   * OR this filter attribute lands it at WebGL2's guaranteed 16-slot floor —
-   * installing BOTH would make 17, a fatal link failure (blank paths) on GPUs
-   * that report exactly 16. Because the path family never uses the GPU category
-   * path (categorical color is expanded on the CPU into `getColor`), the layer
-   * DROPS the idle `CategoryColorExtension` whenever a filter is installed and
-   * spends that slot on `filterValue` instead — so the default path stays at 16
-   * and links fine everywhere. CAVEAT: with `pickable: true` the sublayer is the
-   * stock `PathLayer` (keeps `instancePickingColors`), so filter + picking is 17
-   * and overflows on exactly-16 GPUs (see the separate `pickable` warning);
-   * prefer `pickable: false` (the default) when filtering, or `AnimatedPointLayer`
-   * where the budget is roomy.
+   * vertex-attribute count tight. Counting the `in` declarations in the SHIPPED
+   * deck.gl 9.3 vertex shaders (a WebGL2 driver allocates a slot per declaration,
+   * bound or not):
+   *
+   *   stock PathLayer                     13
+   *   NoPickingPathLayer (picking strip)  12
+   *   + TimeFilterExtension                3
+   *   + STTDataFilterExtension             1   (this prop)
+   *
+   * so the four combinations are 15 (default), 16 (filter), 16 (pickable) and
+   * **17** (filter + pickable) — and 17 is a fatal per-pipeline link failure
+   * (blank paths) on the GPUs that report WebGL2's guaranteed minimum of exactly
+   * 16. Only that last combination overflows: prefer `pickable: false` (the
+   * default) when filtering, or `AnimatedPointLayer`, where the budget is roomy.
+   * The layer warns once if you ask for both.
    * @default null
    */
   filterProperty?: WeightAccessorValue | null;
@@ -297,6 +346,20 @@ export interface _AnimatedPathLayerProps {
    * the whole revealed portion (draw-and-keep: the line stays once drawn); a
    * positive value renders a finite comet trail that erases behind the head
    * after this many ms. No effect unless `revealTrail` is on.
+   *
+   * ⚠ PERSISTENCE IS A SHADER PROPERTY, NOT A TILE-RESIDENCY ONE — the same
+   * caveat {@link TimeFilterExtension} documents for its `cumulative` prop.
+   * The shader keeps every vertex the play head has passed, but tile SELECTION
+   * still follows `getEffectiveTimeWindow()`: once the head is more than
+   * `timeWindow / 2` past a feature, its tile is deselected and the "persisted"
+   * ink disappears mid-playback. A FINITE `revealDuration` is handled for you
+   * (the layer widens the load window to `2 × revealDuration`, like the trips
+   * layer does for `trailLength`), but `0` means "forever", which no finite load
+   * window can satisfy. To actually persist, set {@link
+   * SpatioTemporalLayerProps.tileLoadTimeWindow} wide enough to hold the span you
+   * want to keep on screen (typically the whole dataset's time range) — the
+   * render window stays narrow, since TimeFilterExtension filters per feature,
+   * not per tile. The layer warns once if you leave it unset.
    * @default 0
    */
   revealDuration?: number;
@@ -320,9 +383,73 @@ export interface _AnimatedPathLayerProps {
 export type AnimatedPathLayerProps = _AnimatedPathLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Where each own prop lands, and therefore whether editing it has to throw
+ * away the per-tile sublayer cache. `'sublayer'` values are frozen into a
+ * cached PathLayer at construction and ride {@link computeLayerPropsKey};
+ * `'prepare'` values reach the GPU only through a tile's baked attributes,
+ * which the prepare-time styleKey covers and the prepared-object identity
+ * check turns into a sublayer rebuild.
+ *
+ * The {@link PropEffects} annotation makes the table total: a prop added to
+ * {@link _AnimatedPathLayerProps} without an entry here fails to compile,
+ * which is the only thing standing between an unclassified prop and a stale
+ * sublayer nobody notices until they look at the map.
+ */
+const PATH_PROP_EFFECTS: PropEffects<_AnimatedPathLayerProps> = {
+  widthScale: 'sublayer',
+  widthUnits: 'sublayer',
+  widthMinPixels: 'sublayer',
+  widthMaxPixels: 'sublayer',
+  pathColor: 'sublayer',
+  getColor: 'sublayer',
+  pathWidth: 'sublayer',
+  getWidth: 'sublayer',
+  // Categorical color resolves entirely inside prepareTile — the palette, the
+  // explicit mapping and its unknown-category fallback are baked into the
+  // tile's per-vertex getColor buffer, never read while constructing a
+  // sublayer.
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+  capRounded: 'sublayer',
+  jointRounded: 'sublayer',
+  miterLimit: 'sublayer',
+  billboard: 'sublayer',
+  pathType: 'sublayer',
+  // The elevation ramp is baked into the tile's synthesized XYZ positions and
+  // its height-graded getColor alpha; the sublayer reads neither.
+  elevationProperty: 'prepare',
+  elevationMapping: 'prepare',
+  elevationScale: 'sublayer',
+  elevationOpacityRange: 'prepare',
+  elevationOpacityNear: 'prepare',
+  elevationOpacityFar: 'prepare',
+  filterProperty: 'sublayer',
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+  revealTrail: 'sublayer',
+  revealDuration: 'sublayer',
+  fadeTrail: 'sublayer',
+  reducedMotion: 'sublayer',
+};
+
 // Shared with the maplibre adapter (single source of truth in
 // @poopdeck.gl/core).
 const DEFAULT_PALETTE: Color[] = DEFAULT_LINE_PALETTE;
+
+// Single source of truth for the constant color / width fallbacks: the same
+// values back `defaultProps` AND the buildSublayer fallbacks taken when the
+// resolved prop is a COLUMN NAME that a given tile did not bake. Two literals
+// drifted apart before (the width fallback said 2, the documented default 3),
+// which rendered two different "no data" widths inside one layer whenever only
+// some tiles carried the width column.
+const DEFAULT_PATH_COLOR: Color = [0, 150, 255, 255];
+const DEFAULT_PATH_WIDTH = 3;
+const DEFAULT_MAPPING_DEFAULT: Color = [120, 120, 120, 255];
 
 // Effectively-infinite trail length (ms) used for "reveal and PERSIST": a
 // `revealDuration` of 0 keeps every vertex visible once the play head passes it
@@ -340,6 +467,13 @@ const DEFAULT_PALETTE: Color[] = DEFAULT_LINE_PALETTE;
 // approached.) See the `revealDuration` prop.
 const REVEAL_PERSIST_TRAIL_MS = 250 * 365 * 24 * 60 * 60 * 1000;
 
+/** One deck binary-attribute descriptor. */
+interface BinaryAttr {
+  value: any;
+  size: number;
+  normalized?: boolean;
+}
+
 /** See AnimatedTripsLayer for the rationale; same cache shape, window-mode attrs. */
 interface PreparedTile {
   tileKey: string;
@@ -347,23 +481,67 @@ interface PreparedTile {
   data: {
     length: number;
     startIndices: Uint32Array;
-    attributes: Record<
-      string,
-      { value: any; size: number; normalized?: boolean }
-    >;
+    attributes: Record<string, BinaryAttr>;
   };
   timeOffset: number;
+  /**
+   * 2 or 3 — the dimensionality of the `getPath` buffer this tile was built
+   * with (3 once {@link _AnimatedPathLayerProps.elevationProperty} lifts it).
+   * INFORMATIONAL: deck reads the geometry stride from the descriptor's own
+   * `size`, never from `positionFormat` (`Tesselator.updateGeometry` prefers
+   * `geometryBuffer.size`), so nothing downstream consumes this.
+   */
   dims: number;
-  /** Resolved palette when GPU categorical-color path is active for this tile. */
-  gpuPalette: Color[] | null;
   /** Source tile + decoded columns — picking enrichment context (references, not copies). */
   tile: Tile;
   features: BinaryFeatures;
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
+// ── Per-tile, style-INDEPENDENT attribute memo ──────────────────────────────
+// The descriptors below are pure functions of a tile's decoded `binary` (its
+// positions, per-feature times, and one named column) — none of them depend on
+// the palette, the color mapping, the elevation-opacity ramp, `revealTrail`, or
+// the user's updateTriggers. But ALL of those ride the per-tile `styleKey`, so
+// any style edit re-runs `prepareTile`, and before this memo that rebuilt every
+// descriptor object from scratch.
+//
+// A fresh descriptor is not free even when its CONTENTS are unchanged: deck's
+// tesselator copies it into `buffers`, and `AttributeManager.update` →
+// `Attribute.setExternalBuffer` compares the incoming descriptor by OBJECT
+// IDENTITY (`attribute.ts`). A new object always mismatches, so deck re-runs
+// `setData` — for `getPath` that means a `toDoublePrecisionArray` pass and a
+// full fp64 re-upload of the position buffer, on every palette tweak. The
+// per-vertex expansions (`instanceStartTime`/`instanceEndTime`) and the reveal
+// mode's `synthesizeVertexTimes` (an O(totalVerts) haversine sweep) also paid
+// their CPU cost again each time.
+//
+// Keying on the `binary` object identity — stable while a tile is loaded, GC'd
+// with it — computes each exactly once per tile-load and hands back the SAME
+// descriptor object afterwards, so deck's identity check short-circuits and the
+// GPU buffer is left alone. The arrays are read-only after construction, so
+// sharing them is byte-identical to recomputing. Mirrors the sibling trips
+// layer's `vertexTimeMemo`.
+interface TileAttrMemo {
+  /** Zero-copy positions descriptor (no elevation column in play). */
+  flatPath?: BinaryAttr;
+  /** Elevated (XYZ) positions, plus the elevation signature that produced them. */
+  elevatedPath?: { sig: string; attr: BinaryAttr };
+  startTime?: BinaryAttr;
+  endTime?: BinaryAttr;
+  vertexTime?: BinaryAttr;
+  width?: { prop: string; attr: BinaryAttr };
+  filter?: { prop: string; attr: BinaryAttr };
+}
+
+const tileAttrMemo = new WeakMap<BinaryFeatures, TileAttrMemo>();
+
+function memoFor(binary: BinaryFeatures): TileAttrMemo {
+  let memo = tileAttrMemo.get(binary);
+  if (!memo) {
+    memo = {};
+    tileAttrMemo.set(binary, memo);
+  }
+  return memo;
 }
 
 /**
@@ -528,12 +706,50 @@ function buildElevatedPositions(
 }
 
 /**
+ * True when every feature in the tile carries the +2 wrap vertices that
+ * PathLayer's `_pathType: 'loop'` expects.
+ *
+ * With binary data the tessellator does NOT synthesize the wrap: it takes the
+ * caller's `startIndices` verbatim and, for a closed path of `n` points, expects
+ * `n + 2` entries laid out `B0 B1 … Bn-1 B0 B1` (see `path-tesselator.ts`
+ * `getGeometrySize` / `_updateSegmentTypes`). So the check is exact and cheap —
+ * two vertex comparisons per feature — and it runs only when the caller opts
+ * into `'loop'`. Degenerate runs (< 5 vertices, which `getGeometrySize` would
+ * reject as a ring anyway) are skipped rather than failed.
+ */
+function hasLoopPadding(
+  positions: Float64Array,
+  dims: number,
+  startIndices: Uint32Array,
+  featureCount: number,
+): boolean {
+  for (let f = 0; f < featureCount; f++) {
+    const start = startIndices[f];
+    const size = startIndices[f + 1] - start;
+    if (size < 5) continue;
+    const a = start * dims;
+    const b = (start + 1) * dims;
+    const wrap0 = (start + size - 2) * dims;
+    const wrap1 = (start + size - 1) * dims;
+    if (
+      positions[a] !== positions[wrap0] ||
+      positions[a + 1] !== positions[wrap0 + 1] ||
+      positions[b] !== positions[wrap1] ||
+      positions[b + 1] !== positions[wrap1 + 1]
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Build a per-tile palette by mapping the tile's own category dictionary
- * through an explicit string→color map. Because `instanceCategoryIndex` indexes
- * into the same per-tile `categories` array, the resulting palette makes each
- * category render the same color in every tile (stable colors), while keeping
- * the GPU `CategoryColorExtension` path — no per-tile CPU RGBA expansion.
- * Mirrors `paletteFromMapping` in animated-trips-layer.ts.
+ * through an explicit string→color map, so the same category renders the same
+ * color in every tile (stable colors) rather than following each tile's own
+ * first-seen index order. The result is consumed by the CPU per-vertex
+ * expansion in {@link expandCategoryColors}. Mirrors `paletteFromMapping` in
+ * animated-trips-layer.ts.
  */
 function paletteFromMapping(
   categories: readonly string[],
@@ -550,7 +766,10 @@ function paletteFromMapping(
  * `_subLayerProps: { paths: { type: MyLayer, ...props } }` swaps the
  * sublayer class / overrides sublayer props (deck's CompositeLayer
  * contract). Without a `type` override the class is `PathLayer` when
- * `pickable` and the attribute-stripped `NoPickingPathLayer` otherwise.
+ * `pickable` and the attribute-stripped `NoPickingPathLayer` otherwise; the
+ * choice is encoded in the sublayer id (`…-<tileKey>:np|pk`) so a runtime
+ * `pickable` flip REPLACES the sublayer rather than being matched onto the
+ * other class's transferred GPU state.
  */
 export class AnimatedPathLayer<
   ExtraPropsT extends {} = {},
@@ -566,8 +785,8 @@ export class AnimatedPathLayer<
     // Permissive descriptors ({type:'object'} validates anything): these
     // props legally hold a constant OR a column-name string, which the
     // 'color'/'number' validators would reject in deck's debug mode.
-    pathColor: { type: 'object', value: [0, 150, 255, 255], compare: true },
-    pathWidth: { type: 'object', value: 3, compare: true },
+    pathColor: { type: 'object', value: DEFAULT_PATH_COLOR, compare: true },
+    pathWidth: { type: 'object', value: DEFAULT_PATH_WIDTH, compare: true },
     // Accessor-named aliases (see the prop docs): unset by default so the
     // legacy props win unless the caller opts into the upstream vocabulary.
     getColor: { type: 'object', value: null, optional: true, compare: true },
@@ -581,7 +800,7 @@ export class AnimatedPathLayer<
       optional: true,
       compare: false,
     },
-    colorMappingDefault: { type: 'color', value: [120, 120, 120, 255] },
+    colorMappingDefault: { type: 'color', value: DEFAULT_MAPPING_DEFAULT },
     // Elevation: unset ⇒ flat (zero-copy positions). Digested by content in the
     // styleKey / layerPropsKey (compare:false on the mapping), like colorMapping.
     elevationProperty: {
@@ -613,6 +832,11 @@ export class AnimatedPathLayer<
     jointRounded: false,
     miterLimit: { type: 'number', value: 4, min: 0 },
     billboard: false,
+    // Path topology. 'open' matches the pre-prop behaviour (and, unlike
+    // upstream's `_pathType: null`, keeps the tessellator's normalize pass OFF
+    // so the tile's binary buffers ride to the GPU zero-copy). See the prop docs
+    // for the +2 wrap-vertex requirement 'loop' imposes.
+    pathType: 'open',
 
     // Column range filter (STTDataFilterExtension). Unset ⇒ not installed.
     // Permissive {type:'object'} descriptors (see the point layer).
@@ -662,19 +886,24 @@ export class AnimatedPathLayer<
    * trail mode (reads the per-vertex `instanceVertexTime` we feed only when
    * `revealActive()`). The `mode: 'window'` arg documents the default intent;
    * it does not drop the vertex-time slot. What keeps the fp64-position + time
-   * + category combo under WebGL2's 16-slot floor is NoPickingPathLayer freeing
-   * the picking slot, not attribute pruning here.
+   * combo under WebGL2's 16-slot floor is NoPickingPathLayer freeing the picking
+   * slot, not attribute pruning here.
+   *
+   * NOTE there is deliberately no CategoryColorExtension alongside it. This
+   * family resolves categorical color on the CPU into a per-vertex `getColor`
+   * (PathLayer instances are SEGMENTS, so the extension's per-FEATURE
+   * `instanceCategoryIndex` would under-size the draw), so the extension could
+   * never fire here — while still costing a real vertex-attribute slot, because
+   * its `initializeState` registers the attribute and injects the `in`
+   * declaration unconditionally.
    */
   private readonly timeFilterExtension = new TimeFilterExtension({
     mode: 'window',
   });
-  private readonly categoryColorExtension = new CategoryColorExtension();
   /**
    * Singleton STTDataFilterExtension, composed in only when `filterProperty` is
-   * set (per-layer constant ⇒ stable list). When installed it REPLACES the
-   * idle CategoryColorExtension in the sublayer extension list so the path
-   * pipeline stays at WebGL2's 16-slot vertex-attribute floor rather than
-   * overflowing to 17 — see the `filterProperty` prop docs.
+   * set (per-layer constant ⇒ stable list). See the `filterProperty` prop docs
+   * for the slot arithmetic it participates in.
    */
   private readonly dataFilterExtension = new STTDataFilterExtension({
     filterSize: 1,
@@ -688,7 +917,7 @@ export class AnimatedPathLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy
    * prop. Same value domain as the legacy props (constant or column name).
    */
@@ -712,6 +941,38 @@ export class AnimatedPathLayer<
    */
   private revealActive(): boolean {
     return this.props.revealTrail === true && this.props.reducedMotion !== true;
+  }
+
+  /**
+   * Progressive-reveal needs the tiles BEHIND the play head to stay selected —
+   * the shader can only keep drawing a vertex whose tile is still resident.
+   * A finite {@link _AnimatedPathLayerProps.revealDuration} bounds how far back
+   * that reaches, so widen the LOAD window to twice it (exactly what the trips
+   * layer does for `trailLength`); the RENDER window is untouched, since
+   * TimeFilterExtension filters per feature.
+   *
+   * `revealDuration: 0` (reveal-and-PERSIST) is unbounded by construction —
+   * "keep everything already drawn" has no finite widening — so it is left to
+   * `tileLoadTimeWindow`, and the mismatch is warned about rather than silently
+   * papered over with a guess at the dataset's span.
+   */
+  protected getEffectiveTimeWindow(): number {
+    const base = super.getEffectiveTimeWindow();
+    if (!this.revealActive()) return base;
+    const duration = this.props.revealDuration;
+    if (duration && duration > 0) return Math.max(base, duration * 2);
+    if (!this.props.tileLoadTimeWindow) {
+      warnOnce(
+        'AnimatedPathLayer:revealPersistLoadWindow',
+        '[AnimatedPathLayer] revealTrail with revealDuration:0 persists the ' +
+          'revealed path in the SHADER, but tile selection still follows ' +
+          'timeWindow — a feature more than timeWindow/2 behind the play head ' +
+          'has its tile evicted and its "persisted" ink vanishes mid-playback. ' +
+          'Set tileLoadTimeWindow to the span you want to keep on screen ' +
+          '(typically the dataset time range); the render window is unaffected.',
+      );
+    }
+    return base;
   }
 
   private widthValue(): number | string | undefined {
@@ -738,48 +999,38 @@ export class AnimatedPathLayer<
   }
 
   private computeLayerPropsKey(): string {
-    const color = this.colorValue();
-    const width = this.widthValue();
-    return [
-      this.props.widthScale,
-      this.props.widthUnits,
-      this.props.widthMinPixels,
-      this.props.widthMaxPixels,
-      this.props.capRounded,
-      this.props.jointRounded,
-      this.props.miterLimit,
-      this.props.billboard,
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
-      // plus the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      this.props.elevationScale,
-      Array.isArray(color) ? color.join(',') : '',
-      typeof width === 'number' ? width : 0,
-      // Column-filter uniforms (STTDataFilterExtension) — a range/enabled edit is
-      // uniform-only, so it rebuilds the cached sublayers (whose props carry the
-      // values) rather than re-preparing tiles, like timeWindow above.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-      // Reveal/trail mode. revealTrail + reducedMotion decide whether the trail
-      // is active at all (also folded into the prepared-tile styleKey, which
-      // gates the instanceVertexTime attribute); revealDuration + fadeTrail are
-      // baked as sublayer props, so a change must rebuild the cached sublayers.
-      this.revealActive(),
-      this.props.revealDuration,
-      this.props.fadeTrail,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedPathLayerProps>(
+      this.props,
+      PATH_PROP_EFFECTS,
+      {
+        // Values the sublayer is actually built from: `getColor` / `getWidth`
+        // win over their legacy props, so keying the legacy prop raw would
+        // leave every cached sublayer at the old value when only the alias
+        // changes. `filterProperty` resolves to a column NAME — a function is
+        // ignored, and keying it raw would clear the cache every render for a
+        // caller who passes a fresh function that changes nothing.
+        overrides: {
+          pathColor: this.colorValue(),
+          pathWidth: this.widthValue(),
+          filterProperty: this.filterPropertyValue(),
+        },
+        extra: [
+          // Composite props that getSubLayerProps bakes into every sublayer
+          // (opacity/pickable/visible, coordinate system, _subLayerProps, …)
+          // plus the user's updateTriggers.
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          // Inherited time props the sublayers carry as uniforms.
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+          // What the sublayer's trail branch is actually gated on. revealTrail
+          // and reducedMotion are keyed raw above; this stays a distinct input
+          // so the key follows the gate even if its inputs grow.
+          this.revealActive(),
+        ],
+      },
+    );
   }
 
   renderLayers(): Layer[] {
@@ -796,7 +1047,7 @@ export class AnimatedPathLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -855,6 +1106,20 @@ export class AnimatedPathLayer<
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0 || !binary.startIndices) return null;
+    // Polygon tiles carry `startIndices` too, so the guard above does not
+    // separate them — but their runs are RINGS, not open paths, and this layer
+    // would silently draw every ring's outline as a stray polyline. Skip
+    // anything that is not LineString with one named warning.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.LineString],
+        this.props.id,
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
 
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
@@ -874,6 +1139,17 @@ export class AnimatedPathLayer<
     const mapSig = this.props.colorMapping
       ? `m${colorMappingDigest(this.props.colorMapping)}`
       : '';
+    // colorMappingDefault is load-bearing TWICE over — it is the palette slot
+    // `paletteFromMapping` gives a category the mapping doesn't name, and the
+    // out-of-range fallback `expandCategoryColors` writes — and both are baked
+    // into the per-vertex `getColor` bytes. Without it in the key, editing the
+    // default alone produced a byte-identical styleKey, so the cached tile (and
+    // then the cached sublayer) came straight back and nothing re-rendered.
+    // Folded UNCONDITIONALLY, mirroring AnimatedLineLayer: the re-prepare is
+    // cheap now that the style-independent descriptors are memoized per tile.
+    const mapDefault = (
+      this.props.colorMappingDefault ?? DEFAULT_MAPPING_DEFAULT
+    ).join(',');
     // Elevation signature — column + scale + (categorical) mapping content, so a
     // height-ramp edit re-prepares the tile (rebuilds the 3D positions buffer).
     const elevSig = elevProp
@@ -897,9 +1173,9 @@ export class AnimatedPathLayer<
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapSig}|${elevSig}|${elevOpacSig}|${filterSig}|${updateTriggersDigest(this.props.updateTriggers)}${this.revealActive() ? '|rv1' : ''}`;
+    }|${mapSig}|d${mapDefault}|${elevSig}|${elevOpacSig}|${filterSig}|${updateTriggersDigest(this.props.updateTriggers)}${this.revealActive() ? '|rv1' : ''}`;
 
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -914,41 +1190,59 @@ export class AnimatedPathLayer<
     const t0 = performance.now();
     const srcDims = binary.positionDimensions ?? 2;
     const totalVerts = binary.startIndices[binary.featureCount];
+    // Style-independent descriptors are reused ACROSS style changes — see the
+    // TileAttrMemo docstring for why descriptor IDENTITY (not just content) is
+    // what saves the re-upload.
+    const memo = memoFor(binary);
 
     // Per-feature elevation (z, metres) → a synthesized XYZ positions buffer.
     // Lifts flat contour rings into a 3D relief (stacked-by-density iso-lines).
     // Unset / missing column ⇒ flat: `dims` stays the source value and positions
-    // ride to the GPU zero-copy (byte-identical to before).
-    const zPerFeature = elevProp
-      ? resolveFeatureElevations(
-          binary,
-          elevProp,
-          this.props.elevationMapping,
-          this.props.elevationScale ?? 1,
-        )
-      : null;
-    const dims = zPerFeature ? 3 : srcDims;
-    const positions = zPerFeature
-      ? buildElevatedPositions(
-          binary.positions,
-          srcDims,
-          binary.startIndices,
-          binary.featureCount,
-          totalVerts,
-          zPerFeature,
-        )
-      : binary.positions;
+    // ride to the GPU zero-copy (byte-identical to before). The elevation build
+    // is memoized under its own signature, so only an actual height-ramp edit
+    // reallocates it; a palette swap reuses the same buffer AND descriptor.
+    let pathAttr: BinaryAttr;
+    if (elevSig && memo.elevatedPath?.sig === elevSig) {
+      pathAttr = memo.elevatedPath.attr;
+    } else {
+      const zPerFeature = elevProp
+        ? resolveFeatureElevations(
+            binary,
+            elevProp,
+            this.props.elevationMapping,
+            this.props.elevationScale ?? 1,
+          )
+        : null;
+      if (zPerFeature) {
+        pathAttr = {
+          value: buildElevatedPositions(
+            binary.positions,
+            srcDims,
+            binary.startIndices,
+            binary.featureCount,
+            totalVerts,
+            zPerFeature,
+          ),
+          size: 3,
+        };
+        memo.elevatedPath = { sig: elevSig, attr: pathAttr };
+      } else {
+        // Flat: one shared zero-copy descriptor over the tile's own buffer.
+        pathAttr = memo.flatPath ??= { value: binary.positions, size: srcDims };
+      }
+    }
+    const dims = pathAttr.size;
 
     const attributes: PreparedTile['data']['attributes'] = {
       // Accessor-name key for PathLayer's own attribute.
-      getPath: { value: positions, size: dims },
+      getPath: pathAttr,
       // Extension-registered attribute names: must match
       // TimeFilterExtension.initializeState exactly. EXPANDED PER-VERTEX (not
       // per-feature) — PathLayer instances are SEGMENTS, so a per-feature buffer
       // under-sizes the instanced draw on multi-vertex paths ("vertex buffer is
       // not big enough" on ANGLE/Metal). Short lines happened to work because
       // segments≈features; dense contours / long lane lines do not.
-      instanceStartTime: {
+      instanceStartTime: (memo.startTime ??= {
         value: expandFeatureScalarToVertex(
           binary.startTimes,
           binary.startIndices,
@@ -956,8 +1250,8 @@ export class AnimatedPathLayer<
           totalVerts,
         ),
         size: 1,
-      },
-      instanceEndTime: {
+      }),
+      instanceEndTime: (memo.endTime ??= {
         value: expandFeatureScalarToVertex(
           binary.endTimes,
           binary.startIndices,
@@ -965,7 +1259,7 @@ export class AnimatedPathLayer<
           totalVerts,
         ),
         size: 1,
-      },
+      }),
     };
 
     // Progressive-reveal / trail mode: feed the PER-VERTEX time that the trail
@@ -977,23 +1271,28 @@ export class AnimatedPathLayer<
     // mode (its `mode` option is a no-op), so this adds DATA, not a GPU
     // attribute — the WebGL2 16-slot vertex-attribute budget is unchanged.
     // Gated on revealActive() so window-mode output is byte-identical when the
-    // reveal prop is off (or reduced motion suppresses it).
+    // reveal prop is off (or reduced motion suppresses it). Memoized per tile:
+    // `synthesizeVertexTimes` is an O(totalVerts) haversine sweep, and reveal
+    // mode composes with palettes/mappings that re-prepare the tile.
     if (this.revealActive()) {
-      const vertexTimes =
-        binary.vertexTimestamps && binary.vertexTimestamps.length >= totalVerts
-          ? binary.vertexTimestamps
-          : synthesizeVertexTimes(binary);
-      attributes.instanceVertexTime = { value: vertexTimes, size: 1 };
+      attributes.instanceVertexTime = memo.vertexTime ??= {
+        value:
+          binary.vertexTimestamps &&
+          binary.vertexTimestamps.length >= totalVerts
+            ? binary.vertexTimestamps
+            : synthesizeVertexTimes(binary),
+        size: 1,
+      };
     }
 
     // Categorical color: resolve each feature's color on the CPU and expand it
-    // PER-VERTEX into `getColor`. The GPU CategoryColorExtension path uploaded a
+    // PER-VERTEX into `getColor`. The GPU CategoryColorExtension path uploads a
     // per-FEATURE `instanceCategoryIndex`, which under-sizes the instanced draw
     // for multi-vertex paths exactly like the time attributes above — `getColor`
     // is a native PathLayer accessor its tessellator maps onto segment instances.
-    // Mirrors AnimatedTripsLayer (GPU palette stays null; the extension sits idle
-    // but installed so the shader-pipeline cache key is constant).
-    const gpuPalette: Color[] | null = null;
+    // Mirrors AnimatedTripsLayer. This is the ONLY categorical-color path here,
+    // which is why the extension is not installed at all (see
+    // `timeFilterExtension`). Genuinely style-dependent, so it is NOT memoized.
     if (colorProp) {
       const cat = binary.categoricalProps[colorProp];
       if (cat) {
@@ -1001,11 +1300,13 @@ export class AnimatedPathLayer<
         // map onto THIS tile's category dictionary so the same category renders
         // the same color in every tile (stable), unlike colorPalette's
         // first-seen per-tile index assignment.
+        const mappingFallback =
+          this.props.colorMappingDefault ?? DEFAULT_MAPPING_DEFAULT;
         const palette = this.props.colorMapping
           ? paletteFromMapping(
               cat.categories,
               this.props.colorMapping,
-              this.props.colorMappingDefault ?? [120, 120, 120, 255],
+              mappingFallback,
             )
           : (this.props.colorPalette ?? DEFAULT_PALETTE);
         // Height-graded alpha (top of a stacked relief fades translucent): keyed
@@ -1027,7 +1328,7 @@ export class AnimatedPathLayer<
             binary.startIndices,
             binary.featureCount,
             totalVerts,
-            this.props.colorMappingDefault ?? [120, 120, 120, 255],
+            mappingFallback,
             alphaScale,
           ),
           size: 4,
@@ -1046,17 +1347,25 @@ export class AnimatedPathLayer<
         // "vertex buffer is not big enough" on ANGLE/Metal — deck binds a
         // named binary buffer verbatim, so it must already be per-vertex.
         // Force Float32 (getWidth is a float32 attribute) before expanding.
-        const widthValues =
-          values instanceof Float32Array ? values : new Float32Array(values);
-        attributes.getWidth = {
-          value: expandFeatureScalarToVertex(
-            widthValues,
-            binary.startIndices,
-            binary.featureCount,
-            totalVerts,
-          ),
-          size: 1,
-        };
+        // Keyed by column name in the memo: the expansion depends only on the
+        // tile and that name, never on the palette.
+        if (memo.width?.prop !== widthProp) {
+          const widthValues =
+            values instanceof Float32Array ? values : new Float32Array(values);
+          memo.width = {
+            prop: widthProp,
+            attr: {
+              value: expandFeatureScalarToVertex(
+                widthValues,
+                binary.startIndices,
+                binary.featureCount,
+                totalVerts,
+              ),
+              size: 1,
+            },
+          };
+        }
+        attributes.getWidth = memo.width.attr;
       }
     }
 
@@ -1070,17 +1379,26 @@ export class AnimatedPathLayer<
     if (filterProp) {
       const values = binary.numericProps[filterProp];
       if (values) {
-        const filterValues =
-          values instanceof Float32Array ? values : new Float32Array(values);
-        attributes.filterValue = {
-          value: expandFeatureScalarToVertex(
-            filterValues,
-            binary.startIndices,
-            binary.featureCount,
-            totalVerts,
-          ),
-          size: 1,
-        };
+        // Memoized by column name for the same reason as `getWidth` above: the
+        // per-vertex expansion is a function of the tile, not of the style. The
+        // filter RANGE is a uniform and never touches this buffer.
+        if (memo.filter?.prop !== filterProp) {
+          const filterValues =
+            values instanceof Float32Array ? values : new Float32Array(values);
+          memo.filter = {
+            prop: filterProp,
+            attr: {
+              value: expandFeatureScalarToVertex(
+                filterValues,
+                binary.startIndices,
+                binary.featureCount,
+                totalVerts,
+              ),
+              size: 1,
+            },
+          };
+        }
+        attributes.filterValue = memo.filter.attr;
       } else if (binary.categoricalProps[filterProp]) {
         warnOnce(
           'AnimatedPathLayer:filterPropertyCategorical',
@@ -1101,7 +1419,6 @@ export class AnimatedPathLayer<
       },
       timeOffset: binary.timeOffset,
       dims,
-      gpuPalette,
       tile,
       features: binary,
     };
@@ -1111,7 +1428,6 @@ export class AnimatedPathLayer<
       tileKey,
       cached: false,
       features: binary.featureCount,
-      gpuPalette: gpuPalette !== null,
       ms: performance.now() - t0,
     });
     return prepared;
@@ -1120,22 +1436,16 @@ export class AnimatedPathLayer<
   private buildSublayer(prepared: PreparedTile): PathLayer {
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
+    // Fallbacks for a COLUMN-NAME-valued prop on a tile that didn't bake the
+    // column: the documented defaults, so one layer never renders two different
+    // "no data" widths across a partially-baked dataset.
     const constColor = (
-      Array.isArray(colorValue) ? colorValue : [0, 150, 255, 255]
+      Array.isArray(colorValue) ? colorValue : DEFAULT_PATH_COLOR
     ) as Color;
-    const constWidth = typeof widthValue === 'number' ? widthValue : 2;
+    const constWidth =
+      typeof widthValue === 'number' ? widthValue : DEFAULT_PATH_WIDTH;
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
-
-    const useGpuCategory = prepared.gpuPalette !== null;
-    if (useGpuCategory && prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE) {
-      warnOnce(
-        'AnimatedPathLayer:paletteOverflow',
-        `[AnimatedPathLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
-          `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
-          'CategoryColorExtension.',
-      );
-    }
 
     // Column range filter — install STTDataFilterExtension only when a column is
     // named (per-layer constant ⇒ stable list). `hasFilter` gates the per-tile
@@ -1146,39 +1456,77 @@ export class AnimatedPathLayer<
     // Keep the extension list constant across sublayers — see
     // animated-trips-layer.ts for the cache-storm rationale. User extensions
     // from the top-level `extensions` prop are appended (composeExtensions).
-    //
-    // ATTRIBUTE-BUDGET: the non-pickable path pipeline (NoPickingPathLayer, 12
-    // attrs) + TimeFilterExtension's 3 sits at 15, then ONE more extension
-    // attribute lands it at WebGL2's guaranteed 16-slot floor. Installing BOTH
-    // CategoryColorExtension (`instanceCategoryIndex`) AND STTDataFilterExtension
-    // (`filterValue`) would make 17 — a fatal per-pipeline link FAILURE (blank
-    // paths) on the many GPUs that report exactly 16 slots. The path family
-    // never uses the GPU category path (categorical color is expanded on the
-    // CPU into `getColor`; `gpuPalette` is always null here), so the
-    // CategoryColorExtension is pure dead weight. When a column filter is
-    // installed we therefore DROP the idle CategoryColorExtension and spend that
-    // one free slot on `filterValue` instead — net 16, no overflow. `filterProp`
-    // is a per-LAYER constant, so the list stays stable across this layer's
-    // sublayers (the shader-cache contract holds). See the `filterProperty`
-    // prop docs.
+    // The CategoryColorExtension is deliberately absent (see the
+    // `timeFilterExtension` field docstring): it could never fire on this
+    // family, but its `initializeState` registers `instanceCategoryIndex` and
+    // injects the matching `in` declaration unconditionally, so carrying it cost
+    // a real slot out of WebGL2's 16.
     const extensions = this.composeExtensions(
       filterProp
         ? [this.timeFilterExtension, this.dataFilterExtension]
-        : [this.timeFilterExtension, this.categoryColorExtension],
+        : [this.timeFilterExtension],
     );
+
+    // Path topology. `'loop'` closes the ring joint at the seam instead of
+    // capping it, but with binary data the tessellator takes the caller's
+    // `startIndices` verbatim and expects the +2 wrap vertices to be present
+    // already — check the tile's own buffers and say so precisely when they
+    // aren't, rather than shipping a mis-capped final segment.
+    const pathType = this.props.pathType ?? 'open';
+    if (
+      pathType === 'loop' &&
+      !hasLoopPadding(
+        prepared.data.attributes.getPath.value,
+        prepared.dims,
+        prepared.data.startIndices,
+        prepared.data.length,
+      )
+    ) {
+      warnOnce(
+        'AnimatedPathLayer:loopPaddingMissing',
+        "[AnimatedPathLayer] pathType:'loop' needs each feature's vertex run to " +
+          'END with a repeat of its FIRST TWO vertices (deck.gl tessellates a ' +
+          'closed path as numPoints + 2 and, on binary data, never synthesizes ' +
+          'that padding). This archive does not carry it, so the last segment of ' +
+          "every ring renders short and mis-capped. Use pathType:'open', or " +
+          'rebuild the archive with the wrap vertices baked in.',
+      );
+    }
+
+    // Class choice is part of the sublayer IDENTITY, not just its props: deck
+    // matches a new layer to an old one by id ALONE and then calls
+    // `_transferState` + `_update`, never `_initialize`. A `pickable` flip
+    // therefore hands the stripped NoPickingPathLayer's transferred state (its
+    // AttributeManager, minus the `instancePickingColors` its `initializeState`
+    // removed) to a stock PathLayer, whose `updateState` only rebuilds the model
+    // on `extensionsChanged` — so the null-picking-colour shader stays compiled
+    // and picking is dead for the life of the layer (and the mirror image on the
+    // reverse flip). Folding the class into the id makes the swap a REPLACEMENT,
+    // which runs `_initialize` and gets a correct pipeline either way. Derived
+    // from the resolved class, so a `_subLayerProps.paths.type` override — the
+    // same class in both branches — keeps a stable id.
+    const SubLayerClass = this.getSubLayerClass(
+      'paths',
+      this.props.pickable ? PathLayer : NoPickingPathLayer,
+    );
+    const instanceKey = `${prepared.tileKey}:${
+      SubLayerClass === NoPickingPathLayer ? 'np' : 'pk'
+    }`;
+
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.paths` overrides.
     // Only runs inside this cache-gated build path — never per frame.
-    // positionFormat is passed explicitly (sublayerProps beats inheritance):
-    // the composite's default 'XYZ' would misread 2D tile buffers.
-    const props = this.composeSubLayerProps('paths', prepared.tileKey, {
+    // NOTE no `positionFormat`: PathLayer derives the geometry stride from
+    // `data.attributes.getPath.size` and only falls back to `positionFormat`
+    // when the descriptor carries no `size` (`Tesselator.updateGeometry`) — and
+    // this layer always sets it. Passing it was inert.
+    const props = this.composeSubLayerProps('paths', instanceKey, {
       data: prepared.data,
       // Identity comparator pairs with the preparedTileCache: deck.gl skips
       // the entire prop-diff for `data` when the same object reference
       // comes back.
       dataComparator: (a: any, b: any) => a === b,
-      _pathType: 'open',
-      positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
+      _pathType: pathType,
       // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
       widthUnits: this.props.widthUnits,
       widthScale: this.props.widthScale,
@@ -1224,9 +1572,6 @@ export class AnimatedPathLayer<
       tile: prepared.tile,
       sttFeatures: prepared.features,
 
-      useCategoryColor: useGpuCategory,
-      ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
-
       // STTDataFilterExtension wiring (only when a filterProperty is set). The
       // constant getFilterValue is the fallback for tiles missing the column;
       // filterEnabled is additionally gated on THIS tile having baked it.
@@ -1241,30 +1586,24 @@ export class AnimatedPathLayer<
     });
     // Pickable sublayers must use the stock PathLayer: NoPickingPathLayer
     // strips `instancePickingColors`, so forwarding pickable:true into it
-    // produced silently-broken picking (zeroed picking colors). The stock
-    // layer's extra attribute can push the fp64 + TimeFilter + CategoryColor
-    // combo past WebGL2's 16-slot minimum on GPUs that report exactly 16 —
-    // accepted, with a warning. The picked instance index is the path index
-    // within the tile; getPickingInfo decodes its properties from there.
-    // A `_subLayerProps: { paths: { type } }` override beats both defaults.
-    if (this.props.pickable) {
+    // produced silently-broken picking (zeroed picking colors). The picked
+    // instance index is the path index within the tile; getPickingInfo decodes
+    // its properties from there. Non-pickable sublayers take the stripped
+    // subclass, which reclaims that slot — with the CategoryColorExtension gone
+    // the four combinations sit at 15 (default), 16 (filter), 16 (pickable) and
+    // 17 (filter + pickable); only the last one exceeds WebGL2's guaranteed
+    // 16-slot floor, so that is the only case worth warning about. See
+    // `no-picking-path-layer.ts` and the `filterProperty` prop docs.
+    if (this.props.pickable && filterProp) {
       warnOnce(
         'AnimatedPathLayer:pickableAttributeBudget',
-        '[AnimatedPathLayer] pickable:true renders through the stock PathLayer ' +
-          'so picking works, but its instancePickingColors attribute can exceed ' +
-          "WebGL2's 16-vertex-attribute minimum on some GPUs (link warning).",
+        '[AnimatedPathLayer] pickable:true + filterProperty needs 17 vertex ' +
+          'attributes (stock PathLayer 13 + time 3 + filterValue 1), one past ' +
+          "WebGL2's guaranteed 16 — the pipeline can fail to link (blank paths) " +
+          'on GPUs that report exactly 16. Drop one of the two, or filter with ' +
+          'AnimatedPointLayer, where the budget is roomy.',
       );
-      const SubLayerClass = this.getSubLayerClass('paths', PathLayer);
-      return new SubLayerClass(props as any);
     }
-    // NoPickingPathLayer drops `instancePickingColors` from both the JS
-    // attribute-manager registration AND the compiled vertex shader. With
-    // PathLayer's hard-coded 13 attrs + TimeFilterExtension's 3 +
-    // CategoryColorExtension's 1 = 17, the layer otherwise blows past the
-    // WebGL2 16-attribute minimum and the per-pipeline link fails on GPUs
-    // that report exactly 16. Sublayers here are non-pickable, so there is
-    // no behavioural change. See `no-picking-path-layer.ts`.
-    const SubLayerClass = this.getSubLayerClass('paths', NoPickingPathLayer);
     return new SubLayerClass(props as any);
   }
 }

@@ -101,9 +101,6 @@ export class STTPointLayer implements SttRenderNode {
 
   /** (Re)build points from decoded tiles. Rebases all times to one scene-wide origin. */
   setTiles(tiles: Tile[]): void {
-    this.collection.removeAll();
-    this.entries = [];
-
     // Pure geometry/colour/rebase assembly lives in the Cesium-free builder;
     // this method only turns each FeaturePoint into a Cesium primitive.
     const build = buildPointEntries(tiles, {
@@ -111,7 +108,16 @@ export class STTPointLayer implements SttRenderNode {
       colorMapping: this.opts.colorMapping,
       colorMappingDefault: this.opts.colorMappingDefault,
     });
-    if (build.points.length === 0) return; // no points — leave the prior timeOrigin untouched
+    // Build BEFORE the teardown, and bail on an empty result while the old
+    // primitives are still standing. Selection reports an empty visible set for
+    // the frames between a viewport change and the first decoded tile of the new
+    // set; tearing down first turns that transient into a blank frame — the
+    // "tiles genuinely in view flash out" symptom. Holding the previous points is
+    // safe even when the emptiness is permanent: they sit at their true ECEF
+    // positions, which the camera has by then left behind.
+    if (build.points.length === 0) return; // also leaves the prior timeOrigin untouched
+    this.collection.removeAll();
+    this.entries = [];
     this.timeOrigin = build.timeOrigin;
 
     const pixelSize = this.opts.pixelSize ?? 6;

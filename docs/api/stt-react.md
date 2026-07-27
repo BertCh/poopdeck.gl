@@ -92,24 +92,27 @@ const layers = [
 
 ### `PlaybackState` (return value)
 
-| Member                                                           | Type                                           | Description                                                                                                                                    |
-| :--------------------------------------------------------------- | :--------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
-| `timeController`                                                 | `TimeController`                               | The shared animation clock. Hand it to layers via `useDeckClock`'s `userData` channel, or pass it directly as a layer's `timeController` prop. |
-| `governor`                                                       | `PlaybackGovernor \| null`                     | The buffer-gating governor (null only on the first paint). Pass to `PlaybackControls`.                                                         |
-| `tilesetRef`                                                     | `React.MutableRefObject<BufferSource \| null>` | Handle to the first `required` registered tileset (e.g. for polling `getVisibleTiles`).                                                        |
-| `currentTime`                                                    | `number`                                       | 20 Hz-throttled UI clock (slider/label only, not the layers).                                                                                  |
-| `isPlaying`                                                      | `boolean`                                      | User-intent play bit, mirrored from the governor.                                                                                              |
-| `bufferState`                                                    | `PlaybackGovernorState`                        | Governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`).                                                                    |
-| `speedMultiplier`                                                | `number`                                       | Current speed multiplier over `baseSpeed`.                                                                                                     |
-| `currentSpeedMultiplier`                                         | `number`                                       | Same value under `PlaybackControls`' prop name, so `<PlaybackControls {...playback} />` spreads cleanly.                                       |
-| `timeRange`                                                      | `{ start: number; end: number } \| undefined`  | The `timeRange` option echoed back (for the spread).                                                                                           |
-| `autoSpeed`                                                      | `boolean`                                      | Whether opt-in Auto speed mode is active.                                                                                                      |
-| `overviewPreload`                                                | `OverviewPreloadResult \| null`                | Storyboard-tier preload outcome (perf HUD).                                                                                                    |
-| `baseAnimationSpeed`                                             | `number`                                       | The resolved `baseSpeed` (defaulted to 1000).                                                                                                  |
-| `onPlayPause` / `onSeek` / `onSpeedChange` / `onAutoSpeedSelect` | handlers                                       | Transport callbacks for `PlaybackControls`.                                                                                                    |
-| `play` / `pause`                                                 | `() => void`                                   | Imperative play/pause for visibility-driven embeds.                                                                                            |
-| `registry`                                                       | `SourceRegistry`                               | Multi-source registration API for the governor — see below. Wire each layer's `onTilesetReady`/`onBufferChange` through it.                    |
-| `handleOverviewPreload`                                          | `(result: OverviewPreloadResult) => void`      | Pass as the layer's overview-preload callback.                                                                                                 |
+| Member                                                           | Type                                           | Description                                                                                                                                                          |
+| :--------------------------------------------------------------- | :--------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeController`                                                 | `TimeController`                               | The shared animation clock. Hand it to layers via `useDeckClock`'s `userData` channel, or pass it directly as a layer's `timeController` prop.                       |
+| `governor`                                                       | `PlaybackGovernor \| null`                     | The buffer-gating governor (null only on the first paint). Pass to `PlaybackControls`.                                                                               |
+| `tilesetRef`                                                     | `React.MutableRefObject<BufferSource \| null>` | Handle to the first `required` registered tileset (e.g. for polling `getVisibleTiles`).                                                                              |
+| `currentTime`                                                    | `number`                                       | 20 Hz-throttled UI clock (slider/label only, not the layers).                                                                                                        |
+| `isPlaying`                                                      | `boolean`                                      | User-intent play bit, mirrored from the governor.                                                                                                                    |
+| `bufferState`                                                    | `PlaybackGovernorState`                        | Governor machine state (`idle`/`starting`/`playing`/`buffering`/`seeking`).                                                                                          |
+| `speedMultiplier`                                                | `number`                                       | Current speed multiplier over `baseSpeed`.                                                                                                                           |
+| `currentSpeedMultiplier`                                         | `number`                                       | Same value under `PlaybackControls`' prop name, so `<PlaybackControls {...playback} />` spreads cleanly.                                                             |
+| `timeRange`                                                      | `{ start: number; end: number } \| undefined`  | The `timeRange` option echoed back (for the spread).                                                                                                                 |
+| `autoSpeed`                                                      | `boolean`                                      | Whether opt-in Auto speed mode is active.                                                                                                                            |
+| `ended`                                                          | `boolean`                                      | Media-element `ended`: parked at a non-looping range boundary. Mirrored from the governor's `ended` bit + `'ended'` event; drives the transport's replay affordance. |
+| `loop`                                                           | `boolean`                                      | Live loop state, seeded from `UsePlaybackOptions.loop` (default `true`).                                                                                             |
+| `overviewPreload`                                                | `OverviewPreloadResult \| null`                | Storyboard-tier preload outcome (perf HUD).                                                                                                                          |
+| `baseAnimationSpeed`                                             | `number`                                       | The resolved `baseSpeed` (defaulted to 1000).                                                                                                                        |
+| `onPlayPause` / `onSeek` / `onSpeedChange` / `onAutoSpeedSelect` | handlers                                       | Transport callbacks for `PlaybackControls`.                                                                                                                          |
+| `onLoopToggle`                                                   | `() => void`                                   | Flip looping at the range end. Pushed to the clock via `TimeController.setLoop`; never moves the playhead.                                                           |
+| `play` / `pause`                                                 | `() => void`                                   | Imperative play/pause for visibility-driven embeds.                                                                                                                  |
+| `registry`                                                       | `SourceRegistry`                               | Multi-source registration API for the governor — see below. Wire each layer's `onTilesetReady`/`onBufferChange` through it.                                          |
+| `handleOverviewPreload`                                          | `(result: OverviewPreloadResult) => void`      | Pass as the layer's overview-preload callback.                                                                                                                       |
 
 ### `SourceRegistry`
 
@@ -180,19 +183,86 @@ usePlaybackHotkeys(playback, timeRange, isFullscreen);
 | `Space` / `K`  | Toggle play–pause                             |
 | `←` / `→`      | Committed seek −/+2 % of the range            |
 | `J` / `L`      | Committed seek −/+10 % of the range           |
+| `,` / `.`      | Fine step −/+0.2 % of the range               |
 | `Home` / `End` | Jump to range start / end                     |
-| `↑` / `↓`      | Step speed up / down the shared preset ladder |
+| `<` / `>`      | Step speed down / up the shared preset ladder |
 | `0`–`9`        | Jump to N×10 % of the range                   |
 
 Held keys auto-repeat; committed seeks are rate-capped to ~6/s so a held arrow is
 a stream of seeks, not a `flushPrefetch` storm.
 
+The same table is exported as data — `PLAYBACK_SHORTCUTS: readonly PlaybackShortcut[]`
+— so a shortcuts UI can render it without a copy that drifts. `PlaybackControls`'
+`keyboardShortcuts` prop renders exactly that array.
+
+### Two deliberate yields
+
+The player sits on top of a map and inside a normal focus order, so it declines
+two keys rather than break what is underneath:
+
+- **Speed is `<` / `>`, not `↑` / `↓`.** deck.gl, MapLibre and Cesium all pan on
+  the arrow keys once their canvas has focus (deck sets `tabIndex = 0` on it and
+  defaults `keyboard: true`). A window-level listener claiming `↑`/`↓` fires _in
+  addition to_ the map's own pan — one keypress, two reactions. `←`/`→` are for
+  the same reason yielded whenever the event target is a `<canvas>` or a
+  `[data-poopdeck-map]` element: **map focused → arrows pan; anything else →
+  arrows seek.**
+- **`Space` is yielded to a focused button/link.** A `<button>` activates on
+  Space, and `preventDefault()` on the keydown suppresses that activation — so a
+  window-level Space handler makes every button on the surface unpressable by
+  keyboard, including the transport's own. `K` is unaffected and still toggles
+  play–pause from anywhere.
+
+## useReducedMotion
+
+A live `prefers-reduced-motion: reduce` subscription, exported because the
+transport bar needs it: several of its surfaces are styled with **inline**
+`transition` / `animation` (so the controls survive a consumer whose Tailwind
+build never scanned `node_modules`), and an inline style cannot be gated by a
+CSS media query.
+
+```typescript
+import { useReducedMotion } from '@poopdeck.gl/react';
+
+const reducedMotion = useReducedMotion();
+<div style={{ transition: reducedMotion ? undefined : 'opacity 200ms ease' }} />;
+```
+
+Backed by `useSyncExternalStore`, so the **first** paint is already correct — a
+`useState` + effect version renders one animated frame before correcting itself,
+which is exactly the frame the setting exists to prevent. SSR-safe
+(`getServerSnapshot` returns `false`).
+
 ## PlaybackControls
 
-The transport-bar UI: play/pause + restart, a drag-aware scrubber with a buffered
-bar, hover timestamp, ETA chip, a data-volume density strip, speed presets + fine slider + Auto, and an optional hover-preview toggle. Drag-scrubbing talks to
-the governor directly (`beginScrub`/`scrubTo`/`endScrub`); committed seeks route
-through `onSeek` so the page owns the commit path.
+The transport-bar UI: restart / ∓10 % skip / play-pause / loop, a drag-aware
+scrubber with a visible thumb, buffered bar, hover timestamp, ETA chip and a
+data-volume density strip, an absolute-UTC **and** elapsed-of-total readout,
+speed presets + fine slider + Auto, and optional hover-preview and
+keyboard-shortcut disclosures. Drag-scrubbing talks to the governor directly
+(`beginScrub`/`scrubTo`/`endScrub`); committed seeks route through `onSeek` so
+the page owns the commit path.
+
+Conventions it deliberately borrows from video players, and the reasons:
+
+- **The scrub target is 24 px tall** even though the painted track is 6 px
+  (8 px while active) — WCAG 2.5.8, and a 6 px grab region is unusable on
+  touch. The density strip is inside that region, so clicking the histogram
+  seeks, which is what everyone tries first.
+- **Arrow keys on the focused scrubber step the same 2 %** the global hotkey
+  map uses. The input's native `step` stays at range/500 because it also
+  quantizes _dragging_; keyboard movement is handled explicitly instead of
+  riding on it.
+- **The live region holds transitions only** (buffering, degraded creep,
+  ended). The remaining-time countdown next to it changes every second — inside
+  `aria-live` a screen reader would recite it forever.
+- **Speed is a real radio group** (`<fieldset>` of visually-hidden radios), not
+  toggle buttons with `aria-pressed`: the presets and Auto are mutually
+  exclusive, and native radios bring roving arrow-key traversal for free.
+- **`ended` swaps the play glyph for replay**, and restart _plays_ — a control
+  that leaves you paused at frame zero is a seek, not a replay.
+- Animation (the buffering spinner, the track/thumb growth, the progress-fill
+  smoothing) is gated on `prefers-reduced-motion` via `useReducedMotion`.
 
 `usePlayback`'s return is spread-compatible — it echoes `timeRange` and
 exposes the speed under both `speedMultiplier` and `currentSpeedMultiplier`:
@@ -224,21 +294,26 @@ Or pass the props individually to interpose on any of them:
 
 ### `PlaybackControlsProps`
 
-| Prop                     | Type                                | Description                                                                                                                                       |
-| :----------------------- | :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `currentTime`            | `number`                            | Current playhead (sim-ms); the throttled UI clock.                                                                                                |
-| `timeRange`              | `{ start: number; end: number }`    | Full data range; drives the bar geometry and slider bounds.                                                                                       |
-| `isPlaying`              | `boolean`                           | User intent — drives the play/pause glyph.                                                                                                        |
-| `bufferState`            | `PlaybackGovernorState`             | Governor machine state — drives the buffering chip.                                                                                               |
-| `governor`               | `PlaybackGovernor \| null`          | Scrub previews/commits target it directly; null falls back to `onSeek`.                                                                           |
-| `onPlayPause`            | `() => void`                        | Toggle play/pause.                                                                                                                                |
-| `onSeek`                 | `(time: number) => void`            | Committed seek (keyboard arrows on the slider, jump-to-start).                                                                                    |
-| `onSpeedChange`          | `(multiplier: number) => void`      | Speed preset / slider change.                                                                                                                     |
-| `currentSpeedMultiplier` | `number`                            | Active speed multiplier (lights the matching preset).                                                                                             |
-| `targetPlaybackSeconds`  | `number`                            | Optional (default `60`). Wall-seconds the dataset plays in at 1× — drives the "time left" readout.                                                |
-| `autoSpeed`              | `boolean`                           | Whether Auto speed mode is active.                                                                                                                |
-| `onAutoSpeedSelect`      | `() => void`                        | Select Auto speed (any explicit choice exits it).                                                                                                 |
-| `renderPreview`          | `(time: number) => React.ReactNode` | Optional. When supplied, a "Preview" toggle appears; hovering the scrubber renders the map at the settled hovered time. Pair with `HoverPreview`. |
+| Prop                     | Type                                | Description                                                                                                                                        |
+| :----------------------- | :---------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `currentTime`            | `number`                            | Current playhead (sim-ms); the throttled UI clock.                                                                                                 |
+| `timeRange`              | `{ start: number; end: number }`    | Full data range; drives the bar geometry and slider bounds.                                                                                        |
+| `isPlaying`              | `boolean`                           | User intent — drives the play/pause glyph.                                                                                                         |
+| `bufferState`            | `PlaybackGovernorState`             | Governor machine state — drives the buffering chip.                                                                                                |
+| `governor`               | `PlaybackGovernor \| null`          | Scrub previews/commits target it directly; null falls back to `onSeek`.                                                                            |
+| `onPlayPause`            | `() => void`                        | Toggle play/pause.                                                                                                                                 |
+| `onSeek`                 | `(time: number) => void`            | Committed seek (keyboard arrows on the slider, jump-to-start).                                                                                     |
+| `onSpeedChange`          | `(multiplier: number) => void`      | Speed preset / slider change.                                                                                                                      |
+| `currentSpeedMultiplier` | `number`                            | Active speed multiplier (lights the matching preset).                                                                                              |
+| `targetPlaybackSeconds`  | `number`                            | Optional (default `60`). Wall-seconds the dataset plays in at 1× — drives the "time left" readout.                                                 |
+| `autoSpeed`              | `boolean`                           | Whether Auto speed mode is active.                                                                                                                 |
+| `onAutoSpeedSelect`      | `() => void`                        | Select Auto speed (any explicit choice exits it).                                                                                                  |
+| `ended`                  | `boolean`                           | Optional. Parked at a non-looping range boundary — shows the replay glyph and announces "Ended". `usePlayback` mirrors it off the governor.        |
+| `loop`                   | `boolean`                           | Optional. Current loop state; rendered only alongside `onLoopToggle`.                                                                              |
+| `onLoopToggle`           | `() => void`                        | Optional. Supply to render the loop toggle.                                                                                                        |
+| `keyboardShortcuts`      | `boolean`                           | Optional (default `false`). Set on surfaces that also mount `usePlaybackHotkeys`: adds a shortcuts disclosure and appends keys to button tooltips. |
+| `renderPreview`          | `(time: number) => React.ReactNode` | Optional. When supplied, a "Preview" toggle appears; hovering the scrubber renders the map at the settled hovered time. Pair with `HoverPreview`.  |
+| `className` / `style`    | `string` / `React.CSSProperties`    | Optional. Merged onto the root element — `style` is where you re-map the theme tokens for one instance.                                            |
 
 ## HoverPreview
 

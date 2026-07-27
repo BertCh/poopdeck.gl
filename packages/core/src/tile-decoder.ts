@@ -91,7 +91,7 @@ export interface TileDecoder {
    * (built + blake3-validated from `manifest.schemas` at archive open) so v2
    * frames can resolve their 16-byte template-hash references.
    *
-   * Distribution contract (packed v2 design §4.4, normative): the archive
+   * Distribution contract (normative): the archive
    * calls this once per decoder; a pool implementation MUST (re)send the
    * registry to every worker on EVERY spawn AND respawn, BEFORE dispatching
    * decodes to it, and the inline decoder + OPFS warm path share the same

@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
 import {
   BOUNDS,
@@ -42,11 +42,11 @@ function gatedBatchFn(batches: GatedBatch[]) {
     });
 }
 
-describe('SpatiotemporalTileset.flushPrefetch', () => {
+describe('SpatioTemporalTileset.flushPrefetch', () => {
   it('aborts in-flight PREFETCH batches without touching priority in-flight', async () => {
     const batches: GatedBatch[] = [];
     const loaded: TileId[] = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,
@@ -91,7 +91,7 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
 
   it('clears QUEUED prefetch tiles on the per-tile (non-batch) path', async () => {
     const singles: Array<{ id: TileId; signal: AbortSignal | undefined }> = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,
@@ -133,7 +133,7 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
     // (cancelSupersededRequests would abort in-flight work on any needed-set
     // change, but only a flush empties the queue).
     const singles: Array<{ id: TileId; signal: AbortSignal | undefined }> = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,
@@ -173,7 +173,7 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
   });
 
   it('does NOT flush on ordinary playback steps (≤ one window)', async () => {
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,
@@ -211,7 +211,7 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
     // flushed tiles' headers, so a later selection (or prefetch pass) can
     // re-enqueue them — a lingering unloaded header would block that forever.
     const loaded: TileId[] = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,
@@ -253,7 +253,7 @@ describe('SpatiotemporalTileset.flushPrefetch', () => {
   };
 
   function prefetchingTileset(batches: GatedBatch[]) {
-    return new SpatiotemporalTileset({
+    return new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: true,

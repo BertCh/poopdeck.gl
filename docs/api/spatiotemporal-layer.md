@@ -2,7 +2,7 @@
 
 The `SpatioTemporalLayer` is the base layer for visualizing spatiotemporal data from STT archives. It handles data loading, caching, time synchronization, and coordinate decoding, allowing subclasses to focus purely on rendering.
 
-It follows the deck.gl [TileLayer](https://deck.gl/docs/api-reference/geo-layers/tile-layer) architecture: a [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) (from `@poopdeck.gl/core`) manages tile selection and request scheduling, while the layer turns visible tiles into sublayers.
+It follows the deck.gl [TileLayer](https://deck.gl/docs/api-reference/geo-layers/tile-layer) architecture: a [`SpatioTemporalTileset`](./spatiotemporal-tileset.md) (from `@poopdeck.gl/core`) manages tile selection and request scheduling, while the layer turns visible tiles into sublayers.
 
 ## Installation
 
@@ -88,7 +88,7 @@ point lives at exactly one zoom: coarse tiles are a sparse overview and finer
 tiles add only the residual, so zooming in streams new detail without re-fetching
 the coarse cloud.
 
-Threaded straight to `SpatiotemporalTilesetOptions.lodMode`.
+Threaded straight to `SpatioTemporalTilesetOptions.lodMode`.
 
 ### Scrub-LOD (motion tier)
 
@@ -111,7 +111,7 @@ The degraded tier is preview-only: the buffered-runway and gate math and the
 prefetch planner keep tracking the fine tier, and release restores it. `null`
 (the default) is the kill switch — scrub state is stored but changes nothing.
 
-Threaded straight to `SpatiotemporalTilesetOptions.scrubLod`; see the tileset's
+Threaded straight to `SpatioTemporalTilesetOptions.scrubLod`; see the tileset's
 [`ScrubLodOptions`](./spatiotemporal-tileset.md#scrub-lod-motion-tier) for exact
 field semantics.
 
@@ -158,7 +158,7 @@ only when `overviewPreload` is truthy.
 | `onTileLoad`     | `(tile: Tile) => void`                                    | Called when a single tile successfully loads.                                                                                                                                                                                                                                                 |
 | `onTileUnload`   | `(tile: Tile) => void`                                    | Called when a tile is evicted from the cache.                                                                                                                                                                                                                                                 |
 | `onTileError`    | `(error: Error, tileId?: TileId) => void`                 | Called when a tile's fetch/decode fails after the loader's retries. `tileId` is `undefined` for dataset-level failures (a selection pass that could not query the directory). Default (`null`) logs via `console.error`, matching TileLayer.                                                  |
-| `onTilesetReady` | `(tileset: SpatiotemporalTileset & BufferSource) => void` | Fired ONCE per archive/tileset initialization (and again if `data` changes), with the live tileset. The tileset satisfies the [`BufferSource`](./playback-governor.md) readiness contract, so apps hand it straight to a `PlaybackGovernor` via `governor.setSource(tileset)`.                |
+| `onTilesetReady` | `(tileset: SpatioTemporalTileset & BufferSource) => void` | Fired ONCE per archive/tileset initialization (and again if `data` changes), with the live tileset. The tileset satisfies the [`BufferSource`](./playback-governor.md) readiness contract, so apps hand it straight to a `PlaybackGovernor` via `governor.setSource(tileset)`.                |
 | `onBufferChange` | `(runway: BufferedRunway) => void`                        | Forwarded from the tileset's buffer bookkeeping: fires when the buffered runway around the playhead crosses a threshold (not per tile load). Forward this to `PlaybackGovernor.notifyBufferChange(runway)` so gating reacts immediately instead of waiting for the governor's poll cadence.   |
 
 ### Advanced Options
@@ -187,7 +187,7 @@ TileLayer-convention picking enrichment. A hit fills `info.tile` / `info.sourceT
 | :-------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `renderLayers()`                                    | Override to render visualization sublayers from `this.state.tiles`.                                                                                                           |
 | `onMetadataLoaded(metadata)`                        | Called once per archive init, right after metadata arrives (and after the supersession race guard).                                                                           |
-| `getTilesetOptionOverrides(metadata)`               | Partial `SpatiotemporalTilesetOptions` spread over the base tileset wiring at construction time (overrides win). How `H3SummaryLayer` swaps zoom range / refinement strategy. |
+| `getTilesetOptionOverrides(metadata)`               | Partial `SpatioTemporalTilesetOptions` spread over the base tileset wiring at construction time (overrides win). How `H3SummaryLayer` swaps zoom range / refinement strategy. |
 | `getEffectiveTimeWindow()`                          | The time window used for tile loading. `AnimatedTripsLayer` overrides it to `max(timeWindow, 2 × trailLength)`.                                                               |
 | `composeSubLayerProps(shortId, instanceKey, props)` | Composes one sublayer's props through deck's `CompositeLayer.getSubLayerProps()` so inherited composite props and the user's `_subLayerProps[shortId]` overrides apply.       |
 | `composeExtensions(internal)`                       | Appends the user's top-level `extensions` after the layer's internal extension list — the hook that makes custom deck.gl extensions work (see below).                         |

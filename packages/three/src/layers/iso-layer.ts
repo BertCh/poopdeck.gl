@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `SttIsoLayer` — animated density iso-lines, the Three port of the deck AV
+ * `STTIsoLayer` — animated density iso-lines, the Three port of the deck AV
  * `lidarIso` / `lidarIso3d` modes (`AnimatedPathLayer` over windowed contour
  * LineStrings). Each contour is split into `LineSegments` with per-vertex time
  * (`sttStart` / `sttEnd`) and colour (`sttColor`, the `density_band` ramp), and a
@@ -22,7 +22,7 @@ import {
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { InstanceProvenance, encodePickId } from '@poopdeck.gl/core/picking';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -38,8 +38,8 @@ import {
 import {
   resolveIdPick,
   featureTileKey,
-  type SttIdPickInfo,
-  type SttIdPickable,
+  type STTIdPickInfo,
+  type STTIdPickable,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
@@ -63,7 +63,7 @@ export interface STTIsoLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 200, 255, 220];
 
-export class STTIsoLayer extends BaseSttLayer implements SttIdPickable {
+export class STTIsoLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Group();
   private lines: LineSegments;
@@ -113,7 +113,7 @@ export class STTIsoLayer extends BaseSttLayer implements SttIdPickable {
     this.object.add(this.lines);
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     const proj = ctx.projection;
@@ -291,12 +291,12 @@ export class STTIsoLayer extends BaseSttLayer implements SttIdPickable {
 
   /**
    * Resolve a decoded merged-CONTOUR index (from a GPU id-buffer readback) to a
-   * normalised {@link SttIdPickInfo} (`kind: 'iso'`), or `null` for a miss. The
+   * normalised {@link STTIdPickInfo} (`kind: 'iso'`), or `null` for a miss. The
    * coordinate is the contour's FIRST source vertex (`startIndices[i]`, the
    * standard indexed-geometry path — iso contours are LineStrings, always with
    * `startIndices`). Pure — the unit-tested seam; call it directly.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -336,7 +336,7 @@ export class STTIsoLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.lines.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

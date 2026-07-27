@@ -10,8 +10,8 @@
  *
  * Output is always packed **0..1 float RGBA** ready for a Three vertex attribute.
  *
- * The categorical / ramp algorithms now live in the framework-free
- * `@poopdeck.gl/core/style` kernel (Phase 2 dedup — see
+ * The categorical / ramp algorithms live in the framework-free
+ * `@poopdeck.gl/core/style` kernel, one copy shared by every backend (see
  * docs/roadmap/renderer-architecture.md); the functions below are thin
  * three-side adapters that preserve three's exact public API (mutable `RGBA`,
  * `.mapping`/`.fallback` spec shapes, f32 0..1 output). `expandRgbColumns` keeps

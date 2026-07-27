@@ -17,7 +17,13 @@
  * sublayer props. They pin: construction defaults, cross-tile pooling + track
  * grouping into one model per track, pose interpolation, inactive-track
  * exclusion, the per-instance color bake, SimpleMeshLayer prop forwarding,
- * per-category meshMapping dispatch, and the picking object shape.
+ * per-category meshMapping dispatch, and the picking object shape — plus the
+ * per-frame contracts the buffers rest on: grow-only instance buffers reused
+ * across ticks, ONE stable bound getOrientation/getScale pair carrying explicit
+ * updateTriggers (deck calls every function accessor "equal"), separate scratch
+ * arrays for the two (deck reads both before consuming either), lazy pick rows,
+ * incremental track-index maintenance, `pickable` inheritance, the geometry-kind
+ * guard, and the `quaternionColumn` attitude path.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -587,7 +593,22 @@ describe('AnimatedMeshLayer', () => {
     expect(props._instanced).toBe(false);
     expect(props.texture).toBe(tex);
     expect(props.getTranslation).toEqual([0, 0, 0.8]);
-    expect(props.pickable).toBe(true);
+  });
+
+  it('INHERITS pickable instead of hardcoding it on the sublayer', () => {
+    // `pickable: true` in sublayerProps beat the inherited value through
+    // Object.assign, so `pickable={false}` still produced hits and still paid
+    // for instancePickingColors + the picking pass.
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    expect(render([tile], 500, { pickable: false })[0].props.pickable).toBe(
+      false,
+    );
+    expect(render([tile], 500, { pickable: true })[0].props.pickable).toBe(
+      true,
+    );
   });
 
   // ── Per-category meshMapping dispatch ─────────────────────────────────────
@@ -687,7 +708,7 @@ describe('AnimatedMeshLayer', () => {
 
   // ── Picking ──────────────────────────────────────────────────────────────
 
-  it('attaches per-track pick rows and resolves info.object on a hit', () => {
+  it('carries per-track SAMPLES and builds the pick row lazily on a hit', () => {
     const tile = makeObjTile([
       {
         track: 't-7',
@@ -718,12 +739,14 @@ describe('AnimatedMeshLayer', () => {
     layer.state = { tiles: [tile] };
     layer._currentTime = 500;
     const mesh = (layer as any).renderLayers()[0];
-    const rows = mesh.props.sttPickRows;
-    expect(Array.isArray(rows)).toBe(true);
-    expect(rows.length).toBe(1);
+    // Rows are NOT baked per frame — the sublayer carries the active samples
+    // and getPickingInfo decodes only the hit one, at event rate.
+    expect(mesh.props.sttPickRows).toBeUndefined();
+    const samples = mesh.props.sttPickSamples;
+    expect(Array.isArray(samples)).toBe(true);
+    expect(samples.length).toBe(1);
     expect(mesh.props.sttPickStride).toBe(1);
-    expect(rows[0].track_id).toBe('t-7');
-    expect(rows[0].category).toBe('car');
+    expect(samples[0].track.trackId).toBe('t-7');
 
     const info: any = { index: 0 };
     const out = (layer as any).getPickingInfo({ info, sourceLayer: mesh });
@@ -758,7 +781,12 @@ describe('AnimatedMeshLayer', () => {
 
   // ── Caching / lifecycle ──────────────────────────────────────────────────
 
-  it('rebuilds the pooled index when the tile set changes', () => {
+  it('refreshes the pooled index INCREMENTALLY when the tile set changes', () => {
+    // The index used to be a full kernelBuildTrackIndex re-pool of every
+    // resident snapshot on any tile-set change — the frame-time spike the
+    // TrackIndexMaintainer exists to remove. Now only the ADDED tile is pooled
+    // and only the tracks it touches are re-sorted; the returned Map is
+    // reference-stable by design, so identity is no longer the signal.
     const layer = makeLayer();
     const a = makeObjTile(
       [
@@ -771,10 +799,16 @@ describe('AnimatedMeshLayer', () => {
     layer._currentTime = 500;
     (layer as any).renderLayers();
     const firstIndex = (layer as any).trackIndex;
-    // Same tiles ref → cached index reused.
+    const trackA = firstIndex.get('A');
+    expect(firstIndex.size).toBe(1);
+
+    // Same tiles ref → no re-sync at all (the maintainer is never called, so
+    // its instrumentation still reads the first sync's result).
     (layer as any).renderLayers();
     expect((layer as any).trackIndex).toBe(firstIndex);
-    // New tiles array → rebuild.
+
+    // New tiles array with one ADDED tile: the index gains B, and only B is
+    // re-sorted — A's pooled keyframes are not re-touched.
     layer.state = {
       tiles: [
         a,
@@ -788,11 +822,228 @@ describe('AnimatedMeshLayer', () => {
       ],
     };
     (layer as any).renderLayers();
-    expect((layer as any).trackIndex).not.toBe(firstIndex);
-    expect((layer as any).trackIndex.size).toBe(2);
+    const second = (layer as any).trackIndex;
+    expect(second.size).toBe(2);
+    expect((layer as any).trackMaintainer.resortedTrackIds).toEqual(['B']);
+    // A's Track object survives untouched across the churn.
+    expect(second.get('A')).toBe(trackA);
   });
 
   it('returns [] for an empty tile set', () => {
     expect(render([], 0)).toEqual([]);
+  });
+
+  // ── Instance buffers are grow-only (review fix 3) ─────────────────────────
+
+  it('reuses the SAME instance buffers across frames instead of reallocating', () => {
+    const layer = makeLayer();
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0 },
+      { track: 'A', lon: 10, lat: 0, t: 1000, heading: Math.PI },
+    ]);
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 250;
+    const first = (layer as any).renderLayers()[0];
+    const buffers = (layer as any).meshBuffers.get('all');
+    const posBuf = buffers.positions;
+
+    const lonAt250 = first.props.data.attributes.getPosition.value[0];
+
+    layer._currentTime = 750;
+    const second = (layer as any).renderLayers()[0];
+    // Same backing store, rewritten in place (deck consumed the previous view
+    // during its own update pass).
+    expect((layer as any).meshBuffers.get('all').positions).toBe(posBuf);
+    expect(second.props.data.attributes.getPosition.value.buffer).toBe(
+      posBuf.buffer,
+    );
+    // …and the pose actually advanced.
+    expect(second.props.data.attributes.getPosition.value[0]).not.toBe(
+      lonAt250,
+    );
+    // The view is sliced to the ACTIVE instance count, not the capacity.
+    expect(second.props.data.attributes.getPosition.value.length).toBe(3);
+    expect(posBuf.length).toBeGreaterThan(3);
+  });
+
+  it('keeps ONE bound getOrientation/getScale reference across frames', () => {
+    const layer = makeLayer();
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2 },
+    ]);
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 0;
+    const first = (layer as any).renderLayers()[0];
+    layer._currentTime = 1000;
+    const second = (layer as any).renderLayers()[0];
+    expect(second.props.getOrientation).toBe(first.props.getOrientation);
+    expect(second.props.getScale).toBe(first.props.getScale);
+  });
+
+  it('returns SEPARATE arrays from getOrientation and getScale', () => {
+    // deck calls both accessors BEFORE feeding either to
+    // calculateTransformMatrix, so sharing one scratch array (including deck's
+    // own objectInfo.target) would let the scale clobber the orientation.
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: 0, length: 6 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: 0, length: 6 },
+    ]);
+    const layer = render([tile], 500)[0];
+    const ori = layer.props.getOrientation(null, { index: 0 });
+    const scl = layer.props.getScale(null, { index: 0 });
+    expect(ori).not.toBe(scl);
+    expect(Array.from(ori)).toEqual([0, 0, 0]);
+    expect(scl[0]).toBeCloseTo(6, 5);
+  });
+
+  // ── Pose accessors carry updateTriggers (review fix 4) ────────────────────
+
+  it('bumps getOrientation/getScale updateTriggers every frame', () => {
+    // deck's accessor comparator calls ANY function value "equal", so stable
+    // closures need an explicit trigger — otherwise every model would freeze at
+    // its first-frame heading and scale.
+    const layer = makeLayer({ updateTriggers: { getColor: 'user-token' } });
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    layer.state = { tiles: [tile] };
+    layer._currentTime = 250;
+    const first = (layer as any).renderLayers()[0];
+    layer._currentTime = 750;
+    const second = (layer as any).renderLayers()[0];
+
+    expect(second.props.updateTriggers.getOrientation).not.toBe(
+      first.props.updateTriggers.getOrientation,
+    );
+    expect(second.props.updateTriggers.getScale).not.toBe(
+      first.props.updateTriggers.getScale,
+    );
+    // The caller's own triggers are merged, not replaced.
+    expect(second.props.updateTriggers.getColor).toBe('user-token');
+  });
+
+  // ── Attitude quaternions (review fix 6) ───────────────────────────────────
+
+  /** Attach a `[qx,qy,qz,qw]` vector column to a tile. */
+  function withQuats(tile: Tile, quats: number[][]) {
+    const flat = new Float32Array(quats.length * 4);
+    quats.forEach((q, i) => flat.set(q, i * 4));
+    tile.layers[0].features.vectorProps = { pose: { value: flat, size: 4 } };
+    return tile;
+  }
+
+  /** Quaternion for a yaw-only rotation (about +z). */
+  const yawQuat = (deg: number): number[] => {
+    const h = (deg * Math.PI) / 180 / 2;
+    return [0, 0, Math.sin(h), Math.cos(h)];
+  };
+
+  it('drives all three orientation slots from a quaternion column', () => {
+    // 90° roll about +x — unreachable through the scalar heading path, which
+    // only writes yaw.
+    const s = Math.SQRT1_2;
+    const tile = withQuats(
+      makeObjTile([
+        { track: 'A', lon: 0, lat: 0, t: 0 },
+        { track: 'A', lon: 0, lat: 0, t: 1000 },
+      ]),
+      [
+        [s, 0, 0, s],
+        [s, 0, 0, s],
+      ],
+    );
+    const ori = oriOf(render([tile], 500, { quaternionColumn: 'pose' })[0]);
+    expect(ori[0]).toBeCloseTo(0, 4); // pitch
+    expect(ori[1]).toBeCloseTo(0, 4); // yaw
+    expect(ori[2]).toBeCloseTo(90, 3); // roll
+  });
+
+  it('slerps the attitude between keyframes and adds orientationOffset', () => {
+    const tile = withQuats(
+      makeObjTile([
+        { track: 'A', lon: 0, lat: 0, t: 0 },
+        { track: 'A', lon: 0, lat: 0, t: 1000 },
+      ]),
+      [yawQuat(0), yawQuat(90)],
+    );
+    const ori = oriOf(
+      render([tile], 500, {
+        quaternionColumn: 'pose',
+        orientationOffset: [1, 2, 3],
+      })[0],
+    );
+    expect(ori[1]).toBeCloseTo(45 + 2, 3);
+    expect(ori[0]).toBeCloseTo(1, 4);
+    expect(ori[2]).toBeCloseTo(3, 4);
+  });
+
+  it('slerps the SHORT way round across the ±180° seam', () => {
+    const tile = withQuats(
+      makeObjTile([
+        { track: 'A', lon: 0, lat: 0, t: 0 },
+        { track: 'A', lon: 0, lat: 0, t: 1000 },
+      ]),
+      [yawQuat(170), yawQuat(-170)],
+    );
+    const ori = oriOf(render([tile], 500, { quaternionColumn: 'pose' })[0]);
+    expect(Math.abs(ori[1])).toBeCloseTo(180, 3);
+  });
+
+  it('falls back to the heading path (with a warning) when the column is unusable', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: Math.PI / 2 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2 },
+    ]);
+    const ori = oriOf(render([tile], 500, { quaternionColumn: 'pose' })[0]);
+    expect(ori[1]).toBeCloseTo(90, 3); // yaw from `heading`, not the quaternion
+    expect(warn).toHaveBeenCalled();
+    expect(
+      warn.mock.calls.some((c) => /quaternionColumn/.test(String(c[0]))),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('exposes upstream getOrientation / getScale / getTransformMatrix overrides', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0, heading: Math.PI / 2, length: 9 },
+      { track: 'A', lon: 0, lat: 0, t: 1000, heading: Math.PI / 2, length: 9 },
+    ]);
+    const matrix = new Array(16).fill(0);
+    const props = render([tile], 500, {
+      getOrientation: [11, 22, 33],
+      getScale: [2, 2, 2],
+      getTransformMatrix: matrix,
+    })[0].props;
+    expect(props.getOrientation).toEqual([11, 22, 33]);
+    expect(props.getScale).toEqual([2, 2, 2]);
+    expect(props.getTransformMatrix).toBe(matrix);
+  });
+
+  it('omits getTransformMatrix entirely when unset (deck defaults it to [])', () => {
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    const props = render([tile], 500)[0].props;
+    expect('getTransformMatrix' in props).toBe(false);
+    expect(typeof props.getOrientation).toBe('function');
+  });
+
+  // ── Geometry-kind guard (review fix 11) ───────────────────────────────────
+
+  it('skips (and warns once about) a non-Point tile instead of misreading it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = makeObjTile([
+      { track: 'A', lon: 0, lat: 0, t: 0 },
+      { track: 'A', lon: 0, lat: 0, t: 1000 },
+    ]);
+    tile.layers[0].features.geometryType = 1 as any; // LineString
+    expect(render([tile], 500)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/LineString.*reads Point/);
+    warn.mockRestore();
   });
 });

@@ -272,10 +272,13 @@ beforeEach(() => {
 
 describe('user extensions merge into the internal extension list', () => {
   // Point + heatmap resolve extensions in renderLayers(); path/trips/polygon in
-  // buildSublayer(). Point/path/trips/polygon append the user list after the
-  // internal [timeFilter, categoryColor] pair; heatmap appends after its single
-  // internal DataFilterExtension. Each layer copy-pastes its OWN extension-merge
-  // path, so this runs the assertion against every one.
+  // buildSublayer(). Point/trips/polygon append the user list after the internal
+  // [timeFilter, categoryColor] pair; heatmap appends after its single internal
+  // DataFilterExtension; the PATH layer carries no CategoryColorExtension at all
+  // (it expands categorical colour on the CPU into a per-vertex getColor, so the
+  // extension could never fire while still costing a vertex-attribute slot), so
+  // it appends after timeFilter alone. Each layer copy-pastes its OWN
+  // extension-merge path, so this runs the assertion against every one.
   it.each([
     {
       name: 'AnimatedPointLayer',
@@ -288,6 +291,7 @@ describe('user extensions merge into the internal extension list', () => {
       make: makePathLayer,
       tile: basePathTile,
       via: 'build' as const,
+      noCategoryColor: true,
     },
     {
       name: 'AnimatedTripsLayer',
@@ -310,7 +314,7 @@ describe('user extensions merge into the internal extension list', () => {
     },
   ])(
     '$name: appends user extensions after the internal extension(s)',
-    async ({ make, tile, via, heatmap }) => {
+    async ({ make, tile, via, heatmap, noCategoryColor }: any) => {
       const userExt = new UserExtensionA();
       const layer = await make({ extensions: [userExt] });
       let sub: any;
@@ -323,7 +327,9 @@ describe('user extensions merge into the internal extension list', () => {
       }
       const expected = heatmap
         ? [layer._dataFilter, userExt]
-        : [layer.timeFilterExtension, layer.categoryColorExtension, userExt];
+        : noCategoryColor
+          ? [layer.timeFilterExtension, userExt]
+          : [layer.timeFilterExtension, layer.categoryColorExtension, userExt];
       expect(sub.props.extensions).toEqual(expected);
     },
   );

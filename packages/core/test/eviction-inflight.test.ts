@@ -1,5 +1,5 @@
 /**
- * Eviction ↔ in-flight coupling on SpatiotemporalTileset.
+ * Eviction ↔ in-flight coupling on SpatioTemporalTileset.
  *
  * Grace-period eviction used to delete headers that were still loading. The
  * in-flight batch holds a direct reference to the deleted header, so a late
@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, Tile } from '../src/types';
 import {
   BOUNDS,
@@ -41,7 +41,7 @@ const settle = (ms = 10): Promise<void> =>
  */
 function makeHarness() {
   const pending: Array<{ ids: TileId[]; resolve: () => void }> = [];
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -82,7 +82,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SpatiotemporalTileset eviction/in-flight coupling', () => {
+describe('SpatioTemporalTileset eviction/in-flight coupling', () => {
   it('grace-period eviction never deletes an in-flight header (no counter leak)', async () => {
     installClock();
     const { tileset, loadBucket, loadWindow, releaseBatches } = makeHarness();

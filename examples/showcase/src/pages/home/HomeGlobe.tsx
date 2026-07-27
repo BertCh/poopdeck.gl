@@ -43,7 +43,10 @@ const EARTH_POLYGON: number[][][] = [
 const DEG_PER_SEC = -1;
 
 const HomeGlobe: React.FC = () => {
-  const heroDataset = getDatasetById('ocean-drifters');
+  // The hero globe draws one TRIPS archive (the drifter tracks); a dataset of
+  // any other family carries none of the trail props this layer reads.
+  const hero = getDatasetById('ocean-drifters');
+  const heroDataset = hero?.type === 'trips' ? hero : undefined;
 
   // When the viewer has asked the OS to reduce motion, the hero holds still: no
   // autoplay of the drifter trails and no globe spin. Reactive, so toggling the

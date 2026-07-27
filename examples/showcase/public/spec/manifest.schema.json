@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://poopdeck.gl/spec/manifest.schema.json",
   "title": "STT packed-format manifest",
-  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 2). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion): readers MUST ignore fields they do not recognize. See docs/spec/stt-packed-format.md.",
+  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 2). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion): readers MUST ignore fields they do not recognize. formatVersion 1 is WITHDRAWN (2026-07-26, stt-packed-format.md §9.1): both reference readers refuse it at open, so this schema no longer describes it — a v1 manifest is not valid against this document. See docs/spec/stt-packed-format.md.",
   "type": "object",
   "required": [
     "format",
@@ -12,32 +12,13 @@
     "packs",
     "metadata"
   ],
+  "$comment": "`x-stt-capability-registry` is the machine-readable snapshot of the required-to-understand registry (stt-packed-format.md §3.1). It is the SINGLE source of truth both reference implementations pin their constant lists against in CI (Rust `stt_core::pack::KNOWN_CAPABILITIES` via crates/stt-core/tests/capability_registry.rs; TS `KNOWN_MANIFEST_CAPABILITIES` via packages/core/test/manifest-schema.test.ts). It is NOT an `enum` on `capabilities` — the value vocabulary stays open so a future writer's declaration still validates and readers refuse on their own implemented set.",
   "x-stt-capability-registry": [
     "attr-quant",
     "coord-quant",
-    "elevation-fold"
-  ],
-  "allOf": [
-    {
-      "$comment": "formatVersion-1 manifests MUST NOT carry the `schemas` table (v2-only; the Rust reader rejects it).",
-      "if": {
-        "required": [
-          "formatVersion"
-        ],
-        "properties": {
-          "formatVersion": {
-            "const": 1
-          }
-        }
-      },
-      "then": {
-        "not": {
-          "required": [
-            "schemas"
-          ]
-        }
-      }
-    }
+    "elevation-fold",
+    "time-delta",
+    "vertex-value-quant"
   ],
   "properties": {
     "format": {
@@ -45,20 +26,15 @@
       "const": "stt-packed"
     },
     "formatVersion": {
-      "description": "Packed format version \u2014 the AUTHORITATIVE discriminator (stt-packed-format.md \u00a75.2 authority rule): STTP/STTD object magic with object-absolute blob offsets, manifest-embedded `schemas` templates, and the sectioned layer frame. Distinct from the directory codec version (see `directory.directoryVersion`) and the tile-payload encoding. Readers MUST refuse values outside this enum at open.",
-      "enum": [
-        2
-      ]
+      "description": "Packed format version \u2014 the AUTHORITATIVE discriminator (stt-packed-format.md \u00a75.2 authority rule): STTP/STTD object magic with object-absolute blob offsets, manifest-embedded `schemas` templates, and the sectioned layer frame. Distinct from the directory codec version (see `directory.directoryVersion`) and the tile-payload encoding. Readers MUST refuse values outside this enum at open. The enum is CLOSED at [2]: `1` was withdrawn 2026-07-26 (stt-packed-format.md \u00a79.1/\u00a79.3) \u2014 both reference readers refuse it, so leaving it valid here would make the schema disagree with every conformant reader.",
+      "enum": [2]
     },
     "schemas": {
-      "description": "formatVersion 2 ONLY (v1 manifests MUST NOT carry the key): the dataset's Arrow IPC schema templates, embedded (stt-packed-format.md \u00a73.2). Each entry is the raw template bytes (stream start through the end of the Schema message) base64-encoded, addressed by their blake3-128 hash \u2014 the 16-byte reference v2 layer frames carry. Entries MUST be sorted by `hash` and deduped (byte-reproducible manifests). Readers MUST validate blake3_128(data) == hash for every entry at open, failing the whole dataset loudly on any mismatch, then resolve frame references against the resulting registry.",
+      "description": "The dataset's Arrow IPC schema templates, embedded (stt-packed-format.md \u00a73.2). Optional: a writer that emits only self-contained frames (every layer inlining its own schema section \u2014 what `stt-serve` does, and what `make-golden-fixture` writes) references no template and omits the key. Each entry is the raw template bytes (stream start through the end of the Schema message) base64-encoded, addressed by their blake3-128 hash \u2014 the 16-byte reference v2 layer frames carry. Entries MUST be sorted by `hash` and deduped (byte-reproducible manifests). Readers MUST validate blake3_128(data) == hash for every entry at open, failing the whole dataset loudly on any mismatch, then resolve frame references against the resulting registry.",
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "hash",
-          "data"
-        ],
+        "required": ["hash", "data"],
         "properties": {
           "hash": {
             "description": "blake3-128 of the raw (decoded) template bytes, 32 lowercase hex chars.",
@@ -81,29 +57,17 @@
       }
     },
     "compression": {
-      "description": "Per-blob compression codec. Every tile blob is compressed independently (no shared zstd dictionary), so a streaming reader can decode any blob in isolation. The format is zstd-only: `zstd` is the default and only real codec (it beats gzip on both ratio and browser-side decode speed, so no writer has ever emitted gzip), and `none` exists only for already-incompressible blobs. The canonical reader (Rust `PackedReader`) rejects any value outside this set.",
-      "enum": [
-        "zstd",
-        "none"
-      ]
+      "description": "Per-blob compression codec. Every tile blob is compressed independently (no shared zstd dictionary), so a streaming reader can decode any blob in isolation. The format is zstd-only: `zstd` is the default and only real codec (it beats gzip on both ratio and browser-side decode speed, so no packed writer has ever emitted gzip), and `none` exists only for already-incompressible blobs. The canonical reader (Rust `PackedReader`) rejects any value outside this set.",
+      "enum": ["zstd", "none"]
     },
     "blobOrdering": {
       "description": "OPTIONAL. The concrete space-filling blob byte-ordering the writer resolved and laid down (`--blob-ordering`, see stt-packed-format.md \u00a75). Informational: it records how the on-disk blob byte order was chosen so a tool need not re-infer it from the (packId, offset) layout; a reader indexes by (z, x, y, t) regardless and does not depend on it. Always a concrete order \u2014 never `auto`/`measured`, which resolve at build. Absent on pre-2026-07 archives (writers omit the key rather than emit a default, so pre-field manifests stay byte-identical).",
-      "enum": [
-        "spatial",
-        "time-major",
-        "hilbert3",
-        "morton3"
-      ]
+      "enum": ["spatial", "time-major", "hilbert3", "morton3"]
     },
     "directory": {
       "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index). The object is either a single whole-load buffer (default) or a paged container \u2014 root page + leaf pages \u2014 selected by `layout`. Either way the leaf codec is v5; `layout`, not `directoryVersion`, discriminates the container shape.",
       "type": "object",
-      "required": [
-        "key",
-        "length",
-        "directoryVersion"
-      ],
+      "required": ["key", "length", "directoryVersion"],
       "properties": {
         "key": {
           "description": "Object key relative to the dataset root. blake3-128 content address of the at-rest object bytes (the compressed bytes when `encoding` is set).",
@@ -121,19 +85,14 @@
         },
         "encoding": {
           "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a zstd frame (for a paged directory: EACH page \u2014 root + every leaf \u2014 is its own zstd frame). Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
-          "enum": [
-            "zstd"
-          ]
+          "enum": ["zstd"]
         },
         "layout": {
           "description": "OPTIONAL container layout. `paged` = a root page (fixed-width geo-bbox + zoom-range + temporal page descriptors) followed by leaf pages, so a cold reader fetches only the leaves its viewport/time-window touches. Absent or `single` = the whole-load object. Present (with the fields below) iff `paged`.",
-          "enum": [
-            "single",
-            "paged"
-          ]
+          "enum": ["single", "paged"]
         },
         "rootLength": {
-          "description": "Paged only: at-rest byte length of the root page (a prefix of the object). The reader range-GETs `bytes=0-(rootLength-1)` for the root under formatVersion 1, or `bytes=0-(8+rootLength-1)` under formatVersion 2 (the 8-byte STTD object magic shifts the root), then leaf ranges on demand. Leaf descriptor offsets are relative to this (absolute = rootLength + rel_offset, within the post-magic codec bytes).",
+          "description": "Paged only: at-rest byte length of the root page (a prefix of the object). The reader range-GETs `bytes=0-(8+rootLength-1)` for the root — the 8-byte STTD object magic shifts it — then leaf ranges on demand. Leaf descriptor offsets are relative to this (absolute = rootLength + rel_offset, within the post-magic codec bytes).",
           "type": "integer",
           "minimum": 0
         },
@@ -155,10 +114,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": [
-          "key",
-          "length"
-        ],
+        "required": ["key", "length"],
         "properties": {
           "key": {
             "description": "Object key relative to the dataset root. blake3-128 content address.",
@@ -180,10 +136,7 @@
         "style_hints": {
           "description": "OPTIONAL build-time style hints (additive; written by `stt-build --style-hints`). Per-property statistics plus archive-level rendering DEFAULTS a renderer may adopt and a user can always override. Old readers are unaffected \u2014 absent means no hints.",
           "type": "object",
-          "required": [
-            "version",
-            "properties"
-          ],
+          "required": ["version", "properties"],
           "properties": {
             "version": {
               "description": "Style-hints block schema version. This schema describes version 1.",
@@ -194,9 +147,7 @@
               "type": "array",
               "items": {
                 "type": "object",
-                "required": [
-                  "name"
-                ],
+                "required": ["name"],
                 "properties": {
                   "name": {
                     "description": "Property (tile column) name.",
@@ -241,10 +192,7 @@
                   },
                   "cardinality": {
                     "description": "Distinct-value count (categorical only; the profiler caps it at 10000, so treat the cap value as 'at least this many'). Tolerates `null` for writer flexibility, but the canonical writer omits the key on numeric properties.",
-                    "type": [
-                      "integer",
-                      "null"
-                    ],
+                    "type": ["integer", "null"],
                     "minimum": 0
                   }
                 }
@@ -258,12 +206,7 @@
             },
             "layer_hint": {
               "description": "Dominant produced layer kind (absent when none could be derived). Lines with per-vertex times hint `trips`; timeless lines hint `paths`.",
-              "enum": [
-                "points",
-                "paths",
-                "trips",
-                "polygons"
-              ]
+              "enum": ["points", "paths", "trips", "polygons"]
             }
           }
         }

@@ -350,7 +350,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
         docPath: '/docs/api/binary-features',
       },
       {
-        label: 'SpatiotemporalTileset',
+        label: 'SpatioTemporalTileset',
         docPath: '/docs/api/spatiotemporal-tileset',
       },
     ],
@@ -815,7 +815,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
         docPath: '/docs/api/animated-point-layer',
       },
       {
-        label: 'SpatiotemporalTileset',
+        label: 'SpatioTemporalTileset',
         docPath: '/docs/api/spatiotemporal-tileset',
       },
     ],

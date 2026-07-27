@@ -11,7 +11,7 @@
  * legend/cube chips. This inverts the old "map inset inside page chrome"
  * frame into "UI inside the map".
  */
-import React, { useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useParams, useLocation, Navigate, Link } from 'react-router';
 import { getDatasetById } from '../datasets';
 import { getDemoMeta } from '../content/demoMeta';
@@ -26,6 +26,15 @@ import SttThreeGeoViewer, {
 } from '../components/demo/SttThreeGeoViewer';
 import { useDemoPlayback } from '../components/demo/useDemoPlayback';
 import { usePlaybackHotkeys, PlaybackControls } from '@poopdeck.gl/react';
+// The site's own reduced-motion hook, as every other animated surface here uses
+// (`@poopdeck.gl/react` re-exports an equivalent one, but it is a symlinked
+// workspace package that Vite PRE-BUNDLES; that cache is not invalidated when
+// the package's dist is rebuilt, so importing a newly-added export from it
+// breaks this lazily-loaded route until `node_modules/.vite` is cleared).
+import { useReducedMotion } from '../lib/reducedMotion';
+
+/** Idle time before the floating transport fades out during playback. */
+const CHROME_IDLE_MS = 3000;
 
 /**
  * `PlaybackControls` is authored in the site's light editorial theme (dark ink
@@ -56,8 +65,10 @@ const DemoPage: React.FC = () => {
 
   const playback = useDemoPlayback(selectedDataset);
 
-  // Video-player keyboard map (Space/K, ←/→, J/L, Home/End, ↑/↓, 0–9) —
+  // Video-player keyboard map (Space/K, ←/→, J/L, ,/., Home/End, </>, 0–9) —
   // fullscreen-only: the scrolling embed pages must not capture window keys.
+  // Speed is on </> (not ↑/↓) and ←/→ yield to a focused map canvas, so the
+  // deck/maplibre/Cesium arrow-key pan underneath still works.
   usePlaybackHotkeys(playback, selectedDataset?.timeRange);
 
   // Renderer toggle (deck.gl ↔ maplibre ↔ Three). The legacy `/maplibre/:id`
@@ -80,6 +91,52 @@ const DemoPage: React.FC = () => {
   // Live camera from the deck viewer — fed to the scrubber's hover preview so
   // the thumbnail mirrors what the user is looking at.
   const [camera, setCamera] = useState<DemoCamera | null>(null);
+
+  // ── Idle-hide the floating transport (video-player convention) ─────────────
+  // The bar sits ON the map, so during playback it is permanently spending map
+  // real estate. Fade it out after CHROME_IDLE_MS of no input and bring it
+  // straight back on any pointer/key/focus activity. Only ever while PLAYING —
+  // a paused map keeps its controls, which is what a user who stopped to look
+  // at something expects. It also never fades out from under a hovering
+  // pointer or a keyboard user inside the bar.
+  const reducedMotion = useReducedMotion();
+  const transportRef = useRef<HTMLDivElement | null>(null);
+  const [transportIdle, setTransportIdle] = useState(false);
+  const isPlaying = playback.isPlaying;
+  useEffect(() => {
+    if (!isPlaying) {
+      setTransportIdle(false);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = () => {
+      clearTimeout(timer);
+      setTransportIdle(false);
+      timer = setTimeout(() => {
+        const bar = transportRef.current;
+        const busy =
+          bar != null &&
+          (bar.matches(':hover') || bar.contains(document.activeElement));
+        if (busy) arm();
+        else setTransportIdle(true);
+      }, CHROME_IDLE_MS);
+    };
+    arm();
+    const opts = { passive: true } as const;
+    window.addEventListener('pointermove', arm, opts);
+    window.addEventListener('pointerdown', arm, opts);
+    window.addEventListener('wheel', arm, opts);
+    window.addEventListener('keydown', arm);
+    window.addEventListener('focusin', arm);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('pointermove', arm);
+      window.removeEventListener('pointerdown', arm);
+      window.removeEventListener('wheel', arm);
+      window.removeEventListener('keydown', arm);
+      window.removeEventListener('focusin', arm);
+    };
+  }, [isPlaying]);
 
   if (!selectedDataset) return <Navigate to="/" replace />;
   const useMaplibre = renderer === 'maplibre' && maplibreCapable;
@@ -206,8 +263,19 @@ const DemoPage: React.FC = () => {
           shared PlaybackControls is light-themed, so we remap its CSS vars to
           the dark palette on the wrapper (see DARK_CONTROL_THEME). */}
       <div
+        ref={transportRef}
         className="glass rounded-md absolute bottom-3 left-3 right-3 z-10 mx-auto max-w-4xl px-4 py-3"
-        style={DARK_CONTROL_THEME}
+        style={{
+          ...DARK_CONTROL_THEME,
+          opacity: transportIdle ? 0 : 1,
+          // Must not eat pointer events from the map once invisible.
+          pointerEvents: transportIdle ? 'none' : 'auto',
+          transform:
+            transportIdle && !reducedMotion ? 'translateY(8px)' : undefined,
+          transition: reducedMotion
+            ? undefined
+            : 'opacity 220ms ease, transform 220ms ease',
+        }}
       >
         <PlaybackControls
           currentTime={playback.currentTime}
@@ -222,6 +290,12 @@ const DemoPage: React.FC = () => {
           targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
           autoSpeed={playback.autoSpeed}
           onAutoSpeedSelect={playback.onAutoSpeedSelect}
+          ended={playback.ended}
+          loop={playback.loop}
+          onLoopToggle={playback.onLoopToggle}
+          // This page mounts usePlaybackHotkeys, so the bar may advertise keys
+          // and offer the shortcuts panel.
+          keyboardShortcuts
           // Hover preview is deck-only (it needs the deck camera/render path);
           // the maplibre + Three renderers don't feed a deck camera, so omit it.
           renderPreview={

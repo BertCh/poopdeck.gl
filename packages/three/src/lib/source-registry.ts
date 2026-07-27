@@ -7,13 +7,13 @@
  *
  * The deck cockpit registers each tileset with the playback `PlaybackGovernor`
  * (via `usePlayback().registry`) so the shared clock gates on real buffer
- * readiness. The Three renderer historically registered NOTHING — and the
- * governor's "zero sources ⇒ start immediately" short-circuit lives INSIDE its
- * `hasAnySource()` branch, so an empty source set does NOT pass the start gate;
- * it falls through to the multi-second `maxStartWaitMs` escape hatch. Net effect:
- * pressing play froze the clock for ~8 s before lurching into a degraded start.
+ * readiness. Registering NOTHING is not benign: the governor's "zero sources ⇒
+ * start immediately" short-circuit lives INSIDE its `hasAnySource()` branch, so
+ * an empty source set does NOT pass the start gate; it falls through to the
+ * multi-second `maxStartWaitMs` escape hatch, and pressing play freezes the
+ * clock for ~8 s before lurching into a degraded start.
  *
- * This renderer eager-loads each archive in full (see {@link SttTileSource}), so
+ * This renderer eager-loads each archive in full (see {@link STTTileSource}), so
  * by the time a layer mounts its tiles are already resident. We therefore
  * register a trivially-COMPLETE {@link BufferSource} per layer: the gate passes
  * instantly (honest — the data is loaded) and the cockpit's buffered-range bar,
@@ -29,7 +29,7 @@ import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
  * compatible with `@poopdeck.gl/react`'s `SourceRegistry` (which is what the
  * showcase passes), without coupling this package to the React package.
  */
-export interface SttSourceRegistry {
+export interface STTSourceRegistry {
   registerSource: (
     id: string,
     source: BufferSource,

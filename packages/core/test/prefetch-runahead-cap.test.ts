@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId } from '../src/types';
 import {
   BOUNDS,
@@ -33,7 +33,7 @@ const settle = (ms = 60): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
 interface Fixture {
-  tileset: SpatiotemporalTileset;
+  tileset: SpatioTemporalTileset;
   /** Every distinct prefetched bucket time (t > 0; t = 0 is priority). */
   prefetched: Set<number>;
   unloads: TileId[];
@@ -44,7 +44,7 @@ function makeFixture(
 ): Fixture {
   const prefetched = new Set<number>();
   const unloads: TileId[] = [];
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: true,
@@ -70,7 +70,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('SpatiotemporalTileset.setPrefetchRunAheadLimit', () => {
+describe('SpatioTemporalTileset.setPrefetchRunAheadLimit', () => {
   it('caps the planned horizon, extends again when cleared, and never flushes on lowering', async () => {
     installClock();
     const { tileset, prefetched, unloads } = makeFixture();
@@ -138,7 +138,7 @@ describe('SpatiotemporalTileset.setPrefetchRunAheadLimit', () => {
 
   it('forwards setBandwidthWeight to the wired loader callback', () => {
     const weights: number[] = [];
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,
@@ -152,7 +152,7 @@ describe('SpatiotemporalTileset.setPrefetchRunAheadLimit', () => {
   });
 });
 
-describe('SpatiotemporalTileset prefetch pressure ladder', () => {
+describe('SpatioTemporalTileset prefetch pressure ladder', () => {
   it('decays under runway evictions, then recovers after a quiet 5 s', async () => {
     installClock();
     // A cache smaller than the 30-bucket prefetch horizon: the runway itself

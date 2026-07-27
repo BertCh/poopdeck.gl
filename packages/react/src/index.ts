@@ -8,6 +8,7 @@
  *
  *   - usePlayback         wire a TimeController + PlaybackGovernor into React
  *   - usePlaybackHotkeys  standard video-player keyboard map
+ *   - useReducedMotion    live prefers-reduced-motion subscription
  *   - PlaybackControls    transport bar + scrubber + density strip + speed
  *
  * HoverPreview (YouTube-style scrubber hover thumbnail) lives on the
@@ -15,8 +16,11 @@
  * OPTIONAL `@deck.gl/react` / `@deck.gl/core` peers — keeping it out of this
  * barrel lets the base package import (and typecheck) without deck.gl.
  *
- * Components are styled with standard Tailwind utility classes; consumers
- * supply their own Tailwind build (or override via `className`).
+ * Styling: control GEOMETRY and colour are inline styles, so the bar is usable
+ * even in an app whose Tailwind build never scanned `node_modules`; layout uses
+ * Tailwind utilities, shipped precompiled in `@poopdeck.gl/react/styles.css`.
+ * Re-theme through the CSS custom properties that stylesheet documents, or pass
+ * `className` / `style` to `PlaybackControls` to reach the root element.
  */
 
 // Hooks (zero rendering deps — only @poopdeck.gl/playback + react).
@@ -26,7 +30,12 @@ export type {
   PlaybackState,
   SourceRegistry,
 } from './hooks/use-playback.js';
-export { usePlaybackHotkeys } from './hooks/use-playback-hotkeys.js';
+export {
+  usePlaybackHotkeys,
+  PLAYBACK_SHORTCUTS,
+} from './hooks/use-playback-hotkeys.js';
+export type { PlaybackShortcut } from './hooks/use-playback-hotkeys.js';
+export { useReducedMotion } from './hooks/use-reduced-motion.js';
 export { useDeckClock } from './hooks/use-deck-clock.js';
 export type { DeckClockProps } from './hooks/use-deck-clock.js';
 

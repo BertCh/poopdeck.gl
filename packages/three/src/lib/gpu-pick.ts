@@ -25,10 +25,11 @@
  * valid feature. Alpha is reserved (the id material writes a=255 opaque).
  */
 
-// The id-colour encode/decode math + per-feature id-colour builder were hoisted
-// verbatim into `@poopdeck.gl/core/picking` (shared by every id-buffer backend).
-// Re-export under three's historical names so this package's public API is
-// unchanged; `GpuPicker` below uses the imported `decodeId` binding directly.
+// The id-colour encode/decode math + per-feature id-colour builder live in
+// `@poopdeck.gl/core/picking`, shared by every id-buffer backend. They are
+// re-exported here under three's own names (`encodeId` / `decodeId`), which are
+// part of this package's public API; `GpuPicker` below uses the imported
+// `decodeId` binding directly.
 import { Color } from 'three';
 import {
   encodePickId as encodeId,
@@ -60,8 +61,9 @@ export interface PickRenderer {
    * three's async readback. NOTE: on the unified `WebGPURenderer` (WebGPU *and*
    * WebGL2 backends) this RETURNS the pixels — its 6th/7th args are
    * `textureIndex`/`faceIndex`, NOT an output buffer. So we consume the resolved
-   * `TypedArray` rather than a pre-allocated `out` (the old code passed a buffer
-   * as `textureIndex` and read back all-zeros → every pick decoded index 0).
+   * `TypedArray` rather than a pre-allocated `out`: a buffer passed in those
+   * slots is silently read as a texture index, the readback stays all-zeros, and
+   * every pick decodes to feature index 0.
    */
   readRenderTargetPixelsAsync(
     target: any,

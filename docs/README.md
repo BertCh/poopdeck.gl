@@ -140,7 +140,7 @@ a deck.gl sublayer.
 
 - [Tile decoding](./api/stt-loader.md) — the `TileDecoder` interface plus the
   inline and worker-pool implementations.
-- [SpatiotemporalTileset](./api/spatiotemporal-tileset.md) — tile lifecycle,
+- [SpatioTemporalTileset](./api/spatiotemporal-tileset.md) — tile lifecycle,
   viewport + time-aware selection, prefetching.
 - [Binary features](./api/binary-features.md) — the GPU-ready columnar format
   `TileDecoder` returns.

@@ -87,6 +87,7 @@ export function h3SummaryHarness(): SummaryHarness {
         lineWidthMaxPixels: Number.MAX_SAFE_INTEGER,
         material: true,
         highPrecision: 'auto',
+        centerHexagon: null,
         ...props,
       };
       layer.state = {
@@ -98,6 +99,11 @@ export function h3SummaryHarness(): SummaryHarness {
       layer.preparedTileCache = new Map();
       layer.sublayerCache = new Map();
       layer.lastTilesRef = null;
+      // Prune signature + sub-bucket tick latch (Object.create skips the field
+      // initializers that would otherwise set these).
+      layer.lastPruneKey = null;
+      layer.lastSubBucketTick = null;
+      layer._currentTime = 0;
       layer._lastTileIdSet = new Set();
       return layer;
     },
@@ -190,6 +196,11 @@ export function quadbinSummaryHarness(): SummaryHarness {
       layer.preparedTileCache = new Map();
       layer.sublayerCache = new Map();
       layer.lastTilesRef = null;
+      // Prune signature + sub-bucket tick latch (Object.create skips the field
+      // initializers that would otherwise set these).
+      layer.lastPruneKey = null;
+      layer.lastSubBucketTick = null;
+      layer._currentTime = 0;
       layer._lastTileIdSet = new Set();
       return layer;
     },

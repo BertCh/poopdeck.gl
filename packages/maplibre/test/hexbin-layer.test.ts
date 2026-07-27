@@ -72,7 +72,7 @@ import {
   lngLatToMercatorInto,
   mercatorZFromAltitude,
 } from '../src/lib/projection';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 import { makePointTile, makePropertyPointTile } from './fixtures';
 
 const baseOpts = {
@@ -169,7 +169,7 @@ function wireCaps(layer: any, gl: any): void {
 function makeRenderableLayer(
   gl: any,
   opts: Record<string, unknown> = {},
-  tiles: Array<[string, any]> = [['k', makePropertyPointTile()]],
+  tiles: any[] = [makePropertyPointTile()],
 ): any {
   const layer = new STTHexbinLayer({ ...baseOpts, id: 'h', ...opts } as any);
   const l = layer as any;
@@ -177,7 +177,7 @@ function makeRenderableLayer(
   l.gl = gl;
   l.map = makeMockMap();
   l.tileset = { update: vi.fn(), getVisibleTiles: () => [], finalize: vi.fn() };
-  for (const [k, t] of tiles) l.loadedTiles.set(k, t);
+  publishVisibleTiles(l, ...tiles);
   wireCaps(l, gl);
   return l;
 }
@@ -622,11 +622,20 @@ describe('geometry-cache stability (first-class)', () => {
 
   it('rebuilds when a new tile joins the resident set', () => {
     const gl = makeGl({ gpu: true });
-    const layer = makeRenderableLayer(gl);
+    // The FIRST tile is hoisted and re-published by identity. Building a fresh
+    // `makePropertyPointTile()` for the second publish swapped BOTH members of
+    // the set, so a generation bump proved only that "the set object changed" —
+    // the sibling test above (no rebuild on a time-only change) is the only
+    // thing that kept the stability contract honest. Holding tile one fixed
+    // isolates the bump to the tile that actually joined.
+    const first = makePropertyPointTile();
+    const layer = makeRenderableLayer(gl, {}, [first]);
     layer.render(gl, new Float32Array(16));
     const gen = layer.getBinTableStats().generation;
     // A second, differently-located tile enters — the union changes.
-    layer.loadedTiles.set('k2', makePointTile());
+    const second = makePointTile();
+    second.id = { ...second.id, x: second.id.x + 1 };
+    publishVisibleTiles(layer, first, second);
     layer.render(gl, new Float32Array(16));
     expect(layer.getBinTableStats().generation).toBeGreaterThan(gen);
   });

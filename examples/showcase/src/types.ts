@@ -223,12 +223,21 @@ export interface HeatmapLayerSpec {
   colorDomain?: [number, number];
 }
 
-export interface Dataset {
+/**
+ * What EVERY demo card carries, whatever it renders: identity, the clock, the
+ * camera, the basemap treatment, and the tile-loading knobs the viewer applies
+ * before it knows the layer type.
+ *
+ * A field belongs here only when it is meaningful for every family. Anything a
+ * single family reads lives on that family's variant, so the compiler rejects
+ * `lidarSurfelTemporalSigma` on a seismicity dataset. Anything a HANDFUL of
+ * families share lives on a styling mixin below.
+ */
+interface BaseDataset {
   id: string;
   name: string;
   description: string;
   url: string;
-  type: DatasetType;
   /**
    * Data-source attribution keys (see SOURCE_REGISTRY in components/SourceLogo).
    * Rendered as small source badges on the demo cards.
@@ -310,8 +319,8 @@ export interface Dataset {
    * (`backdropColor`). For scenes that are geographically anchored but not
    * geographically *readable* — a 140 m ship in open water sits inside a single
    * z14 tile, so the basemap contributes nothing but empty ocean. The AV cockpit
-   * has always had this via `avLocalFrame`; this is the same idea for the
-   * ordinary DemoViewer path.
+   * has the same idea in `avLocalFrame`; this is it for the ordinary DemoViewer
+   * path.
    */
   hideBasemap?: boolean;
   /**
@@ -355,7 +364,7 @@ export interface Dataset {
 
   /**
    * Stable category-string → RGBA mapping for `colorProperty`. When set, the
-   * point layer colors each feature by looking up its category string in this
+   * layer colors each feature by looking up its category string in this
    * mapping — required for cross-tile consistency, since the default palette
    * fallback assigns palette indices in first-seen order per tile.
    */
@@ -364,6 +373,71 @@ export interface Dataset {
   /** Fallback color for categories absent from colorMapping. */
   colorMappingDefault?: ColorRGBA;
 
+  /**
+   * Fade-in duration in SIM milliseconds for appearing features. On a point
+   * dataset in `cumulative` mode this is the "ink appearing" ramp applied as
+   * each point is revealed. On the polygon-field composites (`radar`,
+   * `weather`, `storm4d`) the pair instead tunes the field's cross-dissolve:
+   * each discrete scan's isobands ramp in/out as the window slides over them
+   * instead of popping at frame boundaries.
+   */
+  fadeInDuration?: number;
+
+  /**
+   * Fade-out duration in SIM milliseconds for disappearing features. Both fades
+   * default to 300 sim-ms in the layers; a dataset whose `timeWindow` is only a
+   * frame or two wide (e.g. `pointCloud` playback at 30 fps) must zero them,
+   * or every feature stays lit long past its window and the frames smear
+   * together.
+   */
+  fadeOutDuration?: number;
+
+  /**
+   * Layer opacity (0-1). Defaults to 0.8. Lower values let dense, overlapping
+   * geometry (e.g. thousands of satellite trails) read as a density glow
+   * instead of saturating into a solid block.
+   */
+  opacity?: number;
+
+  /** Force a specific zoom for tile selection (used by globe-style demos). */
+  zoomOverride?: number;
+
+  /** Load tiles for the entire planet, ignoring the current viewport bounds. */
+  useGlobalBounds?: boolean;
+
+  // ─── space-time cube (time = height) ───────────────────────────────────
+  /**
+   * Render the dataset as a Hägerstrand space-time cube: time maps to
+   * altitude, so trail-mode trips become 3D threads climbing through the
+   * cube (slope = speed) and points become temporal strata. DemoPage adds a
+   * "squash" slider that morphs between the flat map (0) and the full cube
+   * (1) — a single shader uniform, free to animate. MapView demos only.
+   */
+  timeHeight?: {
+    /** Cube height in meters for the full timeRange at squash factor 1. */
+    rangeHeightMeters: number;
+    /** Initial squash factor, 0..1. Defaults to 1 (full cube). */
+    initialFactor?: number;
+    /** Draw a translucent "now" plane rising with the playhead. Default true. */
+    nowPlane?: boolean;
+    /**
+     * Draw the STT tile lattice: each loaded tile rendered as a wireframe
+     * box (spatial footprint × temporal bucket) — the format made visible.
+     * Default true.
+     */
+    tileLattice?: boolean;
+    /** Camera pitch limit (MapView defaults to 60; cubes want more). */
+    maxPitch?: number;
+  };
+}
+
+// ─── styling mixins ──────────────────────────────────────────────────────
+// Each mixin is the prop set ONE deck layer honors. A composite variant
+// extends every mixin whose layer it actually mounts, so `radiusScale` is
+// legal on the storm-4D volume (it draws points) and illegal on a flowmap.
+
+/** Props {@link AnimatedPointLayer} honors — the round-marker family. */
+interface PointStyling {
   /** Property name for radius/size (passed to layers as radiusProperty) */
   radiusProperty?: string;
 
@@ -393,101 +467,15 @@ export interface Dataset {
   radiusTransform?: (value: number) => number;
 
   /**
-   * Wake length in milliseconds for `type: 'point'`. When > 0, each point
-   * is drawn behind the play head as a fading + shrinking "ship wake".
-   * The caller's `timeWindow` should be `>= 2 × wakeLength` so the tile
-   * loader still covers the past portion of the wake.
+   * Wake length in milliseconds. When > 0, each point is drawn behind the play
+   * head as a fading + shrinking "ship wake". The caller's `timeWindow` should
+   * be `>= 2 × wakeLength` so the tile loader still covers the past portion of
+   * the wake.
    */
   wakeLength?: number;
 
   /** Tail-edge size multiplier for wake mode (0..1). Defaults to 0.15. */
   wakeTailScale?: number;
-
-  /**
-   * Cumulative "draw and persist" mode for `type: 'point'`. When true, each
-   * point appears at its start time and stays visible for the rest of playback
-   * — the dataset "draws itself" (e.g. OSM node creations inking a city in).
-   * DemoPage widens the tile loader's window to keep revealed tiles resident;
-   * the GPU does the progressive reveal. Pair with `fadeInDuration` for an
-   * "ink appearing" ramp.
-   */
-  cumulative?: boolean;
-
-  /**
-   * Fade-in duration in SIM milliseconds for appearing points. In `cumulative`
-   * mode this is the "ink appearing" ramp applied as each point is revealed.
-   * For `type: 'radar'` / `'weather'` these two fields instead tune the precip
-   * FIELD's cross-dissolve: each discrete scan's isobands ramp in/out as the
-   * window slides over them instead of popping at frame boundaries.
-   */
-  fadeInDuration?: number;
-
-  /**
-   * Fade-out duration in SIM milliseconds for disappearing points. Both fades
-   * default to 300 sim-ms in the layers; a dataset whose `timeWindow` is only a
-   * frame or two wide (e.g. `point-cloud` playback at 30 fps) must zero them,
-   * or every point stays lit long past its window and the frames smear together.
-   */
-  fadeOutDuration?: number;
-
-  // ─── motion glide (type: 'point') ──────────────────────────────────────
-  /**
-   * Smooth CPU motion interpolation for `type: 'point'`. When true (and the
-   * user has NOT asked for reduced motion, and {@link idProperty} resolves),
-   * the layer pools loaded samples by entity id and glides ONE marker per
-   * active entity between the two samples bracketing the play head, instead of
-   * popping a fresh instance per ping. Mutually exclusive with `wakeLength` /
-   * `cumulative` (the layer keeps its GPU window path when either is set).
-   * `buildDemoLayers` folds the reduced-motion flag into the concrete boolean
-   * it forwards, so reduced-motion viewers get the discrete (non-glide) path.
-   */
-  interpolate?: boolean;
-  /**
-   * Categorical id column that identifies one moving entity across pings — the
-   * key the glide path pools samples by (e.g. `'icao24'` for aircraft). Has no
-   * effect unless {@link interpolate} is on. Must be a column that already
-   * exists in the archive (no rebuild).
-   */
-  idProperty?: string;
-  /**
-   * Max gap (ms) between two consecutive samples of the same entity that the
-   * glide will interpolate across. A larger gap is a data hole (e.g. an ADS-B
-   * coverage dropout), so the marker HOLDS its last known position instead of
-   * gliding a fabricated straight line the entity never travelled. No effect
-   * unless {@link interpolate} is on. Omit to inherit the layer default
-   * (`Infinity` = always interpolate — only safe for gap-free feeds).
-   */
-  maxInterpolationGap?: number;
-
-  // ─── data filter (type: 'point') ───────────────────────────────────────
-  /**
-   * Numeric column to range-filter `type: 'point'` features by, via the layer's
-   * DataFilterExtension (composes WITH the time filter — a point shows only when
-   * BOTH its time window and its filter range admit it). Names an existing
-   * numeric column (e.g. `'magnitude'`); a categorical column warns and is
-   * ignored. No effect unless set.
-   */
-  filterProperty?: string;
-  /**
-   * Inclusive `[min, max]` bounds for {@link filterProperty}. Only meaningful
-   * when `filterProperty` is set. A future in-map slider would drive this live;
-   * a static value renders a fixed band.
-   */
-  filterRange?: [number, number];
-
-  // ─── type: 'pointCloud' ────────────────────────────────────────────────
-  /** Radius of every point in `pointSizeUnits`. Defaults to the layer's 10. */
-  pointSize?: number;
-
-  /** Units for `pointSize`. Defaults to the layer's `'pixels'`. */
-  pointSizeUnits?: 'meters' | 'pixels' | 'common';
-
-  /**
-   * Phong lighting for the lit points: `true` for the default material, `false`
-   * to render them unlit. An archive that bakes its own shaded colours into
-   * `point_rgba` usually wants `false`, so lighting isn't applied twice.
-   */
-  pointMaterial?: boolean;
 
   /** Render a stroke around each point. */
   stroked?: boolean;
@@ -497,20 +485,76 @@ export interface Dataset {
 
   /** Stroke width clamp in pixels. */
   lineWidthMinPixels?: number;
+}
 
-  /** Property name for weight (used in heatmap layers) */
-  weightProperty?: string;
+/** The width scale + clamps every line-geometry layer honors, arcs included. */
+interface LineWidthStyling {
+  /** Units for `pathWidth` / `tripWidth` / `arcWidth`. */
+  widthUnits?: 'pixels' | 'meters';
+  /** Clamp line width to at least this many on-screen pixels. */
+  widthMinPixels?: number;
+  /** Clamp line width to at most this many on-screen pixels. */
+  widthMaxPixels?: number;
+}
 
+/** Width + join treatment shared by the polyline layers (paths and trips). */
+interface LineStyling extends LineWidthStyling {
+  /** Rounded line caps; disable for ~2× faster fragment shading at small widths. */
+  capRounded?: boolean;
+  /** Rounded line joints; same perf tradeoff as `capRounded`. */
+  jointRounded?: boolean;
+}
+
+/** Props {@link AnimatedTripsLayer} honors on top of {@link LineStyling}. */
+interface TripStyling extends LineStyling {
+  /** Constant trip color, RGBA 0-255. */
+  tripColor?: ColorRGBA;
   /**
-   * For `type: 'heatmap'`, render multiple stacked heatmap layers from this
-   * one source archive (e.g. pickup + dropoff heatmaps from the NYC taxi
-   * status column). If unset, a single default heatmap layer is rendered.
+   * Color each trip *along its length* by a per-vertex scalar carried in the
+   * tile (the `vertex_value` channel, e.g. sea-surface temperature). `property`
+   * names the BinaryFeatures channel (currently only `'vertexValues'`),
+   * `domain` is the `[min, max]` mapped onto `colors` (low→high RGBA stops).
+   * Takes precedence over `colorProperty` / `tripColor`.
    */
-  heatmapLayers?: HeatmapLayerSpec[];
+  tripGradient?: {
+    property: string;
+    domain: [number, number];
+    colors: ColorRGBA[];
+  };
+  /** Trip line width — number (in widthUnits) or numeric property name. */
+  tripWidth?: number | string;
+  /**
+   * Trail duration in ms — how long the trailing path remains visible behind
+   * the play head. The tile loader auto-widens its window to `2 × trailLength`
+   * if `timeWindow` is shorter; setting `timeWindow` smaller than that has no
+   * effect.
+   */
+  trailLength?: number;
+  /** Fade the trail's tail to transparent (vs. hard cut at trailLength). */
+  fadeTrail?: boolean;
+}
 
-  // ─── trip-head styling (type: 'tripHeads') ─────────────────────────────
-  // Rendered by AnimatedTripHeadsLayer — a smooth moving dot at the head of
-  // each active trip (CPU-interpolated position on a stock ScatterplotLayer).
+/** Props {@link AnimatedPathLayer} honors on top of {@link LineStyling}. */
+interface PathStyling extends LineStyling {
+  /** Constant path color (or fall back to `colorProperty` if categorical). */
+  pathColor?: ColorRGBA;
+  /** Path line width — number (in widthUnits) or numeric property name. */
+  pathWidth?: number | string;
+}
+
+/** Props {@link AnimatedPolygonLayer} honors. */
+interface PolygonStyling {
+  /** Fill polygons (default true). */
+  polygonFilled?: boolean;
+  /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
+  polygonFillColor?: ColorRGBA;
+}
+
+/**
+ * Props {@link AnimatedTripHeadsLayer} honors — a smooth moving dot at the head
+ * of each active trip (CPU-interpolated position on a stock ScatterplotLayer).
+ */
+interface TripHeadStyling {
   /** Head-dot color, RGBA 0-255. */
   headColor?: ColorRGBA;
   /** Head-dot radius in pixels (used when `headSizeUnits` is 'pixels'). */
@@ -527,47 +571,188 @@ export interface Dataset {
   headRadiusMinPixels?: number;
   /** Max on-screen head radius in pixels (meters-mode clamp). */
   headRadiusMaxPixels?: number;
+}
+
+/** GPU range-filter on a numeric column (deck's DataFilterExtension). */
+interface DataFilterStyling {
   /**
-   * Composite overlay: on a `type: 'trips'` dataset, the manifest URL of a
-   * SECOND (per-trip, OSRM-routed) archive rendered ON TOP as moving head-dots
-   * via AnimatedTripHeadsLayer — one dot per active ride gliding over the flow
-   * corridors below, both on the one playhead. The corridor archive stays the
-   * primary governor source; the heads overlay ALSO gates the clock unless
-   * {@link overlayGatesPlayback} is set false. Reuses the `head*` styling
-   * fields above.
+   * Numeric column to range-filter features by. Composes WITH the time filter —
+   * a feature shows only when BOTH its time window and its filter range admit
+   * it. Names an existing numeric column (e.g. `'magnitude'`); a categorical
+   * column warns and is ignored. No effect unless set.
+   */
+  filterProperty?: string;
+  /**
+   * Inclusive `[min, max]` bounds for {@link DataFilterStyling.filterProperty}.
+   * Only meaningful when `filterProperty` is set. A future in-map slider would
+   * drive this live; a static value renders a fixed band.
+   */
+  filterRange?: [number, number];
+}
+
+/**
+ * The storm-cell overlay pair shared by the `radar` and `weather` composites:
+ * both draw the same STORMCELL centroids + tracks over their precip field, from
+ * the same generator.
+ */
+interface StormCellOverlay {
+  /**
+   * Storm-cell CENTROID points manifest (sized/colored by `max_dbz`). The
+   * dataset's primary `url` is the reflectivity FIELD manifest; this and
+   * `radarTracksUrl` are the two overlay tilesets. Rewritten through
+   * `resolveDataUrl` alongside `url` so an R2 deploy resolves all three.
+   */
+  radarCellsUrl?: string;
+  /** Storm-cell TRACK linestrings manifest (per-vertex intensity trail). */
+  radarTracksUrl?: string;
+  /** Solid fill for storm-cell centroids. Defaults to near-white. */
+  radarCellColor?: ColorRGBA;
+}
+
+/**
+ * The AV scene archives + palettes shared by the single-scene cockpit (`av`)
+ * and the multi-scenario gallery (`worlds`): both mount an ego trajectory,
+ * tracked-object boxes, and the HD-map substrate from one bundle layout.
+ * Every url is rewritten through `resolveDataUrl` alongside `url`.
+ */
+interface AvSceneStreams {
+  /**
+   * Ego-trajectory archive manifest (an STT TRIPS archive — one LineString =
+   * the ego path). Rendered by `AnimatedTripsLayer`. On LIDAR scenes the
+   * primary `url` is the LIDAR archive; on LIDAR-less scenes (comma.ai) this IS
+   * the primary `url`, so the governor rides it.
+   */
+  avEgoUrl?: string;
+  /**
+   * Tracked-object archive manifest (an STT POINT archive — one point per
+   * object per annotated sample, carrying `category`/`heading`/box dims).
+   * Rendered by `AnimatedBoundingBoxLayer`.
+   */
+  avObjectsUrl?: string;
+  /**
+   * HD-map vector streams: drivable-area / lane / crosswalk POLYGONS
+   * (`avMapPolyUrl`) and lane-divider / boundary LINES (`avMapLineUrl`), each an
+   * STT archive whose features carry a categorical `map_layer` string. Rendered
+   * UNDER the LIDAR as the scene substrate (the streetscape.gl "real road" cue).
+   */
+  avMapPolyUrl?: string;
+  avMapLineUrl?: string;
+  /** `map_layer` (categorical) → RGBA for both map streams (fills low-alpha, lines crisp). */
+  mapColors?: Record<string, ColorRGBA>;
+  /**
+   * Tracked-object category → RGBA color. Also present in `scene.json`; the
+   * Dataset copy keeps `buildDemoLayers` self-contained (so the standard
+   * `DemoPage` render colors object boxes without fetching the manifest).
+   */
+  avObjectColors?: Record<string, ColorRGBA>;
+  /**
+   * LIDAR `height_band` (categorical) → RGBA color ramp. Drives the LIDAR
+   * point cloud's `colorMapping`. ~8 bands across the height domain.
+   */
+  lidarColorMapping?: Record<string, ColorRGBA>;
+  /** Fallback color for `height_band` values absent from `lidarColorMapping`. */
+  lidarColorMappingDefault?: ColorRGBA;
+  /**
+   * The scene rides an APPROXIMATE/anchored local frame, not a real geo-registered
+   * one (e.g. Waymo: the Open Dataset discloses no lat/lon, so the scene is anchored
+   * at a plausible metro point — the metro is right, the streets are not). When
+   * true, the cockpit drops the street basemap (renders the cloud on a plain dark
+   * background) so the real road network can't visibly contradict the anchor.
+   * Georeferenced sources (nuScenes / Argoverse) leave this unset → street basemap.
+   */
+  avLocalFrame?: boolean;
+}
+
+// ─── the families ────────────────────────────────────────────────────────
+
+/** Round markers, one per feature (`AnimatedPointLayer`). */
+export interface PointDataset
+  extends BaseDataset, PointStyling, DataFilterStyling {
+  type: 'point';
+  /**
+   * Cumulative "draw and persist" mode. When true, each point appears at its
+   * start time and stays visible for the rest of playback — the dataset "draws
+   * itself" (e.g. OSM node creations inking a city in). DemoPage widens the tile
+   * loader's window to keep revealed tiles resident; the GPU does the
+   * progressive reveal. Pair with `fadeInDuration` for an "ink appearing" ramp.
+   */
+  cumulative?: boolean;
+  // ─── motion glide ──────────────────────────────────────────────────────
+  /**
+   * Smooth CPU motion interpolation. When true (and the user has NOT asked for
+   * reduced motion, and {@link PointDataset.idProperty} resolves), the layer
+   * pools loaded samples by entity id and glides ONE marker per active entity
+   * between the two samples bracketing the play head, instead of popping a fresh
+   * instance per ping. Mutually exclusive with `wakeLength` / `cumulative` (the
+   * layer keeps its GPU window path when either is set). `buildDemoLayers` folds
+   * the reduced-motion flag into the concrete boolean it forwards, so
+   * reduced-motion viewers get the discrete (non-glide) path.
+   */
+  interpolate?: boolean;
+  /**
+   * Categorical id column that identifies one moving entity across pings — the
+   * key the glide path pools samples by (e.g. `'icao24'` for aircraft). Has no
+   * effect unless {@link PointDataset.interpolate} is on. Must be a column that
+   * already exists in the archive (no rebuild).
+   */
+  idProperty?: string;
+  /**
+   * Max gap (ms) between two consecutive samples of the same entity that the
+   * glide will interpolate across. A larger gap is a data hole (e.g. an ADS-B
+   * coverage dropout), so the marker HOLDS its last known position instead of
+   * gliding a fabricated straight line the entity never travelled. No effect
+   * unless {@link PointDataset.interpolate} is on. Omit to inherit the layer
+   * default (`Infinity` = always interpolate — only safe for gap-free feeds).
+   */
+  maxInterpolationGap?: number;
+}
+
+/**
+ * Phong-lit 3D cloud (`AnimatedPointCloudLayer`), one lit point per feature
+ * animating on/off with the window. Build with `stt-build --point-elevation-column z`
+ * (true 3D geometry) and `--vector-group point_rgba=r,g,b,a:u8` (per-point colour
+ * bound zero-copy, which takes precedence over `color`/`colorMapping`).
+ */
+export interface PointCloudDataset extends BaseDataset {
+  type: 'pointCloud';
+  /** Radius of every point in `pointSizeUnits`. Defaults to the layer's 10. */
+  pointSize?: number;
+  /** Units for `pointSize`. Defaults to the layer's `'pixels'`. */
+  pointSizeUnits?: 'meters' | 'pixels' | 'common';
+  /**
+   * Phong lighting for the lit points: `true` for the default material, `false`
+   * to render them unlit. An archive that bakes its own shaded colours into
+   * `point_rgba` usually wants `false`, so lighting isn't applied twice.
+   */
+  pointMaterial?: boolean;
+}
+
+/** Static polylines revealed by the play head (`AnimatedPathLayer`). */
+export interface PathDataset extends BaseDataset, PathStyling {
+  type: 'path';
+}
+
+/** Trailing trip threads (`AnimatedTripsLayer`) and the flow-corridor variants. */
+export interface TripsDataset
+  extends BaseDataset, TripStyling, TripHeadStyling {
+  type: 'trips';
+  /**
+   * Composite overlay: the manifest URL of a SECOND (per-trip, OSRM-routed)
+   * archive rendered ON TOP as moving head-dots via AnimatedTripHeadsLayer — one
+   * dot per active ride gliding over the flow corridors below, both on the one
+   * playhead. The corridor archive stays the primary governor source; the heads
+   * overlay ALSO gates the clock unless {@link BaseDataset.overlayGatesPlayback}
+   * is set false. Styled by the `head*` fields.
    */
   headsOverlayUrl?: string;
-
   /**
-   * Layer opacity (0-1). Defaults to 0.8. Lower values let dense, overlapping
-   * geometry (e.g. thousands of satellite trails) read as a density glow
-   * instead of saturating into a solid block.
-   */
-  opacity?: number;
-
-  // ─── trips-layer styling (type: 'trips') ───────────────────────────────
-  /** Constant trip color, RGBA 0-255. */
-  tripColor?: ColorRGBA;
-  /**
-   * Color each trip *along its length* by a per-vertex scalar carried in the
-   * tile (the `vertex_value` channel, e.g. sea-surface temperature). `property`
-   * names the BinaryFeatures channel (currently only `'vertexValues'`),
-   * `domain` is the `[min, max]` mapped onto `colors` (low→high RGBA stops).
-   * Takes precedence over `colorProperty` / `tripColor`.
-   */
-  tripGradient?: {
-    property: string;
-    domain: [number, number];
-    colors: ColorRGBA[];
-  };
-  /**
-   * Render this `type: 'trips'` dataset with {@link FlowCorridorLayer} instead
-   * of {@link AnimatedTripsLayer}. Use for static-geometry *overview* archives
-   * (flow corridors) whose tiles carry a per-vertex × per-time-bucket value
-   * matrix: the corridor geometry loads ONCE and the renderer animates the
-   * `tripGradient` color by selecting the active bucket column from the
-   * playhead — no per-timestep geometry re-fetch. Pair with `trailLength: 0`
-   * (the matrix drives the animation, not a trailing fade).
+   * Render with {@link FlowCorridorLayer} instead of {@link AnimatedTripsLayer}.
+   * Use for static-geometry *overview* archives (flow corridors) whose tiles
+   * carry a per-vertex × per-time-bucket value matrix: the corridor geometry
+   * loads ONCE and the renderer animates the `tripGradient` color by selecting
+   * the active bucket column from the playhead — no per-timestep geometry
+   * re-fetch. Pair with `trailLength: 0` (the matrix drives the animation, not a
+   * trailing fade).
    */
   flowMatrix?: boolean;
   /**
@@ -581,13 +766,13 @@ export interface Dataset {
    */
   flowPersistenceMs?: number;
   /**
-   * Render this `type: 'trips'` dataset with {@link FlowStrokeLayer} (a
-   * {@link FlowCorridorLayer} subclass). Like `flowMatrix` the corridor geometry
-   * loads once and colour animates by active bucket, but additionally the per-PATH
-   * WIDTH breathes with the active hour's traveller count, and a constant
-   * perpendicular offset draws opposing directions as twin side-by-side ribbons.
-   * For the `bixi-corridors` archive (`bixi --merged-paths`). Implies `flowMatrix`
-   * semantics; pair with `trailLength: 0`.
+   * Render with {@link FlowStrokeLayer} (a {@link FlowCorridorLayer} subclass).
+   * Like `flowMatrix` the corridor geometry loads once and colour animates by
+   * active bucket, but additionally the per-PATH WIDTH breathes with the active
+   * hour's traveller count, and a constant perpendicular offset draws opposing
+   * directions as twin side-by-side ribbons. For the `bixi-corridors` archive
+   * (`bixi --merged-paths`). Implies `flowMatrix` semantics; pair with
+   * `trailLength: 0`.
    */
   flowStroke?: boolean;
   /** `flowStroke`: width = (active-bucket peak volume) ** this, before
@@ -597,6 +782,10 @@ export interface Dataset {
   /** `flowStroke`: constant twin-ribbon offset, in multiples of the rendered
    * width (0 disables; ~0.6 leaves a small gap). */
   flowOffsetWidths?: number;
+  /** Arrow width in px per `sqrt(current-bucket trip count)`. Default 1.1. */
+  flowWidthScale?: number;
+  /** Hide corridors whose current flow is below this many trips. Default 0.25. */
+  flowMinFlow?: number;
   /**
    * Overlay marching directional chevrons on a `flowMatrix` corridor archive
    * built with `bixi --streets --directional` (each corridor's geometry is
@@ -682,53 +871,34 @@ export interface Dataset {
    * Requires `flowMatrix` + `flowDirectional`.
    */
   flowSignedDirection?: boolean;
-  /** Trip line width — number (in widthUnits) or numeric property name. */
-  tripWidth?: number | string;
-  /** Clamp trip width to at least this many on-screen pixels. */
-  widthMinPixels?: number;
-  /** Clamp trip width to at most this many on-screen pixels. */
-  widthMaxPixels?: number;
+}
+
+/**
+ * One interpolated dot at the head of each active trip
+ * (`AnimatedTripHeadsLayer`, CPU per-frame position on a stock
+ * ScatterplotLayer). Same archive shape as `trips`, no rebuild needed.
+ */
+export interface TripHeadsDataset extends BaseDataset, TripHeadStyling {
+  type: 'tripHeads';
   /**
-   * Trail duration in ms — how long the trailing path remains visible behind
-   * the play head. The tile loader auto-widens its window to `2 × trailLength`
-   * if `timeWindow` is shorter; setting `timeWindow` smaller than that has no
-   * effect.
+   * Trail duration in ms behind each head. The tile loader keeps
+   * `2 × trailLength` resident so a head entering the viewport has its history.
    */
   trailLength?: number;
-  /** Fade the trail's tail to transparent (vs. hard cut at trailLength). */
-  fadeTrail?: boolean;
-  /** Rounded line caps; disable for ~2× faster fragment shading at small widths. */
-  capRounded?: boolean;
-  /** Rounded line joints; same perf tradeoff as `capRounded`. */
-  jointRounded?: boolean;
-  /** Force a specific zoom for tile selection (used by globe-style demos). */
-  zoomOverride?: number;
-  /** Load tiles for the entire planet, ignoring the current viewport bounds. */
-  useGlobalBounds?: boolean;
+}
 
-  // ─── path-layer styling (type: 'path') ─────────────────────────────────
-  /** Constant path color (or fall back to `colorProperty` if categorical). */
-  pathColor?: ColorRGBA;
-  /** Path line width — number (in widthUnits) or numeric property name. */
-  pathWidth?: number | string;
-  /** Units for `pathWidth` / `tripWidth`. */
-  widthUnits?: 'pixels' | 'meters';
-
-  // ─── polygon-layer styling (type: 'polygon') ───────────────────────────
-  /** Fill polygons (default true). */
-  polygonFilled?: boolean;
-  /** Polygon fill color — constant RGBA or `colorProperty` for categorical fill. */
-  polygonFillColor?: ColorRGBA;
-
-  // ─── rain→flood composite (type: 'polygon' + a river overlay) ──────────
+/** Filled polygon fields (`AnimatedPolygonLayer`). */
+export interface PolygonDataset extends BaseDataset, PolygonStyling {
+  type: 'polygon';
+  // ─── rain→flood composite (a river overlay on the precip field) ────────
   /**
    * Optional river-discharge FLOW-MATRIX archive painted ON TOP of the primary
    * precip-isoband polygon field (the rain→flood demo: rainfall drives the
    * rivers). A `FlowCorridorLayer` overlay, styled by `riversConfig`. Registers
-   * as a REQUIRED governor source unless {@link overlayGatesPlayback} is set
-   * false, so the clock waits for the heavy river archive instead of sweeping
-   * past its loaded frontier (empty rivers). Rewritten through `resolveDataUrl`
-   * alongside `url` so an R2 deploy resolves it.
+   * as a REQUIRED governor source unless {@link BaseDataset.overlayGatesPlayback}
+   * is set false, so the clock waits for the heavy river archive instead of
+   * sweeping past its loaded frontier (empty rivers). Rewritten through
+   * `resolveDataUrl` alongside `url` so an R2 deploy resolves it.
    */
   riversUrl?: string;
   /** Styling for the `riversUrl` flow-matrix overlay (see `tripGradient`). */
@@ -745,21 +915,211 @@ export interface Dataset {
     widthMinPixels?: number;
     widthMaxPixels?: number;
   };
+}
 
-  // ─── radar composite styling (type: 'radar') ───────────────────────────
+/**
+ * Origin→destination flow arcs (`AnimatedArcLayer`); each feature is a 2-vertex
+ * LineString (first vertex = source, last = target). Build with
+ * `stt-generate nyc-rideshare --od`.
+ */
+export interface ArcDataset extends BaseDataset, LineWidthStyling {
+  type: 'arc';
+  /** Arc source-endpoint (origin) color, RGBA. The arc interpolates source→target. */
+  arcSourceColor?: ColorRGBA;
+  /** Arc target-endpoint (destination) color, RGBA. */
+  arcTargetColor?: ColorRGBA;
+  /** Arc line width in `widthUnits` (default pixels). */
+  arcWidth?: number;
+  /** Bow arcs along a great-circle path (for globe / long-haul flows). */
+  arcGreatCircle?: boolean;
+  /** Arc height multiplier; 0 = flat lines. Default 1. */
+  arcHeight?: number;
   /**
-   * Storm-cell CENTROID points manifest (sized/colored by `max_dbz`). The
-   * dataset's primary `url` is the reflectivity FIELD manifest; this and
-   * `radarTracksUrl` are the two overlay tilesets. Rewritten through
-   * `resolveDataUrl` alongside `url` so an R2 deploy resolves all three.
+   * Palette for a categorical `colorProperty`
+   * (GPU CategoryColorExtension — palette[categoryIndex]).
    */
-  radarCellsUrl?: string;
-  /** Storm-cell TRACK linestrings manifest (per-vertex intensity trail). */
-  radarTracksUrl?: string;
-  /** Solid fill for storm-cell centroids. Defaults to near-white. */
-  radarCellColor?: ColorRGBA;
+  colorPalette?: ColorRGBA[];
+}
 
-  // ─── weather-suite composite styling (type: 'weather') ─────────────────
+/**
+ * Extruded 3D columns at point features (`AnimatedColumnLayer`), height from a
+ * numeric `elevationProperty`. Reuses any point archive.
+ */
+export interface ColumnDataset extends BaseDataset {
+  type: 'column';
+  /** Column disk radius in `columnRadiusUnits`. Default 100. */
+  columnRadius?: number;
+  /** Units for `columnRadius`. Default 'meters'. */
+  columnRadiusUnits?: 'meters' | 'pixels' | 'common';
+  /** Column cross-section resolution (sides). Default 12. */
+  columnDiskResolution?: number;
+  /** Constant column height when no `elevationProperty` is set. */
+  columnElevation?: number;
+  /** Constant column fill, RGBA (or use `colorProperty` for categorical fill). */
+  columnFillColor?: ColorRGBA;
+  /**
+   * Palette for a categorical `colorProperty`
+   * (GPU CategoryColorExtension — palette[categoryIndex]).
+   */
+  colorPalette?: ColorRGBA[];
+}
+
+/** GPU density field (`AnimatedHeatmapLayer`), optionally channel-stacked. */
+export interface HeatmapDataset extends BaseDataset {
+  type: 'heatmap';
+  /** Property name for weight (defaults to 1 per feature). */
+  weightProperty?: string;
+  /**
+   * Render multiple stacked heatmap layers from this one source archive (e.g.
+   * pickup + dropoff heatmaps from the NYC taxi status column). If unset, a
+   * single default heatmap layer is rendered.
+   */
+  heatmapLayers?: HeatmapLayerSpec[];
+}
+
+/**
+ * Server-aggregated summary tier — H3 hexes (`H3SummaryLayer`) or the
+ * square-cell CARTO Quadbin analog (`QuadbinSummaryLayer`). Only useful for
+ * archives built with `stt-build --summary-tier h3` / `--summary-tier quadbin`.
+ */
+export interface SummaryDataset extends BaseDataset {
+  type: 'h3Summary' | 'quadbinSummary';
+  /**
+   * Numeric column the summary-tier color ramp + extrusion are driven by.
+   * Defaults to `'count'` (the implicit per-cell count column).
+   */
+  summaryWeightProperty?: string;
+  /**
+   * 6-stop low→high colour ramp for the summary tier. RGBA, 0-255.
+   */
+  summaryColorRange?: ColorRGBA[];
+  /**
+   * `[min, max]` pin for the colour ramp. When unset, each tile's own
+   * min/max drives the ramp — visually unstable but a usable default.
+   */
+  summaryColorDomain?: [number, number];
+  /** Extrude the cells by `weight * elevationScale`. */
+  summaryExtruded?: boolean;
+  /** Meters-per-weight-unit when extruded. */
+  summaryElevationScale?: number;
+  /** Cell coverage (0..1). Lower values leave visible gaps between cells. */
+  summaryCoverage?: number;
+  /**
+   * Optional pickup/dropoff-style toggle. When set, the demo renders a small
+   * segmented control over the map; selecting an option swaps the layer's
+   * `weightProperty` + colour ramp + domain in place. The first entry is the
+   * initial selection.
+   */
+  summaryToggleWeights?: SummaryToggleOption[];
+}
+
+/**
+ * OD flow arrows between aggregated nodes (`FlowmapLayer`), and the GPU
+ * force-directed edge-bundled superset (`BundledFlowmapLayer`) that relaxes
+ * compatible flows into smooth rivers (Holten FDEB, cosmos.gl-style ping-pong
+ * textures). Both read the same OD `vertexValueMatrix` tiles, so the bundling
+ * knobs are declared once here; a backend without `liveBundling` draws the
+ * straight arrows instead of refusing the demo.
+ */
+export interface FlowmapDataset extends BaseDataset {
+  type: 'flowmap' | 'flowmap-bundled';
+  /** Arrow width in px per `sqrt(current-bucket trip count)`. Default 1.1. */
+  flowWidthScale?: number;
+  /** Clamp arrow width to at least this many px (active arrows only). */
+  flowWidthMinPixels?: number;
+  /** Clamp arrow width to at most this many px. */
+  flowWidthMaxPixels?: number;
+  /** Arrow source (origin / tail) color, RGBA. */
+  flowSourceColor?: ColorRGBA;
+  /** Arrow target (destination / arrowhead) color, RGBA. */
+  flowTargetColor?: ColorRGBA;
+  /** Perpendicular separation of the two directions, in arrow widths. Default 0.5. */
+  flowGap?: number;
+  /** Node circle radius per `sqrt(incident flow)`. Default 1.3. */
+  flowNodeRadiusScale?: number;
+  /**
+   * Units for node-circle radius: `'pixels'` (constant on screen) or `'meters'`
+   * (scales with the map, so dense overviews don't blow out into overlapping
+   * dots — still clamped by `flowNodeRadiusMaxPixels`). With `'meters'`,
+   * `flowNodeRadiusScale` is metres per √flow. Default `'pixels'`.
+   */
+  flowNodeRadiusUnits?: 'meters' | 'pixels';
+  /** Clamp node circle radius to at most this many px. Default 28. */
+  flowNodeRadiusMaxPixels?: number;
+  /** Node circle fill color, RGBA. */
+  flowNodeColor?: ColorRGBA;
+  /** Hide arrows/nodes whose current flow is below this many trips. Default 0.25. */
+  flowMinFlow?: number;
+
+  // ─── edge-bundling tuning (KDEEB, `flowmap-bundled` only) ─────────────
+  /** Control points per edge (P). Higher = smoother rivers, more GPU work. Default 48. */
+  flowSubdivisionPoints?: number;
+  /** Kernel bandwidth as a fraction of the tile extent — the headline knob; larger bundles more. Default 0.05. */
+  flowKernelRadius?: number;
+  /** Number of KDEEB density-advection iterations (more = tighter). Default 15. */
+  flowBundlingIterations?: number;
+  /** Per-iteration Laplacian smoothing strength in [0,1]. Default 0.5. */
+  flowSmoothingStrength?: number;
+  /** Above this many edges per tile, skip bundling (straight arrows). Default 4000. */
+  flowMaxBundledEdges?: number;
+  /**
+   * The tiles already carry BAKED bundled geometry (`stt-generate bixi
+   * --bake-bundling`): `BundledFlowmapLayer` skips the live GPU bundler and just
+   * renders the precomputed rivers. Cheaper, stable, works without `EXT_float_blend`.
+   */
+  flowPreBundled?: boolean;
+}
+
+/**
+ * GLM lightning from ONE flash-point archive, drawn as TWO stacked layers: a
+ * live strike-DENSITY field (`AnimatedHeatmapLayer`) as the glowing backdrop,
+ * plus individual FLASHES (`AnimatedPointLayer`) on top, each appearing bright
+ * then fading + shrinking over `wakeLength` sim-ms so instantaneous strikes
+ * read as a shimmering flicker on the compressed clock. Build the archive with
+ * `python glm_lightning.py` (GOES-16 GLM L2 LCFA).
+ */
+export interface LightningDataset extends BaseDataset, PointStyling {
+  type: 'lightning';
+}
+
+/**
+ * Composite storm-radar render (NEXRAD). Overlays THREE STT archives from one
+ * dataset entry: filled reflectivity contour bands (`AnimatedPolygonLayer`,
+ * categorical `dbz_band`) as the animated precipitation field — the dataset's
+ * primary `url`; storm-cell centroids (`AnimatedPointLayer`) from
+ * `radarCellsUrl`; and animated cell tracks (`AnimatedTripsLayer`, per-vertex
+ * intensity) from `radarTracksUrl`. Build with `stt-generate storms`.
+ */
+export interface RadarDataset
+  extends
+    BaseDataset,
+    PointStyling,
+    TripStyling,
+    PolygonStyling,
+    StormCellOverlay {
+  type: 'radar';
+}
+
+/**
+ * Composite WEATHER-SUITE render on one playhead. Stacks (bottom→top): HRRR
+ * wind streamlines (`AnimatedTripsLayer`, from `windUrl`); the MRMS precip
+ * FIELD (`AnimatedPolygonLayer`, categorical `dbz_band`) — the primary `url`
+ * and REQUIRED governor source; WPC surface fronts in classic notation
+ * (`AnimatedPathLayer` lines from `frontsUrl` + `AnimatedPolygonLayer`
+ * triangle/semicircle pips from `frontsPipsUrl`); precip cell tracks +
+ * centroids (from `radarTracksUrl`/`radarCellsUrl`); and GLM lightning as a
+ * density field + flashes (from `lightningUrl`). Built by glm_lightning.py +
+ * mrms_weather.py + hrrr_advect.py + wpc_fronts.py.
+ */
+export interface WeatherDataset
+  extends
+    BaseDataset,
+    PointStyling,
+    TripStyling,
+    PathStyling,
+    PolygonStyling,
+    StormCellOverlay {
+  type: 'weather';
   /**
    * HRRR wind archive manifest (the hrrr-wind trips archive from
    * hrrr_advect.py). In the composite it renders as a minimal drifting PARTICLE
@@ -770,7 +1130,7 @@ export interface Dataset {
   windUrl?: string;
   /**
    * GLM lightning flash-point manifest, rendered as BOTH a density heatmap and
-   * flash points (the `type: 'lightning'` pair) within the composite. Rewritten
+   * flash points (the `lightning` pair) within the composite. Rewritten
    * through `resolveDataUrl`. The composite reuses `radarCellsUrl`/
    * `radarTracksUrl` for the precip cells/tracks and `url` for the precip field.
    */
@@ -785,9 +1145,9 @@ export interface Dataset {
    */
   frontsUrl?: string;
   /**
-   * Companion archive to {@link frontsUrl}: the classic frontal notation —
-   * filled triangles (cold), semicircles (warm), alternating (occluded/
-   * stationary) — baked by wpc_fronts.py as small ORIENTED GEOGRAPHIC
+   * Companion archive to {@link WeatherDataset.frontsUrl}: the classic frontal
+   * notation — filled triangles (cold), semicircles (warm), alternating
+   * (occluded/stationary) — baked by wpc_fronts.py as small ORIENTED GEOGRAPHIC
    * POLYGONS on each front's advancing side, so they rotate and scale with
    * the map exactly like the paper-map symbols. Rendered by a second
    * AnimatedPolygonLayer with the same categorical mapping and fades as the
@@ -801,8 +1161,7 @@ export interface Dataset {
    * from the SAME HRRR file as the wind (`hrrr_advect.py --color-by temp`), so
    * the grounding shares the wind's exact 3 km / hourly resolution. `domain` is
    * the [min, max] °C mapped onto the cold→warm `colors` ramp. Unset →
-   * constant {@link windHeadColor}. (Was the legacy streamline speed gradient;
-   * the drift-dot field now carries temperature instead.)
+   * constant {@link WeatherDataset.windHeadColor}.
    */
   windGradient?: {
     property: string;
@@ -824,13 +1183,39 @@ export interface Dataset {
   windHeadRadiusPixels?: number;
   /** Layer opacity for the wind drift dots. @default 0.6 */
   windHeadOpacity?: number;
+}
 
-  // ─── storm-4D composite (type: 'storm4d') ──────────────────────────────
-  // One supercell as a 4D object: the primary `url` is the NEXRAD gate VOLUME
-  // (3D points, `alt_m` altitude column); these are the context overlays.
-  // Every one is rewritten through `resolveDataUrl` alongside `url` so an R2
-  // deploy resolves them. The composite additionally reuses `lightningUrl`
-  // (the existing goes-glm-lightning archive, timeRange-subset at render).
+/**
+ * Composite STORM-4D render — one supercell as a true 4D object on one
+ * playhead (the depth-first sibling of the continental `weather` suite).
+ * Stacks (bottom→top): county power outages extruded by `customers_out`
+ * (`AnimatedPolygonLayer`, from `outagesUrl`); the GOES C13 cloud-top "anvil
+ * canopy" isobands lifted to their brightness-temperature height (from
+ * `cloudTopUrl`); multi-level HRRR wind trips at `level_alt_m` (from
+ * `wind3dUrl`); the NEXRAD Level II gate VOLUME as a 3D billboard point
+ * cloud stacked by beam altitude (`AnimatedPointLayer`, `use3D` +
+ * `elevationProperty: 'alt_m'`) — the primary `url` and REQUIRED governor
+ * source, toggling between reflectivity (`dbz_band`) and dealiased radial
+ * velocity (`vel_band`) render modes via `summaryToggleWeights`; VTEC
+ * warning polygons extruded as translucent wireframe prisms (from
+ * `warningsUrl`); mesocyclone couplet markers (from `coupletUrl`); ASOS
+ * surface stations (from `stationsUrl`); local storm reports arriving
+ * behind the storm (from `reportsUrl`); GLM lightning at ground (from
+ * `lightningUrl`); and the radiosonde ascent trail (from `soundingUrl`).
+ * Built by nexrad_volume.py + the storm4d fetch scripts.
+ *
+ * Every overlay url is rewritten through `resolveDataUrl` alongside `url` so an
+ * R2 deploy resolves them.
+ */
+export interface Storm4dDataset
+  extends
+    BaseDataset,
+    PointStyling,
+    TripStyling,
+    PathStyling,
+    PolygonStyling,
+    DataFilterStyling {
+  type: 'storm4d';
   /**
    * Mesocyclone couplet marker archive (`storm4d-couplet`): azimuthal-shear
    * local maxima on the lowest dealiased velocity sweep, one marker per
@@ -883,6 +1268,11 @@ export interface Dataset {
    */
   soundingUrl?: string;
   /**
+   * GLM lightning flash-point manifest at ground level (the shared
+   * goes-glm-lightning archive, timeRange-subset at render).
+   */
+  lightningUrl?: string;
+  /**
    * How the primary `url` archive renders the storm itself:
    *
    * * `'points'` (default) — the NEXRAD gate VOLUME (`storm4d-volume`):
@@ -899,24 +1289,47 @@ export interface Dataset {
    * camera, the governor wiring — is identical between the two.
    */
   stormVolumeMode?: 'points' | 'isolines';
+  /**
+   * Reflectivity ↔ velocity RENDER-MODE toggle, reusing the summary-tier
+   * segmented control: each option's `weightProperty` names the volume's
+   * CATEGORICAL color column (`dbz_band` or `vel_band`) and its `colorMapping`
+   * carries that mode's category → RGBA map.
+   */
+  summaryToggleWeights?: SummaryToggleOption[];
+}
 
-  // ─── AV cockpit composite styling (type: 'av') ─────────────────────────
+/**
+ * Composite AV-telemetry "cockpit" render (streetscape.gl / avs.auto style).
+ * Overlays up to THREE STT archives from one AV scene bundle: an accumulated
+ * LIDAR point cloud (`AnimatedPointLayer`, categorical `height_band` fill) as
+ * the dataset's primary `url`; the ego trajectory (`AnimatedTripsLayer`) from
+ * `avEgoUrl`; and tracked-object 3D boxes (`AnimatedBoundingBoxLayer`,
+ * categorical `category`) from `avObjectsUrl`. The bespoke `/drive/:sceneId`
+ * cockpit additionally reads `avSceneUrl` (the `scene.json` manifest) plus the
+ * `avTelemetryUrl` / `avCamerasUrl` sidecars for chrome, gauges, and the camera
+ * inset. Built by the `av_synthetic.py` / `nuscenes_extract.py` adapters.
+ *
+ * Every url is rewritten through `resolveDataUrl` alongside `url` so an R2
+ * deploy resolves it.
+ */
+export interface AvDataset
+  extends BaseDataset, PointStyling, TripStyling, AvSceneStreams {
+  type: 'av';
   /**
    * `scene.json` manifest URL for the AV scene bundle. The bespoke
    * `/drive/:sceneId` cockpit fetches it for chrome (name/attribution/license),
    * object colors, the runtime time range, and the telemetry/camera sidecar
    * references. The standard `case 'av'` render does NOT need it (it composes
    * from the archive URLs + the Dataset copies of the colors); the cockpit does.
-   * Rewritten through `resolveDataUrl` alongside `url` so an R2 deploy resolves it.
    */
-  avSceneUrl?: string;
+  avSceneUrl: string;
   /**
    * LIDAR point-cloud archive manifest (an STT POINT archive — accumulated
    * returns, colored by categorical `height_band`). Rendered by
    * `AnimatedPointLayer`. Present ONLY on scenes that have a LIDAR stream
    * (nuScenes / Argoverse / synthetic); omit it for LIDAR-less scenes such as
    * comma.ai. On LIDAR scenes set it equal to the dataset's primary `url` so the
-   * playback governor rides the LIDAR (heaviest) archive. Routed through `resolveDataUrl`.
+   * playback governor rides the LIDAR (heaviest) archive.
    */
   avLidarUrl?: string;
   /**
@@ -926,62 +1339,27 @@ export interface Dataset {
    * ERASOR-style scrub), voxel-downsampling and fitting surfels — baked as ONE
    * timeless full-range cloud that loads once and persists. Rendered as a
    * persistent `SplatLayer` backdrop (no playhead filter) UNDER the animated
-   * actors. Set together with {@link avDynamicUrl} + {@link lidarStage}.
+   * actors. Set together with {@link AvDataset.avDynamicUrl} +
+   * {@link AvDataset.lidarStage}.
    */
   avStaticUrl?: string;
   /**
    * Scene-split DYNAMIC archive manifest (an STT POINT/surfel archive). The
    * MOVING agents' per-sweep returns (cars/bikes/pedestrians inside moving
    * boxes), time-bucketed and animated. On scene-split scenes this is also the
-   * primary `url` / {@link avLidarUrl} so the governor rides it.
+   * primary `url` / {@link AvDataset.avLidarUrl} so the governor rides it.
    */
   avDynamicUrl?: string;
   /**
-   * Ego-trajectory archive manifest (an STT TRIPS archive — one LineString =
-   * the ego path). Rendered by `AnimatedTripsLayer`. On LIDAR scenes the
-   * primary `url` is the LIDAR archive; on LIDAR-less scenes (comma.ai) this IS
-   * the primary `url`, so the governor rides it. Routed through `resolveDataUrl`.
-   */
-  avEgoUrl?: string;
-  /**
-   * Tracked-object archive manifest (an STT POINT archive — one point per
-   * object per annotated sample, carrying `category`/`heading`/box dims).
-   * Rendered by `AnimatedBoundingBoxLayer`. Routed through `resolveDataUrl`.
-   */
-  avObjectsUrl?: string;
-  /**
    * CAN-bus telemetry sidecar JSON URL (`telemetry.json`). Loaded client-side
    * by the cockpit; binary-searched at the playhead to drive the metric gauges.
-   * Routed through `resolveDataUrl`.
    */
   avTelemetryUrl?: string;
   /**
    * Camera-keyframe sidecar JSON URL (`cameras.json`). Loaded client-side by
-   * the cockpit's top-right camera inset. Routed through `resolveDataUrl`.
+   * the cockpit's top-right camera inset.
    */
   avCamerasUrl?: string;
-  /**
-   * The scene rides an APPROXIMATE/anchored local frame, not a real geo-registered
-   * one (e.g. Waymo: the Open Dataset discloses no lat/lon, so the scene is anchored
-   * at a plausible metro point — the metro is right, the streets are not). When
-   * true, the cockpit drops the street basemap (renders the cloud on a plain dark
-   * background) so the real road network can't visibly contradict the anchor.
-   * Georeferenced sources (nuScenes / Argoverse) leave this unset → street basemap.
-   */
-  avLocalFrame?: boolean;
-  /**
-   * Tracked-object category → RGBA color. Also present in `scene.json`; the
-   * Dataset copy keeps `buildDemoLayers` self-contained (so the standard
-   * `DemoPage` render colors object boxes without fetching the manifest).
-   */
-  avObjectColors?: Record<string, ColorRGBA>;
-  /**
-   * LIDAR `height_band` (categorical) → RGBA color ramp. Drives the LIDAR
-   * point cloud's `colorMapping`. ~8 bands across the height domain.
-   */
-  lidarColorMapping?: Record<string, ColorRGBA>;
-  /** Fallback color for `height_band` values absent from `lidarColorMapping`. */
-  lidarColorMappingDefault?: ColorRGBA;
   /**
    * Camera-colored LIDAR: the bundle bakes per-point `r`/`g`/`b` columns
    * (sampled by projecting each return into the camera images at build time —
@@ -1031,32 +1409,34 @@ export interface Dataset {
    */
   lidarIso?: boolean;
   /**
-   * TRUE-3D variant of {@link lidarIso}: the `-iso3d` bundle (built with
-   * `waymo_extract.py --contours --contour-z-step …`) slices the returns into
-   * height layers and contours each layer's XY density independently, tagging
-   * every contour with a numeric `z_layer` (its slab's real altitude, metres).
-   * `AnimatedPathLayer` lifts each ring to `z_layer × {@link
-   * lidarIsoElevationScale}`, so the vertical axis carries REAL structure — a
-   * wall contours up its whole height, a parked car only near the ground.
-   * Implies `lidarIso`; still colored by the categorical `density_band` ramp.
+   * TRUE-3D variant of {@link AvDataset.lidarIso}: the `-iso3d` bundle (built
+   * with `waymo_extract.py --contours --contour-z-step …`) slices the returns
+   * into height layers and contours each layer's XY density independently,
+   * tagging every contour with a numeric `z_layer` (its slab's real altitude,
+   * metres). `AnimatedPathLayer` lifts each ring to `z_layer × {@link
+   * AvDataset.lidarIsoElevationScale}`, so the vertical axis carries REAL
+   * structure — a wall contours up its whole height, a parked car only near the
+   * ground. Implies `lidarIso`; still colored by the categorical `density_band`
+   * ramp.
    */
   lidarIso3d?: boolean;
   /**
    * Vertical exaggeration applied to the `z_layer` altitude for the {@link
-   * lidarIso3d} relief — `1` is true 1:1 scale (matches the point cloud); a
-   * small multiplier (~2–3) makes the few-metre structure read against the
-   * ~100 m-wide scene. Default 1.
+   * AvDataset.lidarIso3d} relief — `1` is true 1:1 scale (matches the point
+   * cloud); a small multiplier (~2–3) makes the few-metre structure read against
+   * the ~100 m-wide scene. Default 1.
    */
   lidarIsoElevationScale?: number;
   /**
-   * Height-graded opacity for the {@link lidarIso3d} stack: fades each contour
-   * ring's alpha by its real altitude so the upper slabs go translucent and the
-   * stack reads coherently from a TOP-DOWN view (you see down through the roof to
-   * the ground rather than the top slab occluding everything below). `range` is
-   * the `[low, high]` altitude in METRES (raw `z_layer`, pre-exaggeration) the
-   * fade spans; `near` is the alpha multiplier at the ground (default 1) and
-   * `far` at the top (e.g. `0.35` → top fades to 35%). Omit for an un-graded
-   * stack. Forwarded to `AnimatedPathLayer.elevationOpacity{Range,Near,Far}`.
+   * Height-graded opacity for the {@link AvDataset.lidarIso3d} stack: fades each
+   * contour ring's alpha by its real altitude so the upper slabs go translucent
+   * and the stack reads coherently from a TOP-DOWN view (you see down through
+   * the roof to the ground rather than the top slab occluding everything below).
+   * `range` is the `[low, high]` altitude in METRES (raw `z_layer`,
+   * pre-exaggeration) the fade spans; `near` is the alpha multiplier at the
+   * ground (default 1) and `far` at the top (e.g. `0.35` → top fades to 35%).
+   * Omit for an un-graded stack. Forwarded to
+   * `AnimatedPathLayer.elevationOpacity{Range,Near,Far}`.
    */
   lidarIsoTopFade?: { range: [number, number]; near?: number; far?: number };
   /**
@@ -1070,43 +1450,47 @@ export interface Dataset {
    */
   lidarWorldbuild?: boolean;
   /**
-   * Reveal-fade (ms) for {@link lidarWorldbuild} — how long a freshly-revealed
-   * static surfel ramps from invisible to full as it first appears. 0 = snap on
-   * (the surface "paints in" instantly at each sweep). Forwarded to
+   * Reveal-fade (ms) for {@link AvDataset.lidarWorldbuild} — how long a freshly-
+   * revealed static surfel ramps from invisible to full as it first appears. 0 =
+   * snap on (the surface "paints in" instantly at each sweep). Forwarded to
    * `SplatLayer.revealFade`.
    */
   lidarWorldbuildRevealFade?: number;
   /**
    * Temporal-Gaussian width (ms) for the DYNAMIC surfels in
-   * {@link lidarWorldbuild} — moving-object returns smear over ±~3σ of this so
-   * traffic reads as motion against the persistent static world. Forwarded to
-   * `SplatLayer.temporalSigmaDynamic`.
+   * {@link AvDataset.lidarWorldbuild} — moving-object returns smear over ±~3σ of
+   * this so traffic reads as motion against the persistent static world.
+   * Forwarded to `SplatLayer.temporalSigmaDynamic`.
    */
   lidarWorldbuildDynamicSigma?: number;
   /**
    * Scene-split ("stage + actors") render: decompose the LIDAR into two distinct
-   * `SplatLayer`s — a STATIC stage (the fixed environment, {@link avStaticUrl})
-   * drawn as a persistent backdrop, and the DYNAMIC actors ({@link avDynamicUrl})
-   * animated over the playhead. Unlike {@link lidarWorldbuild} (one merged cloud,
-   * a shader branch on `is_dynamic`), this renders two separate archives with
-   * independent load lifecycles. Implies camera-colored surfels on both halves.
+   * `SplatLayer`s — a STATIC stage (the fixed environment,
+   * {@link AvDataset.avStaticUrl}) drawn as a persistent backdrop, and the
+   * DYNAMIC actors ({@link AvDataset.avDynamicUrl}) animated over the playhead.
+   * Unlike {@link AvDataset.lidarWorldbuild} (one merged cloud, a shader branch
+   * on `is_dynamic`), this renders two separate archives with independent load
+   * lifecycles. Implies camera-colored surfels on both halves.
    */
   lidarStage?: boolean;
   /**
-   * For {@link lidarStage}: render the static stage with NO playhead filter — an
-   * effectively-infinite `temporalSigma` pins every stage surfel full-bright from
-   * t=0 (a fixed backdrop, not an accreting reveal). Defaults to `true`.
+   * For {@link AvDataset.lidarStage}: render the static stage with NO playhead
+   * filter — an effectively-infinite `temporalSigma` pins every stage surfel
+   * full-bright from t=0 (a fixed backdrop, not an accreting reveal). Defaults
+   * to `true`.
    */
   lidarStageStatic?: boolean;
   /**
-   * For {@link lidarStage}: layer opacity of the static stage backdrop, muted vs
-   * the bright actors so the moving agents pop against it. Defaults to ~0.5.
+   * For {@link AvDataset.lidarStage}: layer opacity of the static stage
+   * backdrop, muted vs the bright actors so the moving agents pop against it.
+   * Defaults to ~0.5.
    */
   lidarStageOpacity?: number;
   /**
-   * For {@link lidarStage}: surfel size multiplier for the DYNAMIC actors, so the
-   * moving agents render chunkier and pop against the recessive stage. Defaults to
-   * ~1.5 (the stage keeps {@link lidarSurfelSizeScale}, default 1).
+   * For {@link AvDataset.lidarStage}: surfel size multiplier for the DYNAMIC
+   * actors, so the moving agents render chunkier and pop against the recessive
+   * stage. Defaults to ~1.5 (the stage keeps
+   * {@link AvDataset.lidarSurfelSizeScale}, default 1).
    */
   lidarActorSizeScale?: number;
   /**
@@ -1121,54 +1505,25 @@ export interface Dataset {
    * Tracked-track LineStrings archive (`tracks/manifest.json`) present in EVERY
    * base bundle: one LineString per track (object classes + the synthetic "ego"
    * spine), carrying `vertex_timestamps`, a categorical `category`, and per-vertex
-   * speed. Drives the {@link avCube} space-time-cube render (`AnimatedTripsLayer`
-   * in trail mode, lifted by time = height). Routed through `resolveDataUrl`.
+   * speed. Drives the {@link AvDataset.avCube} space-time-cube render
+   * (`AnimatedTripsLayer` in trail mode, lifted by time = height).
    */
   avTracksUrl?: string;
   /**
    * Render the scene as a Hägerstrand space-time cube of the TRACK trajectories:
-   * the {@link avTracksUrl} LineStrings are drawn as 3D ribbons climbing through
-   * the cube (time = altitude, slope = speed), with a translucent now-plane riding
-   * the playhead. A render-only flag set on a clone of the base dataset (no bundle
-   * swap — it reads the base + its `tracks/` archive). The cockpit's "Spacetime"
-   * render mode.
+   * the {@link AvDataset.avTracksUrl} LineStrings are drawn as 3D ribbons
+   * climbing through the cube (time = altitude, slope = speed), with a
+   * translucent now-plane riding the playhead. A render-only flag set on a clone
+   * of the base dataset (no bundle swap — it reads the base + its `tracks/`
+   * archive). The cockpit's "Spacetime" render mode.
    */
   avCube?: boolean;
   /**
    * Cube height in METRES for the full time range at squash factor 1 (the
-   * {@link avCube} analog of `timeHeight.rangeHeightMeters`). Defaults to ~200.
+   * {@link AvDataset.avCube} analog of `timeHeight.rangeHeightMeters`). Defaults
+   * to ~200.
    */
   avCubeRangeHeightMeters?: number;
-  /**
-   * HD-map vector streams: drivable-area / lane / crosswalk POLYGONS
-   * (`avMapPolyUrl`) and lane-divider / boundary LINES (`avMapLineUrl`), each an
-   * STT archive whose features carry a categorical `map_layer` string. Rendered
-   * UNDER the LIDAR as the scene substrate (the streetscape.gl "real road" cue).
-   * Routed through `resolveDataUrl`.
-   */
-  avMapPolyUrl?: string;
-  avMapLineUrl?: string;
-  /**
-   * Additive-octree LOD POINT overview of the HD-map lines (the `/worlds`
-   * gallery): a decimated dotted road network whose points each carry a single
-   * `home_zoom`, rendered via `AnimatedPointLayer` with `lodMode:'additive'` so
-   * the multi-scenario overview loads a sparse coarse tier instead of the full
-   * `avMapLineUrl` archive at every zoom. The crisp lines take over on zoom-in.
-   * Built by `cosmos_drive_dreams.py`'s `map_points` archive. Routed through
-   * `resolveDataUrl`.
-   */
-  avMapPointsUrl?: string;
-  /** `map_layer` (categorical) → RGBA for both map streams (fills low-alpha, lines crisp). */
-  mapColors?: Record<string, ColorRGBA>;
-  /**
-   * `worlds` type only: the scenario-index sidecar (`worlds.json`) written by
-   * `cosmos_drive_dreams.py`. Carries the grid geometry, the shared clock, and
-   * one record per scenario (origin lon/lat, caption, agent counts, generated
-   * weather-variant video paths, hero LiDAR manifest). The `/worlds` page fetches
-   * it and resolves every asset path inside it RELATIVE to this url's directory,
-   * so the bundle stays self-describing. Routed through `resolveDataUrl`.
-   */
-  worldsUrl?: string;
   /**
    * Opt this AV scene into a toggleable Google Photorealistic 3D Tiles overlay
    * (deck.gl `Tile3DLayer` from `@deck.gl/geo-layers`, pointed at Google's
@@ -1185,157 +1540,117 @@ export interface Dataset {
   tiles3d?: boolean;
   /**
    * Hard-coded local ground ellipsoidal height (metres) at this scene's anchor,
-   * used to seat {@link tiles3d}. Google's photoreal mesh is referenced to WGS84
-   * ellipsoidal height (e.g. Pittsburgh ground ≈ 230 m) while the AV cloud sits at
-   * local `z ≈ 0`; the cockpit lowers the mesh by this much so the streets line
-   * up. Measured per scene by reading the finest Google tile at the anchor (the
-   * values are baked into `datasets.ts`). When unset, the cockpit falls back to
-   * auto-detecting it from the tiles at runtime (less reliable). The in-app
-   * "3D tiles height" slider trims ± on top of this.
+   * used to seat {@link AvDataset.tiles3d}. Google's photoreal mesh is referenced
+   * to WGS84 ellipsoidal height (e.g. Pittsburgh ground ≈ 230 m) while the AV
+   * cloud sits at local `z ≈ 0`; the cockpit lowers the mesh by this much so the
+   * streets line up. Measured per scene by reading the finest Google tile at the
+   * anchor (the values are baked into `datasets.ts`). When unset, the cockpit
+   * falls back to auto-detecting it from the tiles at runtime (less reliable).
+   * The in-app "3D tiles height" slider trims ± on top of this.
    */
   tiles3dGroundHeight?: number;
   /**
-   * Default opacity (0–1) for this scene's {@link tiles3d} photoreal mesh. Below 1
-   * ghosts the buildings so the LIDAR reads against them. Seeds the cockpit's
-   * "Tiles opacity" slider (the `?tiles3dop=` URL param overrides). @default 1
+   * Default opacity (0–1) for this scene's {@link AvDataset.tiles3d} photoreal
+   * mesh. Below 1 ghosts the buildings so the LIDAR reads against them. Seeds
+   * the cockpit's "Tiles opacity" slider (the `?tiles3dop=` URL param
+   * overrides). @default 1
    */
   tiles3dOpacity?: number;
-
-  // ─── space-time cube (time = height) ───────────────────────────────────
-  /**
-   * Render the dataset as a Hägerstrand space-time cube: time maps to
-   * altitude, so trail-mode trips become 3D threads climbing through the
-   * cube (slope = speed) and points become temporal strata. DemoPage adds a
-   * "squash" slider that morphs between the flat map (0) and the full cube
-   * (1) — a single shader uniform, free to animate. MapView demos only.
-   */
-  timeHeight?: {
-    /** Cube height in meters for the full timeRange at squash factor 1. */
-    rangeHeightMeters: number;
-    /** Initial squash factor, 0..1. Defaults to 1 (full cube). */
-    initialFactor?: number;
-    /** Draw a translucent "now" plane rising with the playhead. Default true. */
-    nowPlane?: boolean;
-    /**
-     * Draw the STT tile lattice: each loaded tile rendered as a wireframe
-     * box (spatial footprint × temporal bucket) — the format made visible.
-     * Default true.
-     */
-    tileLattice?: boolean;
-    /** Camera pitch limit (MapView defaults to 60; cubes want more). */
-    maxPitch?: number;
-  };
-
-  // ─── summary-tier styling (type: 'h3Summary') ──────────────────────────
-  /**
-   * Numeric column the summary-tier color ramp + extrusion are driven by.
-   * Defaults to `'count'` (the implicit per-cell count column).
-   */
-  summaryWeightProperty?: string;
-  /**
-   * 6-stop low→high colour ramp for the summary tier. RGBA, 0-255.
-   */
-  summaryColorRange?: ColorRGBA[];
-  /**
-   * `[min, max]` pin for the colour ramp. When unset, each tile's own
-   * min/max drives the ramp — visually unstable but a usable default.
-   */
-  summaryColorDomain?: [number, number];
-  /** Extrude the hexes by `weight * elevationScale`. */
-  summaryExtruded?: boolean;
-  /** Meters-per-weight-unit when extruded. */
-  summaryElevationScale?: number;
-  /** Hex coverage (0..1). Lower values leave visible gaps between hexes. */
-  summaryCoverage?: number;
-  /**
-   * Optional pickup/dropoff-style toggle for a summary-tier demo. When set,
-   * the demo renders a small segmented control over the map; selecting an
-   * option swaps the layer's `weightProperty` + colour ramp + domain in
-   * place. The first entry is the initial selection.
-   */
-  summaryToggleWeights?: SummaryToggleOption[];
-
-  // ─── arc-layer styling (type: 'arc') ───────────────────────────────────
-  /** Arc source-endpoint (origin) color, RGBA. The arc interpolates source→target. */
-  arcSourceColor?: ColorRGBA;
-  /** Arc target-endpoint (destination) color, RGBA. */
-  arcTargetColor?: ColorRGBA;
-  /** Arc line width in `widthUnits` (default pixels). */
-  arcWidth?: number;
-  /** Bow arcs along a great-circle path (for globe / long-haul flows). */
-  arcGreatCircle?: boolean;
-  /** Arc height multiplier; 0 = flat lines. Default 1. */
-  arcHeight?: number;
-
-  // ─── flowmap-layer styling (type: 'flowmap') ───────────────────────────
-  /** Arrow width in px per `sqrt(current-bucket trip count)`. Default 1.1. */
-  flowWidthScale?: number;
-  /** Clamp arrow width to at least this many px (active arrows only). */
-  flowWidthMinPixels?: number;
-  /** Clamp arrow width to at most this many px. */
-  flowWidthMaxPixels?: number;
-  /** Arrow source (origin / tail) color, RGBA. */
-  flowSourceColor?: ColorRGBA;
-  /** Arrow target (destination / arrowhead) color, RGBA. */
-  flowTargetColor?: ColorRGBA;
-  /** Perpendicular separation of the two directions, in arrow widths. Default 0.5. */
-  flowGap?: number;
-  /** @deprecated No effect — flow arrows are flat (old raised-arc knob). */
-  flowArcHeight?: number;
-  /** @deprecated No effect — flow arrows are flat. */
-  flowGreatCircle?: boolean;
-  /** Node circle radius per `sqrt(incident flow)`. Default 1.3. */
-  flowNodeRadiusScale?: number;
-  /**
-   * Units for node-circle radius: `'pixels'` (constant on screen) or `'meters'`
-   * (scales with the map, so dense overviews don't blow out into overlapping
-   * dots — still clamped by `flowNodeRadiusMaxPixels`). With `'meters'`,
-   * `flowNodeRadiusScale` is metres per √flow. Default `'pixels'`.
-   */
-  flowNodeRadiusUnits?: 'meters' | 'pixels';
-  /** Clamp node circle radius to at most this many px. Default 28. */
-  flowNodeRadiusMaxPixels?: number;
-  /** Node circle fill color, RGBA. */
-  flowNodeColor?: ColorRGBA;
-  /** Hide arrows/nodes whose current flow is below this many trips. Default 0.25. */
-  flowMinFlow?: number;
-
-  // ─── edge-bundled flowmap tuning (type: 'flowmap-bundled', KDEEB) ───────
-  /** Control points per edge (P). Higher = smoother rivers, more GPU work. Default 48. */
-  flowSubdivisionPoints?: number;
-  /** Kernel bandwidth as a fraction of the tile extent — the headline knob; larger bundles more. Default 0.05. */
-  flowKernelRadius?: number;
-  /** Number of KDEEB density-advection iterations (more = tighter). Default 15. */
-  flowBundlingIterations?: number;
-  /** Per-iteration Laplacian smoothing strength in [0,1]. Default 0.5. */
-  flowSmoothingStrength?: number;
-  /** Above this many edges per tile, skip bundling (straight arrows). Default 4000. */
-  flowMaxBundledEdges?: number;
-  /**
-   * The tiles already carry BAKED bundled geometry (`stt-generate bixi
-   * --bake-bundling`): `BundledFlowmapLayer` skips the live GPU bundler and just
-   * renders the precomputed rivers. Cheaper, stable, works without `EXT_float_blend`.
-   */
-  flowPreBundled?: boolean;
-
-  // ─── column-layer styling (type: 'column') ─────────────────────────────
-  /** Column disk radius in `columnRadiusUnits`. Default 100. */
-  columnRadius?: number;
-  /** Units for `columnRadius`. Default 'meters'. */
-  columnRadiusUnits?: 'meters' | 'pixels' | 'common';
-  /** Column cross-section resolution (sides). Default 12. */
-  columnDiskResolution?: number;
-  /** Constant column height when no `elevationProperty` is set. */
-  columnElevation?: number;
-  /** Constant column fill, RGBA (or use `colorProperty` for categorical fill). */
-  columnFillColor?: ColorRGBA;
-
-  /**
-   * Palette for a categorical `colorProperty` on the arc / column layers
-   * (GPU CategoryColorExtension — palette[categoryIndex]).
-   */
-  colorPalette?: ColorRGBA[];
 }
+
+/**
+ * WORLD-MODEL SCENARIO GALLERY (`/worlds`) — hundreds of short driving
+ * scenarios laid out side by side on a synthetic grid, every one animating
+ * at once on a single shared looping clock. FOUR cross-scenario archives:
+ * the ego trips (`avEgoUrl`, the primary `url` + the one REQUIRED governor
+ * source), the oriented agent boxes (`avObjectsUrl`, mounted only when the
+ * camera is close enough to read them), and the HD-map line/polygon
+ * substrate (`avMapLineUrl` / `avMapPolyUrl`, timeless full-range archives).
+ * Rendered by the bespoke `/worlds` page (never by `DemoViewer`), which is why
+ * this type has no `buildDemoLayers` case. Built by `cosmos_drive_dreams.py`.
+ */
+export interface WorldsDataset
+  extends BaseDataset, PointStyling, TripStyling, AvSceneStreams {
+  type: 'worlds';
+  /**
+   * The scenario-index sidecar (`worlds.json`) written by
+   * `cosmos_drive_dreams.py`. Carries the grid geometry, the shared clock, and
+   * one record per scenario (origin lon/lat, caption, agent counts, generated
+   * weather-variant video paths, hero LiDAR manifest). The `/worlds` page fetches
+   * it and resolves every asset path inside it RELATIVE to this url's directory,
+   * so the bundle stays self-describing. Routed through `resolveDataUrl`.
+   */
+  worldsUrl: string;
+  /**
+   * Additive-octree LOD POINT overview of the HD-map lines: a decimated dotted
+   * road network whose points each carry a single `home_zoom`, rendered via
+   * `AnimatedPointLayer` with `lodMode:'additive'` so the multi-scenario overview
+   * loads a sparse coarse tier instead of the full `avMapLineUrl` archive at
+   * every zoom. The crisp lines take over on zoom-in. Built by
+   * `cosmos_drive_dreams.py`'s `map_points` archive. Routed through
+   * `resolveDataUrl`.
+   */
+  avMapPointsUrl?: string;
+}
+
+/** The core {@link LayerKind}s that have a dedicated {@link Dataset} variant. */
+type StyledLayerKind =
+  | PointDataset['type']
+  | PointCloudDataset['type']
+  | PathDataset['type']
+  | TripsDataset['type']
+  | TripHeadsDataset['type']
+  | PolygonDataset['type']
+  | ArcDataset['type']
+  | ColumnDataset['type']
+  | HeatmapDataset['type']
+  | SummaryDataset['type']
+  | FlowmapDataset['type'];
+
+/**
+ * A kind in the frozen core vocabulary that no demo styles yet. It gets the
+ * base fields and nothing else, so adding a kind in `@poopdeck.gl/core` never
+ * silently admits another family's props — authoring a demo for it means giving
+ * it a variant above.
+ */
+export interface GenericDataset extends BaseDataset {
+  type: Exclude<LayerKind, StyledLayerKind>;
+}
+
+/**
+ * A demo card, discriminated on {@link DatasetType}. Narrow on `type` before
+ * reading anything a single family owns — that is what makes
+ * `lidarSurfelTemporalSigma` a compile error on a seismicity dataset.
+ */
+export type Dataset =
+  | PointDataset
+  | PointCloudDataset
+  | PathDataset
+  | TripsDataset
+  | TripHeadsDataset
+  | PolygonDataset
+  | ArcDataset
+  | ColumnDataset
+  | HeatmapDataset
+  | SummaryDataset
+  | FlowmapDataset
+  | LightningDataset
+  | RadarDataset
+  | WeatherDataset
+  | Storm4dDataset
+  | AvDataset
+  | WorldsDataset
+  | GenericDataset;
+
+/** Keys of EVERY member of a union, not just the ones they all share. */
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
+
+/**
+ * A field name SOME {@link Dataset} variant declares. Use it to type lists of
+ * field names that are looked up dynamically, so a rename in a variant breaks
+ * the list instead of silently skipping the field.
+ */
+export type DatasetField = KeysOfUnion<Dataset>;
 
 /**
  * One choice in a summary-tier weight toggle. Each option points at a

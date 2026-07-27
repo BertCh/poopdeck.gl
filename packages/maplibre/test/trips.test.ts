@@ -35,7 +35,7 @@ import {
   metersToPixelsAtLatitude,
   tileCenterLatitude,
 } from '../src/lib/projection';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 import { makeTripsTile } from './fixtures';
 
 const baseOpts = {
@@ -936,7 +936,9 @@ describe('STTTripsLayer globe geometry (D4)', () => {
     const layer = new STTTripsLayer({ ...baseOpts, id: 't' }) as any;
     stubInstancing(layer);
     layer.map = makeMockMap();
-    layer.tileset = { update: vi.fn() };
+    // beginFrame derives the drawn set from the tileset; the draws below are
+    // issued by hand, so the visible set stays empty.
+    publishVisibleTiles(layer);
     const gl = makeGl();
     const tile = makeTripsTile();
 

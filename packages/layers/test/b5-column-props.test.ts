@@ -328,8 +328,10 @@ describe('AnimatedColumnLayer — B5 parity props', () => {
 
   it('is byte-identical with the additions unset vs explicitly undefined', () => {
     const N = 8;
-    // Categorical fill so the GPU category path is live — proving the
-    // colorMapping addition leaves it untouched when the map is absent.
+    // Categorical fill on FLAT disks so the GPU category path is live —
+    // proving the colorMapping addition leaves it untouched when the map is
+    // absent. (Extruded columns deliberately CPU-expand instead, so the lit
+    // color survives DECKGL_FILTER_COLOR — see animated-column-layer.test.ts.)
     const withCat = () => {
       const tile = pointTile(N);
       tile.layers[0].features.categoricalProps['kind'] = {
@@ -341,12 +343,14 @@ describe('AnimatedColumnLayer — B5 parity props', () => {
     };
 
     const omitted = buildSublayerForTile(withCat(), {
+      extruded: false,
       fillColor: 'kind',
       elevation: 'h',
     });
     // The defaultProps shadow gotcha: an explicit `undefined` must behave
     // exactly like omission — the layer never spreads it into the sublayer.
     const explicitUndefined = buildSublayerForTile(withCat(), {
+      extruded: false,
       fillColor: 'kind',
       elevation: 'h',
       colorMapping: undefined,

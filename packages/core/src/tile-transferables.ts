@@ -32,9 +32,16 @@ import type { BinaryFeatures, Tile } from './types.js';
  * (worker transfer list) and `estimateTileSize` (cache byte accounting) so
  * the two can never drift when a new column lands (this diff's own history:
  * `estimateTileSize` had silently fallen behind on `vertexValueMatrix` /
- * `vectorProps` before they were re-synced). Layer-level extras (`arrowIpc`,
- * `arrowIpcProps`) are NOT features fields — callers that want them add them
- * themselves.
+ * `vectorProps` before they were re-synced, and `partIndices` shipped
+ * unlisted — structured-CLONE-copied across the worker boundary and
+ * uncounted against the memory budget — until it was added here). Layer-level
+ * extras (`arrowIpc`, `arrowIpcProps`) are NOT features fields — callers that
+ * want them add them themselves.
+ *
+ * ⚠️ ADDING A BUFFER FIELD TO `BinaryFeatures` MEANS ADDING A `visit()` LINE
+ * HERE. `tile-transferables.test.ts` enumerates the interface's own optional
+ * buffer fields and fails if one is missing, so the omission is caught at
+ * test time rather than as a silent copy in production.
  *
  * Defensive: skips any field whose value is not a real typed array (see the
  * module doc); the callback only ever receives genuine `ArrayBufferView`s.
@@ -52,6 +59,7 @@ export function forEachBufferView(
   visit(features.endTimes);
   visit(features.startIndices);
   visit(features.ringIndices);
+  visit(features.partIndices);
   visit(features.vertexTimestamps);
   visit(features.vertexValues);
   visit(features.vertexValueMatrix);

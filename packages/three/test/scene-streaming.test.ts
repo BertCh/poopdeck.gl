@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Group } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { SttScene } from '../src/scene/stt-three-scene';
-import type { SttLayer, SttLayerContext } from '../src/layers/layer';
+import { STTScene } from '../src/scene/stt-three-scene';
+import type { STTLayer, STTLayerContext } from '../src/layers/layer';
 import { mockTileset, tile, VIEWPORT } from './_support/streaming';
 
 /**
- * The new opt-in streaming DRIVE path through {@link SttScene}: opting a layer
+ * The new opt-in streaming DRIVE path through {@link STTScene}: opting a layer
  * into streaming wires `StreamingTileSource.onTilesChanged → layer.setTiles`, and
  * `scene.updateStreaming(viewport)` pumps the viewport so a residency change
  * rebuilds the layer. Eager (load-everything) stays the default and is a no-op
@@ -16,19 +16,19 @@ import { mockTileset, tile, VIEWPORT } from './_support/streaming';
 
 const ANCHOR = { longitude: 0, latitude: 0 };
 
-/** A minimal SttLayer with spy hooks and a real Object3D (root.add needs one). */
-class FakeLayer implements SttLayer {
+/** A minimal STTLayer with spy hooks and a real Object3D (root.add needs one). */
+class FakeLayer implements STTLayer {
   readonly object = new Group();
-  setTiles = vi.fn<[Tile[], SttLayerContext], void>();
+  setTiles = vi.fn<[Tile[], STTLayerContext], void>();
   setTime = vi.fn<[number], void>();
   dispose = vi.fn<[], void>();
   constructor(readonly id: string) {}
 }
 
-describe('SttScene streaming drive path', () => {
+describe('STTScene streaming drive path', () => {
   it('opts a layer into streaming and drives setTiles via updateStreaming', () => {
     const layer = new FakeLayer('objects');
-    const scene = new SttScene({
+    const scene = new STTScene({
       anchor: ANCHOR,
       timeOrigin: 0,
       ground: false,
@@ -70,7 +70,7 @@ describe('SttScene streaming drive path', () => {
 
   it('leaves eager (default) layers untouched by updateStreaming', () => {
     const layer = new FakeLayer('eager');
-    const scene = new SttScene({
+    const scene = new STTScene({
       anchor: ANCHOR,
       timeOrigin: 0,
       ground: false,
@@ -87,7 +87,7 @@ describe('SttScene streaming drive path', () => {
   it('applies the scene-level streaming default, and a per-layer false overrides it', () => {
     const streamed = new FakeLayer('streamed');
     const forcedEager = new FakeLayer('forced-eager');
-    const scene = new SttScene({
+    const scene = new STTScene({
       anchor: ANCHOR,
       timeOrigin: 0,
       ground: false,
@@ -106,7 +106,7 @@ describe('SttScene streaming drive path', () => {
   });
 
   it('forwards setAnimationState to every streaming source', () => {
-    const scene = new SttScene({
+    const scene = new STTScene({
       anchor: ANCHOR,
       timeOrigin: 0,
       ground: false,
@@ -120,7 +120,7 @@ describe('SttScene streaming drive path', () => {
   });
 
   it('disposes both eager and streaming sources', () => {
-    const scene = new SttScene({
+    const scene = new STTScene({
       anchor: ANCHOR,
       timeOrigin: 0,
       ground: false,

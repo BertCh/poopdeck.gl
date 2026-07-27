@@ -19,7 +19,7 @@ import {
   type DrawContext,
   type STTBaseLayerOptions,
 } from '../src/base-layer';
-import { makeMockGl } from './mock-gl';
+import { makeMockGl, publishVisibleTiles } from './mock-gl';
 import { MockMap } from './mock-map';
 import { makePointTile } from './fixtures';
 
@@ -384,7 +384,9 @@ describe('render() signature dispatch', () => {
     map.addLayer(layer);
     await tick(); // let initTileset resolve
     const tile = makePointTile();
-    layer.loadedTiles.set('2/1/1/0', tile);
+    // The drawn set is DERIVED from the tileset's visible set, so the tile has
+    // to be published there rather than poked into `loadedTiles`.
+    publishVisibleTiles(layer, tile);
     return { gl, map, layer };
   }
 

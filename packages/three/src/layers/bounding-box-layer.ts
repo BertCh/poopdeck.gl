@@ -23,10 +23,11 @@ import {
   LineBasicMaterial,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   buildTrackIndex,
   sampleTracks,
+  SINGLETON_HOLD_MS,
   type Track,
   type BoxSample,
   type BoxTrackOptions,
@@ -34,7 +35,7 @@ import {
 import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges.js';
 import type { Projection } from '../projection/local-enu.js';
 import type { RGBA } from '../lib/color.js';
-import type { SttPickable, PickBox } from '../lib/box-pick.js';
+import type { STTPickable, PickBox } from '../lib/box-pick.js';
 
 export interface STTBoundingBoxLayerOptions {
   id?: string;
@@ -89,7 +90,7 @@ function emptyColoredLineGeometry(): BufferGeometry {
   return geom;
 }
 
-export class STTBoundingBoxLayer extends BaseSttLayer implements SttPickable {
+export class STTBoundingBoxLayer extends BaseSTTLayer implements STTPickable {
   readonly id: string;
   readonly object = new Group();
 
@@ -180,7 +181,7 @@ export class STTBoundingBoxLayer extends BaseSttLayer implements SttPickable {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.projection = ctx.projection;
     this.trackIndex = buildTrackIndex(tiles, this.trackOptions());
@@ -194,6 +195,12 @@ export class STTBoundingBoxLayer extends BaseSttLayer implements SttPickable {
       height: this.opts.defaultHeight,
       fadeIn: this.opts.fadeInDuration,
       fadeOut: this.opts.fadeOutDuration,
+      // Passed EXPLICITLY, not left to a default: the shared kernel holds a
+      // lone keyframe for 600 ms and this backend has always held it for 400.
+      // Spelling it at the call site is what keeps that divergence a visible,
+      // deliberate choice after the de-fork rather than an accident of which
+      // module supplies the constant.
+      singletonHoldMs: SINGLETON_HOLD_MS,
     });
     this.activeSamples = samples;
     this.rebuildEdges(samples);
@@ -332,7 +339,7 @@ export class STTBoundingBoxLayer extends BaseSttLayer implements SttPickable {
     return this.activeSamples;
   }
 
-  /** Current-frame world-space OBBs for click-to-inspect picking ({@link SttPickable}). */
+  /** Current-frame world-space OBBs for click-to-inspect picking ({@link STTPickable}). */
   getPickBoxes(): PickBox[] {
     if (!this.projection) return [];
     const ss = this.opts.sizeScale;

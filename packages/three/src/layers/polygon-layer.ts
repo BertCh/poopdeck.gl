@@ -36,7 +36,7 @@ import {
 } from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { InstanceProvenance } from '@poopdeck.gl/core/picking';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -58,8 +58,8 @@ import {
 import type { DataFilterOptions, DataFilterRange } from '../tsl/data-filter.js';
 import {
   resolveIdPick,
-  type SttIdPickInfo,
-  type SttIdPickable,
+  type STTIdPickInfo,
+  type STTIdPickable,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
@@ -115,7 +115,7 @@ export interface STTPolygonLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_COLOR: RGBA = [120, 130, 150, 90];
 
-export class STTPolygonLayer extends BaseSttLayer implements SttIdPickable {
+export class STTPolygonLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
@@ -219,7 +219,7 @@ export class STTPolygonLayer extends BaseSttLayer implements SttIdPickable {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     const bufOpts: PolygonBufferOptions = {
@@ -283,12 +283,12 @@ export class STTPolygonLayer extends BaseSttLayer implements SttIdPickable {
 
   /**
    * Resolve a decoded merged-FEATURE index (from a GPU id-buffer readback) to a
-   * normalised {@link SttIdPickInfo} (`kind: 'polygon'`), or `null` for a miss.
+   * normalised {@link STTIdPickInfo} (`kind: 'polygon'`), or `null` for a miss.
    * The coordinate is the feature's FIRST source vertex (`startIndices[i]`, the
    * standard indexed-geometry path — polygons always carry `startIndices`). Pure —
    * the unit-tested seam; call it directly with a decoded index.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -336,7 +336,7 @@ export class STTPolygonLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.mesh.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

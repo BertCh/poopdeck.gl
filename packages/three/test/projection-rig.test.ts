@@ -4,6 +4,8 @@ import {
   rigModeFor,
   resolveCanvasProjection,
   globeControlLimits,
+  groundControlLimits,
+  MAX_GROUND_PITCH_DEG,
 } from '../src/scene/projection-rig';
 import { LocalEnuProjection, EARTH_RADIUS } from '../src/projection/local-enu';
 import { MercatorProjection } from '../src/projection/mercator';
@@ -11,7 +13,7 @@ import { GlobeProjection } from '../src/projection/globe';
 
 const ANCHOR = { longitude: -73.98, latitude: 40.75 };
 
-describe('resolveCanvasProjection (SttCanvas projection prop)', () => {
+describe('resolveCanvasProjection (STTCanvas projection prop)', () => {
   it('defaults to a LocalEnuProjection anchored at `anchor` when omitted', () => {
     const proj = resolveCanvasProjection(undefined, ANCHOR);
     expect(proj).toBeInstanceOf(LocalEnuProjection);
@@ -67,5 +69,17 @@ describe('globeControlLimits (OrbitControls distance clamp)', () => {
     );
     expect(minDistance).toBeCloseTo(102, 6);
     expect(maxDistance).toBeCloseTo(800, 6);
+  });
+});
+
+describe('groundControlLimits (flat-rig polar clamp)', () => {
+  it('stops the camera 5° short of the ground plane', () => {
+    // `MapControls` defaults `maxPolarAngle` to π — a right-drag can swing the
+    // camera THROUGH the ground and out the other side, where every ray points
+    // at sky and tile selection has no surface to select against.
+    const { maxPolarAngle } = groundControlLimits();
+    expect(maxPolarAngle).toBeCloseTo((85 * Math.PI) / 180, 12);
+    expect(maxPolarAngle).toBeLessThan(Math.PI / 2);
+    expect(MAX_GROUND_PITCH_DEG).toBe(85);
   });
 });

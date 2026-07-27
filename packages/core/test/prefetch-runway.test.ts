@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 import {
   BOUNDS,
@@ -32,7 +32,7 @@ const N_BUCKETS = 600;
  */
 const availableTiles = makeAvailableTiles(N_BUCKETS);
 
-describe('SpatiotemporalTileset prefetch runway', () => {
+describe('SpatioTemporalTileset prefetch runway', () => {
   it('caps the prefetch enqueue to a cache fraction and picks the nearest upcoming buckets', async () => {
     const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
     const singleSpy = vi.fn(async (id: TileId) => fakeTile(id));
@@ -40,7 +40,7 @@ describe('SpatiotemporalTileset prefetch runway', () => {
     const maxCacheSize = 300; // => prefetch budget = floor(300 * 0.5) = 150
     const budget = 150;
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize,
@@ -81,7 +81,7 @@ describe('SpatiotemporalTileset prefetch runway', () => {
   it('prefetches BACKWARD nearest-first when the play head reverses', async () => {
     const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize: 300, // budget 150
@@ -128,7 +128,7 @@ describe('SpatiotemporalTileset prefetch runway', () => {
   });
 
   it('commits prefetch direction immediately from a signed speed (no hysteresis)', () => {
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       maxCacheSize: 300,
@@ -160,7 +160,7 @@ describe('SpatiotemporalTileset prefetch runway', () => {
   });
 });
 
-describe('SpatiotemporalTileset byte-aware parent-fallback skip', () => {
+describe('SpatioTemporalTileset byte-aware parent-fallback skip', () => {
   it('skips oversized parent tiles but always loads the primary zoom and cheap parents', async () => {
     // A z14 street view: primary tile (9 KB) + a cheap z13 parent (300 KB) +
     // a GIANT z10 parent (14 MB) — the over-fetch the skip must drop.
@@ -193,7 +193,7 @@ describe('SpatiotemporalTileset byte-aware parent-fallback skip', () => {
       return fakeTile(id);
     });
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 14,
       enablePrefetch: false,
@@ -225,7 +225,7 @@ describe('SpatiotemporalTileset byte-aware parent-fallback skip', () => {
       id.z === 14 ? 14_000_000 : undefined;
     const requested: TileId[] = [];
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 14,
       maxZoom: 14, // no parents exist
       enablePrefetch: false,

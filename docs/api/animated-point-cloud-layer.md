@@ -106,6 +106,11 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 - **Normals** — a `[nx, ny, nz]` normal column is bound to `getNormal`
   zero-copy when present; otherwise deck's default `[0, 0, 1]` gives uniform
   lighting across the cloud.
+- **Point tiles only** — the layer checks each tile layer's `geometryType` and
+  skips any layer that is not `Point`, emitting one named console warning. A
+  linestring tile would otherwise be read as one position per feature over the
+  flattened vertex run: no error, no blank map, just points silently bunched
+  along the first few paths.
 - **Window mode only** — there is no wake or cumulative ("draws itself") path;
   point clouds animate whole features on and off through the
   [`TimeFilterExtension`](./time-filter-extension.md) window (with fade ramps),

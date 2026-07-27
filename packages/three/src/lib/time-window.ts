@@ -3,20 +3,19 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * Time-window vocabulary bridge (renderer parity, audit Theme 4).
+ * Time-window vocabulary bridge for renderer parity.
  *
  * deck's `TimeFilterExtension` and the maplibre adapter both expose a
  * FULL-width `timeWindow` (ms) plus `fadeInDuration` / `fadeOutDuration`. The
  * Three layers filter internally against a HALF-width `windowHalf` and
- * `fadeIn` / `fadeOut`. Historically the three layers only accepted the
- * lower-level half-width knobs, so copying `timeWindow: 86_400_000` from a deck
- * demo onto a three layer was an unknown prop → a silent fall-back to the
+ * `fadeIn` / `fadeOut`. Without a bridge, `timeWindow: 86_400_000` copied from a
+ * deck demo onto a three layer is an unknown prop → a silent fall-back to the
  * default window (a 2× magnitude trap).
  *
- * {@link resolveTimeWindow} lets every three layer ALSO accept the deck/maplibre
- * full-width vocabulary, converting exactly as deck does
- * (`windowHalf = timeWindow / 2`, `fadeIn = fadeInDuration`), while keeping the
- * historical `windowHalf` / `fadeIn` / `fadeOut` working as documented
+ * {@link resolveTimeWindow} therefore lets every three layer ALSO accept the
+ * deck/maplibre full-width vocabulary, converting exactly as deck does
+ * (`windowHalf = timeWindow / 2`, `fadeIn = fadeInDuration`), while the
+ * three-native `windowHalf` / `fadeIn` / `fadeOut` keep working as documented
  * lower-level aliases.
  *
  * Precedence when BOTH forms are supplied: the lower-level three-native knob
@@ -71,8 +70,8 @@ export interface ResolvedTimeWindow {
 
 /**
  * Resolve the {@link ThreeTimeWindowOptions} vocabulary into the internal
- * half-width params. `defaultWindowHalf` is the layer's historical default
- * (used only when neither `windowHalf` nor `timeWindow` is supplied).
+ * half-width params. `defaultWindowHalf` is the layer's own default (used only
+ * when neither `windowHalf` nor `timeWindow` is supplied).
  */
 export function resolveTimeWindow(
   o: ThreeTimeWindowOptions,
@@ -80,7 +79,7 @@ export function resolveTimeWindow(
 ): ResolvedTimeWindow {
   // Delegate to the shared kernel resolver (one copy across backends). With no
   // `softDefaultFraction` policy the fades default to 0 and half-width wins over
-  // full-width — byte-identical to the historical three-native behaviour.
+  // full-width, which is exactly the three-native semantics.
   const p = resolveTimeFilterParams(o, { defaultWindowHalf });
   return {
     windowHalf: p.windowHalf ?? 0,

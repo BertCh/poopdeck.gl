@@ -39,7 +39,7 @@
  * years' worth of metres — set it to the dataset's `timeRange.start`. Same
  * default and same obligation as deck's `AnimatedColumnLayer`.
  *
- * ── Elevation units (D10) ───────────────────────────────────────────────────
+ * ── Elevation units ─────────────────────────────────────────────────────────
  * `elevation` is METRES and the metres→shader-elevation conversion is
  * host-variant-dependent, identical to `STTPolygonLayer`'s extrusion path:
  *   - legacy `uMatrix` and the v5 MERCATOR prelude both take mercator-z, so the
@@ -48,7 +48,8 @@
  *   - the v5 GLOBE prelude takes METRES (`spherePos * (1 + elev/GLOBE_RADIUS)`)
  *     while its transition FALLBACK term wants mercator-z again — so the globe
  *     branch feeds each side its own unit from the same two values.
- * Never re-adopt the pre-D10 flat `1e-7` factor.
+ * A flat `1e-7` factor is latitude-blind and ~4× too tall — never substitute
+ * one.
  *
  * ── Feature surface ─────────────────────────────────────────────────────────
  *  - `timeFilterMode` — window (default) / wake / cumulative / trail, compiled
@@ -95,7 +96,7 @@ import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_POLYGON_PALETTE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
   type STTBaseLayerOptions,
   type STTTimeFilterMode,
@@ -113,6 +114,11 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
 import {
@@ -121,11 +127,11 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 import { buildElevatedProjection } from '../shaders/globe-elevation.glsl.js';
@@ -532,9 +538,9 @@ export interface STTColumnLayerOptions
   /** Outline width in {@link lineWidthUnits} when `stroked`. @default 1 */
   lineWidth?: number;
   /**
-   * Unit for {@link lineWidth}: `'pixels'` (screen-space, the historical
-   * package convention) or `'meters'` (ground-metric, converted per tile at its
-   * centre latitude).
+   * Unit for {@link lineWidth}: `'pixels'` (screen-space, the package-wide
+   * default) or `'meters'` (ground-metric, converted per tile at its centre
+   * latitude).
    * @default 'pixels'
    */
   lineWidthUnits?: 'pixels' | 'meters';
@@ -693,27 +699,12 @@ const MODE_GLSL: Readonly<Record<ColumnTimeFilterMode, string>> = Object.freeze(
 
 /**
  * Uniforms each mode reads. Only the active mode's block is declared, so an
- * unused uniform can never be silently mis-set.
+ * unused uniform can never be silently mis-set. The wake block carries
+ * `uWakeTailScale` because this layer tapers the FOOTPRINT toward the tail
+ * (`sttWakeSizeScale`).
  */
 const MODE_UNIFORMS: Readonly<Record<ColumnTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE;
 
 /**
  * The `vAlpha = …` expression per mode. Every vertex of an instance carries its
@@ -1065,7 +1056,12 @@ const ID_FS_SOURCE = `
  * come back -1, which is exactly how a mode/filter combination that doesn't
  * declare them reads.
  */
-interface ColumnSharedHandles {
+interface ColumnSharedHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the vertex source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -1086,20 +1082,6 @@ interface ColumnSharedHandles {
   uMercatorZPerMeter: WebGLUniformLocation | null;
   uTimeHeightScale: WebGLUniformLocation | null;
   uTimeHeightOrigin: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface ColumnFillHandles extends ColumnSharedHandles {
@@ -1127,7 +1109,7 @@ interface ColumnGpuCache extends TileGpuCache {
   /** Instances drawn for this tile — one per POINT feature. */
   instanceCount: number;
   /**
-   * Metres → mercator-z at this tile's centre latitude (D10), resolved once at
+   * Metres → mercator-z at this tile's centre latitude, resolved once at
    * build time so the draw path pays no transcendentals per frame.
    */
   mercatorZScale: number;
@@ -1166,7 +1148,7 @@ interface ColumnGpuCache extends TileGpuCache {
  * layer.attach(map);
  * ```
  */
-export class STTColumnLayer extends STTBaseLayer {
+export class STTColumnLayer extends STTFilterableLayer {
   /**
    * Host depth participation. Redeclared (the base defaults the package to
    * `'2d'`) because this kind is genuinely 3D — see
@@ -1205,12 +1187,6 @@ export class STTColumnLayer extends STTBaseLayer {
     fadeTrail: number;
   };
 
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private readonly filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
-
   /**
    * Compiled shader configuration. Both knobs are fixed for the layer's
    * lifetime (mode is resolved once from the constructor options, the filter
@@ -1244,7 +1220,6 @@ export class STTColumnLayer extends STTBaseLayer {
   private mesh?: ColumnMesh;
   private strokeMesh?: ColumnStrokeMesh;
 
-  private warnedCategoricalFilter = false;
   private warnedNoInstancing = false;
 
   constructor(opts: STTColumnLayerOptions) {
@@ -1282,14 +1257,6 @@ export class STTColumnLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? 0,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.diskRotation = rotationOf(this.columnOpts.angle);
     this.shaderConfig = Object.freeze({
@@ -1391,28 +1358,6 @@ export class STTColumnLayer extends STTBaseLayer {
   /** Toggle the ring outline. */
   setStroked(stroked: boolean): void {
     this.columnOpts.stroked = stroked;
-    this.map?.triggerRepaint();
-  }
-
-  /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only: no relink, no tile rebuild. `null` idles the filter, which
-   * renders everything.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only, like `setFilterRange`. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every column unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
     this.map?.triggerRepaint();
   }
 
@@ -1518,13 +1463,7 @@ export class STTColumnLayer extends STTBaseLayer {
       // One column == one instance, so the per-FEATURE column binds directly
       // (no expandFilterValues, which is for segment/vertex instancing).
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-            `categorical column; range filtering needs a numeric one — rendering unfiltered`,
-        );
-      }
+      if (col.categorical) this.warnCategoricalFilterOnce();
       cache.hasFilterColumn = col.hasColumn;
       if (col.values) {
         cache.filterBuffer = this.uploadArrayBuffer(gl, col.values);
@@ -1706,29 +1645,6 @@ export class STTColumnLayer extends STTBaseLayer {
   }
 
   /**
-   * Upload the DataFilter uniforms for this tile. No-op unless the filter was
-   * compiled in. A tile that didn't bake the column resolves to `enabled: 0`,
-   * which the kernel reads as "render everything" — never as "hide everything".
-   */
-  private setFilterUniforms(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: ColumnSharedHandles,
-    cache: ColumnGpuCache,
-  ): void {
-    if (!this.shaderConfig.filter) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
-      cache.hasFilterColumn === true,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
-  }
-
-  /**
    * Projection + sizing + elevation + time + filter uniforms — everything the
    * visual and id passes set identically, so the pickable prism always matches
    * the drawn one (including on globe, where the prelude owns projection).
@@ -1770,7 +1686,11 @@ export class STTColumnLayer extends STTBaseLayer {
     // Absolute → tile-relative, the same rebasing every other time crosses.
     gl.uniform1f(h.uTimeHeightOrigin, o.timeHeightOrigin - cache.timeOffset);
     this.setTimeUniforms(gl, h, cache, ctx);
-    this.setFilterUniforms(gl, h, cache);
+    // Skipped entirely when no filter branch compiled — the uniforms do not
+    // exist in that program.
+    if (this.shaderConfig.filter) {
+      this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn === true);
+    }
   }
 
   // ── attribute binding ─────────────────────────────────────────────────────
@@ -1814,7 +1734,7 @@ export class STTColumnLayer extends STTBaseLayer {
    * Attribute divisors are per-VAO state and a pick runs outside the host's
    * render pass, so every per-instance slot must go back to 0 — otherwise the
    * next non-instanced draw that lands on the same slot reads one element per
-   * INSTANCE instead of per vertex (a real bug the M2 picking pass hit).
+   * INSTANCE instead of per vertex.
    */
   private releaseInstanceAttributes(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -1929,29 +1849,10 @@ export class STTColumnLayer extends STTBaseLayer {
       uMercatorZPerMeter: gl.getUniformLocation(program, 'uMercatorZPerMeter'),
       uTimeHeightScale: gl.getUniformLocation(program, 'uTimeHeightScale'),
       uTimeHeightOrigin: gl.getUniformLocation(program, 'uTimeHeightOrigin'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 

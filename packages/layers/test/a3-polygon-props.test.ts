@@ -4,6 +4,13 @@
  *     `filterSoftRange` / `filterEnabled`);
  *   - `timeHeightScale` (space-time-cube lift) + `reducedMotion` gate.
  *
+ * Plus three correctness guards on the tile-prepare path:
+ *   - a MISSING elevation column falls back to this layer's own 0, never to
+ *     deck's 1000 m `SolidPolygonLayer` default;
+ *   - categorical fill on an EXTRUDED layer expands on the CPU (the GPU
+ *     palette hook runs after lighting and would flatten every prism);
+ *   - the geometry-kind guard keeps LineString tiles out of the polygon path.
+ *
  * These exercise the layer's `prepareTile` / `buildSublayer` /
  * `buildOutlineSublayer` paths directly (via Object.create, which bypasses
  * CompositeLayer's lifecycle) with a deck.gl mock that captures constructor
@@ -16,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { makePolygonTile } from './fake-tile';
+import { makePolygonTile, makePathTile } from './fake-tile';
 
 interface CapturedLayer {
   props: Record<string, any>;
@@ -129,6 +136,15 @@ async function makePolygonLayer(props: Record<string, any> = {}) {
     filterRange: null,
     filterSoftRange: null,
     filterEnabled: true,
+    // Geometry / palette knobs read by prepareTile.
+    seamWalls: false,
+    elevationScale: 1,
+    baseElevation: 0,
+    elevationThickness: null,
+    colorMapping: null,
+    colorMappingDefault: [0, 0, 0, 0],
+    _normalize: false,
+    _windingOrder: 'CCW',
     ...props,
   };
   layer._currentTime = 0;
@@ -427,5 +443,252 @@ describe('AnimatedPolygonLayer DataFilterExtension', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A missing elevation COLUMN must not fall through to deck's 1000 m default
+// ---------------------------------------------------------------------------
+
+describe('AnimatedPolygonLayer missing elevation column', () => {
+  it('falls back to elevation 0 and supplies the prop (never deck’s 1000)', async () => {
+    const { _resetWarnOnce } = await import('../src/lib/log');
+    _resetWarnOnce();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const layer = await makePolygonLayer({
+        extruded: true,
+        elevation: 'hieght', // typo'd column — the tile carries nothing
+      });
+      const tile = basePolygonTile();
+      const prepared = layer.prepareTile(tile, tile.layers[0]);
+      // Neither a per-vertex buffer nor a null constant: null would leave the
+      // sublayer prop unset, and SolidPolygonLayer.defaultProps.getElevation
+      // is 1000 — every polygon a kilometre tall, with no visible cause.
+      expect(prepared.data.attributes.getElevation).toBeUndefined();
+      expect(prepared.elevationConstant).toBe(0);
+      const fill = layer.buildSublayer(prepared);
+      expect('getElevation' in fill.props).toBe(true);
+      expect(fill.props.getElevation).toBe(0);
+
+      const missingWarnings = warnSpy.mock.calls.filter(([msg]) =>
+        String(msg).includes('elevation column'),
+      );
+      expect(missingWarnings.length).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('warns once even across many tiles missing the same column', async () => {
+    const { _resetWarnOnce } = await import('../src/lib/log');
+    _resetWarnOnce();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const layer = await makePolygonLayer({
+        extruded: true,
+        elevation: 'height',
+      });
+      layer.prepareTile(basePolygonTile(), basePolygonTile().layers[0]);
+      const second = twoPolygonTile();
+      layer.prepareTile(second, second.layers[0]);
+      const missingWarnings = warnSpy.mock.calls.filter(([msg]) =>
+        String(msg).includes('elevation column'),
+      );
+      expect(missingWarnings.length).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('a column the tile DOES carry still wins (no fallback, no warning)', async () => {
+    const { _resetWarnOnce } = await import('../src/lib/log');
+    _resetWarnOnce();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const layer = await makePolygonLayer({
+        extruded: true,
+        elevation: 'height',
+      });
+      const tile = basePolygonTile();
+      tile.layers[0].features.numericProps['height'] = new Float32Array([
+        250,
+      ]) as any;
+      const prepared = layer.prepareTile(tile, tile.layers[0]);
+      expect(prepared.elevationConstant).toBeNull();
+      expect([...prepared.data.attributes.getElevation.value]).toEqual([
+        250, 250, 250, 250,
+      ]);
+      const fill = layer.buildSublayer(prepared);
+      // Per-vertex buffer owns it → no constant shadowing the attribute.
+      expect('getElevation' in fill.props).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('a CONSTANT elevation is unaffected', async () => {
+    const layer = await makePolygonLayer({ extruded: true, elevation: 42 });
+    const tile = basePolygonTile();
+    const fill = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
+    expect(fill.props.getElevation).toBe(42);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Categorical fill × extruded: the GPU palette hook runs AFTER lighting
+// ---------------------------------------------------------------------------
+
+/** Attach a categorical column to a polygon tile (fake-tile bakes none). */
+function withCategory(
+  tile: ReturnType<typeof makePolygonTile>,
+  column: string,
+  categories: string[],
+  indices: number[],
+) {
+  (tile.layers[0].features.categoricalProps as any)[column] = {
+    categories,
+    indices: new Uint16Array(indices),
+  };
+  return tile;
+}
+
+describe('AnimatedPolygonLayer categorical fill × extruded', () => {
+  const PALETTE = [
+    [10, 20, 30, 255],
+    [40, 50, 60, 128],
+  ];
+
+  it('FLAT keeps the GPU palette path (no lighting to lose)', async () => {
+    const layer = await makePolygonLayer({
+      extruded: false,
+      fillColor: 'kind',
+      colorPalette: PALETTE,
+    });
+    const tile = withCategory(twoPolygonTile(), 'kind', ['a', 'b'], [0, 1]);
+    const prepared = layer.prepareTile(tile, tile.layers[0]);
+    expect(prepared.data.attributes.instanceCategoryIndex).toBeDefined();
+    expect(prepared.data.attributes.getFillColor).toBeUndefined();
+    expect(prepared.gpuPalette).not.toBeNull();
+    const fill = layer.buildSublayer(prepared);
+    expect(fill.props.useCategoryColor).toBe(true);
+  });
+
+  it('EXTRUDED expands the palette on the CPU into per-vertex getFillColor', async () => {
+    // CategoryColorExtension injects at fs:DECKGL_FILTER_COLOR and REPLACES
+    // rgb, but SolidPolygonLayer already applied phong lighting in the vertex
+    // shader (`vColor`, forwarded verbatim by its fragment shader) — so the
+    // GPU path would flatten every prism into an unlit silhouette.
+    const layer = await makePolygonLayer({
+      extruded: true,
+      fillColor: 'kind',
+      colorPalette: PALETTE,
+    });
+    const tile = withCategory(twoPolygonTile(), 'kind', ['a', 'b'], [0, 1]);
+    const prepared = layer.prepareTile(tile, tile.layers[0]);
+
+    expect(prepared.data.attributes.instanceCategoryIndex).toBeUndefined();
+    expect(prepared.gpuPalette).toBeNull();
+    const attr = prepared.data.attributes.getFillColor;
+    expect(attr.size).toBe(4);
+    expect(attr.normalized).toBe(true);
+    expect(attr.value).toBeInstanceOf(Uint8Array);
+    // 8 vertices (2 rings of 4); each feature's 4 vertices carry its color.
+    expect(attr.value.length).toBe(8 * 4);
+    expect([...attr.value.slice(0, 8)]).toEqual([
+      10, 20, 30, 255, 10, 20, 30, 255,
+    ]);
+    expect([...attr.value.slice(16, 24)]).toEqual([
+      40, 50, 60, 128, 40, 50, 60, 128,
+    ]);
+
+    const fill = layer.buildSublayer(prepared);
+    // The GPU branch stays OFF, so the extension's filter hook can't run and
+    // the lit color survives to the framebuffer.
+    expect(fill.props.useCategoryColor).toBe(false);
+    expect(fill.props.categoryPalette).toEqual([]);
+  });
+
+  it('NULL categories take colorMappingDefault on the extruded CPU path', async () => {
+    const layer = await makePolygonLayer({
+      extruded: true,
+      fillColor: 'kind',
+      colorPalette: PALETTE,
+      colorMappingDefault: [1, 2, 3, 4],
+    });
+    // 0xffff is the NULL sentinel — it must land on the appended default slot,
+    // not clamp onto the last real palette entry.
+    const tile = withCategory(
+      twoPolygonTile(),
+      'kind',
+      ['a', 'b'],
+      [0xffff, 1],
+    );
+    const prepared = layer.prepareTile(tile, tile.layers[0]);
+    const value = prepared.data.attributes.getFillColor.value;
+    expect([...value.slice(0, 4)]).toEqual([1, 2, 3, 4]);
+    expect([...value.slice(16, 20)]).toEqual([40, 50, 60, 128]);
+  });
+
+  it('toggling extruded re-prepares the tile (the two paths bake different attributes)', async () => {
+    const layer = await makePolygonLayer({
+      extruded: false,
+      fillColor: 'kind',
+      colorPalette: PALETTE,
+    });
+    const tile = withCategory(twoPolygonTile(), 'kind', ['a', 'b'], [0, 1]);
+    const flat = layer.prepareTile(tile, tile.layers[0]);
+    layer.props = { ...layer.props, extruded: true };
+    const extruded = layer.prepareTile(tile, tile.layers[0]);
+    expect(extruded.styleKey).not.toBe(flat.styleKey);
+    expect(extruded.data.attributes.getFillColor).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Geometry-kind guard
+// ---------------------------------------------------------------------------
+
+describe('AnimatedPolygonLayer geometry guard', () => {
+  it('skips a LineString tile (which also carries startIndices) with one warning', async () => {
+    const { _resetWarnOnce } = await import('../src/lib/log');
+    _resetWarnOnce();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const layer = await makePolygonLayer();
+      const tile = makePathTile({
+        paths: [
+          [
+            [0, 0],
+            [1, 1],
+            [2, 0],
+          ],
+        ],
+        startTimes: [0],
+        endTimes: [100],
+        timeOffset: 0,
+      });
+      expect(layer.prepareTile(tile, tile.layers[0])).toBeNull();
+      layer.state = { tiles: [tile] };
+      expect(layer.renderLayers()).toEqual([]);
+      const geomWarnings = warnSpy.mock.calls.filter(([msg]) =>
+        String(msg).includes('LineString geometry'),
+      );
+      expect(geomWarnings.length).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('accepts a Polygon tile, and a tile with no geometry tag at all', async () => {
+    const layer = await makePolygonLayer();
+    const tile = basePolygonTile();
+    expect(layer.prepareTile(tile, tile.layers[0])).not.toBeNull();
+
+    // Pre-tag archives / hand-built fixtures: trust the caller.
+    const untagged = basePolygonTile();
+    (untagged.layers[0].features as any).geometryType = undefined;
+    expect(layer.prepareTile(untagged, untagged.layers[0])).not.toBeNull();
   });
 });

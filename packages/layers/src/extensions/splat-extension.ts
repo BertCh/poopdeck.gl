@@ -48,9 +48,18 @@ export class SplatExtension extends LayerExtension {
         // the rim); dot(uv,uv) is r² ∈ [0,1]. Multiply — never replace — alpha,
         // so the temporal-fade / categorical alpha written by earlier
         // extensions survives.
+        //
+        // The body is BRACED so the injection is idempotent: deck's
+        // `mergeShaders` concatenates same-key injections with no dedup, so a
+        // layer that ends up with two SplatExtension instances (the internal
+        // one plus a caller's, via the top-level `extensions` prop) would
+        // otherwise redeclare `splatR2` in the same scope and fail to compile.
+        // Duplicated, the braced form just squares the falloff.
         'fs:DECKGL_FILTER_COLOR': `
-          float splatR2 = dot(geometry.uv, geometry.uv);
-          color.a *= exp(-${SPLAT_FALLOFF.toFixed(1)} * splatR2);
+          {
+            float splatR2 = dot(geometry.uv, geometry.uv);
+            color.a *= exp(-${SPLAT_FALLOFF.toFixed(1)} * splatR2);
+          }
         `,
       },
     };

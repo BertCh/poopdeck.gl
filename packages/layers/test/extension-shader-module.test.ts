@@ -13,7 +13,7 @@
  * sends each frame.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ShaderInputs } from '@luma.gl/engine';
 import {
   CategoryColorExtension,
@@ -25,6 +25,7 @@ import {
   chevronUniforms,
 } from '../src/extensions/chevron-flow-extension';
 import type { Color } from '@deck.gl/core';
+import { _resetWarnOnce } from '../src/lib/log';
 
 function makeShaderInputs() {
   return new ShaderInputs<{ categoryColor: Record<string, unknown> }>(
@@ -202,6 +203,30 @@ describe('CategoryColorExtension shared palette texture cache', () => {
     expect(created[0].destroyed).toBe(true);
   });
 
+  it('acquire-before-release: switching onto a palette another layer holds never destroys it', () => {
+    // bindPalette acquires the NEW entry before releasing the old one. If the
+    // order were reversed, a layer moving onto a palette whose refcount is
+    // about to drop to zero could observe a destroyed texture.
+    const { device, created } = makeFakeDevice();
+    const OTHER: Color[] = [[0, 0, 255, 255]];
+    const a = initLayer(device, { categoryPalette: PALETTE });
+    const b = initLayer(device, { categoryPalette: OTHER });
+    expect(device.createTexture).toHaveBeenCalledTimes(2);
+    const oldProps = a.layer.props;
+    a.layer.props = { categoryPalette: OTHER };
+    (a.ext.updateState as any).call(
+      a.layer,
+      { props: a.layer.props, oldProps, context: { device } },
+      a.ext,
+    );
+    // Both layers now share b's texture; nothing new was uploaded…
+    expect(device.createTexture).toHaveBeenCalledTimes(2);
+    expect(a.layer.state.paletteTexture).toBe(b.layer.state.paletteTexture);
+    expect(created[1].destroyed).toBe(false);
+    // …and the palette a vacated (sole user) is gone.
+    expect(created[0].destroyed).toBe(true);
+  });
+
   it('a later layer with the destroyed palette content gets a fresh texture', () => {
     const { device, created } = makeFakeDevice();
     const a = initLayer(device, { categoryPalette: PALETTE });
@@ -247,8 +272,20 @@ describe('TimeFilterExtension getShaders', () => {
 });
 
 describe('ChevronFlowExtension', () => {
-  function getShaderObject(ext: ChevronFlowExtension) {
-    return (ext.getShaders as any).call({}, ext);
+  // A PathLayer-shaped host: `getPath` is what marks the PathLayer family (it
+  // is in PathLayer.defaultProps and nothing else's), and a sibling
+  // TimeFilterExtension is what declares `instanceVertexTime`. Options that
+  // compile against those symbols are gated on them — see the host-capability
+  // suite below.
+  const pathHost = () => ({
+    props: {
+      getPath: (d: any) => d.path,
+      extensions: [new TimeFilterExtension()],
+    },
+  });
+
+  function getShaderObject(ext: ChevronFlowExtension, host: any = pathHost()) {
+    return (ext.getShaders as any).call(host, ext);
   }
 
   it('injects a marching chevron into DECKGL_FILTER_COLOR that MULTIPLIES alpha', () => {
@@ -268,9 +305,12 @@ describe('ChevronFlowExtension', () => {
     expect(filterColor).not.toMatch(/color\s*=\s*vec4\(/);
   });
 
-  it('returns a reference-stable shader object (one cache entry per instance)', () => {
+  it('returns a reference-stable shader object (one cache entry per host kind)', () => {
     const ext = new ChevronFlowExtension();
-    expect(getShaderObject(ext)).toBe(getShaderObject(ext));
+    const host = pathHost();
+    expect(getShaderObject(ext, host)).toBe(getShaderObject(ext, host));
+    // A second sublayer of the same host family shares the entry too.
+    expect(getShaderObject(ext, pathHost())).toBe(getShaderObject(ext, host));
   });
 
   it('declares the uniform block with explicit std140 layout', () => {
@@ -404,8 +444,183 @@ describe('ChevronFlowExtension', () => {
     // Signed skew (no along-flip) = the arrow→flat→arrow morph; march by sign(dir).
     expect(hook).toContain('float chevronAlong = geometry.uv.y;');
     expect(hook).toContain('abs(chevronAcross) * chevron.skew * chevronDir');
-    expect(hook).toContain('chevron.phase * sign(chevronDir)');
+    // The march is applied in TURNS (phase / raw period), so a CPU phase wrap
+    // moves the band by exactly one whole chevron even when uniformSpacing has
+    // refitted the divisor — see the "marching + uniformSpacing" test below.
+    expect(hook).toContain(
+      '(chevron.phase / chevron.period) * sign(chevronDir)',
+    );
     expect(hook).not.toContain('geometry.uv.y * chevronDir'); // no along-flip
+  });
+
+  it('marching + uniformSpacing: the phase is divided by the RAW period', () => {
+    // The stepping bug: the CPU reduces the phase mod the RAW `period`, but
+    // uniformSpacing divides the band by a REFITTED per-segment period. While
+    // the phase was subtracted in width-units BEFORE that division, each wrap
+    // shifted the band by fract(rawPeriod / fittedPeriod) and the march visibly
+    // stepped at every wrap. Applying it in turns makes a wrap an exact 1.0.
+    const hook = getShaderObject(
+      new ChevronFlowExtension({ uniformSpacing: true, speed: 0.002 }),
+    ).inject['fs:DECKGL_FILTER_COLOR'] as string;
+    expect(hook).toContain('chevronS / chevronPeriod');
+    expect(hook).toContain('(chevron.phase / chevron.period)');
+    // The phase must NOT be folded into chevronS (which the fit rescales).
+    expect(hook).not.toMatch(/float chevronS =[^;]*chevron\.phase/);
+  });
+
+  it('JS mirror: a phase wrap is seam-free under a refitted period', () => {
+    // fract(S/fitted - phase/raw) must be continuous as phase wraps raw→0.
+    const raw = 6;
+    const fitted = 4.3; // what uniformSpacing snapped this segment to
+    const band = (S: number, phase: number) => {
+      const x = S / fitted - phase / raw;
+      return x - Math.floor(x);
+    };
+    const justBefore = band(3.1, raw - 1e-6);
+    const justAfter = band(3.1, 0);
+    expect(Math.abs(justBefore - justAfter)).toBeLessThan(1e-6);
+    // The OLD arithmetic — phase subtracted in width-units — jumped instead.
+    const oldBand = (S: number, phase: number) => {
+      const x = (S - phase) / fitted;
+      return x - Math.floor(x);
+    };
+    expect(
+      Math.abs(oldBand(3.1, raw - 1e-6) - oldBand(3.1, 0)),
+    ).toBeGreaterThan(0.1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Host-capability guards
+  //
+  // ChevronFlowExtension is publicly exported and documented as attachable via
+  // the top-level `extensions` prop, but three of its options only compile
+  // against a PathLayer that already carries a TimeFilterExtension. Each was a
+  // hard GLSL "undeclared identifier" — a BLANK layer, not a warning.
+  // -------------------------------------------------------------------------
+  describe('degrades instead of emitting undeclared identifiers', () => {
+    /** ScatterplotLayer-shaped host: no getPath ⇒ no PathLayer varyings. */
+    const scatterHost = () => ({
+      props: { getRadius: 1, extensions: [new TimeFilterExtension()] },
+      constructor: { layerName: 'ScatterplotLayer' },
+    });
+    /** PathLayer without a sibling TimeFilterExtension ⇒ no instanceVertexTime. */
+    const bareePathHost = () => ({
+      props: { getPath: (d: any) => d.path, extensions: [] },
+      constructor: { layerName: 'PathLayer' },
+    });
+
+    beforeEach(() => _resetWarnOnce());
+
+    function shadersWithWarnings(ext: ChevronFlowExtension, host: any) {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const shaders = (ext.getShaders as any).call(host, ext);
+        return {
+          shaders,
+          messages: warn.mock.calls.map(([m]) => String(m)),
+        };
+      } finally {
+        warn.mockRestore();
+      }
+    }
+
+    it('directionColor on a Scatterplot host drops the bearing plumbing', () => {
+      const { shaders, messages } = shadersWithWarnings(
+        new ChevronFlowExtension({ directionColor: true }),
+        scatterHost(),
+      );
+      // `instanceStartPositions` is a PathLayer attribute — referencing it on a
+      // Scatterplot sublayer failed to compile and blanked the layer.
+      expect(JSON.stringify(shaders.inject)).not.toContain(
+        'instanceStartPositions',
+      );
+      expect(JSON.stringify(shaders.inject)).not.toContain('vChevronEN');
+      // Chevrons still draw, just in the inherited host color.
+      expect(shaders.inject['fs:DECKGL_FILTER_COLOR']).toContain(
+        'color.a *= mix(chevron.baseAlpha, 1.0, chevronHead);',
+      );
+      expect(messages.some((m) => m.includes('directionColor'))).toBe(true);
+    });
+
+    it('uniformSpacing on a Scatterplot host falls back to the raw period', () => {
+      const { shaders, messages } = shadersWithWarnings(
+        new ChevronFlowExtension({ uniformSpacing: true }),
+        scatterHost(),
+      );
+      // `vPathLength` is a PathLayer-only varying.
+      expect(JSON.stringify(shaders.inject)).not.toContain('vPathLength');
+      expect(shaders.inject['fs:#main-start']).toBeUndefined();
+      expect(shaders.inject['fs:DECKGL_FILTER_COLOR']).not.toContain(
+        'chevronSegLen',
+      );
+      expect(messages.some((m) => m.includes('uniformSpacing'))).toBe(true);
+    });
+
+    it('perBucketDirection without a TimeFilterExtension falls back to the winding', () => {
+      const { shaders, messages } = shadersWithWarnings(
+        new ChevronFlowExtension({ perBucketDirection: true }),
+        bareePathHost(),
+      );
+      // `instanceVertexTime` is declared by TimeFilterExtension's module.
+      expect(JSON.stringify(shaders.inject)).not.toContain(
+        'instanceVertexTime',
+      );
+      expect(JSON.stringify(shaders.inject)).not.toContain('vChevronDir');
+      expect(shaders.inject['fs:DECKGL_FILTER_COLOR']).toContain(
+        'float chevronDir = 1.0;',
+      );
+      expect(messages.some((m) => m.includes('perBucketDirection'))).toBe(true);
+    });
+
+    it('keeps every capability on a proper PathLayer + TimeFilter host', () => {
+      const { shaders, messages } = shadersWithWarnings(
+        new ChevronFlowExtension({
+          directionColor: true,
+          uniformSpacing: true,
+          perBucketDirection: true,
+        }),
+        {
+          props: {
+            getPath: (d: any) => d.path,
+            extensions: [new TimeFilterExtension()],
+          },
+          constructor: { layerName: 'PathLayer' },
+        },
+      );
+      expect(shaders.inject['vs:#main-start']).toContain(
+        'instanceStartPositions',
+      );
+      expect(shaders.inject['vs:#main-start']).toContain('instanceVertexTime');
+      expect(shaders.inject['fs:#main-start']).toContain('vPathLength');
+      expect(messages).toEqual([]);
+    });
+
+    it('caches per host kind, so a degraded variant never leaks to a capable host', () => {
+      const ext = new ChevronFlowExtension({ uniformSpacing: true });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const degraded = (ext.getShaders as any).call(scatterHost(), ext);
+        const full = (ext.getShaders as any).call(pathHost(), ext);
+        expect(degraded).not.toBe(full);
+        expect(JSON.stringify(degraded.inject)).not.toContain('vPathLength');
+        expect(full.inject['fs:#main-start']).toContain('vPathLength');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('an uninspectable host (no props) keeps every capability — degrade only on evidence', () => {
+      const { shaders, messages } = shadersWithWarnings(
+        new ChevronFlowExtension({
+          directionColor: true,
+          uniformSpacing: true,
+          perBucketDirection: true,
+        }),
+        {},
+      );
+      expect(shaders.inject['vs:#main-start']).toContain('instanceVertexTime');
+      expect(messages).toEqual([]);
+    });
   });
 
   it('directionColors defaults use a shared array reference (no equals() thrash)', () => {

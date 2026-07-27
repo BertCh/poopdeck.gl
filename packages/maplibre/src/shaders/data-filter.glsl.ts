@@ -156,6 +156,72 @@ float sttDataFilterAlpha(
 }
 `;
 
+/**
+ * Locations of the uniforms {@link DATA_FILTER_UNIFORMS_GLSL} declares, minus
+ * the size transform. Lives here rather than in `base-layer.ts` so a rename of
+ * a GLSL symbol, its {@link DATA_FILTER_NAMES} entry and the field that holds
+ * its location is one edit in one file.
+ *
+ * A layer extends this and adds its own locations:
+ *   `interface XxxHandles extends DataFilterUniformLocations { program: …; … }`
+ *
+ * Every member is null when the layer compiled no filter branch, which the
+ * `gl.uniform*` calls ignore — a layer resolves one handles shape whether or
+ * not `filterProperty` was set.
+ */
+export interface DataFilterUniformLocations {
+  uFilterRange: WebGLUniformLocation | null;
+  uFilterSoftRange: WebGLUniformLocation | null;
+  uFilterEnabled: WebGLUniformLocation | null;
+  uFilterTransformColor: WebGLUniformLocation | null;
+}
+
+/**
+ * `uFilterTransformSize`'s location, kept out of
+ * {@link DataFilterUniformLocations} so a layer with no size hook does not
+ * carry a field it never sets. The GLSL declares the uniform either way (the
+ * block is all five); a layer that cannot shrink geometry simply never reads
+ * it, matching upstream PathLayer / SolidPolygonLayer.
+ */
+export interface FilterTransformSizeUniformLocation {
+  uFilterTransformSize: WebGLUniformLocation | null;
+}
+
+/**
+ * Resolve every {@link DataFilterUniformLocations} member against a linked
+ * program. An absent (or compiled-out) uniform resolves to null.
+ */
+export function resolveDataFilterUniformLocations(
+  gl: WebGLRenderingContext | WebGL2RenderingContext,
+  program: WebGLProgram,
+): DataFilterUniformLocations {
+  return {
+    uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
+    uFilterSoftRange: gl.getUniformLocation(
+      program,
+      DATA_FILTER_NAMES.softRange,
+    ),
+    uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
+    uFilterTransformColor: gl.getUniformLocation(
+      program,
+      DATA_FILTER_NAMES.transformColor,
+    ),
+  };
+}
+
+/** Resolve the size transform's location; for layers that can shrink geometry. */
+export function resolveFilterTransformSizeUniformLocation(
+  gl: WebGLRenderingContext | WebGL2RenderingContext,
+  program: WebGLProgram,
+): FilterTransformSizeUniformLocation {
+  return {
+    uFilterTransformSize: gl.getUniformLocation(
+      program,
+      DATA_FILTER_NAMES.transformSize,
+    ),
+  };
+}
+
 /** GLSL `smoothstep` semantics, for the JS reference impl. */
 function smoothstepJS(edge0: number, edge1: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));

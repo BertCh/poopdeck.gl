@@ -3,7 +3,7 @@
 
 /**
  * The elevated-projection kernel — ONE implementation of the trickiest twelve
- * lines of GLSL in this package (Wave M3 seam pass).
+ * lines of GLSL in this package.
  *
  * ── The problem ─────────────────────────────────────────────────────────────
  * Raising geometry off the ground is not one operation but three, because
@@ -31,15 +31,14 @@
  * ── Why it lives here ───────────────────────────────────────────────────────
  * Three layers need it — `STTPolygonLayer` (extruded fills), `STTColumnLayer`
  * (prisms + the space-time-cube lift) and `STTArcLayer` (arcs leave the ground
- * by definition) — and before this module each carried its own transcription.
- * Nothing in CI compiles GLSL, so a fix applied to one copy and not the others
- * would have surfaced as a back-hemisphere bleed in a browser, on one kind.
+ * by definition). Nothing in CI compiles GLSL, so a per-layer transcription
+ * fixed in one copy and not the others surfaces as a back-hemisphere bleed in
+ * a browser, on one kind only — hence one emitter for all three.
  *
- * Callers keep their own variable NAMES (the emitted text is unchanged from the
- * hand-written copies) because a shader is read in a GL debugger, where
- * `elevated`/`globePos` in the arc's projection function and `hereSphere`/
- * `hereGlobe` in the column's per-vertex block are the names the surrounding
- * code uses.
+ * Callers supply their own variable NAMES because a shader is read in a GL
+ * debugger, where `elevated`/`globePos` in the arc's projection function and
+ * `hereSphere`/`hereGlobe` in the column's per-vertex block are the names the
+ * surrounding code uses.
  */
 
 /**

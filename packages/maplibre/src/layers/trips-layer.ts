@@ -12,7 +12,7 @@
  * three and the Rust producer use, so a long leg does not advance at the same
  * rate as a short one.
  *
- * ── TIME MODES (campaign D8) ────────────────────────────────────────────────
+ * ── TIME MODES ──────────────────────────────────────────────────────────────
  * Both modes are PER-VERTEX (that is what makes a trip a trip) and are chosen
  * at PROGRAM-BUILD time, so the mode is part of the program cache key:
  *   - `trail` (default) — the classic comet: vertices inside
@@ -34,10 +34,10 @@
  *
  * ── SIZING ──────────────────────────────────────────────────────────────────
  * `widthUnits: 'meters'` resolves metric widths to device pixels per tile at
- * the tile's centre latitude (`lib/projection.ts`, campaign D10 scale), clamped
+ * the tile's centre latitude (`lib/projection.ts`), clamped
  * to `[widthMinPixels, widthMaxPixels]`.
  *
- * Projection is variant-aware (campaign D3): legacy hosts (maplibre ≤v4,
+ * Projection is variant-aware: legacy hosts (maplibre ≤v4,
  * mapbox v3) keep the positional `uMatrix` MVP shader; v5+ hosts get the
  * injected projection prelude and project endpoints via `projectTile(vec2)`
  * (0..1 mercator in, clip out — z overwritten for horizon clipping, which is
@@ -57,12 +57,13 @@ import {
 } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   expandPickIdColors,
   resolveTrailFade,
   type STTBaseLayerOptions,
   type DrawContext,
   type TileGpuCache,
+  type TimeModeLoadKnobs,
   type RGBA8,
 } from '../base-layer.js';
 import {
@@ -75,6 +76,12 @@ import { lngLatToMercator } from '../lib/projection.js';
 import {
   TIME_TRAIL_GLSL,
   TIME_WAKE_GLSL,
+  TIME_MODE_UNIFORM_DECLS,
+  WAKE_TAIL_SCALE_UNIFORM_DECL,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -82,12 +89,12 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   expandFilterValues,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 
@@ -158,8 +165,8 @@ export interface STTTripsLayerOptions
    * `<= 0` means NO TRAIL — nothing renders (and nothing is pickable) unless a
    * `wakeLength` is set. This matches deck (`TimeFilterExtension` only enters
    * trail mode when `trailLength > 0`) and core `trailAlpha` (which returns 0
-   * once the window has collapsed). Before this wave a non-positive
-   * `trailLength` here revealed the ENTIRE past trip at full alpha.
+   * once the window has collapsed). It is NOT "no clipping": a non-positive
+   * value must never be read as "reveal the entire past trip".
    * @default 180000
    */
   trailLength?: number;
@@ -224,7 +231,7 @@ const WAKE_ALPHA_BODY = `
 /**
  * Variant- and mode-aware vertex source (base program-cache contract): with an
  * injected prelude (v5+ host) the endpoints project via `projectTile(vec2)`;
- * without one (the 'legacy' variant) the projection block is the historical
+ * without one (the 'legacy' variant) the projection block is the plain
  * `uMatrix` shader. The variant block sits exactly where `uniform mat4 uMatrix;`
  * otherwise would — GLSL only needs declarations before `main`. The
  * screen-space quad extrusion happens post-projection in NDC, so it is
@@ -233,6 +240,12 @@ const WAKE_ALPHA_BODY = `
  * `pass: 'pick'` swaps the colour attribute/varying for the flat id colour and
  * keeps every visibility gate, so a feature the user cannot see cannot be
  * picked either.
+ *
+ * BOTH time modes' uniforms are declared whichever kernel is compiled in: the
+ * handle shape and the per-draw uniform writes are mode-agnostic, and a uniform
+ * the compiled kernel never reads resolves to a null location, which every
+ * `gl.uniform*` call ignores. The shared `trail` block already declares
+ * `uCurrentTime`, so wake adds only its own two.
  */
 function buildVertexSource(
   shader: ShaderInjection,
@@ -266,12 +279,8 @@ ${projectionDecls}
   uniform vec2 uWidthPixelRange; // [min, max] resolved width, device px
   uniform float uUseFeatureWidth;
 ${isPick ? '' : '  uniform float uUseFeatureColor;\n  uniform vec4 uColor;'}
-  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-${DATA_FILTER_UNIFORMS_GLSL}
+${TIME_MODE_UNIFORM_DECLS.trail}  uniform float uWakeLength;
+${WAKE_TAIL_SCALE_UNIFORM_DECL}${DATA_FILTER_UNIFORMS_GLSL}
   varying float vAlpha;
 ${isPick ? '  varying vec3 vIdColor;' : '  varying vec4 vColor;'}
 ${mode === 'wake' ? TIME_WAKE_GLSL : TIME_TRAIL_GLSL}
@@ -359,8 +368,17 @@ const ID_FS_SOURCE = `
   }
 `;
 
-/** Locations shared by the visual and id programs. */
-interface TripsCommonHandles {
+/**
+ * Locations shared by the visual and id programs. The inherited `window`
+ * members stay null — this layer's kernels are per-VERTEX, so it compiles only
+ * `trail` and `wake` — and every `gl.uniform*` call ignores a null location.
+ */
+interface TripsCommonHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   aCorner: number;
   aPosA: number;
@@ -374,16 +392,6 @@ interface TripsCommonHandles {
   uWidthScale: WebGLUniformLocation | null;
   uWidthPixelRange: WebGLUniformLocation | null;
   uUseFeatureWidth: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface TripsProgramHandles extends TripsCommonHandles {
@@ -422,7 +430,7 @@ interface TripsGpuCache extends TileGpuCache {
   vaoProgram?: WebGLProgram | null;
 }
 
-export class STTTripsLayer extends STTBaseLayer {
+export class STTTripsLayer extends STTFilterableLayer {
   private tripsOpts: {
     color: [number, number, number, number];
     width: number;
@@ -440,13 +448,6 @@ export class STTTripsLayer extends STTBaseLayer {
     colorMapping?: Record<string, RGBA8>;
     colorMappingDefault?: RGBA8;
   };
-  /** Column-filter props, resolved into {@link filterUniforms} per draw. */
-  private filterOpts: STTDataFilterOptions;
-  /** Allocated once — the draw path re-resolves it in place, never allocates. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
-  /** One warning per layer for a categorical `filterProperty`. */
-  private warnedCategoricalFilter = false;
   /**
    * Globe frames need subdivided tile geometry, but the base render loop
    * resolves caches before drawTile ever sees the frame — beginFrame stashes
@@ -478,14 +479,6 @@ export class STTTripsLayer extends STTBaseLayer {
       colorMapping: opts.colorMapping,
       colorMappingDefault: opts.colorMappingDefault,
     };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
-    };
   }
 
   /** Update the trail length (ms) at runtime. */
@@ -516,24 +509,6 @@ export class STTTripsLayer extends STTBaseLayer {
     this.map?.triggerRepaint();
   }
 
-  /** Animate the filter bounds — uniform-only, no tile re-upload. */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Animate the soft margin — uniform-only, no tile re-upload. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Toggle the filter without dropping the bound column. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
-    this.map?.triggerRepaint();
-  }
-
   /**
    * Point the filter at a different baked column. The values are a per-tile
    * ATTRIBUTE, so this rebuilds the tile caches (unlike the range setters).
@@ -541,7 +516,7 @@ export class STTTripsLayer extends STTBaseLayer {
   setFilterProperty(property?: string): void {
     if (this.filterOpts.filterProperty === property) return;
     this.filterOpts.filterProperty = property;
-    this.warnedCategoricalFilter = false;
+    this.resetCategoricalFilterWarning();
     this.rebuildTileCaches();
   }
 
@@ -568,6 +543,24 @@ export class STTTripsLayer extends STTBaseLayer {
     if (this.tripsOpts.wakeLength > 0) return 'wake';
     if (this.tripsOpts.trailLength > 0) return 'trail';
     return 'off';
+  }
+
+  /**
+   * The RESOLVED knobs, because `trailLength` DEFAULTS to 180 s here: the raw
+   * option is undefined on almost every trips layer while the ribbon really
+   * does sweep three minutes of history, and the base's generic reader would
+   * see nothing to widen for. A trail whose tail outruns the loader window is
+   * the classic "the back of the snake keeps vanishing" report — the shader
+   * still asks for those vertices, the tileset has already evicted the tiles.
+   * `'off'` maps to `'window'`: nothing is drawn, so nothing needs covering.
+   */
+  protected timeModeLoadKnobs(): TimeModeLoadKnobs {
+    const mode = this.resolveTimeMode();
+    return {
+      mode: mode === 'off' ? 'window' : mode,
+      wakeLength: this.tripsOpts.wakeLength,
+      trailLength: this.tripsOpts.trailLength,
+    };
   }
 
   /**
@@ -621,25 +614,10 @@ export class STTTripsLayer extends STTBaseLayer {
       uWidthScale: gl.getUniformLocation(program, 'uWidthScale'),
       uWidthPixelRange: gl.getUniformLocation(program, 'uWidthPixelRange'),
       uUseFeatureWidth: gl.getUniformLocation(program, 'uUseFeatureWidth'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 
@@ -834,14 +812,7 @@ export class STTTripsLayer extends STTBaseLayer {
     // segments. A missing (or categorical) column leaves the tile unfiltered —
     // never blank.
     const filterColumn = extractFilterColumn(f, this.filterOpts.filterProperty);
-    if (filterColumn.categorical && !this.warnedCategoricalFilter) {
-      this.warnedCategoricalFilter = true;
-      console.warn(
-        `[${this.id}] filterProperty "${this.filterOpts.filterProperty}" is a ` +
-          `categorical column; v1 range-filters NUMERIC columns only — ` +
-          `rendering unfiltered.`,
-      );
-    }
+    if (filterColumn.categorical) this.warnCategoricalFilterOnce();
     const filterAttr = filterColumn.values
       ? expandFilterValues(filterColumn.values, segmentCounts, segmentCount)
       : null;
@@ -947,16 +918,11 @@ export class STTTripsLayer extends STTBaseLayer {
       cache.widthBuffer && h.aWidth >= 0 ? 1 : 0,
     );
 
-    const fu = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
+    this.uploadDataFilterUniforms(
+      gl,
+      h,
       cache.hasFilterColumn && !!cache.filterBuffer && h.aFilterValue >= 0,
     );
-    gl.uniform2fv(h.uFilterRange, fu.range);
-    gl.uniform2fv(h.uFilterSoftRange, fu.softRange);
-    gl.uniform1f(h.uFilterEnabled, fu.enabled);
-    gl.uniform1f(h.uFilterTransformSize, fu.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, fu.transformColor);
   }
 
   /**

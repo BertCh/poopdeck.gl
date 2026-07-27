@@ -135,7 +135,7 @@ Cost scales with the number of _active_ tracks over the visible tiles (AV scenes
 
 ## Picking
 
-Exactly one sublayer carries picking: `boxes` when `filled`, otherwise `edges` when `stroked` (a solid box is easier to click than a thin edge, so fill wins when both are on). `labels` and `velocity` are never pickable. A hit's `info.object` is set to that track's flat decoded props — `track_id`, `category`, `heading`, `length`, `width`, `height`, `speed` — the shape the AV cockpit's click-to-inspect handler reads.
+At most one sublayer carries picking: `boxes` when `filled`, otherwise `edges` when `stroked` (a solid box is easier to click than a thin edge, so fill wins when both are on). `labels` and `velocity` are never pickable. Nothing ever **forces** picking on — that choice only decides which sublayer may inherit the composite's own `pickable`, so `pickable: false` on the layer really does let clicks fall through. A hit's `info.object` is set to that track's flat decoded props — `track_id`, `category`, `heading`, `length`, `width`, `height`, `speed` — the shape the AV cockpit's click-to-inspect handler reads.
 
 ## Source
 

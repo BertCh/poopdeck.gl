@@ -6,7 +6,7 @@
 // fanout agent relies on:
 //   • `isIdPickable` — the auto-registration signal (structural `pick()` test).
 //   • `featureTileKey` / `parseIdTileKey` — the provenance key round-trip.
-//   • `resolveIdPick` — merged index → kind-tagged `SttIdPickInfo`, including the
+//   • `resolveIdPick` — merged index → kind-tagged `STTIdPickInfo`, including the
 //     geometry-aware coordinate (Point vs indexed) and the miss paths.
 // The per-kind proofs (column + arc: provenance emission, id materials, full
 // `layer.pick()` dispatch) live in `column-arc-pick.test.ts`.

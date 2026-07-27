@@ -266,7 +266,7 @@ const HowItWorks: React.FC = () => {
           lede={
             <>
               Each tile is columnar Apache Arrow — the layout GPUs and analytics
-              engines already speak. Four required columns describe points,
+              engines already speak. Three required columns describe points,
               paths and polygons in time; optional columns layer on trips,
               per-vertex values, splats and pre-aggregation.
             </>
@@ -298,10 +298,11 @@ const HowItWorks: React.FC = () => {
           def={SECTIONS[5]}
           lede={
             <>
-              Every lever below is measured, opt-in and recorded in tile
-              metadata — the reader reconstructs exact values on decode. In
-              practice they compound to 4–6× smaller archives that animate at 60
-              fps.
+              Every lever below is measured and recorded in the archive's own
+              metadata, so the reader reconstructs exact values on decode. The
+              lossless ones are on by default; anything that trades precision
+              for bytes is opt-in. Together they compound to 4–6× smaller
+              archives that still animate at 60 fps.
             </>
           }
         >

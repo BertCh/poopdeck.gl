@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The FLOW kernel — CPU side of the origin→destination / corridor family
- * (maplibre parity campaign Wave M4, P2 tier).
+ * The FLOW kernel — CPU side of the origin→destination / corridor family.
  *
  * A flow tile is a STATIC geometry carrying a TIME SERIES: the streets, the
  * river reaches or the OD pairs never move, but each one's magnitude changes

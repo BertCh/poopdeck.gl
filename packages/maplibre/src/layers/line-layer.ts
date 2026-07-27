@@ -14,7 +14,7 @@
  * the only browsers without it are end-of-life Edge and IE, neither of which
  * the rest of the STT stack targets.
  *
- * Projection variants (parity campaign D3/D4): legacy hosts (maplibre ≤v4,
+ * Projection variants: legacy hosts (maplibre ≤v4,
  * mapbox v3) project endpoints through the positional `uMatrix`; v5+ hosts
  * get the host's injected prelude prepended and endpoints go through its
  * `projectTile(vec2)` — same 0..1-mercator input our decode produces. On
@@ -24,8 +24,7 @@
  * and this backend never draws world copies, so the globe wrap-skip rule is
  * vacuously satisfied.
  *
- * Wave M2 adds three orthogonal axes, all defaulting to the historical
- * behaviour (an app that sets none of them renders exactly as before):
+ * Three orthogonal axes sit on top, all OFF at their defaults:
  *   - **time modes** — `timeFilterMode` selects one of the four
  *     `shaders/time-window.glsl.ts` kernels at PROGRAM-BUILD time (there is no
  *     mode uniform); the mode is part of the program cache key.
@@ -35,12 +34,13 @@
  *   - **metric sizing** — `widthUnits: 'meters'` resolves the metres→device-px
  *     factor per tile (tile-centre latitude, fractional map zoom) and folds it
  *     into the width scale, so no shader branch is needed.
- * Picking (campaign D11) reuses the SAME vertex source through a `pick: true`
+ * Picking reuses the SAME vertex source through a `pick: true`
  * variant, so the id pass extrudes the identical screen-space quad the visual
  * pass drew and honours the identical time/filter gates.
  *
- * Wave M3 adds PATH REVEAL (`revealTrail`/`revealDuration`/`fadeTrail`, deck's
- * `AnimatedPathLayer` prop names and defaults, OFF by default). Where the
+ * PATH REVEAL (`revealTrail`/`revealDuration`/`fadeTrail`, deck's
+ * `AnimatedPathLayer` prop names and defaults, OFF by default) is a fifth
+ * compiled mode. Where the
  * `'trail'` time mode fades a whole segment by its interpolated vertex time,
  * reveal CLIPS THE GEOMETRY: the drawn extent of each segment is
  * `mix(A, B, [tail, head])`, so the frontier segment is drawn PARTIALLY and the
@@ -62,7 +62,7 @@ import {
 } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   expandPickIdColors,
   resolveTrailFade,
   type STTBaseLayerOptions,
@@ -79,19 +79,24 @@ import {
   TIME_TRAIL_GLSL,
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
   trailAlphaJS,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
   DATA_FILTER_CALL_GLSL,
   DATA_FILTER_GLSL,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   expandFilterValues,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 
@@ -101,7 +106,7 @@ const DEFAULT_LINE_PALETTE: ReadonlyArray<RGBA8> = CORE_LINE_PALETTE;
 
 /**
  * The four real time-filter modes — the package-wide {@link STTTimeFilterMode}
- * under this layer's historical name.
+ * under this layer's own name.
  */
 export type STTLineTimeFilterMode = STTTimeFilterMode;
 
@@ -154,7 +159,7 @@ export interface STTLineLayerOptions
   widthScale?: number;
   /**
    * Unit `width` / `widthProperty` values are expressed in. `'pixels'` (the
-   * default) keeps the historical constant-on-screen width; `'meters'` sizes
+   * default) is a constant-on-screen width; `'meters'` sizes
    * the line on the ground, resolved per tile at the tile's centre latitude
    * and the map's fractional zoom (deck `widthUnits` parity).
    *
@@ -181,8 +186,8 @@ export interface STTLineLayerOptions
   /** Drive per-feature width (in `widthUnits`) from a numeric property name. */
   widthProperty?: string;
   /**
-   * Which temporal filter the shader applies. Defaults to `'window'` — the
-   * historical behaviour, driven by `timeWindow` + the fade durations.
+   * Which temporal filter the shader applies. Defaults to `'window'`, driven
+   * by `timeWindow` + the fade durations.
    *
    *   - `'window'` — lit while `[startTime, endTime]` overlaps the window.
    *   - `'wake'` — lit for {@link wakeLength} ms after `startTime`, fading AND
@@ -281,11 +286,11 @@ export interface STTLineLayerOptions
 // The instanced VS reads (side, along) ∈ {-1,1} × {0,1} from the unit-quad
 // vertex attribute, then picks the segment endpoint and perpendicular offset.
 // `aPosA`/`aPosB` are the *segment endpoints*, not the 4 corners; the 4×
-// expansion happens in the GPU rasterizer — we're removing the redundant CPU
-// broadcast that the v0.2 layer was doing on every tile load.
+// expansion happens in the GPU rasterizer, so no CPU corner broadcast runs at
+// tile load.
 
 /**
- * Path-reveal kernel (Wave M3). Returns `[tail, head]` — the two fractions of
+ * Path-reveal kernel. Returns `[tail, head]` — the two fractions of
  * THIS segment the reveal window currently covers, so the caller can clip the
  * drawn geometry to `mix(A, B, tail) … mix(A, B, head)`. The head is where the
  * play head sits INSIDE the segment, which is what makes the frontier segment
@@ -294,8 +299,9 @@ export interface STTLineLayerOptions
  * larger than any feature's own span). `head <= tail` ⇒ nothing of this segment
  * is currently drawn.
  *
- * Private to this layer for now — the icon/trips/arc kinds are the extraction
- * trigger (see the `concerns` note in the wave report), not a second copy here.
+ * Private to this layer: the line kind is the only consumer. A second kind
+ * needing reveal is the trigger to hoist this into a shared shader module —
+ * not to copy it.
  */
 export const LINE_REVEAL_GLSL = `
 vec2 sttRevealSpan(
@@ -403,24 +409,17 @@ const MODE_TIME_ATTRIBUTE: Record<LineCompiledMode, string> = {
     '  attribute vec2 aVertexTimeAB; // [timeA, timeB], per-instance, tile-relative',
 };
 
+/**
+ * Uniforms each mode reads. The quad narrows toward the tail in wake mode, so
+ * this is the record carrying `uWakeTailScale`. Reveal IS a trail whose length
+ * is the reveal duration (or the persist sentinel), so it reads trail's block.
+ *
+ * The blocks end with a newline; the splice site pastes one as a whole template
+ * line and must `.trimEnd()`.
+ */
 const MODE_UNIFORMS: Record<LineCompiledMode, string> = {
-  window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;`,
-  wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;`,
-  cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;`,
-  trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;`,
-  // Same three as trail: reveal IS a trail whose length is the reveal duration
-  // (or the persist sentinel).
-  reveal: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;`,
+  ...TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  reveal: TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE.trail,
 };
 
 const MODE_ALPHA: Record<LineCompiledMode, string> = {
@@ -453,9 +452,8 @@ export interface LineVertexVariant {
 }
 
 /**
- * Variant-aware vertex source (D3/D8/D11). An empty `prelude` yields the legacy
- * `uMatrix` shader (maplibre ≤v4 / mapbox — behaviour-identical to the
- * pre-campaign shader whenever the new knobs are left at their defaults); a v5+
+ * Variant-aware vertex source. An empty `prelude` yields the legacy `uMatrix`
+ * shader (maplibre ≤v4 / mapbox); a v5+
  * host's prelude + define are prepended (maplibre's documented injection order)
  * and BOTH segment endpoints project through its `projectTile(vec2)`.
  * projectTile overwrites z for horizon clipping — correct for this 2d
@@ -546,7 +544,7 @@ ${filter ? DATA_FILTER_ATTRIBUTE_GLSL.trimEnd() : ''}
   uniform float uWidth;
   uniform float uWidthScale;
   uniform float uUseFeatureWidth;
-${MODE_UNIFORMS[mode]}
+${MODE_UNIFORMS[mode].trimEnd()}
 ${filter ? DATA_FILTER_UNIFORMS_GLSL.trimEnd() : ''}
   varying float vAlpha;
 ${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}
@@ -615,7 +613,12 @@ const ID_FS_SOURCE = `
   }
 `;
 
-interface LineProgramHandles {
+interface LineProgramHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   aCorner: number;
   aPosA: number;
@@ -638,22 +641,6 @@ interface LineProgramHandles {
   uUseFeatureWidth: WebGLUniformLocation | null;
   uUseFeatureColor: WebGLUniformLocation | null;
   uColor: WebGLUniformLocation | null;
-  // Mode uniforms: only the active mode's are non-null.
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  // DataFilter uniforms: null unless the branch was compiled in.
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface LineGpuCache extends TileGpuCache {
@@ -691,7 +678,7 @@ interface LineGpuCache extends TileGpuCache {
  */
 const FALLBACK_LEGACY_FRAME: HostFrame = createHostFrame();
 
-export class STTLineLayer extends STTBaseLayer {
+export class STTLineLayer extends STTFilterableLayer {
   protected lineOpts: {
     color: [number, number, number, number];
     width: number;
@@ -715,12 +702,6 @@ export class STTLineLayer extends STTBaseLayer {
     revealTrail: boolean;
     revealDuration: number;
     reducedMotion: boolean;
-    filterProperty?: string;
-    filterRange?: DataFilterRange | null;
-    filterSoftRange?: DataFilterRange | null;
-    filterEnabled?: boolean;
-    filterTransformSize?: boolean;
-    filterTransformColor?: boolean;
   };
   /**
    * Globe frames need subdivided tile geometry, but the base render loop
@@ -729,16 +710,8 @@ export class STTLineLayer extends STTBaseLayer {
    * projection. Also read by the pick path (a pick follows a render).
    */
   private frameIsGlobe = false;
-  /**
-   * Per-draw DataFilter uniform payload, allocated ONCE: `resolveDataFilterUniforms`
-   * refills it in place so the hot path allocates nothing.
-   */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
   /** A named `filterProperty` is what compiles the filter branch into the shaders. */
   private readonly filterCompiled: boolean;
-  /** Categorical columns aren't range-filterable; warn once, render unfiltered. */
-  private warnedCategoricalFilter = false;
   /**
    * Tail lengths AS PASSED (undefined ⇒ defaulted off `timeWindow`), and the
    * mode as REQUESTED — `lineOpts.timeFilterMode` holds the DEGRADED one.
@@ -797,12 +770,6 @@ export class STTLineLayer extends STTBaseLayer {
       revealTrail: opts.revealTrail ?? false,
       revealDuration: opts.revealDuration ?? 0,
       reducedMotion: opts.reducedMotion ?? false,
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.filterCompiled = !!opts.filterProperty;
     this.resolveTimeConfig();
@@ -967,27 +934,6 @@ export class STTLineLayer extends STTBaseLayer {
     this.map?.triggerRepaint();
   }
 
-  /**
-   * Move the DataFilter bounds (the slider path). Uniform-only — no relink, no
-   * tile rebuild — so it is safe to call every animation frame.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.lineOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only, like `setFilterRange`. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.lineOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Toggle the DataFilter off (everything renders) / on. Uniform-only. */
-  setFilterEnabled(enabled: boolean): void {
-    this.lineOpts.filterEnabled = enabled;
-    this.map?.triggerRepaint();
-  }
-
   protected acceptsGeometry(type: GeometryType): boolean {
     return type === GeometryType.LineString;
   }
@@ -1053,26 +999,10 @@ export class STTLineLayer extends STTBaseLayer {
         uUseFeatureWidth: glc.getUniformLocation(program, 'uUseFeatureWidth'),
         uUseFeatureColor: glc.getUniformLocation(program, 'uUseFeatureColor'),
         uColor: glc.getUniformLocation(program, 'uColor'),
-        uWindowStart: glc.getUniformLocation(program, 'uWindowStart'),
-        uWindowEnd: glc.getUniformLocation(program, 'uWindowEnd'),
-        uFadeIn: glc.getUniformLocation(program, 'uFadeIn'),
-        uFadeOut: glc.getUniformLocation(program, 'uFadeOut'),
-        uCurrentTime: glc.getUniformLocation(program, 'uCurrentTime'),
-        uWakeLength: glc.getUniformLocation(program, 'uWakeLength'),
-        uWakeTailScale: glc.getUniformLocation(program, 'uWakeTailScale'),
-        uTrailLength: glc.getUniformLocation(program, 'uTrailLength'),
-        uFadeTrail: glc.getUniformLocation(program, 'uFadeTrail'),
-        uFilterRange: glc.getUniformLocation(program, 'uFilterRange'),
-        uFilterSoftRange: glc.getUniformLocation(program, 'uFilterSoftRange'),
-        uFilterEnabled: glc.getUniformLocation(program, 'uFilterEnabled'),
-        uFilterTransformSize: glc.getUniformLocation(
-          program,
-          'uFilterTransformSize',
-        ),
-        uFilterTransformColor: glc.getUniformLocation(
-          program,
-          'uFilterTransformColor',
-        ),
+        ...resolveTimeUniformLocations(glc, program),
+        ...resolveWakeTailScaleUniformLocation(glc, program),
+        ...resolveDataFilterUniformLocations(glc, program),
+        ...resolveFilterTransformSizeUniformLocation(glc, program),
       };
     });
   }
@@ -1196,9 +1126,8 @@ export class STTLineLayer extends STTBaseLayer {
     }
     if (segmentCount === 0) return null;
 
-    // Per-instance buffers — one row per segment, not per quad corner. This
-    // is the core memory win vs. v0.2: 4× less data uploaded per tile and no
-    // main-thread expansion pass.
+    // Per-instance buffers — one row per segment, not per quad corner: 4× less
+    // data uploaded per tile, and no main-thread corner-expansion pass.
     const posA = new Float32Array(segmentCount * 2);
     const posB = new Float32Array(segmentCount * 2);
     const times = new Float32Array(segmentCount * 2);
@@ -1259,14 +1188,8 @@ export class STTLineLayer extends STTBaseLayer {
     // feature contributed. A missing / categorical column resolves to
     // `hasFilterColumn: false`, which the uniform resolver turns into
     // `enabled: 0` — an UNFILTERED tile, never a blank one.
-    const filterColumn = extractFilterColumn(f, this.lineOpts.filterProperty);
-    if (filterColumn.categorical && !this.warnedCategoricalFilter) {
-      this.warnedCategoricalFilter = true;
-      console.warn(
-        `[${this.id}] filterProperty '${this.lineOpts.filterProperty}' is a ` +
-          `categorical column; range filtering needs a numeric one — rendering unfiltered.`,
-      );
-    }
+    const filterColumn = extractFilterColumn(f, this.filterOpts.filterProperty);
+    if (filterColumn.categorical) this.warnCategoricalFilterOnce();
     const filterAttr = filterColumn.values
       ? expandFilterValues(filterColumn.values, segCounts, segmentCount)
       : null;
@@ -1305,9 +1228,9 @@ export class STTLineLayer extends STTBaseLayer {
       timeBuffer,
       posABuffer,
       posBBuffer,
-      // `vertexCount` here is the number of segments — old tests assert
-      // 4 verts/segment (legacy 12), which no longer applies. The replacement
-      // assertion is `instanceCount`.
+      // `vertexCount` here counts SEGMENTS, not drawn vertices: the quad's 4
+      // corners come from the shared unit quad, so anything that needs the
+      // draw size must read `instanceCount`.
       vertexCount: segmentCount,
       indexCount: 0,
       instanceCount: segmentCount,
@@ -1388,30 +1311,6 @@ export class STTLineLayer extends STTBaseLayer {
   }
 
   /**
-   * Upload the DataFilter uniforms for one tile. No-op unless a
-   * `filterProperty` compiled the branch in. The vec2 pairs go up as
-   * `uniform2fv` (the kernel's documented form, shared by all five kinds) so
-   * the `Float32Array` payload is uploaded without unpacking.
-   */
-  private setFilterUniforms(
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    h: LineProgramHandles,
-    cache: LineGpuCache,
-  ): void {
-    if (!this.filterCompiled) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.lineOpts,
-      cache.hasFilterColumn,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
-  }
-
-  /**
    * Bind the per-instance attributes shared by the visual and id passes. The
    * time attribute is mode-dependent (`aVertexTimeAB` in the per-VERTEX modes,
    * trail and reveal); colour / width / filter bind only when the tile carries
@@ -1484,7 +1383,9 @@ export class STTLineLayer extends STTBaseLayer {
     gl.uniform1f(h.uWidthScale, this.widthScaleFor(gl, tile, ctx));
     gl.uniform4fv(h.uColor, this.rgba01Uniform('Color', this.lineOpts.color));
     this.setTimeUniforms(gl, h, c, ctx);
-    this.setFilterUniforms(gl, h, c);
+    if (this.filterCompiled) {
+      this.uploadDataFilterUniforms(gl, h, c.hasFilterColumn);
+    }
     gl.uniform1f(h.uUseFeatureColor, c.colorBuffer && h.aColor >= 0 ? 1 : 0);
     gl.uniform1f(h.uUseFeatureWidth, c.widthBuffer && h.aWidth >= 0 ? 1 : 0);
 
@@ -1532,7 +1433,7 @@ export class STTLineLayer extends STTBaseLayer {
 
   /**
    * Draw this line tile into the id-pick FBO, painting feature `i` the flat
-   * colour `encodePickId(idBase + i)` (campaign D11). The id program is built
+   * colour `encodePickId(idBase + i)`. The id program is built
    * from the SAME vertex source as the visual pass — same projection variant,
    * same time mode, same DataFilter branch — so the pickable area is exactly
    * the extruded quad the user sees, and time- or range-filtered geometry
@@ -1571,7 +1472,9 @@ export class STTLineLayer extends STTBaseLayer {
     gl.uniform1f(h.uWidth, this.lineOpts.width);
     gl.uniform1f(h.uWidthScale, this.widthScaleFor(gl, tile, ctx));
     this.setTimeUniforms(gl, h, c, ctx);
-    this.setFilterUniforms(gl, h, c);
+    if (this.filterCompiled) {
+      this.uploadDataFilterUniforms(gl, h, c.hasFilterColumn);
+    }
     gl.uniform1f(h.uUseFeatureWidth, c.widthBuffer && h.aWidth >= 0 ? 1 : 0);
 
     // Raw attribute binds (no VAO): picking is a rare user-initiated pass, and

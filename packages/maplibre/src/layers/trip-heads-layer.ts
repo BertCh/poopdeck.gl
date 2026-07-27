@@ -25,10 +25,10 @@
  *      (`bufferSubData`, never a fresh allocation) and drawn as `GL_POINTS`
  *      billboards.
  *
- * This layer is the primary consumer of campaign D7 (the track-kernel hoist to
- * core): the interpolation, the shortest-arc/NaN-tolerant lerps, the CPU
- * appear/disappear fade and the `maxGapMs` integrity guard all come from ONE
- * implementation shared with deck, three and Cesium.
+ * This layer is the primary consumer of the core track kernel: the
+ * interpolation, the shortest-arc/NaN-tolerant lerps, the CPU appear/disappear
+ * fade and the `maxGapMs` integrity guard all come from ONE implementation
+ * shared with deck, three and Cesium.
  *
  * ── TIME MODES ──────────────────────────────────────────────────────────────
  * A head is inherently a "where is it RIGHT NOW" primitive, so only two of the
@@ -73,7 +73,7 @@
  * and the same COLOUR ALPHA — as the visual pass ⇒ a head the user cannot see
  * is not pickable.
  *
- * ── PROJECTION (campaign D3) ────────────────────────────────────────────────
+ * ── PROJECTION ──────────────────────────────────────────────────────────────
  * Legacy hosts (maplibre ≤v4, mapbox v3) keep the positional `uMatrix` MVP;
  * v5+ hosts get the injected prelude and project via `projectTile(vec2)` —
  * a billboard is 2d content, so `projectTile`'s z overwrite (horizon clipping)
@@ -109,7 +109,7 @@ import {
   buildBillboardIdFragmentSource,
 } from '../shaders/billboard.glsl.js';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   type STTBaseLayerOptions,
   type STTTimeFilterMode,
   type DrawContext,
@@ -125,6 +125,11 @@ import { lngLatToMercatorInto } from '../lib/projection.js';
 import {
   TIME_WINDOW_GLSL,
   TIME_WAKE_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -132,11 +137,11 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 
@@ -319,10 +324,9 @@ export function buildTripTracks(f: BinaryFeatures): TripTrackSet | null {
  * `out[at]`/`out[at + 1]` instead of returning a fresh 2-tuple.
  *
  * The emit loop runs per active head per frame, so the tuple-returning form
- * would allocate thousands of arrays a second. The maths now lives in
- * `lib/projection.ts` as {@link lngLatToMercatorInto} — the extraction this
- * function's own concerns note asked for, which the icon layer's glide emit
- * shares — and this stays as the layer-local name the trip-heads suite pins
+ * would allocate thousands of arrays a second. The maths lives in
+ * `lib/projection.ts` as {@link lngLatToMercatorInto}, shared with the icon
+ * layer's glide emit; this is the layer-local name the trip-heads suite pins
  * against the tuple form.
  */
 export function writeMercator(
@@ -363,20 +367,6 @@ const MODE_GLSL: Readonly<Record<TripHeadsTimeFilterMode, string>> =
   Object.freeze({
     window: TIME_WINDOW_GLSL,
     wake: TIME_WAKE_GLSL,
-  });
-
-/** Uniforms each mode reads. Only the active mode's block is declared. */
-const MODE_UNIFORMS: Readonly<Record<TripHeadsTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
   });
 
 /**
@@ -496,7 +486,7 @@ ${idAttribute}${cfg.filter ? FILTER_ATTRIBUTE : ''}${legacyUniforms}  uniform fl
   uniform vec2 uRadiusPixelRange; // [min, max] resolved radius, device px
   uniform float uUseFeatureColor;
   uniform vec4 uColor;
-${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
+${TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
 ${payloadVarying}${MODE_GLSL[cfg.mode]}${cfg.filter ? DATA_FILTER_GLSL : ''}
   void main() {
 ${projection}
@@ -602,8 +592,17 @@ ${discMaskGLSL()}    // Antialiased disc: soften the last ~10% of the radius.
  */
 const ID_FS_SOURCE = buildBillboardIdFragmentSource('heads');
 
-/** Locations every trip-heads program shares. */
-interface HeadsSharedHandles {
+/**
+ * Locations every trip-heads program shares. The inherited `trail` members stay
+ * null — this layer compiles only `window` and `wake` — and every `gl.uniform*`
+ * call ignores a null location.
+ */
+interface HeadsSharedHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the vertex source was built with the host prelude (v5+). */
   usesPrelude: boolean;
@@ -623,18 +622,6 @@ interface HeadsSharedHandles {
   uRadiusPixelRange: WebGLUniformLocation | null;
   uUseFeatureColor: WebGLUniformLocation | null;
   uColor: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface HeadsProgramHandles extends HeadsSharedHandles {
@@ -814,7 +801,7 @@ export interface STTTripHeadsLayerOptions
  * Pass both layers one {@link SharedTilesetSource} (`{ source }` instead of
  * `{ url }`) to read the archive once.
  */
-export class STTTripHeadsLayer extends STTBaseLayer {
+export class STTTripHeadsLayer extends STTFilterableLayer {
   private headOpts: {
     color: [number, number, number, number];
     radius: number;
@@ -835,11 +822,6 @@ export class STTTripHeadsLayer extends STTBaseLayer {
     wakeTailScale: number;
     maxInterpolationGap: number;
   };
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
   /**
    * Sample config handed to `sampleTrack`, refilled in place each emit so the
    * per-frame path allocates nothing. The three `default*` dimensions are
@@ -866,7 +848,6 @@ export class STTTripHeadsLayer extends STTBaseLayer {
   private floatScratch = new Float32Array(0);
   private colorScratch = new Uint8Array(0);
   private idScratch = new Uint8Array(0);
-  private warnedCategoricalFilter = false;
   private warnedUnsupportedMode = false;
   /**
    * Handles of the most recently used variant, memoized per `*Variant` so the
@@ -898,14 +879,6 @@ export class STTTripHeadsLayer extends STTBaseLayer {
       wakeLength: opts.wakeLength ?? 0,
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       maxInterpolationGap: opts.maxInterpolationGap ?? Number.POSITIVE_INFINITY,
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.shaderConfig = {
       mode: this.resolveMode(),
@@ -978,27 +951,6 @@ export class STTTripHeadsLayer extends STTBaseLayer {
    */
   setMaxInterpolationGap(maxInterpolationGap: number): void {
     this.headOpts.maxInterpolationGap = maxInterpolationGap;
-    this.map?.triggerRepaint();
-  }
-
-  /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only: no relink, no tile rebuild. `null` idles the filter.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every head unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
     this.map?.triggerRepaint();
   }
 
@@ -1078,13 +1030,7 @@ export class STTTripHeadsLayer extends STTBaseLayer {
     let hasFilterColumn = false;
     if (this.shaderConfig.filter) {
       const col = extractFilterColumn(f, this.filterOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-            `categorical column; range filtering needs a numeric one — rendering unfiltered`,
-        );
-      }
+      if (col.categorical) this.warnCategoricalFilterOnce();
       filterValues = col.values;
       hasFilterColumn = col.hasColumn;
     }
@@ -1286,16 +1232,11 @@ export class STTTripHeadsLayer extends STTBaseLayer {
     cache: TripHeadsGpuCache,
   ): void {
     if (!this.shaderConfig.filter) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
+    this.uploadDataFilterUniforms(
+      gl,
+      h,
       cache.hasFilterColumn && h.aFilterValue >= 0,
     );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
   }
 
   /**
@@ -1393,27 +1334,10 @@ export class STTTripHeadsLayer extends STTBaseLayer {
       uRadiusPixelRange: gl.getUniformLocation(program, 'uRadiusPixelRange'),
       uUseFeatureColor: gl.getUniformLocation(program, 'uUseFeatureColor'),
       uColor: gl.getUniformLocation(program, 'uColor'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 

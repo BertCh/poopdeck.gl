@@ -202,6 +202,21 @@ export class TimeController {
     return this.timeRange ? { ...this.timeRange } : undefined;
   }
 
+  /**
+   * Toggle wrapping at the range end (the media-element `loop` attribute).
+   * Live: flipping it mid-playback only changes what happens at the NEXT
+   * boundary crossing — it never moves the playhead. `bounce` still takes
+   * precedence when set.
+   */
+  setLoop(loop: boolean): void {
+    this.loop = loop;
+  }
+
+  /** Whether the clock wraps at the range end rather than ending there. */
+  getLoop(): boolean {
+    return this.loop;
+  }
+
   /** Start playback */
   play(): void {
     if (this.playing) return;

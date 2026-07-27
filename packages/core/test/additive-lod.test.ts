@@ -1,5 +1,5 @@
 /**
- * Unit tests for `lodMode: 'additive'` in `SpatiotemporalTileset` — the
+ * Unit tests for `lodMode: 'additive'` in `SpatioTemporalTileset` — the
  * additive-octree zoom-LOD path. Two behaviours distinguish it from the default
  * 'parent-fallback' mode:
  *
@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox } from '../src/types';
 import { BOUNDS, flush as tick } from './helpers/fixtures';
 
@@ -23,7 +23,7 @@ import { BOUNDS, flush as tick } from './helpers/fixtures';
 const fakeTile = (id: TileId) =>
   ({ id, featureCount: 0, layers: [] }) as unknown;
 
-describe('SpatiotemporalTileset additive LOD — union loading', () => {
+describe('SpatioTemporalTileset additive LOD — union loading', () => {
   function zoomsQueried(
     lodMode: 'additive' | 'parent-fallback',
     minZoom: number,
@@ -31,7 +31,7 @@ describe('SpatiotemporalTileset additive LOD — union loading', () => {
     cameraZoom: number,
   ) {
     const queried = new Set<number>();
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom,
       maxZoom,
       lodMode,
@@ -83,12 +83,12 @@ describe('SpatiotemporalTileset additive LOD — union loading', () => {
   });
 });
 
-describe('SpatiotemporalTileset additive LOD — getVisibleTiles retains parents', () => {
+describe('SpatioTemporalTileset additive LOD — getVisibleTiles retains parents', () => {
   // A z14 parent (0,0) fully covered by its four z15 children. In parent-fallback
   // the parent is dropped once the children load; in additive it stays (its
   // overview points exist nowhere else).
   function makeCoveredTileset(lodMode: 'additive' | 'parent-fallback') {
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 14,
       maxZoom: 15,
       lodMode,

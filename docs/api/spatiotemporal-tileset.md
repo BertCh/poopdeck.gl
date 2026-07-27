@@ -1,13 +1,13 @@
-# SpatiotemporalTileset
+# SpatioTemporalTileset
 
-The `SpatiotemporalTileset` class manages the lifecycle, loading, and caching of spatiotemporal tiles. It is the "brain" behind the [`SpatioTemporalLayer`](./spatiotemporal-layer.md), determining which tiles to load based on the current viewport and time window — and, since the player-buffering work, the readiness oracle a [`PlaybackGovernor`](./playback-governor.md) gates playback on.
+The `SpatioTemporalTileset` class manages the lifecycle, loading, and caching of spatiotemporal tiles. It is the "brain" behind the [`SpatioTemporalLayer`](./spatiotemporal-layer.md), determining which tiles to load based on the current viewport and time window — and, since the player-buffering work, the readiness oracle a [`PlaybackGovernor`](./playback-governor.md) gates playback on.
 
 It is inspired by deck.gl's `Tileset2D` (the class behind `TileLayer`), extended for the temporal dimension: tile selection, request scheduling, prefetch, and the buffer model all reason about `(z, x, y, t)` addresses.
 
 ## Installation
 
 ```typescript
-import { SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { SpatioTemporalTileset } from '@poopdeck.gl/core';
 ```
 
 ## Usage
@@ -15,7 +15,7 @@ import { SpatiotemporalTileset } from '@poopdeck.gl/core';
 Typically used internally by `SpatioTemporalLayer` (and `@poopdeck.gl/maplibre`'s `STTBaseLayer`), but can be used independently for custom implementations.
 
 ```typescript
-const tileset = new SpatiotemporalTileset({
+const tileset = new SpatioTemporalTileset({
   maxRequests: 24,
   getAvailableTiles: (bounds, zoom, timeRange) =>
     archive.getTileIdsInBounds(bounds, zoom, timeRange),

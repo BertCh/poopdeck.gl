@@ -20,7 +20,7 @@
 import { Mesh, InstancedBufferAttribute, Box3, Vector3, Sphere } from 'three';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildTripsBuffers,
@@ -37,8 +37,8 @@ import {
 import type { DataFilterRange } from '../tsl/data-filter.js';
 import {
   resolveIdPick,
-  type SttIdPickInfo,
-  type SttIdPickable,
+  type STTIdPickInfo,
+  type STTIdPickable,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
@@ -78,7 +78,7 @@ export interface STTTripsLayerOptions {
   trailFade?: number;
 }
 
-export class STTTripsLayer extends BaseSttLayer implements SttIdPickable {
+export class STTTripsLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -117,7 +117,7 @@ export class STTTripsLayer extends BaseSttLayer implements SttIdPickable {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     const buf = buildTripsBuffers(
@@ -228,11 +228,11 @@ export class STTTripsLayer extends BaseSttLayer implements SttIdPickable {
 
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback) to
-   * a normalised {@link SttIdPickInfo} (`kind: 'trips'`), or `null` for a miss. A
+   * a normalised {@link STTIdPickInfo} (`kind: 'trips'`), or `null` for a miss. A
    * pick on any trail segment resolves to the whole trip (its first vertex is the
    * coordinate). Pure — the unit-tested seam; call it directly with a decoded index.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -276,7 +276,7 @@ export class STTTripsLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.object.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

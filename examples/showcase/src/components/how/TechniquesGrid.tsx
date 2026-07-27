@@ -22,7 +22,7 @@ const GROUPS: TechniqueGroup[] = [
   {
     label: 'Smaller archives',
     blurb:
-      'Cut bytes at build time — every lever is opt-in, exact to a declared precision, and undone on decode.',
+      'Cut bytes at build time. The lossless levers run by default; the ones that trade precision for size are opt-in, exact to a declared precision, and undone on decode.',
     items: [
       {
         title: 'Coordinate quantization',
@@ -31,18 +31,23 @@ const GROUPS: TechniqueGroup[] = [
       },
       {
         title: 'Attribute quantization',
-        body: 'Numeric properties become range-adaptive UInt16 plus a tiny affine to reconstruct real values on decode.',
-        tag: '--quantize-attr · stt:qa',
+        body: 'Every Float64 property maps onto 65 536 levels of its own range, plus a tiny affine to reconstruct real values on decode — or pin one column to a fixed precision.',
+        tag: '--quantize-attrs-auto · TILE_META.qa',
       },
       {
-        title: 'Per-vertex time deltas',
-        body: 'Trajectory vertices carry timestamps as UInt16 steps from a per-tile origin — millisecond playback at two bytes a vertex.',
-        tag: 'vertex_time',
+        title: 'Compact feature times',
+        body: 'On by default: start_time becomes a UInt32 offset from the tile’s own t0, and end_time vanishes entirely when every feature is instantaneous. Measured a third of a point archive’s bytes.',
+        tag: 'TILE_META.st / .et',
+      },
+      {
+        title: 'Shared schema templates',
+        body: 'Arrow schemas are dataset-constant, so tiles reference one by 16-byte blake3 hash instead of repeating ~900 B of it each. Single-digit templates cover a whole dataset.',
+        tag: 'manifest.schemas',
       },
       {
         title: 'Per-blob zstd',
         body: 'Every tile blob is an independent zstd frame, so the browser decodes with a ~30 kB pure-JS decoder — no WASM, no shared dictionary.',
-        tag: '--zstd-level 1…22',
+        tag: '--zstd-level 1…22 · --publish',
       },
       {
         title: 'Content-addressed dedup',
@@ -51,7 +56,7 @@ const GROUPS: TechniqueGroup[] = [
       },
       {
         title: 'Simplify + pre-tessellate',
-        body: 'Time-aware line simplification keeps the motion, drops the noise; polygons can bake their earcut triangles so clients skip tessellation.',
+        body: 'Time-aware line simplification keeps the motion and drops the noise, at a latitude-corrected ground tolerance; polygons can bake their earcut triangles so clients skip tessellation.',
         tag: '--time-aware-simplify · --pre-tessellate',
       },
     ],
@@ -63,8 +68,8 @@ const GROUPS: TechniqueGroup[] = [
     items: [
       {
         title: 'Paged directory',
-        body: 'The tile index ships in pages; 52-byte root descriptors prune whole leaves by zoom ∧ bbox ∧ time span before any fetch.',
-        tag: 'layout: "paged"',
+        body: 'The default: the tile index ships in pages, and 52-byte root descriptors prune whole leaves by zoom ∧ bbox ∧ time span before any fetch.',
+        tag: 'layout: "paged" · --page-entries',
       },
       {
         title: 'Range coalescing',
@@ -115,8 +120,8 @@ const GROUPS: TechniqueGroup[] = [
       },
       {
         title: 'Space-time values',
-        body: 'A per-vertex × per-bucket value cube animates static geometry — streets breathing with hourly traffic while their shape ships once.',
-        tag: 'vertex_value_matrix',
+        body: 'A per-vertex × per-bucket value cube animates static geometry — streets breathing with hourly traffic while their shape ships once. Optionally UInt16-quantized, the only lever those columns have.',
+        tag: 'vertex_value_matrix · --quantize-vertex-values',
       },
     ],
   },

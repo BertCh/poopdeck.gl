@@ -45,12 +45,66 @@ describe('collisionFilterProps helper', () => {
     expect(props.getCollisionPriority).toBe(50);
   });
 
-  it('defaults: collisionEnabled true, priority 0, no group/testProps keys', () => {
+  it('defaults: collisionEnabled true, no priority/group/testProps keys at all', () => {
     const props = collisionFilterProps();
     expect(props.collisionEnabled).toBe(true);
-    expect(props.getCollisionPriority).toBe(0);
+    // The helper is meant to be SPREAD, so it must not emit keys the caller
+    // never asked for — `getCollisionPriority: 0` used to overwrite whatever
+    // accessor the layer set before the spread (see the clobber suite below).
+    expect('getCollisionPriority' in props).toBe(false);
     expect('collisionGroup' in props).toBe(false);
     expect('collisionTestProps' in props).toBe(false);
+  });
+
+  it('does NOT clobber a caller-supplied getCollisionPriority accessor', () => {
+    // The reported bug, in the shape callers actually write it:
+    //   new AnimatedIconLayer({getCollisionPriority: d => d.rank,
+    //                          ...collisionFilterProps({collisionEnabled: true})})
+    const accessor = (d: any) => d.rank;
+    const layerProps = {
+      getCollisionPriority: accessor,
+      ...collisionFilterProps({ collisionEnabled: true }),
+    };
+    expect(layerProps.getCollisionPriority).toBe(accessor);
+  });
+
+  it('routes an accessor THROUGH the helper (the recommended spelling)', () => {
+    const accessor = (d: any) => d.rank;
+    const props = collisionFilterProps({ getCollisionPriority: accessor });
+    expect(props.getCollisionPriority).toBe(accessor);
+    // deck's own prop type is Accessor<DataT, number> — a constant is fine too,
+    // and is still clamped into deck's documented range.
+    expect(
+      collisionFilterProps({ getCollisionPriority: 5000 }).getCollisionPriority,
+    ).toBe(COLLISION_PRIORITY_MAX);
+  });
+
+  it('warns once when both the constant and the accessor are supplied; the accessor wins', () => {
+    _resetWarnOnce();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const accessor = (d: any) => d.rank;
+      const props = collisionFilterProps({
+        collisionPriority: 7,
+        getCollisionPriority: accessor,
+      });
+      expect(props.getCollisionPriority).toBe(accessor);
+      const hits = warnSpy.mock.calls.filter(([m]) =>
+        String(m).includes('getCollisionPriority'),
+      );
+      expect(hits.length).toBe(1);
+      collisionFilterProps({
+        collisionPriority: 7,
+        getCollisionPriority: accessor,
+      });
+      expect(
+        warnSpy.mock.calls.filter(([m]) =>
+          String(m).includes('getCollisionPriority'),
+        ).length,
+      ).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('composes with existing extensions without dropping them or double-adding collision', () => {

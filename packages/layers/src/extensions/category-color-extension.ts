@@ -159,6 +159,24 @@ layout(std140) uniform categoryColorUniforms {
 uniform sampler2D categoryColor_paletteTexture;
 `;
 
+// Attribute + varying declarations live in the shader MODULE source, NOT in a
+// `vs:#decl` / `fs:#decl` injection. deck's `mergeShaders` concatenates
+// same-key injections with NO dedup, so a layer carrying two
+// CategoryColorExtension instances — the internal one plus a caller's, since
+// the docs invite adding extensions through the top-level `extensions` prop —
+// would emit `in float instanceCategoryIndex;` twice and the vertex shader
+// would fail to link, rendering nothing. luma dedupes shader MODULES by name,
+// so declaring them here makes the duplicate a no-op. Module sources precede
+// every `#decl` injection, so downstream injections still see them.
+const glslVertexDecl = `\
+in float instanceCategoryIndex;
+out float vCategoryIndex;
+`;
+
+const glslFragmentDecl = `\
+in float vCategoryIndex;
+`;
+
 // Shader module definition for deck.gl 9.x. The sampler lives outside the
 // uniform block because textures cannot be UBO members; it is bound via
 // getUniforms — same pattern as deck.gl's own FillStyleExtension.
@@ -167,8 +185,8 @@ uniform sampler2D categoryColor_paletteTexture;
 // contract below is invisible to attribute-wiring tests.
 export const categoryColorUniforms = {
   name: 'categoryColor',
-  vs: glslUniformBlock,
-  fs: glslUniformBlock,
+  vs: `${glslUniformBlock}${glslVertexDecl}`,
+  fs: `${glslUniformBlock}${glslFragmentDecl}`,
   uniformTypes: {
     paletteSize: 'f32',
     useCategoryColor: 'f32',
@@ -302,16 +320,13 @@ export class CategoryColorExtension extends LayerExtension {
   ) {
     return {
       modules: [categoryColorUniforms],
+      // NOTE: no `vs:#decl` / `fs:#decl` entries — the attribute and varying
+      // are declared in `categoryColorUniforms.vs/fs` so luma's name-based
+      // module dedup protects a duplicated extension. Both injections below
+      // are idempotent under duplication (an assignment and a braced block).
       inject: {
-        'vs:#decl': `
-          in float instanceCategoryIndex;
-          out float vCategoryIndex;
-        `,
         'vs:#main-end': `
           vCategoryIndex = instanceCategoryIndex;
-        `,
-        'fs:#decl': `
-          in float vCategoryIndex;
         `,
         // Sample the palette texture in the FS. Gated by useCategoryColor so
         // the same layer can still render its constant / property color when

@@ -11,7 +11,7 @@
  * from the root barrel (`create*Material` → bundle → `update*Uniforms`, or just
  * the layer classes). This subpath exists for the narrower job of writing a NEW
  * layer or a NEW TSL material against the same time-filter / data-filter /
- * palette node graph the built-ins use — subclassing {@link BaseSttLayer},
+ * palette node graph the built-ins use — subclassing {@link BaseSTTLayer},
  * assembling instanced geometry, or wiring the visibility nodes by hand.
  *
  * The split is deliberate: at 0.5.0 every name on the ROOT barrel is an API we
@@ -29,9 +29,20 @@
 // Every built-in layer extends this: it owns the tile→buffer rebuild hook, the
 // Three object lifecycle, and the per-frame `setTime` pump.
 export {
-  BaseSttLayer,
-  type SttLayer,
-  type SttLayerContext,
+  BaseSTTLayer,
+  type STTLayer,
+  type STTLayerContext,
+} from './layers/layer.js';
+// Deprecated `Stt*` spellings of the same three names — the acronym is `STT`
+// everywhere in this package now. Kept so an authoring consumer that pinned the
+// old spelling keeps compiling; they will be removed in a future major.
+export {
+  /** @deprecated Use {@link BaseSTTLayer}. */
+  BaseSTTLayer as BaseSttLayer,
+  /** @deprecated Use {@link STTLayer}. */
+  type STTLayer as SttLayer,
+  /** @deprecated Use {@link STTLayerContext}. */
+  type STTLayerContext as SttLayerContext,
 } from './layers/layer.js';
 
 // ─── TSL node graph: time filter ──────────────────────────────────────────────
@@ -115,9 +126,15 @@ export {
 } from './geometry/box-edges.js';
 
 // ─── Scene primitives ─────────────────────────────────────────────────────────
-// `SttScene` calls `makeGround` for you (`ground` option) and `frameBox` is the
-// camera-framing helper behind the viewer rigs; `zoomFromCamera` is the
-// altitude→web-mercator-zoom inverse the streaming source selects LOD with.
+// `STTScene` calls `makeGround` for you (`ground` option) and `frameBox` is the
+// camera-framing helper behind the viewer rigs.
 export { makeGround, type GroundOptions } from './scene/ground.js';
 export { frameBox, type FrameOptions } from './scene/camera.js';
+// `zoomFromCamera` is DEPRECATED and no longer part of tile selection — do not
+// reach for it when authoring a layer. The streaming source now takes its LOD
+// from `cameraToViewState(...).zoom` (camera distance × vertical FOV), because
+// measurement against a real camera showed `zoomFromCamera`'s ground-span
+// estimate reading 2–5 levels too coarse under pitch and a level off on a
+// portrait canvas. It stays exported only so an authoring consumer that already
+// imported it keeps compiling; see its own doc comment for the four errors.
 export { zoomFromCamera } from './scene/streaming-tile-source.js';

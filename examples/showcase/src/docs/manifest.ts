@@ -382,7 +382,7 @@ export const docSections: DocSection[] = [
       {
         slug: 'api/spatiotemporal-tileset',
         file: 'api/spatiotemporal-tileset.md',
-        title: 'SpatiotemporalTileset',
+        title: 'SpatioTemporalTileset',
       },
       {
         slug: 'api/binary-features',

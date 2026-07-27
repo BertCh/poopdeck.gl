@@ -4,22 +4,22 @@
 
 /**
  * Tileset callback glue — the single adapter that wires an {@link STTArchive} onto
- * the {@link SpatiotemporalTilesetOptions} fetch callbacks. deck's
+ * the {@link SpatioTemporalTilesetOptions} fetch callbacks. deck's
  * `SpatioTemporalLayer` and three's `StreamingTileSource` each re-wrote this exact
  * `getAvailableTiles` / `getTileData` / `getTileDataBatch` / `getTileByteSize` /
  * `getThroughput` bundle by hand (see docs/roadmap/renderer-architecture.md
  * §1.4 #6); this collapses both to one call. maplibre can use it too. Callers spread
- * the result into their `SpatiotemporalTileset` options and add the layout/lifecycle
+ * the result into their `SpatioTemporalTileset` options and add the layout/lifecycle
  * fields (min/maxZoom, refinementStrategy, onTileLoad/Unload, onBufferChange, …).
  */
 
 import type { STTArchive } from '../archive.js';
 import type { ArchiveMetadata } from '../types.js';
-import type { SpatiotemporalTilesetOptions } from '../spatiotemporal-tileset.js';
+import type { SpatioTemporalTilesetOptions } from '../spatiotemporal-tileset.js';
 
-/** The fetch-callback subset of {@link SpatiotemporalTilesetOptions} that maps 1:1 to the archive. */
+/** The fetch-callback subset of {@link SpatioTemporalTilesetOptions} that maps 1:1 to the archive. */
 export type TilesetFetchCallbacks = Pick<
-  SpatiotemporalTilesetOptions,
+  SpatioTemporalTilesetOptions,
   | 'getAvailableTiles'
   | 'getAvailableSummaryTiles'
   | 'getTileData'
@@ -27,6 +27,7 @@ export type TilesetFetchCallbacks = Pick<
   | 'getTileByteSize'
   | 'getThroughput'
   | 'setSchedulerWeight'
+  | 'setMaxConcurrentRequests'
 >;
 
 /**
@@ -67,6 +68,13 @@ export function makeTilesetCallbacks(
     // Governor bandwidth re-balancing (tileset.setBandwidthWeight) reaches the
     // process-shared scheduler through this — without it the hook no-ops.
     setSchedulerWeight: (weight) => archive.setSchedulerWeight(weight),
+    // `maxRequests` has TWO halves: the tileset's own dispatch fan-out, and the
+    // archive range-coalescer's concurrency ceiling. `setOptions({maxRequests})`
+    // only owns the first; without this hook a post-mount change is silently
+    // half-applied. Wiring it here rather than per-backend means deck, three and
+    // maplibre all get it from the one adapter.
+    setMaxConcurrentRequests: (maxConcurrentRequests) =>
+      archive.setMaxConcurrentRequests(maxConcurrentRequests),
   };
   // Summary-tier dispatch (capability-gated). Only wire the enumerate callback
   // when the archive actually has a summary tier; the tileset returns 'raw' for

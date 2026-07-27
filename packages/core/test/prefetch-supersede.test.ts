@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { TileId, BoundingBox, Tile } from '../src/types';
 import {
   BOUNDS,
@@ -62,7 +62,7 @@ function gatedBatchFn(batches: GatedBatch[]) {
 }
 
 function makeTileset(batches: GatedBatch[], loaded: TileId[] = []) {
-  return new SpatiotemporalTileset({
+  return new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: true,
@@ -243,7 +243,7 @@ describe('per-batch dispatch accounting', () => {
     // working set itself (51 tiles ≫ the default maxRequests of 24 — the old
     // tile-granular slot math would compute availableSlots ≤ 0 and dispatch
     // NOTHING until it settled).
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: 0,
       maxZoom: 12,
       enablePrefetch: false,

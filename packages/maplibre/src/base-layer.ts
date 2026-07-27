@@ -23,9 +23,9 @@
  * that survives style diff-fallback rebuilds, and canvas context-loss
  * listeners invalidate every GPU cache so a restored context rebuilds lazily.
  *
- * Tileset ownership comes in two modes (D6a):
- *   - **Per-layer (default, compat).** `{ url }` — the layer owns a private
- *     archive + tileset, exactly the historical behaviour.
+ * Tileset ownership comes in two modes:
+ *   - **Per-layer (the default).** `{ url }` — the layer owns a private
+ *     archive + tileset.
  *   - **Shared.** `{ source: SharedTilesetSource }` — N layers over one .stt
  *     register as consumers of ONE archive + ONE tileset (`lib/streaming-source.ts`),
  *     receiving the resident set replace-all and sharing a single governor
@@ -39,8 +39,9 @@ import type {
 } from 'maplibre-gl';
 import {
   STTArchive,
-  SpatiotemporalTileset,
+  SpatioTemporalTileset,
   getFeatureProperties,
+  normalizeViewportBounds,
   type ArchiveMetadata,
   type BinaryFeatures,
   type BoundingBox,
@@ -81,6 +82,15 @@ import {
   isValidMapboxSlot,
   type MapboxSlot,
 } from './lib/host-slot.js';
+import {
+  createDataFilterUniforms,
+  resolveDataFilterUniforms,
+  type DataFilterRange,
+  type DataFilterUniformLocations,
+  type DataFilterUniforms,
+  type FilterTransformSizeUniformLocation,
+  type STTDataFilterOptions,
+} from './shaders/data-filter.glsl.js';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -96,15 +106,13 @@ export type RGBA8 = [number, number, number, number];
 /**
  * Normalize a constant colour to the 0–1 range the shaders expect, accepting
  * EITHER convention:
- * - 0–1 floats (the maplibre adapter's historical `color` convention), or
- * - 0–255 ints (the deck.gl `Color` convention and what `colorPalette` already
- *   uses).
+ * - 0–1 floats (this adapter's own `color` convention), or
+ * - 0–255 ints (the deck.gl `Color` convention, and what `colorPalette` uses).
  *
  * The range is auto-detected: if any RGB channel exceeds 1 the tuple is treated
- * as 0–255 and divided by 255. This removes the cross-adapter foot-gun where a
- * deck.gl-style `[255, 128, 0, 255]` ported to maplibre clamped to solid white,
- * and makes a single layer's `color` and `colorPalette` props self-consistent —
- * without breaking existing 0–1 callers.
+ * as 0–255 and divided by 255. Without that, a deck.gl-style
+ * `[255, 128, 0, 255]` ported to maplibre clamps to solid white, and a single
+ * layer's `color` and `colorPalette` props disagree about their own units.
  */
 export function toRgba01(
   c: readonly [number, number, number, number],
@@ -127,7 +135,7 @@ export type STTTimeFilterMode = Exclude<TimeFilterMode, 'none'>;
 
 /**
  * Normalize a `fadeTrail` prop to the shader's continuous 0..1 weight.
- * Booleans are the historical spelling (`true` → full head→tail comet,
+ * Booleans are the coarse spelling (`true` → full head→tail comet,
  * `false` → solid snake); numbers blend between them (deck's `trailFade`
  * uniform / core `trailAlpha`'s `trailFade` argument). Non-finite input falls
  * back to the default rather than poisoning a uniform with NaN.
@@ -173,6 +181,70 @@ export function expandPickIdColors(
   return out;
 }
 
+/**
+ * The time-mode knobs a layer contributes to the tile-LOAD window, already
+ * RESOLVED (defaults applied, degradation applied). Produced by
+ * {@link STTBaseLayer.timeModeLoadKnobs} and consumed by
+ * {@link widenLoadWindowForTimeMode}.
+ */
+export interface TimeModeLoadKnobs {
+  /**
+   * The mode the shader actually compiled. Leave undefined to have the kernel
+   * infer it from the lengths in deck's precedence order (wake before trail) —
+   * correct for every layer whose `timeFilterMode` is a pure pass-through.
+   */
+  mode?: STTTimeFilterMode;
+  wakeLength?: number;
+  trailLength?: number;
+}
+
+/**
+ * Widen a tile-LOAD window so it spans the history the time mode DRAWS.
+ *
+ * The tileset selects the tiles overlapping `[t − w/2, t + w/2]` and evicts
+ * behind them, but wake / trail / cumulative all paint features whose
+ * `startTime` is in the PAST of the play head. A window sized for the render
+ * pass alone therefore under-selects exactly the tiles holding the tail: the
+ * wake's far end, the trail's tail, an already-revealed cumulative bucket. They
+ * pop in and out as the play head advances, which reads as flicker rather than
+ * as missing data — the failure is invisible until you look for it.
+ *
+ * `Math.max` composition, never `??`: every widening is a FLOOR the mode
+ * requires, so a caller-supplied window that is smaller (or zero — which `??`
+ * treats as "supplied" and passes straight through) must lose to it, and the
+ * order the floors are applied in is immaterial. This is the semantics deck's
+ * `getEffectiveTimeWindow` overrides have; the maplibre adapter had none.
+ *
+ * The `2×` factors are deck's: the loader window is SYMMETRIC about the play
+ * head, so only half of it lies in the past, and covering `wakeLength` of past
+ * needs `2 × wakeLength` of window. A mode whose length knob is non-positive
+ * has already degraded to plain window mode in the shader and contributes
+ * nothing.
+ */
+export function widenLoadWindowForTimeMode(
+  base: number,
+  knobs: TimeModeLoadKnobs,
+  timeRange?: { start: number; end: number } | null,
+): number {
+  const wake = knobs.wakeLength ?? 0;
+  const trail = knobs.trailLength ?? 0;
+  const mode =
+    knobs.mode ?? (wake > 0 ? 'wake' : trail > 0 ? 'trail' : 'window');
+  let widened = base;
+  if (mode === 'wake' && wake > 0) widened = Math.max(widened, wake * 2);
+  if (mode === 'trail' && trail > 0) widened = Math.max(widened, trail * 2);
+  if (mode === 'cumulative' && timeRange) {
+    // Cumulative keeps every played-through bucket on screen, so from ANY play
+    // head position the symmetric window has to reach back to the start of the
+    // range: `2 × span`. Without a `timeRange` the span is unknowable here and
+    // the caller's window is honoured as-is (that is the documented caller
+    // obligation on every layer's `'cumulative'` doc).
+    const span = timeRange.end - timeRange.start;
+    if (span > 0) widened = Math.max(widened, span * 2);
+  }
+  return widened;
+}
+
 export interface STTBaseLayerOptions {
   /** Unique layer id passed to MapLibre. */
   id: string;
@@ -182,7 +254,7 @@ export interface STTBaseLayerOptions {
    */
   url?: string;
   /**
-   * Shared tileset source (D6a): the layer registers as a consumer of ONE
+   * Shared tileset source: the layer registers as a consumer of ONE
    * archive + ONE tileset serving every layer constructed over the same
    * source. The source's lifetime is the caller's — the layer never
    * finalizes it (dispose the source after removing its layers). Exactly one
@@ -197,6 +269,36 @@ export interface STTBaseLayerOptions {
    * timeWindow/2] are drawn opaque; everything else is `discard`-ed.
    */
   timeWindow: number;
+  /**
+   * Widen the window used to SELECT tiles without widening the window used to
+   * RENDER features (deck's `SpatioTemporalLayerProps.tileLoadTimeWindow`,
+   * same semantics). Unset — or any value `<= timeWindow` — leaves the two the
+   * same.
+   *
+   * The two windows are only accidentally the same quantity. The render window
+   * is a look: it decides which features are lit. The load window is a bet on
+   * where the play head will be by the time the tiles arrive. A dataset whose
+   * `timeWindow` is one animation frame (a baked frame sequence: a 66 ms window
+   * over 66 ms buckets) selects tiles the play head has already left before
+   * they land, and draws nothing for most of playback. Extra resident tiles are
+   * cheap — the shader still discards every feature outside `timeWindow`, per
+   * feature, not per tile.
+   *
+   * Composed with the mode widenings as a `Math.max`, never a `??`: it is a
+   * FLOOR under the selection window, so it cannot undercut what wake / trail /
+   * cumulative already require (see {@link widenLoadWindowForTimeMode}).
+   *
+   * @default 0 (follow `timeWindow`)
+   */
+  tileLoadTimeWindow?: number;
+  /**
+   * Full time range of the dataset (deck's `timeRange` prop). Read ONLY to size
+   * the tile-load window in `'cumulative'` mode, where the shader reveals every
+   * played-through bucket and the loader must therefore keep them resident —
+   * see {@link widenLoadWindowForTimeMode}. Without it the caller keeps the
+   * documented obligation to set `timeWindow` wide enough by hand.
+   */
+  timeRange?: { start: number; end: number } | null;
   /**
    * If true (default), the layer calls `map.triggerRepaint()` after
    * setCurrentTime(). Set to false if you drive the render loop yourself.
@@ -228,7 +330,7 @@ export interface STTBaseLayerOptions {
    */
   maxRequests?: number;
   /**
-   * Override prefetch behaviour. Defaults follow the SpatiotemporalTileset
+   * Override prefetch behaviour. Defaults follow the SpatioTemporalTileset
    * defaults (30s lookahead, 4 steps). Per-layer (`url`) mode only.
    */
   enablePrefetch?: boolean;
@@ -242,7 +344,7 @@ export interface STTBaseLayerOptions {
    * contract (runway / cost / ETA queries), which is what a PlaybackGovernor
    * consumes.
    */
-  onTilesetReady?: (tileset: SpatiotemporalTileset) => void;
+  onTilesetReady?: (tileset: SpatioTemporalTileset) => void;
   /**
    * Buffered-runway threshold events from the tileset's coverage index,
    * forwarded as-is (both ownership modes). Route them into a
@@ -398,13 +500,68 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   protected gl?: WebGLRenderingContext | WebGL2RenderingContext;
   /** Private archive (per-layer ownership); undefined in shared-source mode. */
   protected archive?: STTArchive;
-  /** Shared tileset source (D6a); undefined in per-layer mode. */
+  /** Shared tileset source; undefined in per-layer mode. */
   protected readonly source?: SharedTilesetSource;
   /** Unregister handle for the shared-source consumer; set while registered. */
   private unregisterConsumer?: () => void;
   protected metadata?: ArchiveMetadata;
-  protected tileset?: SpatiotemporalTileset;
+  protected tileset?: SpatioTemporalTileset;
+  /**
+   * The tiles this layer DRAWS and PICKS, keyed by `z/x/y/t` — the tileset's
+   * VISIBLE set, not everything resident in its cache.
+   *
+   * The distinction is the whole point. A tileset's cache legitimately holds
+   * several zoom levels at once: `refinementStrategy: 'best-available'` fetches
+   * parents as fallbacks while detail streams in, and eviction is lazy, so a
+   * zoom gesture leaves the levels it passed through resident for a while.
+   * `getVisibleTiles()` is what resolves that pile into the ONE set that should
+   * be on screen — primary-zoom tiles, plus only the parents still covering a
+   * gap. Drawing the cache instead composited up to five zoom levels of the
+   * same features: five times the alpha accumulation and five times the draw
+   * calls, and a `pick()` that could answer with the z3 feature underneath the
+   * z12 one the user is actually looking at.
+   *
+   * Both ownership modes deliver the same set: `handleSharedTiles` receives it
+   * from the source's replace-all fan-out, and per-layer mode re-derives it in
+   * {@link syncVisibleTiles}. GPU buffers deliberately do NOT follow this map
+   * in per-layer mode — they are freed on the tileset's `onTileUnload`, so a
+   * parent that drops out of the visible set and comes back (the constant case
+   * while panning a partially-streamed viewport) is redrawn from its existing
+   * buffers instead of being re-uploaded.
+   */
   protected loadedTiles = new Map<string, Tile>();
+  /**
+   * Tileset frame number {@link loadedTiles} was last derived at (per-layer
+   * ownership only). The frame number changes whenever the visible set MAY
+   * have changed, so an unchanged one lets the render hot path skip the
+   * `getVisibleTiles()` walk entirely — the same gate the shared source uses.
+   * `-1` is "never derived", which no real frame number equals.
+   */
+  private lastVisibleFrame = -1;
+  /**
+   * An async tileset edge (arrival or eviction) has invalidated
+   * {@link loadedTiles} and the re-derive has not run yet.
+   *
+   * THE ORDERING THIS EXISTS FOR. Core fires `onTileUnload` with the header
+   * STILL in its registry and only deletes it afterwards
+   * (`packages/core/src/spatiotemporal-tileset.ts` `evictTiles`: callback,
+   * then `tiles.delete(key)`; `clear()` is worse still — it fires the callback
+   * for EVERY header before both `tiles.clear()` and `neededTileKeys.clear()`).
+   * Re-deriving from inside the callback therefore reads a registry that still
+   * contains what is being removed, and re-publishes the doomed tile: the
+   * layer kept drawing a tile whose data was gone and whose GPU buffers the
+   * very same handler had just swept, and after a `clear()` the drawn set was
+   * left FULLY populated against an empty tileset.
+   *
+   * Deferring the re-derive past the end of the current task is what makes it
+   * read the registry core actually left behind. It also coalesces: tiles
+   * arrive in BATCHES (one coalesced range delivers a whole group), and the
+   * eager form paid three walks of `neededTileKeys` plus a descendant
+   * recursion plus a fresh `Map` allocation PER ARRIVING TILE.
+   */
+  private visibleRefreshPending = false;
+  /** A microtask flush is already queued (one per batch, not one per tile). */
+  private visibleRefreshScheduled = false;
   protected tileGpuCache = new Map<string, TileGpuCache | null>();
   protected opts: STTBaseLayerOptions & { autoRepaint: boolean };
   protected supports32BitIndices = false;
@@ -437,9 +594,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * Instanced-draw support detection. WebGL2 has `drawArraysInstanced` /
    * `drawElementsInstanced` / `vertexAttribDivisor` in core; WebGL1 exposes
    * them through `ANGLE_instanced_arrays`. When unavailable, layers that rely
-   * on instancing (lines, trips, polygon stroke) will be dropped — the
-   * fallback non-instanced path is gone now that instancing is widely
-   * available (everywhere except old IE/Edge, both EOL).
+   * on instancing (lines, trips, polygon stroke) are dropped: there is no
+   * non-instanced fallback path, because instancing is available everywhere
+   * except old IE/Edge, both EOL.
    */
   protected instSupport: {
     enabled: boolean;
@@ -522,8 +679,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * async `initTileset`/`initSharedSource` continuation compares its captured
    * value after each await and aborts on mismatch — the `!this.map` guard
    * alone cannot distinguish "removed" from "removed then re-added" (a
-   * styledata re-add restores `map` before the stale await resolves), which
-   * previously double-fired `onTilesetReady` and orphaned a live tileset.
+   * styledata re-add restores `map` before the stale await resolves). Without
+   * the token a stale continuation double-fires `onTilesetReady` and orphans a
+   * live tileset.
    */
   private initGeneration = 0;
 
@@ -594,12 +752,82 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     }
   }
 
-  /** Replace the time window (in ms). */
+  /** Replace the RENDER time window (in ms). */
   setTimeWindow(ms: number): void {
     this.opts.timeWindow = ms;
     if (this.opts.autoRepaint && this.map) {
       this.map.triggerRepaint();
     }
+  }
+
+  /**
+   * Replace the tile-LOAD window floor (in ms); see
+   * {@link STTBaseLayerOptions.tileLoadTimeWindow}. `0` returns to following
+   * `timeWindow`. Takes effect on the next frame — the selection window is
+   * resolved per frame in {@link beginFrame}, not cached.
+   */
+  setTileLoadTimeWindow(ms: number): void {
+    this.opts.tileLoadTimeWindow = ms;
+    if (this.opts.autoRepaint && this.map) {
+      this.map.triggerRepaint();
+    }
+  }
+
+  /**
+   * The window the TILESET selects against, as opposed to the one the shader
+   * renders with. Every widening below is a `Math.max` floor, so they compose
+   * in any order and a smaller (or zero) caller value can never win:
+   *
+   *   1. `tileLoadTimeWindow`, the explicit decoupling knob;
+   *   2. whatever the layer's time MODE draws into the past — a wake's tail, a
+   *      trail's tail, a cumulative reveal's whole played-through range.
+   *
+   * Point 2 is what the maplibre adapter was missing entirely: it selected on
+   * `timeWindow` alone, so a wake or trail longer than half the render window
+   * had its tail evicted out from under it while the shader was still asking
+   * for it. Subclasses whose knobs are pass-through options need no override;
+   * ones that DEFAULT or DEGRADE them override {@link timeModeLoadKnobs}.
+   */
+  protected getEffectiveTimeWindow(): number {
+    const load = this.opts.tileLoadTimeWindow;
+    const base =
+      load && load > 0
+        ? Math.max(load, this.opts.timeWindow)
+        : this.opts.timeWindow;
+    return widenLoadWindowForTimeMode(
+      base,
+      this.timeModeLoadKnobs(),
+      this.opts.timeRange,
+    );
+  }
+
+  /**
+   * The RESOLVED time-mode knobs {@link getEffectiveTimeWindow} sizes against.
+   *
+   * The default reads the raw option bag, which every layer in this package
+   * spells identically (`timeFilterMode` / `wakeLength` / `trailLength`, all
+   * over the one {@link STTTimeFilterMode} alias) and which is exactly right
+   * whenever those options are passed straight through to the shader. A layer
+   * that DEFAULTS a length to something non-zero (heatmap's
+   * `trailLength ?? timeWindow`, trips' 180 s) or DEGRADES the requested mode
+   * must override this, or the load window would be sized against a knob the
+   * shader is not using.
+   */
+  protected timeModeLoadKnobs(): TimeModeLoadKnobs {
+    // `this.opts` is the SUBCLASS's option bag (the constructor spreads it
+    // wholesale), so the three knobs are present at runtime even though the
+    // base's option type does not declare them — declaring them there would
+    // advertise a time-mode surface on layers that compile no mode shader.
+    const o = this.opts as STTBaseLayerOptions & {
+      timeFilterMode?: STTTimeFilterMode;
+      wakeLength?: number;
+      trailLength?: number;
+    };
+    return {
+      mode: o.timeFilterMode,
+      wakeLength: o.wakeLength,
+      trailLength: o.trailLength,
+    };
   }
 
   /** Promise that resolves once the archive's metadata has been read. */
@@ -621,7 +849,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * tileset implements the BufferSource readiness contract (runway / cost /
    * ETA queries), which is what a PlaybackGovernor attaches to.
    */
-  getTileset(): SpatiotemporalTileset | undefined {
+  getTileset(): SpatioTemporalTileset | undefined {
     return this.tileset;
   }
 
@@ -642,8 +870,8 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    *
    * Plain `map.addLayer(layer)` keeps working and gets NO auto re-add.
    *
-   * `opts.slot` (mapbox Standard style only, campaign D5) requests a layer-stack
-   * slot; see {@link applySlot} for the maplibre-ignores / mapbox-honours split.
+   * `opts.slot` (mapbox Standard style only) requests a layer-stack slot; see
+   * {@link applySlot} for the maplibre-ignores / mapbox-honours split.
    */
   attach(
     map: MaplibreMap,
@@ -698,15 +926,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (map.getLayer(this.id)) map.removeLayer(this.id);
   }
 
-  // ── Mapbox Standard-style slot support (campaign D5) ─────────────────────
-  // Self-contained additive block, kept beside attach/detach so a concurrent
-  // edit to the render/pick/lifecycle internals never collides with it.
-  //
+  // ── Mapbox Standard-style slot support ───────────────────────────────────
   // Mapbox-gl reads a `slot` field off the custom-layer object at addLayer
   // time to place the layer in the Standard style's stack
   // ('bottom' | 'middle' | 'top'). MapLibre has no slot concept, so a slot
   // request on a maplibre host is dropped (one-time dev warning). Mercator
-  // only — mapbox globe is deferred (D5); the slot governs 2D stacking, which
+  // only — mapbox globe is unsupported; the slot governs 2D stacking, which
   // is orthogonal to projection.
 
   /**
@@ -806,7 +1031,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     this.initInstanceSupport(gl);
     this.onContextReady(gl);
     // The host explicitly cannot restore custom layers across a WebGL
-    // context loss — we own the invalidation ourselves (D12). Optional
+    // context loss — we own the invalidation ourselves. Optional
     // chaining keeps bare-bones test mocks without a canvas working.
     const canvas = (
       map as unknown as { getCanvas?: () => HTMLCanvasElement }
@@ -1040,6 +1265,10 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (gl) this.onContextLost(gl);
     this.contextLost = false;
     this.loadedTiles.clear();
+    // A styledata re-add builds a FRESH tileset whose frame numbering restarts,
+    // so a retained frame number could match the new tileset's first frame and
+    // suppress the very first visible-set derivation — an empty first paint.
+    this.lastVisibleFrame = -1;
     // Shared-source mode: the tileset/archive belong to the source (and to
     // its other consumers) — just stop receiving fan-out. A styledata re-add
     // re-registers in onAdd.
@@ -1053,6 +1282,13 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     // onAdd's initTileset builds a fresh one (the archive itself is reusable
     // after finalize: metadata stays cached, the decoder rebuilds lazily).
     this.tileset = undefined;
+    // AFTER finalize(): that call routes through the tileset's `clear()`,
+    // which fires `onTileUnload` for every header and so re-arms the pending
+    // flag. Discharging it here (rather than next to the `loadedTiles.clear()`
+    // above) is what stops a queued flush from repopulating the drawn set on
+    // its way out — and the outstanding microtask then finds no tileset and
+    // no pending work.
+    this.visibleRefreshPending = false;
     // Clear the map handle LAST. An in-flight `initTileset` /
     // `initSharedSource` (awaiting metadata) is already invalidated by the
     // initGeneration bump above; the `!this.map` check is the belt to that
@@ -1126,11 +1362,22 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     this.lastFov = frame.fov;
     this.lastNearZ = frame.nearZ;
     this.lastFarZ = frame.farZ;
+    const bounds = this.resolveViewportBounds();
+    // No usable box and no previous one to fall back on (a first frame whose
+    // camera state is still degenerate): draw what is already resident and
+    // leave the tileset alone. Driving it with garbage is the one outcome
+    // worse than a stale selection.
+    if (!bounds) return frame;
     const viewport = {
-      bounds: toBoundsArray(this.map.getBounds()),
+      bounds,
       zoom: Math.floor(this.map.getZoom()),
       time: this.opts.currentTime,
-      timeWindow: this.opts.timeWindow,
+      // The SELECTION window, not the render window — see
+      // getEffectiveTimeWindow(). The two diverge whenever
+      // `tileLoadTimeWindow` is set or the layer's time mode paints into the
+      // past, and selecting on the render window evicts the tail the shader
+      // is still drawing.
+      timeWindow: this.getEffectiveTimeWindow(),
     };
     // Shared mode routes through the source so its resident-set diff runs
     // and N sibling layers stay cheap: the source is left UNARMED (no
@@ -1139,13 +1386,141 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     // source gates its getVisibleTiles/resident-diff walk on the tileset's
     // frame number, so redundant sibling updates allocate nothing; hosts
     // wanting strict once-per-frame driving may call `source.beginFrame()`
-    // from their own frame hook.
+    // from their own frame hook. The source publishes the visible set back
+    // through `handleSharedTiles`; per-layer mode derives it here.
     if (this.source) this.source.update(viewport);
-    else this.tileset.update(viewport);
+    else this.syncVisibleTiles(this.tileset.update(viewport));
     return frame;
   }
 
-  // Host signature dispatch (D2): maplibre ≤v4 calls `render(gl, matrix)`
+  /**
+   * Last well-formed viewport box, kept so a frame whose camera reports garbage
+   * can reuse it (contract rule 1 —
+   * `docs/roadmap/tile-loading-3d-2026-07.md` §4.1).
+   */
+  private lastViewportBounds?: BoundingBox;
+  /** One repair report per layer; a degenerate camera repeats every frame. */
+  private boundsRepairWarned = false;
+
+  /**
+   * The camera's lon/lat box, made safe for tile selection, or `undefined` when
+   * neither this frame nor any earlier one produced a usable one.
+   *
+   * maplibre's `getBounds()` is the least-broken of the four backends' camera
+   * paths: `LngLatBounds` is ordered by construction, and all three supported
+   * majors clamp the top sample row at the horizon, so what comes back is a
+   * conservative SUPERSET of the visible ground rather than the inverted box
+   * deck's two-corner unproject produced under pitch. This normalisation is
+   * therefore defence in depth here, not the fix — but the contract is that
+   * EVERY backend routes its box through the one shared primitive, so a host
+   * regression, a globe transform, or a later move to
+   * `transform.coveringTiles()` cannot quietly hand the tileset an inverted or
+   * non-finite box. An inverted latitude box selects ZERO tiles while every
+   * readiness signal reports "settled and fully buffered"; a non-finite one is
+   * worse still. Keeping the previous box costs one frame of staleness.
+   */
+  private resolveViewportBounds(): BoundingBox | undefined {
+    const normalized = normalizeViewportBounds(
+      toBoundsArray(this.map!.getBounds()),
+    );
+    if (!normalized) return this.lastViewportBounds;
+    // Only the INVERSIONS are reportable. `full-world` is what an ordinary
+    // zoomed-out maplibre camera produces (west −180 / east +180 is a 360°
+    // span) and `clamped-lat` is the poles; warning about either would fire on
+    // a healthy map every frame and train the reader to ignore the channel.
+    const defects = normalized.issues.filter(
+      (i) => i === 'inverted-lat' || i === 'inverted-lon',
+    );
+    if (defects.length > 0 && !this.boundsRepairWarned) {
+      this.boundsRepairWarned = true;
+      console.warn(
+        `[${this.id}] repaired an inverted viewport box from map.getBounds(): ` +
+          defects.join(', '),
+      );
+    }
+    this.lastViewportBounds = normalized.bounds;
+    return normalized.bounds;
+  }
+
+  /**
+   * Re-derive {@link loadedTiles} from the tileset's visible set when the frame
+   * number says it may have moved (per-layer ownership). Cheap to call every
+   * frame: an unchanged frame number is a guarantee that the visible set is
+   * unchanged, so the steady state costs one integer compare.
+   */
+  private syncVisibleTiles(frame: number): void {
+    if (frame === this.lastVisibleFrame) return;
+    this.lastVisibleFrame = frame;
+    // This IS the deferred re-derive, run early: `tileset.update()` has
+    // returned, so every registry mutation it made (including any synchronous
+    // eviction) is complete. Discharging the pending flag here keeps a settled
+    // camera from paying the walk twice for one change.
+    this.visibleRefreshPending = false;
+    this.refreshVisibleTiles();
+  }
+
+  /**
+   * Mark {@link loadedTiles} stale and queue the re-derive for the end of the
+   * current task. See {@link visibleRefreshPending} for why it must not run
+   * inline. A microtask — not a frame callback — because it has to land before
+   * anything can paint: the browser cannot render between a task and its
+   * microtask drain, so there is no window in which a stale set reaches the
+   * screen. {@link render} and {@link pick} flush it synchronously as well, for
+   * the case where the eviction happened inside the very frame that is drawing.
+   */
+  private scheduleVisibleRefresh(): void {
+    this.visibleRefreshPending = true;
+    if (this.visibleRefreshScheduled) return;
+    this.visibleRefreshScheduled = true;
+    queueMicrotask(() => {
+      this.visibleRefreshScheduled = false;
+      // Already discharged by a render / pick / selection pass in this task —
+      // and each of those is itself the frame, so there is nothing to repaint.
+      if (!this.visibleRefreshPending) return;
+      // A host that is not animating gets no frame otherwise. The eviction edge
+      // never asked for one before (only arrivals did), which was survivable
+      // only because the eager re-derive left the doomed tile in the drawn set.
+      if (this.flushVisibleRefresh()) this.map?.triggerRepaint();
+    });
+  }
+
+  /** Run a queued re-derive now, if one is outstanding; `true` if the set moved. */
+  private flushVisibleRefresh(): boolean {
+    if (!this.visibleRefreshPending) return false;
+    this.visibleRefreshPending = false;
+    return this.refreshVisibleTiles();
+  }
+
+  /**
+   * Unconditionally re-derive {@link loadedTiles} from the tileset. Used for
+   * the async edges — a tile ARRIVING or being evicted changes the visible set
+   * without any selection pass — where re-deriving beats inserting the one
+   * tile: `getVisibleTiles()` may have superseded it with a child, or dropped a
+   * parent it now covers, and inserting would put a tile on screen that the
+   * tileset has already resolved away.
+   *
+   * Reports whether the drawn set actually MOVED, by address and by `Tile`
+   * identity (a fresh object at the same address is a different payload and
+   * counts). Only the deferred flush reads it, to decide whether a repaint is
+   * owed — an unconditional repaint per eviction would keep an idle map awake
+   * for a set that never changed.
+   */
+  private refreshVisibleTiles(): boolean {
+    const tileset = this.tileset;
+    if (!tileset) return false;
+    const prev = this.loadedTiles;
+    const next = new Map<string, Tile>();
+    let changed = false;
+    for (const tile of tileset.getVisibleTiles()) {
+      const key = tileKey(tile.id);
+      next.set(key, tile);
+      if (!changed && prev.get(key) !== tile) changed = true;
+    }
+    this.loadedTiles = next;
+    return changed || next.size !== prev.size;
+  }
+
+  // Host signature dispatch: maplibre ≤v4 calls `render(gl, matrix)`
   // (v4.6+ appends a camera-options arg) and mapbox v3 calls
   // `render(gl, matrix, ...globe positional params)` — both legacy; maplibre
   // v5 REPLACED the positional matrix with a single args object carrying
@@ -1159,6 +1534,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   ): void {
     const frame = this.beginFrame(matrixOrArgs, options);
     if (!frame) return;
+    // A tile can be evicted INSIDE `beginFrame`'s `tileset.update()` — the
+    // selection pass runs eviction synchronously — which lands us here in the
+    // same task as the unload callback, ahead of its microtask. Flushing first
+    // is what makes "defer the re-derive" safe: no frame ever paints the set
+    // that was current before core mutated its registry.
+    this.flushVisibleRefresh();
 
     const zoom = Math.floor(this.map!.getZoom());
     const currentTime = this.opts.currentTime;
@@ -1898,12 +2279,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   private dprMemo = 1;
 
   /**
-   * Metric sizing, the ONE implementation (Wave M3 seam pass).
+   * Metric sizing, the ONE implementation.
    *
    * How many DEVICE pixels `meters` metres of ground cover at `latitudeDeg`,
    * for the frame in progress. This is what every `radiusUnits`/`widthUnits`/
-   * `sizeUnits: 'meters'` prop in the package resolves through, and the three
-   * details it encodes were being re-derived, identically, in seven layers:
+   * `sizeUnits: 'meters'` prop in the package resolves through. A layer that
+   * re-derives it needs all three of these, and each is easy to get wrong:
    *
    *  1. FRACTIONAL zoom. `ctx.zoom` is FLOORED (it is the tile-selection zoom),
    *     so sizing off it makes metric widths step at integer zooms instead of
@@ -1950,12 +2331,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
 
   /**
    * `toRgba01` without the per-call allocation — the form the DRAW path must
-   * use (Wave M3 seam pass).
+   * use.
    *
    * `gl.uniform4fv(h.uColor, toRgba01(this.opts.color))` reads innocently, but
    * `toRgba01` builds a fresh 4-tuple and the draw path runs it once per TILE
-   * per FRAME, on every layer with a constant colour — eight layers were doing
-   * it, up to two slots each. This returns a cached array owned by `slot`,
+   * per FRAME, on every layer with a constant colour — up to two slots each.
+   * This returns a cached array owned by `slot`,
    * refilled in place, so the steady state allocates nothing.
    *
    * Still a plain `number[]` rather than a `Float32Array`: WebGL accepts both,
@@ -2015,8 +2396,8 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
    * `renderingMode: '3d'` layer renders its frame depth-tested, so its id pass
    * runs depth-tested too (against the FBO's own depth attachment, see
    * {@link ensurePickFbo}) rather than letting draw order decide which of two
-   * overlapping prisms owns a texel. A '2d' layer keeps the historical
-   * depth-less pass, which is exactly how its frame paints.
+   * overlapping prisms owns a texel. A '2d' layer runs a depth-less pass,
+   * which is exactly how its frame paints.
    *
    * Every piece of GL state this pass touches is captured and restored: render
    * target, viewport, BLEND / DEPTH_TEST enables, the depth func / write mask /
@@ -2038,6 +2419,12 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     const matrix = this.lastMatrix;
     if (!matrix) return null; // no frame rendered yet.
 
+    // A pick is issued from a `mousemove` handler, i.e. OUTSIDE the host's
+    // render pass, so it can be the first thing to touch `loadedTiles` after an
+    // eviction. Answering from the pre-eviction set would hand the app a
+    // feature that is no longer on screen. Flushed here rather than in
+    // `buildPickProvenance` because subclasses (hexbin) replace that wholesale.
+    this.flushVisibleRefresh();
     const provenance = this.buildPickProvenance(gl);
     if (provenance.length === 0) return null;
 
@@ -2188,7 +2575,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   }
 
   /**
-   * Shared-source init (D6a counterpart of {@link initTileset}): register as
+   * Shared-source counterpart of {@link initTileset}: register as
    * a consumer for resident-set fan-out, make sure the source is loaded, and
    * adopt its tileset. Mirrors initTileset's removal-race guards.
    */
@@ -2221,7 +2608,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     // The source's structural DrivableTileset IS the real tileset whenever it
     // was built by load(); a test-attached mock only needs the surface the
     // base layer touches in shared mode (readiness guard + getTileset()).
-    this.tileset = tileset as unknown as SpatiotemporalTileset;
+    this.tileset = tileset as unknown as SpatioTemporalTileset;
     this.opts.onTilesetReady?.(this.tileset);
     this.map.triggerRepaint();
   }
@@ -2258,7 +2645,7 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     if (gen !== this.initGeneration || !this.map) return;
     this.metadata = metadata;
 
-    this.tileset = new SpatiotemporalTileset({
+    this.tileset = new SpatioTemporalTileset({
       maxRequests: this.opts.maxRequests,
       minZoom: this.metadata.minZoom,
       maxZoom: this.metadata.maxZoom,
@@ -2282,14 +2669,25 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       onBufferChange: (runway) => {
         this.opts.onBufferChange?.(runway);
       },
-      onTileLoad: (tile) => {
-        this.loadedTiles.set(tileKey(tile.id), tile);
+      // Both edges re-derive the visible set rather than mutating the drawn
+      // map by one key: an arriving tile can SUPERSEDE a resident parent (the
+      // parent stops earning its keep the moment its last uncovered child
+      // lands) and an eviction can promote one back, and neither of those is
+      // expressible as an insert or a delete of the tile that moved.
+      onTileLoad: () => {
+        this.scheduleVisibleRefresh();
         this.map?.triggerRepaint();
       },
       onTileUnload: (tile) => {
-        const baseKey = tileKey(tile.id);
-        this.loadedTiles.delete(baseKey);
-        this.sweepTileGpuCache(baseKey);
+        // GPU buffers are freed on RESIDENCY, not on visibility: a tile that
+        // merely dropped out of the visible set is very likely to come back
+        // (every pan across a partially-streamed viewport does it), and
+        // re-uploading its buffers each time would be pure churn. This half
+        // stays SYNCHRONOUS — the handle set is exactly the one tile core
+        // named, so it needs no view of the post-delete registry, and the
+        // sooner the buffers go the better.
+        this.sweepTileGpuCache(tileKey(tile.id));
+        this.scheduleVisibleRefresh();
       },
     });
 
@@ -2322,6 +2720,160 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     const cache = this.buildTileGpuCache(gl, tile, layer);
     this.tileGpuCache.set(key, cache);
     return cache;
+  }
+}
+
+/** Options for a layer that range-filters on a baked numeric column. */
+export interface STTFilterableLayerOptions
+  extends STTBaseLayerOptions, STTDataFilterOptions {}
+
+/**
+ * Base for the layers that carry the GPU DataFilter — the `filterProperty`
+ * column state, the three runtime setters that drive it, and the per-draw
+ * uniform upload.
+ *
+ * It sits BELOW {@link STTBaseLayer} rather than inside it because a filter is
+ * a capability, not universal plumbing: `setFilterRange` on a subclass whose
+ * shader compiles no filter branch would be a method that silently does
+ * nothing. Extending this class is the declaration that the subclass splices
+ * `DATA_FILTER_GLSL` into its program; a subclass that does not stays on
+ * {@link STTBaseLayer} and has no filter surface to lie about.
+ *
+ * The subclass still owns everything tile- and program-shaped: whether the
+ * branch compiled at all, which tile baked the column (`extractFilterColumn`),
+ * and where the attribute binds. What it inherits is the state those decisions
+ * read from, so thirteen copies of the same six-line construction and the same
+ * three setters cannot drift.
+ */
+export abstract class STTFilterableLayer extends STTBaseLayer {
+  /**
+   * Live filter props. Mutated in place by the setters and read by
+   * {@link uploadDataFilterUniforms} — never reassigned, so a resolved
+   * reference stays valid.
+   */
+  protected readonly filterOpts: STTDataFilterOptions;
+
+  /**
+   * Uniform payload for one draw, allocated once and re-resolved in place, so
+   * the per-tile hot path allocates nothing.
+   */
+  protected readonly filterUniforms: DataFilterUniforms =
+    createDataFilterUniforms();
+
+  /** Gate for {@link warnCategoricalFilterOnce} — one warning per layer. */
+  private categoricalFilterWarned = false;
+
+  constructor(opts: STTFilterableLayerOptions) {
+    super(opts);
+    this.filterOpts = {
+      filterProperty: opts.filterProperty,
+      filterRange: opts.filterRange,
+      filterSoftRange: opts.filterSoftRange,
+      filterEnabled: opts.filterEnabled,
+      filterTransformSize: opts.filterTransformSize,
+      filterTransformColor: opts.filterTransformColor,
+    };
+  }
+
+  /**
+   * Move the filter's hard bounds (the slider hook). Uniform-only: the
+   * attribute stays bound and no tile is re-uploaded, so this is cheap enough
+   * to drive from a drag. `null` idles the filter and everything renders.
+   *
+   * Passing `softRange` explicitly (including `null`) replaces the soft margin
+   * in the same repaint; omitting it leaves the configured one alone.
+   *
+   * Inert without a construction-time `filterProperty`: no branch compiled.
+   */
+  setFilterRange(
+    range: DataFilterRange | null,
+    softRange?: DataFilterRange | null,
+  ): void {
+    this.filterOpts.filterRange = range;
+    if (softRange !== undefined) this.filterOpts.filterSoftRange = softRange;
+    this.onFilterChanged();
+  }
+
+  /** Move the fade margin alone. Uniform-only, like {@link setFilterRange}. */
+  setFilterSoftRange(range: DataFilterRange | null): void {
+    this.filterOpts.filterSoftRange = range;
+    this.onFilterChanged();
+  }
+
+  /** Master switch. `false` renders every feature unfiltered. */
+  setFilterEnabled(enabled: boolean): void {
+    this.filterOpts.filterEnabled = enabled;
+    this.onFilterChanged();
+  }
+
+  /**
+   * Run after any of the three setters. The default repaint is enough for a
+   * layer whose filter is pure uniform state; a layer that AGGREGATES on the
+   * CPU overrides this to re-run the aggregate first, since its bin totals are
+   * a function of the filter and a repaint alone would draw stale bins.
+   */
+  protected onFilterChanged(): void {
+    this.map?.triggerRepaint();
+  }
+
+  /**
+   * Report a categorical `filterProperty` at most once per layer (deck
+   * parity), then leave the tile rendering unfiltered.
+   *
+   * `action` names what happens instead, for a layer where "rendering" is the
+   * wrong verb — an aggregating layer drops the feature from its bins rather
+   * than from the draw.
+   */
+  protected warnCategoricalFilterOnce(action = 'rendering unfiltered'): void {
+    if (this.categoricalFilterWarned) return;
+    this.categoricalFilterWarned = true;
+    console.warn(
+      `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
+        `categorical column; range filtering needs a numeric one — ${action}`,
+    );
+  }
+
+  /**
+   * Re-arm {@link warnCategoricalFilterOnce}. A layer that lets
+   * `filterProperty` change at runtime calls this on the change: the new
+   * column deserves its own verdict.
+   */
+  protected resetCategoricalFilterWarning(): void {
+    this.categoricalFilterWarned = false;
+  }
+
+  /**
+   * Resolve and upload one draw's filter uniforms. `hasColumn` is whether THIS
+   * tile baked the column (and, where it matters, bound the attribute): false
+   * resolves `enabled` to 0, so a tile without the column renders UNFILTERED
+   * rather than blank.
+   *
+   * Callers keep their own "was the branch compiled" guard — that is a
+   * program-shape question, and skipping the call entirely is cheaper than
+   * five no-op uniform writes.
+   *
+   * `uFilterTransformSize` is written only when `locs` carries it. A layer
+   * with no size hook omits the field and the shrink is left at the shader's
+   * default, matching upstream PathLayer / SolidPolygonLayer.
+   */
+  protected uploadDataFilterUniforms(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    locs: DataFilterUniformLocations &
+      Partial<FilterTransformSizeUniformLocation>,
+    hasColumn: boolean,
+  ): void {
+    const u = resolveDataFilterUniforms(
+      this.filterUniforms,
+      this.filterOpts,
+      hasColumn,
+    );
+    gl.uniform2fv(locs.uFilterRange, u.range);
+    gl.uniform2fv(locs.uFilterSoftRange, u.softRange);
+    gl.uniform1f(locs.uFilterEnabled, u.enabled);
+    if (locs.uFilterTransformSize !== undefined) {
+      gl.uniform1f(locs.uFilterTransformSize, u.transformSize);
+    }
+    gl.uniform1f(locs.uFilterTransformColor, u.transformColor);
   }
 }
 

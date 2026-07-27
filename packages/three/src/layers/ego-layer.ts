@@ -21,11 +21,11 @@ import {
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges.js';
 import type { Projection } from '../projection/local-enu.js';
 import type { RGBA } from '../lib/color.js';
-import type { SttPickable, PickBox } from '../lib/box-pick.js';
+import type { STTPickable, PickBox } from '../lib/box-pick.js';
 
 export interface EgoPose {
   x: number;
@@ -47,7 +47,7 @@ export interface STTEgoLayerOptions {
 const DEFAULT_TRAIL: RGBA = [80, 200, 255, 160];
 const DEFAULT_MARKER: RGBA = [120, 230, 255, 255];
 
-export class STTEgoLayer extends BaseSttLayer implements SttPickable {
+export class STTEgoLayer extends BaseSTTLayer implements STTPickable {
   readonly id: string;
   readonly object = new Group();
 
@@ -103,7 +103,7 @@ export class STTEgoLayer extends BaseSttLayer implements SttPickable {
     this.object.add(this.marker);
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.projection = ctx.projection;
 
@@ -195,7 +195,7 @@ export class STTEgoLayer extends BaseSttLayer implements SttPickable {
       true;
   }
 
-  /** Current-frame ego OBB for click-to-inspect picking ({@link SttPickable}). */
+  /** Current-frame ego OBB for click-to-inspect picking ({@link STTPickable}). */
   getPickBoxes(): PickBox[] {
     const pose = this.currentPose;
     if (!pose) return [];

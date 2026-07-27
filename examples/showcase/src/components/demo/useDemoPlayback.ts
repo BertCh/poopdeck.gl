@@ -32,6 +32,10 @@ import { useArchiveMetadata } from '../../lib/useArchiveMetadata';
 
 export function useDemoPlayback(dataset: Dataset | undefined): PlaybackState {
   const metadata = useArchiveMetadata(dataset?.url);
+  // The resolver widens the resident window to cover a wake's tail. Only the
+  // round-marker families draw one; the rest have no tail to keep resident.
+  const wakeLength =
+    dataset && 'wakeLength' in dataset ? dataset.wakeLength : undefined;
 
   // Memoise on the PRIMITIVE inputs (authored range/target/window/wake + the
   // reconciled metadata range/bucket) so the resolved object reference stays
@@ -48,7 +52,7 @@ export function useDemoPlayback(dataset: Dataset | undefined): PlaybackState {
         timeRange: dataset.timeRange,
         targetPlaybackSeconds: dataset.targetPlaybackSeconds,
         timeWindow: dataset.timeWindow,
-        wakeLength: dataset.wakeLength,
+        wakeLength,
         datasetId: dataset.id,
       },
       { onWarn: (m) => console.warn(m) },
@@ -60,7 +64,7 @@ export function useDemoPlayback(dataset: Dataset | undefined): PlaybackState {
     dataset?.timeRange.end,
     dataset?.targetPlaybackSeconds,
     dataset?.timeWindow,
-    dataset?.wakeLength,
+    wakeLength,
     metadata?.timeRange?.start,
     metadata?.timeRange?.end,
     metadata?.temporalBucketMs,

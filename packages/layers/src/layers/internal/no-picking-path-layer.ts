@@ -19,11 +19,12 @@
  *   + 1 (instanceStrokeWidths) + 1 (instanceColors)
  *   + 1 (instancePickingColors)                       = 13 PathLayer slots
  *   + 3 (TimeFilterExtension: vertexTime/start/end)   = 16
- *   + 1 (CategoryColorExtension: categoryIndex)       = 17
+ *   + 1 (STTDataFilterExtension: filterValue)         = 17
  *
- * That's one slot above WebGL2's guaranteed minimum (`MAX_VERTEX_ATTRIBS`
- * = 16). GPUs / drivers that report the minimum (Intel UHD, software
- * WebGL, some Apple Silicon configs) refuse to link the program and emit
+ * That last line is one slot above WebGL2's guaranteed minimum
+ * (`MAX_VERTEX_ATTRIBS` = 16). GPUs / drivers that report the minimum
+ * (Intel UHD, software WebGL, some Apple Silicon configs) refuse to link
+ * the program and emit
  *   `WebGL Link error: Too many attributes (instancePickingColors)`
  * — picking ends up named because it's the last `in` to be allocated.
  *
@@ -37,8 +38,20 @@
  *   2. Removes the matching `AttributeManager` entry so the CPU-side
  *      buffer is never allocated either.
  *
- * Net effect: 16 attribute slots, which fits the WebGL2 minimum, and the
- * link warning stops firing on per-tile sublayers.
+ * Net effect: one slot back, so the animated path family sits at 15 in its
+ * default configuration and 16 with a column filter installed — both inside
+ * the WebGL2 minimum, and the link warning stops firing on per-tile
+ * sublayers.
+ *
+ * ⚠ SWAPPING THIS CLASS IN OR OUT MUST CHANGE THE SUBLAYER ID. deck matches
+ * a new layer to an old one by id alone, then calls `_transferState` +
+ * `_update` — never `_initialize`. Reusing an id across the stock/stripped
+ * pair therefore inherits the other class's AttributeManager and compiled
+ * model: `initializeState` (below) never re-runs to restore
+ * `instancePickingColors`, and `PathLayer.updateState` only rebuilds the
+ * model on `extensionsChanged`, so the stripped shader stays resident and
+ * picking is permanently dead. `AnimatedPathLayer` encodes the class choice
+ * in the sublayer id for exactly this reason.
  */
 
 import { PathLayer } from '@deck.gl/layers';
@@ -54,8 +67,10 @@ const PICKING_USE = /geometry\.pickingColor\s*=\s*instancePickingColors\s*;/g;
  * the stripping entirely and behaves like a stock PathLayer (full attribute
  * budget, working picking) instead of shipping zeroed picking colors.
  *
- * @internal Exported for back-compat only; the animated layers pick the
- * stripped/stock PathLayer automatically based on `pickable`.
+ * Exported from the package root as public API: an app composing its own
+ * PathLayer stack under the WebGL2 16-attribute floor may want the same
+ * three-slot saving. The animated layers pick the stripped/stock class
+ * automatically from `pickable`, so most consumers never name it.
  */
 export class NoPickingPathLayer extends PathLayer {
   static layerName = 'NoPickingPathLayer';

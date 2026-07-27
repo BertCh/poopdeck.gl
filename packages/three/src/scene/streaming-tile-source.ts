@@ -5,12 +5,12 @@
 /**
  * `StreamingTileSource` — viewport-driven streaming for the Three renderer.
  *
- * Where {@link SttTileSource} eagerly loads a whole (small, local) AV archive,
- * this source WRAPS the core {@link SpatiotemporalTileset} so the heavy
+ * Where {@link STTTileSource} eagerly loads a whole (small, local) AV archive,
+ * this source WRAPS the core {@link SpatioTemporalTileset} so the heavy
  * multi-km clouds stream like the deck renderer: a camera-derived
  * `{bounds, zoom, time}` drives `tileset.update`, the tileset selects/loads/
  * prefetches/evicts, and on every change we hand the layer the fresh
- * {@link SpatiotemporalTileset.getVisibleTiles} set (replace-all — incremental
+ * {@link SpatioTemporalTileset.getVisibleTiles} set (replace-all — incremental
  * residency is a later optimization). It deliberately REUSES the core tileset's
  * selection/buffer machinery rather than reimplementing any of it.
  *
@@ -18,9 +18,11 @@
  *   1. {@link StreamingTileSource.update} — pump a viewport into the tileset and,
  *      when the visible/resident set actually changed, fire `onTilesChanged`.
  *   2. {@link cameraToViewport} — turn a {@link Projection} + Three
- *      `PerspectiveCamera` into `{bounds, zoom}` by unprojecting the four NDC
- *      frustum corners onto the ground (z = 0) plane and deriving a slippy-map
- *      zoom from the visible ground resolution.
+ *      `PerspectiveCamera` into `{bounds, zoom}` by casting a grid of NDC rays
+ *      at the projection's reference surface (ground plane / globe sphere),
+ *      clipping every ray that grazes the horizon (not just the ones that miss)
+ *      AT the horizon, widening for a pole in frame, and taking the zoom from
+ *      the recovered view state.
  *   3. {@link TilesetBufferSource} — the REAL playback `BufferSource` backed by
  *      the tileset's pending/loaded coverage state (runway / ranges / cost /
  *      ETA), replacing the faked `createCompleteBufferSource` for streaming
@@ -28,21 +30,38 @@
  *
  * The buffer/builder split convention (a PURE testable core + a thin GPU/Three
  * wrapper) is honoured here too: the resident-diffing and the BufferSource are
- * Three-free and unit-tested; {@link cameraToViewport} is the only Three-coupled
- * piece (verified visually).
+ * Three-free and unit-tested. {@link cameraToViewport} needs Three's
+ * `Vector3.unproject`, so it lives here rather than in the framework-free
+ * kernel, but it is deterministic and IS unit-tested (`camera-viewport.test.ts`)
+ * — the "verified visually" it used to claim is how four separate defects,
+ * including a globe path that returned latitude 0 for every camera, survived to
+ * the 2026-07 audit.
  */
 
 import { STTArchive } from '@poopdeck.gl/core';
 import type { ArchiveMetadata, BoundingBox, Tile } from '@poopdeck.gl/core';
 import {
-  SpatiotemporalTileset,
+  SpatioTemporalTileset,
   type BufferedRunway as CoreBufferedRunway,
 } from '@poopdeck.gl/core';
+// The shared bounds repair comes in on the `/geo` subpath, not the package root:
+// `streaming-tile-source.test.ts` mocks the root specifier to stub the archive +
+// tileset, and a root import of these would resolve to the mock (Vitest throws
+// on an export the factory does not define).
+import {
+  boundsFromCorners,
+  normalizeViewportBounds,
+} from '@poopdeck.gl/core/geo';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import type { BufferSource, BufferedRunway } from '@poopdeck.gl/playback';
 import { PerspectiveCamera, Vector3 } from 'three';
 import type { Projection } from '../projection/local-enu.js';
 import { EARTH_RADIUS } from '../projection/local-enu.js';
+import {
+  cameraToViewState,
+  intersectSurface,
+  surfaceRadius,
+} from '../projection/view-state.js';
 
 /** A camera/playback-derived viewport — the input to {@link StreamingTileSource.update}. */
 export interface StreamingViewport {
@@ -130,7 +149,7 @@ export interface StreamingTileSourceOptions {
 
 /**
  * The streaming-tileset knobs a HOST forwards when opting a layer into
- * streaming (see {@link SttScene.addLayer} / the r3f `streaming` prop). `url`,
+ * streaming (see {@link STTScene.addLayer} / the r3f `streaming` prop). `url`,
  * `fetch`, and `onTilesChanged` are omitted because the driver wires them from
  * the layer's archive URL + resident-set callback — the caller only tunes the
  * LOD/cache/prefetch behaviour.
@@ -168,7 +187,7 @@ export function residentSetEqual(
 
 /**
  * The minimal tileset surface {@link StreamingTileSource} drives. The real
- * {@link SpatiotemporalTileset} satisfies it; tests pass a mock. Keeping it
+ * {@link SpatioTemporalTileset} satisfies it; tests pass a mock. Keeping it
  * structural lets the unit test exercise the update-pump + resident diff
  * without a network/archive.
  */
@@ -189,7 +208,7 @@ export interface DrivableTileset {
 }
 
 /**
- * Wraps a {@link SpatiotemporalTileset} (or any {@link DrivableTileset}) and
+ * Wraps a {@link SpatioTemporalTileset} (or any {@link DrivableTileset}) and
  * pumps camera-derived viewports into it, surfacing the resident set via an
  * `onTilesChanged` callback whenever it actually changes.
  */
@@ -290,7 +309,7 @@ export class StreamingTileSource {
         ? { minZoom: summaryTier.minZoom, maxZoom: summaryTier.maxZoom }
         : undefined);
 
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       minZoom: metadata.minZoom,
       maxZoom: metadata.maxZoom,
       temporalBucketMs: metadata.temporalBucketMs,
@@ -314,7 +333,7 @@ export class StreamingTileSource {
       // A wired onTileLoad means tiles arrive after the synchronous update()
       // returns — re-publish the resident set so the layer picks them up.
       onTileLoad: () => this.publishIfChanged(),
-    } as ConstructorParameters<typeof SpatiotemporalTileset>[0]);
+    } as ConstructorParameters<typeof SpatioTemporalTileset>[0]);
     this.tileset = tileset;
 
     // Storyboard tier (WS-C4, parity with the deck path): kick the budget-gated
@@ -380,7 +399,7 @@ export class StreamingTileSource {
   }
 
   /**
-   * Forward the interactive/motion bit to the tileset (scrub-LOD P0). No-op
+   * Forward the interactive/motion bit to the tileset for scrub-LOD. No-op
    * unless a {@link StreamingTileSourceOptions.scrubLod} axis is enabled — the
    * tileset stores the bit and changes nothing otherwise (the kill switch).
    * Normally driven by the PlaybackGovernor through
@@ -428,104 +447,358 @@ const TILE_SIZE_PX = 512;
 const EARTH_CIRCUMFERENCE = 2 * Math.PI * EARTH_RADIUS;
 
 /**
- * Intersect the ray from `origin` along `dir` with the ground plane `z = 0`.
- * Returns the world point, or `null` when the ray is parallel to / points away
- * from the plane (a near-horizon corner that never hits the ground).
+ * Shallowest depression below horizontal, in radians, at which a camera ray is
+ * still allowed to reach the ground.
+ *
+ * A ray aimed AT or ABOVE the horizon has no ground point at all, and the old
+ * code simply dropped those corners. That is what collapses a pitched viewport:
+ * at `pitch ≥ 90 − fov/2` (65° at fov 50) BOTH top corners go, exactly two
+ * symmetric bottom corners survive — too many for any `hits.length < 2` fallback
+ * to fire — and their AABB is a ZERO-HEIGHT LINE along the bottom screen edge.
+ * One degree shallower the same box spans 100° of longitude. That explode-then-
+ * collapse pair across a single degree of tilt is the flash users report.
+ *
+ * So above-horizon rays are CLIPPED here rather than dropped, and the clip angle
+ * is deck's: `@math.gl/web-mercator`'s `getProjectionParameters` clamps the top
+ * plane's ground angle to a 0.01 rad minimum when sizing the far plane, and
+ * `getBounds` then reads its top corners off that far plane
+ * (`unprojectOnFarPlane`). Clamping the ray angle directly reproduces the same
+ * footprint without depending on whatever `camera.far` the host happens to have
+ * set — a Three camera's far plane is a clipping decision, not a horizon one.
+ *
+ * 0.01 rad puts the far edge at ~100× the camera height. The resulting tile
+ * count under steep pitch is much larger than today's — see §4.4 of
+ * docs/roadmap/tile-loading-3d-2026-07.md: today's is a 36 %-coverage
+ * UNDER-selection, and the rise is the fix, not a regression to tune back down.
+ *
+ * The angle is only half the guard. WHEN it is applied — from the ray's own
+ * depression rather than from whether the surface solve failed — is what makes
+ * the footprint bounded on both sides of the singularity; see
+ * {@link groundPointForRay}.
  */
-function intersectGround(origin: Vector3, dir: Vector3): Vector3 | null {
-  // Plane z = 0: solve origin.z + t·dir.z = 0.
-  if (Math.abs(dir.z) < 1e-9) return null;
-  const t = -origin.z / dir.z;
-  if (!Number.isFinite(t) || t <= 0) return null;
-  return new Vector3(origin.x + dir.x * t, origin.y + dir.y * t, 0);
+const HORIZON_MIN_DEPRESSION_RAD = 0.01;
+
+/**
+ * Rays cast per axis across NDC (so `5 × 5 = 25` ground samples, boundary
+ * included).
+ *
+ * Four corners are exactly right for an unclipped planar ground quad — it is
+ * convex with straight edges, so its AABB is pinned by its vertices. They are
+ * NOT enough for either of the two cases this function must now handle:
+ *
+ * - **Horizon-clipped.** The far edge becomes an ARC at constant depression.
+ *   Its chord (corner to corner) cuts ~18 % off the forward reach at a 70°
+ *   horizontal FOV — a missing row of tiles at the top of a pitched frame.
+ * - **Globe.** Lon/lat is a curved function of the ECEF hit, so the edges bow
+ *   outside the corner box.
+ *
+ * A 5-per-axis grid leaves at most a 17.5° gap along that arc (~1.2 % sag) and
+ * costs 25 unprojections a few times a second. On the unclipped planar case it
+ * returns exactly the four-corner answer, because every interior sample lands
+ * inside the hull.
+ */
+const GROUND_SAMPLES_PER_AXIS = 5;
+
+/**
+ * Slack added before flooring the continuous zoom.
+ *
+ * `cameraToViewState` inverts `viewStateToCamera` through a chain of
+ * `tan`/`log2`/distance round-trips, so a view state authored at an exact
+ * integer zoom comes back as e.g. `13.999999999999939` (measured: z14/pitch 45,
+ * and z9 on the globe). `Math.floor` then hands the tileset zoom 13 and the
+ * whole frame renders one level too coarse — from a rounding error, at the most
+ * common camera there is. 1e-9 is six orders above the observed noise and eleven
+ * below anything a real camera move produces.
+ */
+const ZOOM_FLOOR_EPSILON = 1e-9;
+
+/**
+ * Where a ray that never reaches the surface should be treated as landing.
+ *
+ * Planar frames have no true horizon point, so the ray is tilted down to
+ * {@link HORIZON_MIN_DEPRESSION_RAD} keeping its azimuth. Globe frames DO have
+ * one — the limb — so the ray is snapped to the tangent point in its own plane,
+ * at the exact limb half-angle `acos(radius / distance)`.
+ *
+ * `null` only for rays with no meaningful ground azimuth at all (straight up
+ * from a planar camera, straight out from the planet centre) or a camera at or
+ * below the surface.
+ */
+function clipAtHorizon(
+  proj: Projection,
+  origin: Vector3,
+  dir: Vector3,
+): Vector3 | null {
+  if (proj.kind === 'globe') {
+    const radius = surfaceRadius(proj);
+    const distance = origin.length();
+    if (!(distance > radius)) return null;
+    const up = origin.clone().divideScalar(distance);
+    const tangent = dir.clone().addScaledVector(up, -dir.dot(up));
+    if (tangent.lengthSq() < 1e-12) return null;
+    tangent.normalize();
+    const cosLimb = radius / distance;
+    const sinLimb = Math.sqrt(Math.max(0, 1 - cosLimb * cosLimb));
+    return up
+      .multiplyScalar(radius * cosLimb)
+      .addScaledVector(tangent, radius * sinLimb);
+  }
+  if (!(origin.z > 0)) return null;
+  const azimuth = Math.hypot(dir.x, dir.y);
+  if (azimuth < 1e-12) return null;
+  const sinDepression = Math.sin(HORIZON_MIN_DEPRESSION_RAD);
+  const cosDepression = Math.cos(HORIZON_MIN_DEPRESSION_RAD);
+  const t = origin.z / sinDepression;
+  return new Vector3(
+    origin.x + (dir.x / azimuth) * cosDepression * t,
+    origin.y + (dir.y / azimuth) * cosDepression * t,
+    0,
+  );
+}
+
+/**
+ * Where a camera ray should be treated as reaching the ground — the surface
+ * solve, the horizon clip, or nowhere.
+ *
+ * The branch is decided from the RAY GEOMETRY, before the solve, and that is the
+ * entire point of this function. Wave 2 shipped the clip as a FALLBACK for the
+ * solve —
+ *
+ *     intersectSurface(proj, camPos, dir) ?? clipAtHorizon(proj, camPos, dir)
+ *
+ * — which reads as "clip the rays that cannot reach the ground". It is not what
+ * it does. A ray a hundredth of a degree BELOW horizontal reaches the ground
+ * perfectly well, about 5,700 camera heights out; the solve returns that point
+ * and the clip is never consulted. So the guard caught only the far side of the
+ * 1/tan(depression) singularity — the collapse — and left the near side, the
+ * EXPLODE, running unbounded. Measured at z9 on 1440×900 (see
+ * `camera-viewport.test.ts`), the box grew to lon [-180, 180] × lat [40.3,
+ * 89.999] at pitch 64.95 and snapped back to 62.7° × 29.7° at 65.00. Twice, in
+ * fact: each row of the NDC sample grid has its own pitch at which it goes
+ * horizontal, and the second one (ny = 0.5) fires at 76.88 and reaches further.
+ * A full-planet tile scan flashing past inside one degree of a smooth camera
+ * move is exactly the flash users reported.
+ *
+ * deck resolves the same singularity the same way: `@math.gl/web-mercator`'s
+ * `getBounds` tests `halfFov > angleToGround - 0.01` and substitutes the far
+ * plane for its top corners BEFORE it casts. The substitution is a property of
+ * the camera, never of what a cast happened to return.
+ *
+ * Because {@link clipAtHorizon} projects along exactly
+ * {@link HORIZON_MIN_DEPRESSION_RAD} and the test switches at exactly that
+ * angle, the two branches AGREE at the crossover — both place the point
+ * `height / tan(θ)` out along the ray's azimuth — so the footprint is continuous
+ * through it. That continuity, not the clip itself, is what the pitch sweep in
+ * `camera-viewport.test.ts` pins.
+ */
+function groundPointForRay(
+  proj: Projection,
+  origin: Vector3,
+  dir: Vector3,
+): Vector3 | null {
+  // Planar frames only, and only for a camera above the plane.
+  //
+  // A globe needs NO minimum-depression clamp and must not be given one. Its
+  // solve is against a FINITE sphere, so a grazing ray lands on the limb, not
+  // 5,700 heights downrange — `intersectSurface` is already bounded, and it
+  // already meets `clipAtHorizon`'s tangent point continuously as the ray slides
+  // past the limb (the tangent point IS the limit of the grazing intersection).
+  // Clamping there would instead DISCARD near-limb ground that a globe camera
+  // genuinely sees. Measured over the same 55°→85° sweep at 0.05° steps, the
+  // globe path's sharpest step is ×1.099 — grid-sampling wobble on a curved
+  // surface, not a singularity.
+  //
+  // Below the plane there is no horizon to reason about (`clipAtHorizon` would
+  // return null and drop the sample), so the old solve-or-nothing behaviour is
+  // kept byte-for-byte for a sub-surface camera.
+  if (proj.kind !== 'globe' && origin.z > 0) {
+    // `dir` is unit, so this is `asin(-dir.z)`; the two-argument form keeps the
+    // answer right for a ray that is not quite normalized and is exact at the
+    // straight-up / straight-down poles.
+    const depression = Math.atan2(-dir.z, Math.hypot(dir.x, dir.y));
+    if (!(depression >= HORIZON_MIN_DEPRESSION_RAD)) {
+      return clipAtHorizon(proj, origin, dir);
+    }
+  }
+  return (
+    intersectSurface(proj, origin, dir) ?? clipAtHorizon(proj, origin, dir)
+  );
+}
+
+/**
+ * Is the geographic pole at `sign · 90°` both inside the frustum and on the near
+ * side of the globe?
+ *
+ * A lon/lat AABB of ray hits is simply the wrong shape once the frame CONTAINS
+ * a pole, and no amount of extra sampling fixes it: the visible patch is a CAP,
+ * every meridian runs through it, and latitude turns back DOWN once the frame
+ * steps over the pole. A globe camera centred at lat 89 / z2 on 1440×900 — the
+ * pole 0.72 of the way up the screen — reported
+ * `{minLat: 86.699, maxLat: 89.691, minLon: -109.456, maxLon: 180}`: the pole it
+ * is staring straight at outside its own viewport box, and the longitudes it did
+ * report an artefact of where the 5×5 grid happened to land rather than a bound
+ * on anything. The samples cannot detect this themselves — the grid's
+ * northernmost row lands short of 90 either way, and an AABB has no way to know
+ * it stepped OVER the pole rather than up to it.
+ *
+ * So the test is geometric, and it is a FRUSTUM test rather than a latitude
+ * threshold because the two disagree over exactly the cameras that matter: at
+ * the same lat 89 centre one zoom in, the pole sits at NDC y = 1.44, just off
+ * the top edge, and the sampled box is then genuinely correct (its widest
+ * longitude IS a corner sample). Widening there would scan every column on the
+ * planet for a 150°-wide frame. Two conditions, both required:
+ *
+ * - **Facing.** The outward normal at a pole is the ECEF ±Z axis exactly — on
+ *   the sphere and on the WGS84 ellipsoid alike, since the poles lie on the axis
+ *   of symmetry — so the pole faces the camera iff the camera sits on its
+ *   outward side. Without this a zoomed-out equatorial view would widen for a
+ *   pole that is behind the planet.
+ * - **Frustum.** In front of the camera FIRST, then inside the NDC square.
+ *   `Vector3.project` divides by `w`, and `w` is negative behind the camera,
+ *   which flips both NDC axes and makes a point 180° away test as on screen.
+ */
+function poleOnScreen(
+  proj: Projection,
+  camera: PerspectiveCamera,
+  sign: 1 | -1,
+): boolean {
+  const [px, py, pz] = proj.project(0, sign * 90, 0);
+  if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) {
+    return false;
+  }
+  const pole = new Vector3(px, py, pz);
+  if (!(camera.position.clone().sub(pole).dot(pole) > 0)) return false;
+  const inCamera = pole.clone().applyMatrix4(camera.matrixWorldInverse);
+  if (!(inCamera.z < 0)) return false;
+  const ndc = pole.clone().project(camera);
+  return Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1;
+}
+
+/**
+ * Bring `lon` into the same unwrapped turn as `reference`.
+ *
+ * `GlobeProjection.unproject` ends in `atan2`, so it always reports lon in
+ * `[-180, 180]`: a globe view straddling the antimeridian samples −179.5 and
+ * +179.5 and their AABB claims 359° of the planet — the long way round, every
+ * tile except the ones on screen. Re-referencing each sample to the view centre
+ * instead yields `[179.5, 180.5]`, the UNWRAPPED box the core tile scan wants
+ * (`tileXSpanForLonRange` walks unwrapped column space and wraps at emit; see
+ * §4.1 rule 4 of the plan). Planar frames need none of this — their `unproject`
+ * is linear in world x and already unwrapped.
+ */
+function unwrapLon(lon: number, reference: number): number {
+  return lon + 360 * Math.round((reference - lon) / 360);
 }
 
 /**
  * Derive `{bounds, zoom}` from a {@link Projection} and a Z-up
- * `PerspectiveCamera` by unprojecting the four NDC frustum corners onto the
- * ground plane and converting back to lon/lat.
+ * `PerspectiveCamera` by casting a grid of NDC rays at the projection's
+ * reference surface and converting the hits back to lon/lat.
  *
- * - **bounds**: lon/lat AABB of the (up to four) ground-plane hits. Corners that
- *   point above the horizon are skipped; a fallback box around the camera's
- *   nadir is used when fewer than two corners hit (steep up-tilt / looking at
- *   sky), so the tileset always gets a sane viewport.
- * - **zoom**: a slippy-map zoom from the visible ground resolution
- *   (metres-per-pixel across the viewport width), corrected for latitude
- *   (`cos(lat)` mercator stretch) so it matches the deck/maplibre tile pyramid.
+ * - **bounds**: lon/lat AABB of the ground samples, repaired by the shared
+ *   `normalizeViewportBounds` (ordering, the antimeridian-crossing-vs-inversion
+ *   test, the full-world collapse). Rays above the horizon are CLIPPED at it,
+ *   never dropped.
+ * - **zoom**: `floor(cameraToViewState(...).zoom)`. Flooring is required and
+ *   correct — the directory is keyed by integer z, and a fractional zoom makes
+ *   `getAvailableTiles` query a level that does not exist, selecting nothing.
  *
- * Pure-ish: needs Three's `Vector3.unproject`, so it lives here (not in the
- * unit-tested pure core) and is verified visually.
+ * Returns **`null`** when the camera yields no usable box — a canvas that has
+ * not been laid out yet, or a camera whose matrices came out non-finite. The
+ * caller must then KEEP ITS PREVIOUS VIEWPORT (the simplest form of which is:
+ * skip the `tileset.update` for this frame). Selecting against a NaN box is
+ * strictly worse than selecting against a slightly stale one — it makes
+ * `boundsToTiles` enumerate nothing while every readiness signal still reports
+ * settled and fully buffered. §4.1 rule 1.
  */
 export function cameraToViewport(
   proj: Projection,
   camera: PerspectiveCamera,
   viewportPx: { width: number; height: number },
   opts: { minZoom?: number; maxZoom?: number } = {},
-): { bounds: BoundingBox; zoom: number } {
+): { bounds: BoundingBox; zoom: number } | null {
+  // A canvas that has not been laid out yet reports 0×0 (and r3f then hands the
+  // camera an aspect of 0 or NaN). Nothing downstream can recover from that, and
+  // the zoom in particular is scaled by the viewport height, so bail before
+  // fabricating a plausible-looking box from it.
+  if (!(viewportPx.width > 0) || !(viewportPx.height > 0)) return null;
+
   camera.updateMatrixWorld();
   camera.updateProjectionMatrix();
   const camPos = camera.position.clone();
 
-  // NDC corners of the far plane (z = 1): unproject each to a world point, form
-  // the ray from the camera, intersect the ground.
-  const ndc: Array<[number, number]> = [
-    [-1, -1],
-    [1, -1],
-    [1, 1],
-    [-1, 1],
-  ];
-  const hits: Vector3[] = [];
-  for (const [nx, ny] of ndc) {
-    const far = new Vector3(nx, ny, 1).unproject(camera);
-    const dir = far.sub(camPos).normalize();
-    const hit = intersectGround(camPos, dir);
-    if (hit) hits.push(hit);
+  // The view centre serves twice: it is the reference turn for globe longitude
+  // unwrapping, and its zoom is the zoom. Deriving zoom from the ground AABB
+  // instead (the old `zoomFromCamera`) measured the wrong thing four different
+  // ways at once — it took the LARGER of the two ground spans and divided by the
+  // viewport WIDTH, so a pitched frame read 2–5 levels too coarse, a portrait
+  // canvas 0.83 too coarse and a 90°-rotated one 0.14 off. The view state's zoom
+  // comes straight from the camera distance and the vertical FOV, which is what
+  // the tile pyramid is defined against, and is invariant to all three.
+  const view = cameraToViewState(proj, camera, {
+    viewportHeight: viewportPx.height,
+  });
+
+  const samples: Array<[number, number]> = [];
+  const far = new Vector3();
+  const dir = new Vector3();
+  const steps = GROUND_SAMPLES_PER_AXIS - 1;
+  for (let iy = 0; iy <= steps; iy++) {
+    const ny = -1 + (2 * iy) / steps;
+    for (let ix = 0; ix <= steps; ix++) {
+      const nx = -1 + (2 * ix) / steps;
+      // NDC on the far plane (z = 1) gives a point along the ray through this
+      // pixel; the ray itself is what we intersect, so the far plane's distance
+      // never enters the answer.
+      far.set(nx, ny, 1).unproject(camera);
+      dir.copy(far).sub(camPos).normalize();
+      const hit = groundPointForRay(proj, camPos, dir);
+      if (!hit) continue;
+      // `hit.z` matters on the globe — it is an ECEF point on the sphere, not a
+      // planar ground point, and passing 0 is precisely the bug that made every
+      // globe camera report latitude 0.
+      const [lon, lat] = proj.unproject(hit.x, hit.y, hit.z);
+      samples.push([
+        proj.kind === 'globe' ? unwrapLon(lon, view.longitude) : lon,
+        lat,
+      ]);
+    }
   }
 
-  // Fallback: too few ground hits (looking near/above the horizon). Build a
-  // box around the camera's nadir sized by its altitude so streaming keeps a
-  // sane footprint instead of an empty / world-spanning one.
-  if (hits.length < 2) {
-    const alt = Math.max(Math.abs(camPos.z), 1);
-    const nadir = new Vector3(camPos.x, camPos.y, 0);
-    hits.length = 0;
-    hits.push(
-      new Vector3(nadir.x - alt, nadir.y - alt, 0),
-      new Vector3(nadir.x + alt, nadir.y + alt, 0),
-    );
-  }
+  // `boundsFromCorners` skips non-finite components PER AXIS, so one diverged
+  // sample costs that axis one contribution instead of poisoning the whole box.
+  const raw = boundsFromCorners(samples);
 
-  // World-space AABB → lon/lat AABB (unproject each corner; the projection may
-  // be non-linear, so corners alone bound it on planar frames — adequate here).
-  let minLon = Infinity;
-  let minLat = Infinity;
-  let maxLon = -Infinity;
-  let maxLat = -Infinity;
-  let sumLat = 0;
-  for (const h of hits) {
-    const [lon, lat] = proj.unproject(h.x, h.y, 0);
-    minLon = Math.min(minLon, lon);
-    minLat = Math.min(minLat, lat);
-    maxLon = Math.max(maxLon, lon);
-    maxLat = Math.max(maxLat, lat);
-    sumLat += lat;
+  // Polar widening. Where the sample AABB under-reports because the frame
+  // CONTAINS a pole, extend it to the geometry the samples cannot express: the
+  // full longitude circle (every meridian passes through the visible cap) and
+  // the pole's own latitude. See {@link poleOnScreen} for why sampling harder
+  // does not help. Applied before `normalizeViewportBounds`, so the exactly-360°
+  // span lands on its full-world rule rather than being carried through as a
+  // suspiciously wide box.
+  if (raw && proj.kind === 'globe') {
+    if (poleOnScreen(proj, camera, 1)) {
+      raw.maxLat = 90;
+      raw.minLon = -180;
+      raw.maxLon = 180;
+    }
+    if (poleOnScreen(proj, camera, -1)) {
+      raw.minLat = -90;
+      raw.minLon = -180;
+      raw.maxLon = 180;
+    }
   }
-  const centerLat = sumLat / hits.length;
-  const bounds: BoundingBox = { minLon, minLat, maxLon, maxLat };
+  const normalized = raw ? normalizeViewportBounds(raw) : null;
+  if (!normalized || !Number.isFinite(view.zoom)) return null;
 
-  // Slippy tiles live at INTEGER zoom levels, so floor the continuous zoom before
-  // clamping — exactly as the deck path does (`Math.floor(viewport.zoom)`). Passing
-  // a fractional zoom (e.g. 13.14) to `tileset.update` makes `getAvailableTiles`
-  // query a non-existent zoom → zero tiles selected → nothing ever renders.
-  const zoom = Math.floor(
-    zoomFromCamera(proj, camera, viewportPx, centerLat, hits),
-  );
-  const clampedZoom = clamp(
-    zoom,
-    opts.minZoom ?? -Infinity,
-    opts.maxZoom ?? Infinity,
-  );
-  return { bounds, zoom: clampedZoom };
+  return {
+    bounds: normalized.bounds,
+    zoom: clamp(
+      Math.floor(view.zoom + ZOOM_FLOOR_EPSILON),
+      opts.minZoom ?? -Infinity,
+      opts.maxZoom ?? Infinity,
+    ),
+  };
 }
 
 /**
@@ -539,6 +812,16 @@ export function cameraToViewport(
  * When the ground hits are unavailable it falls back to the camera distance to
  * the ground × the vertical FOV as the visible span (the classic
  * `2·tan(fov/2)·distance` extent).
+ *
+ * @deprecated Not used for tile selection any more, and do not adopt it for a
+ * new one. Measured against a real camera it is wrong four ways at once: it
+ * takes the LARGER of the two ground-hit spans yet divides by the viewport
+ * WIDTH, so a pitched frame reads 2–5 zoom levels too coarse, a portrait canvas
+ * 0.83 too coarse and a 90°-rotated one 0.14 off, and the `log2` lands a hair
+ * under an exact integer so even a flat north-up camera floors one level down.
+ * {@link cameraToViewport} now takes `cameraToViewState(...).zoom`, which is
+ * derived from the camera distance and vertical FOV and is invariant to all
+ * four. Kept only because it is exported from `@poopdeck.gl/three/internal`.
  */
 export function zoomFromCamera(
   proj: Projection,
@@ -595,7 +878,7 @@ function clamp(x: number, lo: number, hi: number): number {
 
 /**
  * The tileset surface {@link TilesetBufferSource} reads. The real
- * {@link SpatiotemporalTileset} satisfies it; tests pass a mock.
+ * {@link SpatioTemporalTileset} satisfies it; tests pass a mock.
  */
 export interface RunwayTileset {
   getBufferedRunway(
@@ -671,7 +954,7 @@ export class TilesetBufferSource implements BufferSource {
     this.tileset.setAnimationState?.(isAnimating, speed);
   }
 
-  // Scrub-LOD interactive bit (scrub-LOD P0). The PlaybackGovernor broadcasts
+  // Scrub-LOD interactive bit. The PlaybackGovernor broadcasts
   // `true` on beginScrub / `false` on endScrub through this optional hook, so a
   // streaming tileset can serve a cheaper motion tier while the user drags the
   // timeline. Without this forward the governor's optional-chained call silently
@@ -681,7 +964,7 @@ export class TilesetBufferSource implements BufferSource {
     this.tileset.setInteractive?.(interactive);
   }
 
-  // Run-ahead fairness + dynamic fair-share weight (multi-source Phase 2).
+  // Run-ahead fairness + dynamic fair-share weight for multi-source playback.
   // Without these forwards the governor's optional-chained calls silently
   // no-op for every three-renderer source while the deck path cooperates.
   setPrefetchRunAheadLimit(simMs: number | null): void {

@@ -49,6 +49,44 @@
  *       still covers the trailing half of the comet wake (see
  *       TimeFilterExtension.wakeLength). A HARD failure — it catches real drift
  *       (e.g. an earlier ship-traffic wake that outran its authored window).
+ *
+ * ── the CAMERA / ORDERING half (second describe) ───────────────────────────
+ *
+ * Checks (a)–(c) only ever opened the PRIMARY `d.url`, so the nine storm4d
+ * overlay archives were never read at all, and nothing in the file could catch
+ * a zoom, bbox, blob-ordering or pitch mismatch. The second describe closes
+ * both gaps: it walks EVERY archive-bearing url on the dataset (`url` plus every
+ * `*Url` field pointing at a `manifest.json` — the `.json` telemetry/camera
+ * sidecars are excluded by that same filter) and asserts:
+ *   (d) the demo's opening camera zoom, floored the way
+ *       SpatioTemporalLayer.getZoomLevel floors it, is inside each archive's
+ *       [min_zoom, max_zoom]. Above max_zoom is the benign, deliberate case
+ *       (deep-dive framings over-zoom the deepest tier on purpose), so it is an
+ *       informational note; BELOW min_zoom is the hazard and fails — the layer
+ *       clamps up to min_zoom and the loader then enumerates a whole-world box
+ *       at a zoom the camera never asked for.
+ *   (e) the camera centre lies inside `metadata.bounds`. A centre outside the
+ *       archive extent is the "renders blank / camera parked over the previous
+ *       scene" class, so it is a HARD failure. Whole-world archives and globe
+ *       demos pass trivially.
+ *   (f) `blobOrdering !== 'spatial'` on any dataset that authors
+ *       `targetPlaybackSeconds` — i.e. anything that PLAYS. Spatial ordering
+ *       makes a time-ordered range read a scatter-gather, the buffered ranges
+ *       come back empty and the playhead stalls with no error anywhere. Hard
+ *       failure; see the `--blob-ordering time-major` rule in
+ *       docs/roadmap/tile-loading-3d-2026-07.md §5 wave 4.
+ *   (g) every authored `maxPitch` (view-state or `timeHeight`) is ≤ 70. Past
+ *       71.57° at deck's default `altitude: 1.5` the top screen ray clears the
+ *       horizon, `unproject` returns a point behind the camera, and the viewport
+ *       lon/lat box the tile loader selects against inverts — zero tiles on the
+ *       latitude axis, a near-whole-world column span on the longitude axis.
+ *       docs/roadmap/tile-loading-3d-2026-07.md §1/§4 is the account.
+ *
+ * (d)–(f) need `min_zoom` / `max_zoom` / `bounds` / `blobOrdering`, which only
+ * the packed `manifest.json` carries; the git-tracked density sidecar supplies
+ * `bounds` and the profiled (deepest) zoom, so CI still runs (e) and half of (d)
+ * even though the packed dirs are git-ignored. (g) reads the registry alone and
+ * therefore ALWAYS runs, in CI included.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
@@ -127,6 +165,146 @@ function loadManifestFixture(url: string): Fixture | null {
 function resolveFixture(url: string): Fixture | null {
   return loadDensityFixture(url) ?? loadManifestFixture(url);
 }
+
+// ── camera / ordering half ───────────────────────────────────────────────────
+
+interface Bounds {
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+}
+
+/**
+ * The archive facts the camera/ordering checks need, none of which the (a)–(c)
+ * `Fixture` carries. Sourced from the packed manifest when the (git-ignored)
+ * dataset dir is present, else from the git-tracked density sidecar — which
+ * knows `bounds` and the profiled deepest zoom but neither `min_zoom` nor the
+ * ordering the build actually resolved (its `autoChoice` is what `--blob-ordering
+ * auto` WOULD pick, not what shipped: `drifters` records `spatial` there while
+ * its manifest says `time-major`).
+ */
+interface ArchiveFacts {
+  source: 'manifest' | 'density';
+  path: string;
+  minZoom?: number;
+  maxZoom?: number;
+  bounds?: Bounds;
+  blobOrdering?: string;
+}
+
+function isBounds(v: unknown): v is Bounds {
+  const b = v as Partial<Bounds> | undefined;
+  return (
+    !!b &&
+    typeof b.minLon === 'number' &&
+    typeof b.minLat === 'number' &&
+    typeof b.maxLon === 'number' &&
+    typeof b.maxLat === 'number'
+  );
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+function factsFromManifest(url: string): ArchiveFacts | null {
+  if (!url.startsWith('/data/') || !url.endsWith('/manifest.json')) return null;
+  const path = publicPath(url);
+  if (!existsSync(path)) return null;
+  const j = JSON.parse(readFileSync(path, 'utf8')) as {
+    blobOrdering?: unknown;
+    metadata?: Record<string, unknown>;
+  };
+  const md = j.metadata ?? {};
+  const b = md.bounds as Record<string, unknown> | undefined;
+  return {
+    source: 'manifest',
+    path,
+    minZoom: num(md.min_zoom),
+    maxZoom: num(md.max_zoom),
+    bounds: b
+      ? {
+          minLon: num(b.min_lon) ?? NaN,
+          minLat: num(b.min_lat) ?? NaN,
+          maxLon: num(b.max_lon) ?? NaN,
+          maxLat: num(b.max_lat) ?? NaN,
+        }
+      : undefined,
+    blobOrdering:
+      typeof j.blobOrdering === 'string' ? j.blobOrdering : undefined,
+  };
+}
+
+function factsFromDensity(url: string): ArchiveFacts | null {
+  const id = profileIdFromUrl(url);
+  if (!id) return null;
+  const path = publicPath(`/density/${id}.json`);
+  if (!existsSync(path)) return null;
+  const j = JSON.parse(readFileSync(path, 'utf8')) as {
+    bounds?: unknown;
+    zoom?: number;
+  };
+  return {
+    source: 'density',
+    path,
+    // The profile is emitted at the archive's deepest zoom; min_zoom is not
+    // recorded there, so (d)'s below-min_zoom half simply doesn't run in CI.
+    maxZoom: num(j.zoom),
+    bounds: isBounds(j.bounds) ? j.bounds : undefined,
+  };
+}
+
+function loadArchiveFacts(url: string): ArchiveFacts | null {
+  return factsFromManifest(url) ?? factsFromDensity(url);
+}
+
+/**
+ * Every url on a dataset that addresses a packed archive: the primary `url`
+ * plus every `*Url` field. The `manifest.json` suffix is the discriminator —
+ * it keeps the AV `telemetry.json` / `cameras.json` / `scene.json` sidecars out
+ * without a hand-maintained field list that would silently miss the next
+ * overlay someone adds (which is exactly how the nine storm4d overlays went
+ * unchecked).
+ */
+function archiveUrls(d: Dataset): { field: string; url: string }[] {
+  const out: { field: string; url: string }[] = [];
+  const fields = Object.entries(d as unknown as Record<string, unknown>);
+  for (const [field, value] of fields) {
+    if (field !== 'url' && !field.endsWith('Url')) continue;
+    if (typeof value !== 'string' || !value.endsWith('manifest.json')) continue;
+    if (out.some((e) => e.url === value)) continue; // shared archives (GLM)
+    out.push({ field, url: value });
+  }
+  return out;
+}
+
+/** Every maxPitch the demo can put on the camera, with where it came from. */
+function authoredMaxPitches(d: Dataset): { where: string; value: number }[] {
+  const out: { where: string; value: number }[] = [];
+  const vs = d.initialViewState?.maxPitch;
+  if (typeof vs === 'number')
+    out.push({ where: 'initialViewState', value: vs });
+  const th = d.timeHeight?.maxPitch;
+  if (typeof th === 'number') out.push({ where: 'timeHeight', value: th });
+  return out;
+}
+
+/**
+ * The pitch at which deck's default `altitude: 1.5` camera puts the top of the
+ * screen at/above the horizon: `90 - degrees(atan(1 / 1.5) … )` resolves to
+ * 71.57°. 70 is the shipped ceiling — comfortably under, still dramatic.
+ * Raising it needs docs/roadmap/tile-loading-3d-2026-07.md §4 read first.
+ */
+const MAX_SAFE_PITCH = 70;
+
+/**
+ * Floor on each axis of an archive extent before the camera-centre test, in
+ * degrees (~1.1 km). Absorbs the point-extent case described at the test site;
+ * far below any framing drift worth catching (the one this gate did catch is
+ * ~830 m of it).
+ */
+const BBOX_MIN_SPAN_DEG = 0.01;
 
 /**
  * Sub-second authoring-precision floor for the (a) timeRange tolerance.
@@ -296,5 +474,195 @@ describe('dataset ↔ archive reconciliation', () => {
       reconciled,
       'expected at least the density-sidecar-backed demos to reconcile; got zero — fixtures or url→stem mapping likely broke',
     ).toBeGreaterThan(0);
+  });
+});
+
+// Filled during the camera/ordering runs; read by that describe's summary case.
+const cameraNotes: string[] = [];
+const cameraProblems: string[] = [];
+const factsSources: Record<string, number> = { density: 0, manifest: 0 };
+const unresolvedArchives: string[] = [];
+let archiveUrlsSeen = 0;
+/** Primaries a git-tracked density sidecar can resolve — the CI-stable floor. */
+const densityBackedPrimaries = datasets.filter(
+  (d) => factsFromDensity(d.url) !== null,
+).length;
+
+describe('dataset ↔ archive camera & ordering reconciliation', () => {
+  for (const d of datasets) {
+    it(`${d.id} camera & ordering`, () => {
+      const problems: string[] = [];
+
+      // (g) Registry-only, so this half runs everywhere including CI. Both
+      // spellings are checked: the storm4d demos carry maxPitch on the view
+      // state, the space-time cubes on `timeHeight` (DemoViewer reads that one
+      // and defaults it). AvDeck's ceiling is a module constant in
+      // components/av/AvDeck.tsx and is out of this file's reach.
+      for (const { where, value } of authoredMaxPitches(d)) {
+        if (!(value <= MAX_SAFE_PITCH)) {
+          problems.push(
+            `${where}.maxPitch=${value} > ${MAX_SAFE_PITCH} — the camera can reach the band (pitch > 71.57° at deck's default altitude 1.5) where the above-horizon unproject inverts the tile-selection box; see docs/roadmap/tile-loading-3d-2026-07.md §1/§4`,
+          );
+        }
+      }
+
+      const urls = archiveUrls(d);
+      archiveUrlsSeen += urls.length;
+      for (const { field, url } of urls) {
+        const facts = loadArchiveFacts(url);
+        if (!facts) {
+          unresolvedArchives.push(`${d.id}.${field} → ${url}`);
+          continue;
+        }
+        factsSources[facts.source] += 1;
+        const at = `${field} (${url}, ${facts.source})`;
+        // Only the PRIMARY `url` hard-fails on framing. An overlay legitimately
+        // covers a different footprint from the camera (storm4d's OAX
+        // radiosonde ascent sits ~150 km west of the Greenfield framing; the
+        // shared GLM lightning archive is continental) and is frequently
+        // zoom-GATED by its builder — buildWorldsLayers only mounts
+        // cosmos-drive-dreams' `objects` at BOX_ZOOM 13.5, comfortably above
+        // its min_zoom 13, so the gallery's opening zoom 11.6 never touches it.
+        // The primary is the governor: if the opening camera can't see IT, the
+        // demo opens blank with every readiness signal green.
+        const primary = field === 'url';
+        const record = (msg: string) => {
+          if (primary) problems.push(msg);
+          else
+            cameraNotes.push(`${d.id}: ${msg} — overlay, flagged not failed`);
+        };
+
+        // (d) Opening zoom vs the archive's tiled range, floored the way
+        // SpatioTemporalLayer.getZoomLevel floors it. `zoomOverride` replaces
+        // the camera zoom outright, so it is what gets checked when set.
+        const pinned = d.zoomOverride;
+        const z =
+          pinned !== undefined ? pinned : Math.floor(d.initialViewState.zoom);
+        const zWhat =
+          pinned !== undefined
+            ? `zoomOverride=${pinned}`
+            : `floor(camera)=${z}`;
+        if (facts.minZoom !== undefined && z < facts.minZoom) {
+          record(
+            `zoom below the archive: ${zWhat} < min_zoom=${facts.minZoom} on ${at} — the layer clamps up to min_zoom, so the loader enumerates a box at a zoom the camera never asked for`,
+          );
+        }
+        if (facts.maxZoom !== undefined && z > facts.maxZoom) {
+          // Over-zoom is deliberate everywhere it appears (a deep-dive framing
+          // stretches the deepest tier on purpose), so it never fails.
+          cameraNotes.push(
+            `${d.id}: ${zWhat} > max_zoom=${facts.maxZoom} on ${at} — deliberate over-zoom of the deepest tier, flagged not failed`,
+          );
+        }
+
+        // (e) Camera centre inside the archive extent. Outside = the demo opens
+        // on empty map with every readiness signal green.
+        const b = facts.bounds;
+        const { longitude, latitude } = d.initialViewState;
+        if (b && Number.isFinite(b.minLon)) {
+          // A single-trip archive's `metadata.bounds` collapses to a POINT:
+          // whole-feature placement records the representative point, not the
+          // vertex extent, and every AV `ego` archive is exactly one trip. A
+          // zero-span box would then reject any camera not standing on that one
+          // coordinate, so each axis gets a floor of BBOX_MIN_SPAN_DEG (~1.1 km
+          // — a city block or two, well under the drift this is looking for).
+          const pad = (min: number, max: number) => {
+            const grow = Math.max(0, BBOX_MIN_SPAN_DEG - (max - min)) / 2;
+            return [min - grow, max + grow] as const;
+          };
+          const [latLo, latHi] = pad(b.minLat, b.maxLat);
+          const crossing = b.minLon > b.maxLon;
+          const [lonLo, lonHi] = crossing
+            ? ([b.minLon, b.maxLon] as const)
+            : pad(b.minLon, b.maxLon);
+          const lonIn = crossing
+            ? // A seam-crossing extent is stored min > max; the interval is the
+              // UNION of the two halves, not their (empty) intersection.
+              longitude >= lonLo || longitude <= lonHi
+            : longitude >= lonLo && longitude <= lonHi;
+          const latIn = latitude >= latLo && latitude <= latHi;
+          if (!lonIn || !latIn) {
+            record(
+              `camera centre outside the archive extent: (${longitude}, ${latitude}) vs [${b.minLon}, ${b.minLat}, ${b.maxLon}, ${b.maxLat}] on ${at} — opens on empty map`,
+            );
+          }
+        }
+
+        // (f) Blob ordering vs playback. Only the manifest records what the
+        // build actually resolved (the density sidecar's `autoChoice` is a
+        // recommendation, not the shipped value).
+        if (
+          d.targetPlaybackSeconds !== undefined &&
+          facts.blobOrdering === 'spatial'
+        ) {
+          problems.push(
+            `blobOrdering='spatial' on ${at} while the demo authors targetPlaybackSeconds=${d.targetPlaybackSeconds} — a time-ordered range read becomes a scatter-gather, buffered ranges come back empty and the playhead stalls silently; rebuild with --blob-ordering time-major`,
+          );
+        }
+      }
+
+      for (const p of problems) cameraProblems.push(`${d.id}: ${p}`);
+      expect(
+        problems,
+        `\n[camera] ${d.id}\n  - ${problems.join('\n  - ')}\n`,
+      ).toEqual([]);
+    });
+  }
+
+  // Every packed dataset dir happens to be present in local dev, so the manifest
+  // branch always wins here and the density branch — the ONLY one that runs in
+  // CI, where those dirs are git-ignored — would otherwise ship unexercised.
+  // Call it directly on a known git-tracked sidecar so a shape change in
+  // density-profile.rs (or in profileIdFromUrl) fails loudly instead of quietly
+  // turning the whole CI half into "unresolved".
+  it('the density-sidecar fallback (the CI path) still resolves bounds + zoom', () => {
+    const facts = factsFromDensity('/data/drifters/manifest.json');
+    expect(facts, 'density/drifters.json missing or unreadable').not.toBeNull();
+    expect(facts!.source).toBe('density');
+    expect(typeof facts!.maxZoom).toBe('number');
+    expect(isBounds(facts!.bounds)).toBe(true);
+  });
+
+  it('coverage summary (archives opened, camera/ordering findings)', () => {
+    const lines: string[] = [];
+    lines.push(
+      `[camera] ${archiveUrlsSeen} archive-bearing url(s) across ${datasets.length} datasets; ` +
+        `${factsSources.manifest} resolved via manifest, ${factsSources.density} via density sidecar, ` +
+        `${unresolvedArchives.length} unresolved (git-ignored packed dir, no sidecar)`,
+    );
+    if (unresolvedArchives.length) {
+      for (const u of unresolvedArchives) lines.push(`    ⊘ ${u}`);
+    }
+    if (cameraNotes.length) {
+      lines.push(`[camera] ${cameraNotes.length} informational note(s):`);
+      for (const n of cameraNotes) lines.push(`    · ${n}`);
+    }
+    lines.push(
+      cameraProblems.length
+        ? `[camera] ${cameraProblems.length} FINDING(S):`
+        : `[camera] 0 findings — every demo's camera agrees with every archive it mounts`,
+    );
+    for (const bad of cameraProblems) lines.push(`    ✗ ${bad}`);
+    // eslint-disable-next-line no-console
+    console.log(lines.join('\n'));
+
+    // Resolution floor, pinned to the GIT-TRACKED sidecars so it holds in CI
+    // too. Without it the whole half could silently degrade to "everything
+    // unresolved" — e.g. if `resolveDataUrl`'s R2-origin rewrite ever fires in
+    // the test environment, every url would stop starting with `/data/` and
+    // both fixture lookups would miss.
+    expect(
+      factsSources.manifest + factsSources.density,
+      `expected at least the ${densityBackedPrimaries} density-sidecar-backed primary archive(s) to resolve; the url→fixture lookup likely broke`,
+    ).toBeGreaterThanOrEqual(densityBackedPrimaries);
+
+    // Coverage floor. The nine storm4d overlay manifests are the reason this
+    // half exists: the (a)–(c) half only ever opened `d.url`, so a whole demo
+    // family's archives were never read. If the walk ever stops finding more
+    // urls than there are datasets, the `*Url` discovery broke.
+    expect(
+      archiveUrlsSeen,
+      'expected more archive-bearing urls than datasets (composites mount several); got fewer — the *Url discovery in archiveUrls() likely broke',
+    ).toBeGreaterThan(datasets.length);
   });
 });

@@ -13,8 +13,8 @@
  *
  * One implementation for every consumer — FlowCorridorLayer's per-vertex
  * gradient (FlowStrokeLayer inherits it), FlowmapLayer's and
- * BundledFlowmapLayer's per-edge widths — which previously hand-copied it.
- * (BundledFlowLinesLayer's GLSL re-derives the same blend on the GPU.)
+ * BundledFlowmapLayer's per-edge widths — so the blend cannot drift between
+ * them. (BundledFlowLinesLayer's GLSL re-derives the same blend on the GPU.)
  */
 
 /** The two adjacent bucket columns + blend fraction for a stepped position. */

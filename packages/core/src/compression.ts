@@ -9,9 +9,29 @@
  * benefit from compression. zstd is decoded with `fzstd` (pure JS, ~30 KB, no
  * WASM) since browsers do not (yet) expose a zstd `DecompressionStream`.
  *
- * gzip was retired with the legacy single-file `.stt` format and is no longer
- * decodable here — the reader rejects it. Byte 1 in the {@link Compression}
- * enum stays permanently reserved so it is never reused.
+ * A packed archive names its codec as a **string** in `manifest.json` —
+ * `"zstd"` or `"none"`, enumerated in `docs/spec/manifest.schema.json`. No live
+ * STT format encodes the codec as a byte; the numbers in {@link Compression}
+ * are a package-local tag (see `types.ts`).
+ *
+ * ## gzip
+ *
+ * The canonical account for this package; `types.ts` and `archive.ts` defer
+ * here. Three claims that are easy to conflate are kept apart:
+ *
+ * - **It was a real codec, not merely an accepted flag value.** The single-file
+ *   `.stt` archive that preceded the packed format defaulted to gzip and wrote
+ *   true DEFLATE frames, tagged `1` in that header's compression byte.
+ * - **No release and no packed archive ever carried it.** That format is gone,
+ *   its codec with it. No packed writer has ever put anything but `"zstd"` in a
+ *   manifest, and this package has no DEFLATE decoder to offer one.
+ * - **It cannot reappear silently.** A manifest claiming `"gzip"` is refused at
+ *   open (`archive.ts`) rather than assumed to be zstd, which would fail late
+ *   and opaquely inside fzstd.
+ *
+ * The codec number `1` stays unassigned: reusing it would let a byte salvaged
+ * from a single-file archive decode as a live codec. Mirrors the Rust account
+ * in `crates/stt-core/src/compression.rs`.
  */
 
 import { Decompress as ZstdDecompress } from 'fzstd';

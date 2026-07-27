@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Group, Matrix4, Vector3 } from 'three';
 import {
   resolveTilesSource,
-  resolveStt3DTilesOptions,
+  resolveSTT3DTilesOptions,
   ecefToWorldMatrix,
   alignTilesGroup,
 } from '../src/scene/tiles-3d';
@@ -74,11 +74,11 @@ describe('resolveTilesSource — source → plugin/URL wiring', () => {
   });
 });
 
-describe('resolveStt3DTilesOptions — defaults', () => {
+describe('resolveSTT3DTilesOptions — defaults', () => {
   const src = { url: 'x' } as const;
 
   it('fills fade + compression on and errorTarget 16 (matches the library default)', () => {
-    expect(resolveStt3DTilesOptions({ source: src })).toEqual({
+    expect(resolveSTT3DTilesOptions({ source: src })).toEqual({
       fade: true,
       compression: true,
       errorTarget: 16,
@@ -91,7 +91,7 @@ describe('resolveStt3DTilesOptions — defaults', () => {
   it('honours explicit overrides (including turning features off)', () => {
     const anchor = { longitude: 1, latitude: 2 };
     expect(
-      resolveStt3DTilesOptions({
+      resolveSTT3DTilesOptions({
         source: src,
         fade: false,
         compression: false,

@@ -35,7 +35,7 @@ import {
 } from '../src/lib/projection';
 import { TIME_WINDOW_GLSL } from '../src/shaders/time-window.glsl';
 import { expandFilterValues } from '../src/shaders/data-filter.glsl';
-import { makeMockGl, makeMockMap } from './mock-gl';
+import { makeMockGl, makeMockMap, publishVisibleTiles } from './mock-gl';
 import { makePolygonTile } from './fixtures';
 
 // The pre-D10 flat altitude→mercator-z factor, kept as a local literal purely
@@ -1065,7 +1065,9 @@ describe('polygon beginFrame projection-family tracking', () => {
     const { layer, gl, tile } = makeLayerWithCache();
     layer.gl = gl;
     layer.map = makeMockMap();
-    layer.tileset = { update: vi.fn() };
+    // beginFrame derives the drawn set from the tileset; these cases only care
+    // about the GPU-cache keying, so the visible set stays empty.
+    publishVisibleTiles(layer);
     // Seed a cache through the base path so the rebuild sweep has a victim.
     layer.ensureTileGpuCache(gl, tile, tile.layers[0]);
     expect(layer.tileGpuCache.size).toBe(1);

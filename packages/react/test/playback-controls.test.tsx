@@ -4,12 +4,33 @@
  * path). This guards against gross breakage from the extraction — a render
  * crash, a bad import — without re-testing the engine behavior the hooks cover.
  */
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, cleanup, act, fireEvent } from '@testing-library/react';
 import { PlaybackControls } from '../src/components/PlaybackControls';
+import type { PlaybackControlsProps } from '../src/components/PlaybackControls';
 import { usePlayback } from '../src/hooks/use-playback';
 
 afterEach(() => cleanup());
+
+const RANGE = { start: 0, end: 10_000 };
+
+const baseProps = (
+  over: Partial<PlaybackControlsProps> = {},
+): PlaybackControlsProps => ({
+  currentTime: 0,
+  timeRange: RANGE,
+  isPlaying: false,
+  bufferState: 'idle',
+  governor: null,
+  onPlayPause: () => {},
+  onSeek: () => {},
+  onSpeedChange: () => {},
+  currentSpeedMultiplier: 1,
+  targetPlaybackSeconds: 30,
+  autoSpeed: false,
+  onAutoSpeedSelect: () => {},
+  ...over,
+});
 
 describe('PlaybackControls', () => {
   it('renders the transport bar with a null governor and minimal props', () => {
@@ -47,5 +68,236 @@ describe('PlaybackControls', () => {
     const { container } = render(<Transport />);
     expect(container.querySelector('input[type="range"]')).not.toBeNull();
     expect(container.querySelector('button')).not.toBeNull();
+  });
+});
+
+describe('PlaybackControls — HTML semantics', () => {
+  it('gives every button an explicit type="button"', () => {
+    // The bar is a published component; dropped into a consumer's <form> a
+    // type-less button defaults to submit, so pressing Play would submit it.
+    const { container } = render(
+      <PlaybackControls
+        {...baseProps({ onLoopToggle: () => {}, loop: true })}
+      />,
+    );
+    const buttons = Array.from(container.querySelectorAll('button'));
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) expect(b.getAttribute('type')).toBe('button');
+  });
+
+  it('models the speed choices as one radio group, not toggle buttons', () => {
+    // The presets and Auto are mutually exclusive, which is a radio group —
+    // native radios also bring roving arrow-key traversal for free.
+    const { container } = render(
+      <PlaybackControls {...baseProps({ currentSpeedMultiplier: 2 })} />,
+    );
+    const radios = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+    );
+    expect(radios).toHaveLength(6); // 0.5/1/2/5/10 + Auto
+    expect(new Set(radios.map((r) => r.name)).size).toBe(1);
+    expect(radios.filter((r) => r.checked)).toHaveLength(1);
+    // No faked toggle semantics left behind.
+    expect(container.querySelector('[aria-pressed]')).toBeNull();
+  });
+
+  it('scopes the radio group name per instance so two bars do not fuse', () => {
+    const { container } = render(
+      <>
+        <PlaybackControls {...baseProps()} />
+        <PlaybackControls {...baseProps()} />
+      </>,
+    );
+    const names = new Set(
+      Array.from(
+        container.querySelectorAll<HTMLInputElement>('input[type="radio"]'),
+      ).map((r) => r.name),
+    );
+    expect(names.size).toBe(2);
+  });
+
+  it('merges className and style onto the root', () => {
+    const { container } = render(
+      <PlaybackControls
+        {...baseProps({ className: 'my-bar', style: { opacity: 0.5 } })}
+      />,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.classList.contains('my-bar')).toBe(true);
+    expect(root.style.opacity).toBe('0.5');
+  });
+
+  it('pads the scrub hit area out to the 24px target minimum', () => {
+    // WCAG 2.5.8. The painted track stays 6px; the input covers 9+6+9.
+    const { container } = render(<PlaybackControls {...baseProps()} />);
+    const slider = container.querySelector(
+      'input[type="range"][aria-label="Playback position"]',
+    ) as HTMLInputElement;
+    const hitArea = slider.parentElement as HTMLElement;
+    expect(hitArea.style.paddingTop).toBe('9px');
+    expect(hitArea.style.paddingBottom).toBe('9px');
+    // …and a touch drag must scrub, not scroll the page.
+    expect(slider.style.touchAction).toBe('none');
+  });
+});
+
+describe('PlaybackControls — status announcements', () => {
+  it('keeps the per-second countdown OUT of the live region', () => {
+    // Inside aria-live the countdown makes a screen reader recite
+    // "58s left, 57s left, …" for the whole session.
+    const { container } = render(
+      <PlaybackControls
+        {...baseProps({ isPlaying: true, bufferState: 'playing' })}
+      />,
+    );
+    const live = container.querySelector('output') as HTMLElement;
+    expect(live).not.toBeNull();
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('');
+    // The countdown still renders — just as a sibling, not a live update.
+    expect(container.textContent).toContain('left');
+  });
+
+  it('puts genuine transitions (buffering) IN the live region', () => {
+    const { container } = render(
+      <PlaybackControls
+        {...baseProps({ isPlaying: true, bufferState: 'buffering' })}
+      />,
+    );
+    const live = container.querySelector('output') as HTMLElement;
+    expect(live.textContent).toContain('Buffering');
+  });
+
+  it('announces the ended state', () => {
+    const { container } = render(
+      <PlaybackControls {...baseProps({ ended: true })} />,
+    );
+    expect((container.querySelector('output') as HTMLElement).textContent).toBe(
+      'Ended',
+    );
+  });
+});
+
+describe('PlaybackControls — transport', () => {
+  it('shows a replay affordance when parked at the range end', () => {
+    // The governor has exposed `ended` (and implemented replay-on-play) all
+    // along; the bar never rendered it.
+    const { getByLabelText, queryByLabelText } = render(
+      <PlaybackControls {...baseProps({ ended: true })} />,
+    );
+    expect(getByLabelText('Replay')).toBeTruthy();
+    expect(queryByLabelText('Play')).toBeNull();
+  });
+
+  it('restart seeks to the start AND plays (media replay convention)', () => {
+    const onSeek = vi.fn();
+    const onPlayPause = vi.fn();
+    const { getByLabelText } = render(
+      <PlaybackControls
+        {...baseProps({
+          currentTime: 5_000,
+          isPlaying: false,
+          onSeek,
+          onPlayPause,
+        })}
+      />,
+    );
+    fireEvent.click(getByLabelText('Restart from beginning'));
+    expect(onSeek).toHaveBeenCalledWith(RANGE.start);
+    expect(onPlayPause).toHaveBeenCalledTimes(1);
+  });
+
+  it('skip buttons seek ±10% and clamp to the range', () => {
+    const onSeek = vi.fn();
+    const { getByLabelText } = render(
+      <PlaybackControls {...baseProps({ currentTime: 5_000, onSeek })} />,
+    );
+    fireEvent.click(getByLabelText('Forward 10 percent'));
+    expect(onSeek).toHaveBeenLastCalledWith(6_000);
+    fireEvent.click(getByLabelText('Back 10 percent'));
+    expect(onSeek).toHaveBeenLastCalledWith(4_000);
+  });
+
+  it('renders the loop toggle only when the handler is supplied', () => {
+    const onLoopToggle = vi.fn();
+    const { queryByLabelText: without } = render(
+      <PlaybackControls {...baseProps()} />,
+    );
+    expect(without('Loop at the end of the range')).toBeNull();
+    cleanup();
+    const { getByLabelText } = render(
+      <PlaybackControls {...baseProps({ loop: true, onLoopToggle })} />,
+    );
+    const toggle = getByLabelText('Loop at the end of the range');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(toggle);
+    expect(onLoopToggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PlaybackControls — scrubber keyboard', () => {
+  const scrubber = (c: HTMLElement) =>
+    c.querySelector(
+      'input[type="range"][aria-label="Playback position"]',
+    ) as HTMLInputElement;
+
+  it('steps the focused scrubber by the SAME 2% the global hotkeys use', () => {
+    // The native step is range/500 (kept small so DRAGGING stays smooth), so
+    // before this the same arrow key moved 0.2% on the scrubber and 2%
+    // everywhere else.
+    vi.useFakeTimers();
+    try {
+      const onSeek = vi.fn();
+      const { container } = render(
+        <PlaybackControls {...baseProps({ currentTime: 5_000, onSeek })} />,
+      );
+      fireEvent.keyDown(scrubber(container), { key: 'ArrowRight' });
+      // Commit is settle-debounced (200ms with no governor).
+      expect(onSeek).not.toHaveBeenCalled();
+      act(() => void vi.advanceTimersByTime(250));
+      expect(onSeek).toHaveBeenCalledWith(5_200); // +2% of 10_000
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accumulates repeats and commits ONCE when the key rests', () => {
+    vi.useFakeTimers();
+    try {
+      const onSeek = vi.fn();
+      const { container } = render(
+        <PlaybackControls {...baseProps({ currentTime: 5_000, onSeek })} />,
+      );
+      const el = scrubber(container);
+      // A held key repeats faster than React commits; each step must build on
+      // the last chosen value, not on the last rendered one.
+      fireEvent.keyDown(el, { key: 'ArrowRight' });
+      fireEvent.keyDown(el, { key: 'ArrowRight' });
+      fireEvent.keyDown(el, { key: 'ArrowRight' });
+      act(() => void vi.advanceTimersByTime(250));
+      expect(onSeek).toHaveBeenCalledTimes(1);
+      expect(onSeek).toHaveBeenCalledWith(5_600);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('PageUp/PageDown step 10% and Home/End clamp to the range', () => {
+    vi.useFakeTimers();
+    try {
+      const onSeek = vi.fn();
+      const { container } = render(
+        <PlaybackControls {...baseProps({ currentTime: 5_000, onSeek })} />,
+      );
+      fireEvent.keyDown(scrubber(container), { key: 'PageUp' });
+      act(() => void vi.advanceTimersByTime(250));
+      expect(onSeek).toHaveBeenLastCalledWith(6_000);
+
+      fireEvent.keyDown(scrubber(container), { key: 'End' });
+      act(() => void vi.advanceTimersByTime(250));
+      expect(onSeek).toHaveBeenLastCalledWith(RANGE.end);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

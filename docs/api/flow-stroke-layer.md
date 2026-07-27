@@ -39,7 +39,7 @@ const layer = new FlowStrokeLayer({
 
 ## Properties
 
-Inherits all properties from [`FlowCorridorLayer`](./flow-corridor-layer.md) (and through it [`AnimatedTripsLayer`](./animated-trips-layer.md) and [`SpatioTemporalLayer`](./spatiotemporal-layer.md)), including `gradientProperty`/`gradientDomain`/`gradientColorRamp`, `tripWidth`/`widthUnits`/`widthScale`/`widthMinPixels`/`widthMaxPixels`, and the `signedFlow`/`chevronPerTripLight`/chevron-window props — see [`FlowCorridorLayer`](./flow-corridor-layer.md) for the full inherited tables.
+Inherits all properties from [`FlowCorridorLayer`](./flow-corridor-layer.md) (and through it [`AnimatedTripsLayer`](./animated-trips-layer.md) and [`SpatioTemporalLayer`](./spatiotemporal-layer.md)), including `gradientProperty`/`gradientDomain`/`gradientColorRamp`, `tripWidth`/`widthUnits`/`widthScale`/`widthMinPixels`/`widthMaxPixels`, and the `signedFlow`/`chevronPerTripLight`/`persistenceMs`/chevron-window props — see [`FlowCorridorLayer`](./flow-corridor-layer.md) for the full inherited tables. It also inherits that layer's `trailLength: 0` pin; raising it blanks the network (the parent warns once).
 
 `FlowStrokeLayer` adds:
 

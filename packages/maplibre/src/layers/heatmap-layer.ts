@@ -25,16 +25,16 @@
  *     resize because some drivers don't support framebuffer texture
  *     reattachment.
  *
- * Host-projection variants (D3): the accumulate-pass vertex shader is built
- * per host shader variant — legacy hosts (maplibre ≤v4 / mapbox) keep the
- * historical `uMatrix` projection, while v5+ hosts get the map's injected
+ * Host-projection variants: the accumulate-pass vertex shader is built
+ * per host shader variant — legacy hosts (maplibre ≤v4 / mapbox) compile the
+ * plain `uMatrix` projection, while v5+ hosts get the map's injected
  * prelude + define prepended and project via `projectTile`, so splats land in
  * the correct screen position on mercator AND globe. The colour-ramp pass is
  * a screen-space fullscreen quad — projection-agnostic by construction.
  * Programs are cached per variant via the base `getOrCreateProgram`, linked
  * lazily on the first frame that needs them.
  *
- * Gating (D8 + DataFilter, wave M2): which splats reach the accumulator is
+ * Gating (time filter + DataFilter): which splats reach the accumulator is
  * decided entirely in the accumulate-pass VERTEX stage, by two independent
  * factors multiplied into the splat weight:
  *
@@ -45,9 +45,8 @@
  *   - the column range filter from `shaders/data-filter.glsl.ts`, compiled in
  *     only when a `filterProperty` is configured.
  *
- * Both default OFF-shaped: `timeFilterMode` defaults to `'window'` (the
- * historical behaviour, byte-for-byte the same math) and no `filterProperty`
- * compiles no filter branch at all, so an existing app sees no change.
+ * Both default OFF-shaped: `timeFilterMode` defaults to `'window'`, and with
+ * no `filterProperty` no filter branch is compiled in at all.
  *
  * Picking: heatmap is deliberately NOT pickable. The rendered surface is a
  * density field — a pixel is the sum of an unbounded number of splats and has
@@ -60,11 +59,12 @@ import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_HEATMAP_COLOR_RANGE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   resolveTrailFade,
   type STTBaseLayerOptions,
   type STTTimeFilterMode,
   type TileGpuCache,
+  type TimeModeLoadKnobs,
   type RGBA8,
 } from '../base-layer.js';
 import {
@@ -72,6 +72,12 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_GLSL,
@@ -79,18 +85,18 @@ import {
   DATA_FILTER_UNIFORMS_GLSL,
   DATA_FILTER_CALL_GLSL,
   DATA_FILTER_NAMES,
-  createDataFilterUniforms,
-  resolveDataFilterUniforms,
   extractFilterColumn,
-  type DataFilterRange,
-  type DataFilterUniforms,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
 
 /**
  * The time-filter modes this layer can gate the accumulate pass with — the
- * package-wide {@link STTTimeFilterMode} under this layer's historical name.
+ * package-wide {@link STTTimeFilterMode} under this layer's own name.
  */
 export type STTHeatmapTimeFilterMode = STTTimeFilterMode;
 
@@ -126,7 +132,7 @@ export interface STTHeatmapLayerOptions
   colorDomain?: [number, number];
   /**
    * Which temporal kernel decides whether a point splats this frame. Default
-   * `'window'` — the historical symmetric `timeWindow` filter with the
+   * `'window'` — the symmetric `timeWindow` filter with the
    * `fadeInDuration`/`fadeOutDuration` ramps.
    *
    *   - `'wake'` — a point splats for {@link wakeLength} ms AFTER its own
@@ -178,7 +184,7 @@ export interface STTHeatmapLayerOptions
 }
 
 /** Layer options after defaulting — what the draw path reads. */
-interface ResolvedHeatmapOptions extends STTDataFilterOptions {
+interface ResolvedHeatmapOptions {
   radiusPixels: number;
   intensity: number;
   threshold: number;
@@ -215,34 +221,26 @@ interface TimeModeBlock {
 const TIME_MODES: Readonly<Record<STTHeatmapTimeFilterMode, TimeModeBlock>> =
   Object.freeze({
     window: {
-      decls:
-        '  uniform float uWindowStart;\n' +
-        '  uniform float uWindowEnd;\n' +
-        '  uniform float uFadeIn;\n' +
-        '  uniform float uFadeOut;\n',
+      decls: TIME_MODE_UNIFORM_DECLS.window,
       glsl: TIME_WINDOW_GLSL,
       alpha:
         'sttTimeWindowAlpha(aTime, uWindowStart, uWindowEnd, uFadeIn, uFadeOut)',
     },
     wake: {
-      decls:
-        '  uniform float uCurrentTime;\n' +
-        '  uniform float uWakeLength;\n' +
-        '  uniform float uWakeTailScale;\n',
+      // The tapered block: a splat's radius is a style knob, so the wake tail
+      // shrink applies and `uWakeTailScale` must be declared.
+      decls: TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE.wake,
       glsl: TIME_WAKE_GLSL,
       alpha: 'sttWakeAlpha(aTime, uCurrentTime, uWakeLength)',
       size: 'sttWakeSizeScale(alpha, uWakeTailScale)',
     },
     cumulative: {
-      decls: '  uniform float uCurrentTime;\n  uniform float uFadeIn;\n',
+      decls: TIME_MODE_UNIFORM_DECLS.cumulative,
       glsl: TIME_CUMULATIVE_GLSL,
       alpha: 'sttCumulativeAlpha(aTime, uCurrentTime, uFadeIn)',
     },
     trail: {
-      decls:
-        '  uniform float uCurrentTime;\n' +
-        '  uniform float uTrailLength;\n' +
-        '  uniform float uFadeTrail;\n',
+      decls: TIME_MODE_UNIFORM_DECLS.trail,
       glsl: TIME_TRAIL_GLSL,
       // One splat per feature ⇒ the kernel's per-vertex time IS the feature's
       // start time (core `timeFilterAlpha`'s `vertexTime = startTime`).
@@ -270,13 +268,13 @@ const FILTER_MAIN_GLSL =
 /**
  * Variant-aware accumulate-pass vertex source. An empty prelude means a
  * legacy frame (maplibre ≤v4 / mapbox, or a v5 host without shaderData —
- * `frame.matrix` is the mercator MVP there): the historical `uMatrix`
- * projection ships unchanged. A non-empty prelude (v5+) is prepended, prelude
+ * `frame.matrix` is the mercator MVP there): the plain `uMatrix`
+ * projection is emitted. A non-empty prelude (v5+) is prepended, prelude
  * before define (the order maplibre's own custom-layer examples use), ahead
  * of the `projectTile`-projecting body.
  *
  * `mode` and `dataFilter` select which snippets are compiled in; both default
- * to the pre-M2 shape (window gating, no filter). Callers MUST key the program
+ * to the OFF shape (window gating, no filter). Callers MUST key the program
  * cache by both (see {@link accumProgramKey}) — `getOrCreateProgram` only
  * appends the host variant. Exported for string-level tests.
  */
@@ -288,7 +286,7 @@ export function buildHeatmapAccumVertexSource(
   } = {},
 ): string {
   // `?? window` also covers a JS caller handing an unknown mode string —
-  // gating must degrade to the historical filter, never to a crash.
+  // gating must degrade to the window filter, never to a crash.
   const mode = TIME_MODES[opts.timeFilterMode ?? 'window'] ?? TIME_MODES.window;
   const filtered = opts.dataFilter === true;
   const usesPrelude = shader.prelude.length > 0;
@@ -389,7 +387,18 @@ const RAMP_FS = `
   }
 `;
 
-interface AccumProgramHandles {
+/**
+ * The inherited time-mode locations cover all four modes, and the filter ones
+ * the whole filter block: only the active mode's — and, when the filter branch
+ * was compiled in, the filter's — resolve to a real location, and every
+ * `gl.uniform*` call ignores a null one.
+ */
+interface AccumProgramHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   aMercator: number;
   aTime: number;
@@ -401,23 +410,6 @@ interface AccumProgramHandles {
   uPosOffset: WebGLUniformLocation | null;
   uRadius: WebGLUniformLocation | null;
   uIntensity: WebGLUniformLocation | null;
-  // Time-mode uniforms. Only the active mode's are declared in the source; the
-  // rest resolve to null, which every gl.uniform* call ignores.
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  // Column range filter (null unless the filter branch was compiled in).
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface RampProgramHandles {
@@ -463,7 +455,7 @@ interface AccumFormat {
   label: 'RGBA8' | 'RGBA16F' | 'RGBA32F';
 }
 
-export class STTHeatmapLayer extends STTBaseLayer {
+export class STTHeatmapLayer extends STTFilterableLayer {
   private heatOpts: ResolvedHeatmapOptions;
   // The accumulate program lives in the base per-variant program cache
   // (`getOrCreateProgram(accumKey, ...)`), linked lazily per frame variant —
@@ -483,11 +475,6 @@ export class STTHeatmapLayer extends STTBaseLayer {
   private requestedMode: STTHeatmapTimeFilterMode;
   /** True when a `filterProperty` was configured — the filter branch is compiled. */
   private readonly filterCompiled: boolean;
-  /** Filter uniform payload, allocated once and re-resolved in place per tile. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
-  /** One warning per layer for a categorical `filterProperty` (deck parity). */
-  private warnedCategoricalFilter = false;
 
   // FBO state — lazily allocated on first frame, resized when the drawing
   // buffer changes.
@@ -502,7 +489,7 @@ export class STTHeatmapLayer extends STTBaseLayer {
    * (WebGL2 `EXT_color_buffer_half_float` / WebGL1 + OES_texture_half_float),
    * we allocate `RGBA16F` and the additive blend has ~65k headroom per
    * channel. Falls back to `RGBA8` everywhere else — heatmaps still render,
-   * just with the historical saturation behaviour.
+   * just with the ~255-splat saturation above.
    *
    * `null` = uninitialized; resolved on first `ensureAccumFramebuffer`.
    */
@@ -528,15 +515,9 @@ export class STTHeatmapLayer extends STTBaseLayer {
       wakeLength: opts.wakeLength ?? 0,
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       // No independent default: a trail as long as the window is the closest
-      // thing to the historical gating, and never the degenerate `<= 0`.
+      // thing to the window gating, and never the degenerate `<= 0`.
       trailLength: opts.trailLength ?? opts.timeWindow,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.filterCompiled = !!opts.filterProperty;
     this.trailLengthOpt = opts.trailLength;
@@ -578,30 +559,6 @@ export class STTHeatmapLayer extends STTBaseLayer {
   /** Replace the splat radius (px) at runtime. */
   setRadius(radiusPixels: number): void {
     this.heatOpts.radiusPixels = radiusPixels;
-    this.map?.triggerRepaint();
-  }
-
-  /**
-   * Move the column range filter's bounds (the slider hook). Uniform-only —
-   * the attribute stays bound and no tile is re-uploaded, so this is cheap
-   * enough to drive from a drag. `null` idles the filter (everything renders).
-   * Requires a construction-time `filterProperty`: without one the layer
-   * compiled no filter branch and this is inert.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.heatOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only, like `setFilterRange`. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.heatOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every feature unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.heatOpts.filterEnabled = enabled;
     this.map?.triggerRepaint();
   }
 
@@ -652,6 +609,23 @@ export class STTHeatmapLayer extends STTBaseLayer {
       (requested === 'trail' && !(trail > 0))
         ? 'window'
         : requested;
+  }
+
+  /**
+   * The knobs the SHADER compiled, not the ones the caller passed. Both differ
+   * here: `trailLength` defaults to the whole `timeWindow` (so the raw option
+   * is usually undefined while the splat really does reach a full window into
+   * the past), and the mode is DEGRADED to `'window'` when its length knob is
+   * non-positive. Sizing the load window off the raw bag would under-cover the
+   * tail in trail mode and over-cover it — by 2× — in window mode, where that
+   * defaulted `trailLength` is not used at all.
+   */
+  protected timeModeLoadKnobs(): TimeModeLoadKnobs {
+    return {
+      mode: this.heatOpts.timeFilterMode,
+      wakeLength: this.heatOpts.wakeLength,
+      trailLength: this.heatOpts.trailLength,
+    };
   }
 
   protected acceptsGeometry(type: GeometryType): boolean {
@@ -756,15 +730,8 @@ export class STTHeatmapLayer extends STTBaseLayer {
     extras.push(cache.weightBuffer);
 
     if (this.filterCompiled) {
-      const col = extractFilterColumn(f, this.heatOpts.filterProperty);
-      if (col.categorical && !this.warnedCategoricalFilter) {
-        this.warnedCategoricalFilter = true;
-        console.warn(
-          `[${this.id}] filterProperty '${this.heatOpts.filterProperty}' is a ` +
-            'categorical column; range filtering needs a numeric one — ' +
-            'rendering unfiltered',
-        );
-      }
+      const col = extractFilterColumn(f, this.filterOpts.filterProperty);
+      if (col.categorical) this.warnCategoricalFilterOnce();
       cache.hasFilterColumn = col.hasColumn;
       if (col.values) {
         // One splat per feature, so the per-FEATURE column binds directly (no
@@ -849,7 +816,7 @@ export class STTHeatmapLayer extends STTBaseLayer {
 
     // Globe wrap-skip (drop wrap !== 0 copies) is vacuous here: STT tiles
     // are world tiles drawn exactly once — no wrapped copies exist to skip.
-    // Splats are points, so no edge subdivision is needed either (D4).
+    // Splats are points, so no edge subdivision is needed either.
     const half = this.opts.timeWindow / 2;
     for (const tile of this.loadedTiles.values()) {
       for (const layer of tile.layers) {
@@ -871,16 +838,7 @@ export class STTHeatmapLayer extends STTBaseLayer {
         if (this.filterCompiled) {
           // Per tile: `enabled` also depends on whether THIS tile baked the
           // column (a tile without it renders unfiltered).
-          const fu = resolveDataFilterUniforms(
-            this.filterUniforms,
-            this.heatOpts,
-            cache.hasFilterColumn === true,
-          );
-          gl.uniform2fv(ah.uFilterRange, fu.range);
-          gl.uniform2fv(ah.uFilterSoftRange, fu.softRange);
-          gl.uniform1f(ah.uFilterEnabled, fu.enabled);
-          gl.uniform1f(ah.uFilterTransformSize, fu.transformSize);
-          gl.uniform1f(ah.uFilterTransformColor, fu.transformColor);
+          this.uploadDataFilterUniforms(gl, ah, cache.hasFilterColumn === true);
         }
 
         // A VAO records attribute locations belonging to the program it was
@@ -1001,29 +959,10 @@ export class STTHeatmapLayer extends STTBaseLayer {
       uPosOffset: gl.getUniformLocation(program, 'uPosOffset'),
       uRadius: gl.getUniformLocation(program, 'uRadius'),
       uIntensity: gl.getUniformLocation(program, 'uIntensity'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 

@@ -7,7 +7,7 @@ It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and shares the tra
 ## How a model is posed
 
 - **Position** — the interpolated point (lon/lat/alt) between the two bracketing keyframes → `getPosition`.
-- **Orientation** — the `headingProperty` column (radians, `0` = +x/east, CCW), angle-interpolated the shortest way around the ±π seam, rides the yaw slot of deck.gl's `[pitch, yaw, roll]` (`getOrientation`, degrees). The constant `orientationOffset` is added on top so a model whose native forward axis is not +x can be corrected once. With no heading column, models render axis-aligned (the offset alone).
+- **Orientation** — the `headingProperty` column (radians, `0` = +x/east, CCW), angle-interpolated the shortest way around the ±π seam, rides the yaw slot of deck.gl's `[pitch, yaw, roll]` (`getOrientation`, degrees). The constant `orientationOffset` is added on top so a model whose native forward axis is not +x can be corrected once. With no heading column, models render axis-aligned (the offset alone). For a full 3-axis attitude — banking, pitching aircraft and drones — set [`quaternionColumn`](#full-3-axis-attitude-quaternioncolumn) instead.
 - **Scale** — when `scaleToDimensions` (default), `getScale` = `[length, width, height]` (meters), fitting a unit-sized model to the object's bounding box; when `false`, `getScale` = `[1, 1, 1]` and the model renders at its native size. `SimpleMeshLayer`'s own `sizeScale` multiplies on top.
 - **Color** — the `colorProperty` category is resolved on the CPU through `colorMapping` into a per-instance RGBA `getColor`, multiplied by the CPU appear/disappear fade. With a `texture` set, the mesh's texture wins and `getColor` is ignored (deck `SimpleMeshLayer` semantics); the default white keeps textured / vertex-colored models looking natural.
 - **Anchor** — the constant `getTranslation` `[x, y, z]` (meters) offsets every instance from its anchor point — lift a center-origin model by half its height, or leave `[0, 0, 0]` for a base-anchored model.
@@ -90,7 +90,8 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | Property            | Type                       | Default     | Description                                                                                                                                                                                                                                                                   |
 | :------------------ | :------------------------- | :---------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `headingProperty`   | `string`                   | `'heading'` | Yaw column name (radians, world frame, 0 = +x/east, CCW). Drives the model's `getOrientation` yaw, angle-interpolated between keyframes. Absent ⇒ models are axis-aligned.                                                                                                    |
-| `orientationOffset` | `[number, number, number]` | `[0, 0, 0]` | Constant orientation offset `[pitch, yaw, roll]` in degrees, added to the interpolated heading (which rides the yaw slot). Corrects a model whose native forward axis is not +x, or tilts/rolls it.                                                                           |
+| `quaternionColumn`  | `string \| null`           | `null`      | Per-feature **attitude quaternion** column name — an interleaved `FixedSizeList<Float32, 4>` vector column holding `[qx, qy, qz, qw]`. See [Full 3-axis attitude](#full-3-axis-attitude-quaternioncolumn).                                                                    |
+| `orientationOffset` | `[number, number, number]` | `[0, 0, 0]` | Constant orientation offset `[pitch, yaw, roll]` in degrees, added to the interpolated heading (which rides the yaw slot) or to the `quaternionColumn` attitude. Corrects a model whose native forward axis is not +x, or tilts/rolls it.                                     |
 | `lengthProperty`    | `string`                   | `'length'`  | Model-length column name (meters, model +x). Drives the x-scale when `scaleToDimensions`.                                                                                                                                                                                     |
 | `widthProperty`     | `string`                   | `'width'`   | Model-width column name (meters). Drives the y-scale when `scaleToDimensions`.                                                                                                                                                                                                |
 | `heightProperty`    | `string`                   | `'height'`  | Model-height column name (meters). Drives the z-scale when `scaleToDimensions`.                                                                                                                                                                                               |
@@ -100,6 +101,35 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `defaultLength`     | `number`                   | `4`         | Length used when `lengthProperty` names no column and `scaleToDimensions` is on.                                                                                                                                                                                              |
 | `defaultWidth`      | `number`                   | `2`         | Width used when `widthProperty` names no column.                                                                                                                                                                                                                              |
 | `defaultHeight`     | `number`                   | `1.6`       | Height used when `heightProperty` names no column.                                                                                                                                                                                                                            |
+
+### Full 3-axis attitude (`quaternionColumn`)
+
+`headingProperty` expresses **yaw only**, so an aircraft or drone archive
+renders permanently wings-level. Set `quaternionColumn` to the name of a baked
+`FixedSizeList<Float32, 4>` column of `[qx, qy, qz, qw]` (the shape
+[`BinaryFeatures.vectorProps`](./binary-features.md) documents for exactly this
+case) and the full attitude drives the pose instead: the quaternion is
+**slerped** (shortest-arc) between the two keyframes bracketing the playhead,
+converted to deck's euler `[pitch, yaw, roll]` degrees, and then
+`orientationOffset` is added.
+
+Requires a resolvable `trackIdProperty` column — attitude keyframes are pooled
+per track exactly like positions, which costs a second pooled index (maintained
+incrementally across tile churn, like the track index). The layer falls back to
+the heading path, with a one-time warning, when the column is missing,
+mis-sized, or ships a `u8` leaf.
+
+### Upstream pose escape hatches
+
+These are `SimpleMeshLayer` pass-throughs, unset by default so the layer's own
+interpolated pose drives the models. Setting one hands that part of the pose to
+the caller.
+
+| Property             | Type                                           | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                       |
+| :------------------- | :--------------------------------------------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getOrientation`     | `[number, number, number] \| Function \| null` | `null`  | Constant `[pitch, yaw, roll]` (degrees) or a deck accessor. When set it **replaces** the computed per-instance orientation (heading / quaternion + offset) wholesale.                                                                                                                                                                                                                                             |
+| `getScale`           | `[number, number, number] \| Function \| null` | `null`  | Constant `[x, y, z]` or a deck accessor. When set it **replaces** the computed `scaleToDimensions` scale.                                                                                                                                                                                                                                                                                                         |
+| `getTransformMatrix` | `number[] \| Function \| null`                 | `null`  | Constant 16-element column-major matrix, or an accessor returning one. deck ignores `getOrientation`/`getScale`/`getTranslation` entirely when this yields a matrix, so it overrides the whole computed pose. **Caveat**: deck probes it once as `getTransformMatrix(data[0])`, and `data` here is a binary `{length, attributes}` object whose `[0]` is `undefined` — an accessor must tolerate that probe call. |
 
 ### Rendering
 
@@ -120,8 +150,9 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ## How it works
 
+0. **Geometry-kind guard** — tile layers whose `geometryType` is not `Point` are filtered out before pooling, with one named console warning, rather than being misread as one position per feature. (The filter is memoized on the tile-array reference, so the tile-identity short-circuits downstream stay intact.)
 1. **Cross-tile pooling** — a track's keyframes are spread across temporal-bucket tiles, so the two keyframes bracketing the playhead can live in adjacent tiles. Every loaded tile's snapshots are grouped by `trackIdProperty`, with each keyframe's time rebased to absolute epoch-ms so snapshots from tiles with different `timeOffset`s sort into one timeline. The pooled, track-grouped index is rebuilt only when the visible tile set changes (or a style prop that feeds it changes) — not every frame.
-2. **Per-frame interpolation** — for every track active at the playhead, a binary search finds the two bracketing keyframes and linearly interpolates position, dimensions, and speed; heading is interpolated the shortest way around the ±π seam. Missing dimension/heading columns fall back to the `default*` props (or axis-aligned, for heading).
+2. **Per-frame interpolation** — for every track active at the playhead, a binary search finds the two bracketing keyframes and linearly interpolates position, dimensions, and speed; heading is interpolated the shortest way around the ±π seam, and a `quaternionColumn` attitude is slerped the shortest arc. Missing dimension/heading columns fall back to the `default*` props (or axis-aligned, for heading).
 3. **Implicit visibility & fade** — a track only produces a sample while the playhead lies within its keyframe span; there is no separate time-filter window to configure. Just inside the start/end of that span, `fadeInDuration`/`fadeOutDuration` ramp the model's alpha from/to zero. A track with only one loaded keyframe is instead held, un-interpolated, for a short hold window around that keyframe.
 4. **Instance bake** — the interpolated samples are baked into per-instance buffers (`getPosition` and `getColor` as binary attributes, `getOrientation` and `getScale` as function accessors that index those buffers), then handed to a `SimpleMeshLayer` (`@deck.gl/mesh-layers`) instancing `mesh` at each pose. With `meshMapping`, one `SimpleMeshLayer` is emitted per category (each mapped category is seeded up front so its GPU model persists across frames rather than re-uploading as the category comes and goes); otherwise a single sublayer draws every instance.
 5. **Redraw** — the layer forces a `renderLayers()` pass every advanced tick (like `AnimatedBoundingBoxLayer`) so the CPU-computed instance buffers advance; the base class's shader-uniform redraw path never runs for this layer.
@@ -130,7 +161,7 @@ Cost scales with the number of _active_ tracks over the visible tiles — a bina
 
 ## Picking
 
-Every mesh sublayer is pickable. A hit's `info.index` maps into that sublayer's per-instance active-track rows (stride 1) and `info.object` is set to that track's flat decoded props — `track_id`, `category`, `heading`, `length`, `width`, `height`, `speed` — the same AV-inspector shape `AnimatedBoundingBoxLayer` emits. The sublayer short id for `_subLayerProps` overrides is **`mesh`**.
+`pickable` is **inherited** like any other deck layer — pass `pickable: true` on the composite (it is no longer hardcoded on the sublayers, so `pickable: false` now genuinely disables hit-testing and stops paying for the picking attribute). A hit's `info.index` maps into that sublayer's per-instance active-track rows (stride 1) and `info.object` is set to that track's flat decoded props — `track_id`, `category`, `heading`, `length`, `width`, `height`, `speed` — the same AV-inspector shape `AnimatedBoundingBoxLayer` emits. The sublayer short id for `_subLayerProps` overrides is **`mesh`**.
 
 ## Source
 

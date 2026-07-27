@@ -38,7 +38,9 @@
  *      expansion into a per-point RGBA `getColor`. This is a LIT layer, so
  *      categorical colours must ride `instanceColors` (Gouraud-lit) — NOT the
  *      GPU `CategoryColorExtension`, which replaces colour AFTER lighting in the
- *      fragment stage and would render categorical points flat/unshaded.
+ *      fragment stage and would render categorical points flat/unshaded. The
+ *      extension is therefore not installed at all: no `instanceCategoryIndex`
+ *      attribute, no UBO, no palette texture, no fragment branch.
  *   4. a constant `color`.
  *
  * NORMAL comes from a `[nx, ny, nz]` VECTOR column (`FixedSizeList<Float32,3>`)
@@ -63,22 +65,26 @@ import {
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
-import {
-  CategoryColorExtension,
-  CATEGORY_PALETTE_SIZE,
-} from '../../extensions/category-color-extension.js';
 import { emit } from '../../lib/telemetry.js';
-import { warnOnce } from '../../lib/log.js';
 import {
   colorListDigest,
   colorMappingDigest,
   inheritedPropsDigest,
-  structuralDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type { ColorAccessorValue } from '../../lib/accessor-alias.js';
-import { DEFAULT_CATEGORICAL_PALETTE } from '@poopdeck.gl/core';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import { bindColorVector, bindFloatVector } from '../../lib/vector-props.js';
+import {
+  DEFAULT_CATEGORICAL_PALETTE,
+  GeometryType,
+  tileLayerKey,
+} from '@poopdeck.gl/core';
 import { expandCategoricalColors as coreExpandCategoricalColors } from '@poopdeck.gl/core/style';
 import type { RGBA255 } from '@poopdeck.gl/core/style';
 import type {
@@ -115,8 +121,10 @@ export interface _AnimatedPointCloudLayerProps {
 
   /**
    * Point colour — constant {@link Color}, or property name for categorical
-   * colouring (GPU lookup via CategoryColorExtension, same path as the point
-   * layer's `fillColor`).
+   * colouring. Unlike AnimatedPointLayer's `fillColor`, the categorical path
+   * is CPU-expanded into a per-point RGBA `getColor` rather than lifted to
+   * CategoryColorExtension: these points are phong-LIT, and the extension
+   * replaces colour after lighting. See the class docstring.
    * @default [255, 255, 255, 255]
    */
   color?: Color | string;
@@ -159,7 +167,9 @@ export interface _AnimatedPointCloudLayerProps {
    * baked by `stt-build --vector-group name=r,g,b,a:u8`). When the tile carries
    * it, the contiguous u8 buffer is bound to `getColor` **zero-copy** — the
    * GPU-ready analogue of {@link rgbColorColumns}. Takes precedence over every
-   * other colour path. Ignored if the column is absent from the tile.
+   * other colour path. Ignored if the column is absent from the tile. A column
+   * baked with an f32 leaf still works, but is converted per tile (with a
+   * one-time warning) — colour attributes must reach the GPU as normalized u8.
    * @default 'point_rgba'
    */
   colorVectorColumn?: string | null;
@@ -168,7 +178,9 @@ export interface _AnimatedPointCloudLayerProps {
    * VECTOR column name (`FixedSizeList<Float32,3>`) holding each point's
    * surface normal `[nx, ny, nz]`. When present it's bound to `getNormal`
    * **zero-copy**; absent ⇒ deck's default `[0, 0, 1]` (points face straight
-   * up, so lighting is uniform).
+   * up, so lighting is uniform). The f32 leaf is REQUIRED — a u8 leaf is
+   * ignored with a one-time warning, since `instanceNormals` is a float
+   * attribute and there is no rescale convention that would make u8 valid.
    * @default 'normal'
    */
   normalColumn?: string | null;
@@ -206,6 +218,47 @@ export interface _AnimatedPointCloudLayerProps {
 export type AnimatedPointCloudLayerProps = _AnimatedPointCloudLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Sublayer-cache effect of every own prop, exhaustive by type: a prop added to
+ * {@link _AnimatedPointCloudLayerProps} without an entry here fails to compile.
+ *
+ * `'sublayer'` — read by {@link AnimatedPointCloudLayer.buildSublayer}, so a
+ * cached `PointCloudLayer` freezes the value and a change must drop the
+ * sublayer cache.
+ *
+ * `'prepare'` — read only by `buildTileData`, where the value is baked into the
+ * tile's binary attributes. Each is a component of
+ * {@link AnimatedPointCloudLayer.computeStyleKey} (`colorPalette` via
+ * `colorListDigest`, `colorMapping` via `colorMappingDigest`,
+ * `colorMappingDefault` via `mapDefault`, the column-name props via their own
+ * terms, `elevationScale` alongside `elevationProperty`), so a change rebuilds
+ * `prepared` — and the sublayer cache hit tests `prepared` by object identity,
+ * which is what invalidates the sublayer. Moving one of these to `'sublayer'`
+ * is safe; moving a `'sublayer'` prop here is only safe while `styleKey`
+ * genuinely contains it.
+ *
+ * `color` is additionally keyed on its RESOLVED value (`getColor` wins) through
+ * the `overrides` channel — see
+ * {@link AnimatedPointCloudLayer.computeLayerPropsKey}.
+ */
+const POINT_CLOUD_PROP_EFFECTS: PropEffects<_AnimatedPointCloudLayerProps> = {
+  sizeUnits: 'sublayer',
+  pointSize: 'sublayer',
+  material: 'sublayer',
+  color: 'sublayer',
+  getColor: 'sublayer',
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+  rgbColorColumns: 'prepare',
+  colorVectorColumn: 'prepare',
+  normalColumn: 'prepare',
+  elevationProperty: 'prepare',
+  elevationScale: 'prepare',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+};
+
 // Default categorical palette — the single source of truth in @poopdeck.gl/core.
 const DEFAULT_PALETTE: Color[] = DEFAULT_CATEGORICAL_PALETTE;
 
@@ -232,20 +285,10 @@ interface PreparedTile {
   };
   /** Per-tile time reference; passed to TimeFilterExtension as `timeOffset`. */
   timeOffset: number;
-  /**
-   * When the GPU categorical-colour path is active for this tile, the resolved
-   * palette to pass to the extension. Null when CPU-side / constant colour.
-   */
-  gpuPalette: Color[] | null;
   /** Source tile + decoded columns — picking enrichment context (references). */
   tile: Tile;
   layerName: string;
   features: BinaryFeatures;
-}
-
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
 }
 
 /**
@@ -373,13 +416,6 @@ export class AnimatedPointCloudLayer<
   });
 
   /**
-   * Singleton CategoryColorExtension. Always installed; when a tile lacks
-   * `instanceCategoryIndex` the shader branch is gated off via the
-   * `useCategoryColor` uniform.
-   */
-  private readonly categoryColorExtension = new CategoryColorExtension();
-
-  /**
    * Stable getTime reference. Critical: deck.gl re-runs work when accessor
    * function references change; a fresh arrow every render defeats the cache.
    */
@@ -392,7 +428,7 @@ export class AnimatedPointCloudLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy prop.
    * Same value domain as the legacy prop (constant or column name).
    */
@@ -408,33 +444,48 @@ export class AnimatedPointCloudLayer<
   /**
    * Compute a digest of the layer-level props that affect every sublayer. When
    * this changes we throw away the entire sublayer cache.
+   *
+   * Which props participate is decided by {@link POINT_CLOUD_PROP_EFFECTS}
+   * rather than by an enumeration here, so a new prop cannot silently miss the
+   * key. The remaining inputs are not props of this layer at all — the
+   * inherited composite/time props ride the positional `extra` channel.
    */
   private computeLayerPropsKey(): string {
-    const color = this.colorValue();
-    return [
-      this.props.sizeUnits,
-      this.props.pointSize,
-      structuralDigest(this.props.material),
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
-      // props, _subLayerProps overrides…) plus the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      // color constant branch only — the property-driven path lives in
-      // `prepared` and is keyed via preparedKey.
-      Array.isArray(color) ? color.join(',') : '',
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedPointCloudLayerProps>(
+      this.props,
+      POINT_CLOUD_PROP_EFFECTS,
+      {
+        overrides: {
+          // The sublayer's constant `getColor` comes from the RESOLVED alias
+          // value, so the key has to track it: keying the raw prop leaves every
+          // cached sublayer stale when only `getColor` changes.
+          color: this.colorValue(),
+        },
+        extra: [
+          // Composite props that getSubLayerProps bakes into every sublayer
+          // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
+          // props, _subLayerProps overrides…) plus the user's updateTriggers.
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          // Inherited time props that `buildSublayer` forwards directly.
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   renderLayers(): Layer[] {
     const t0 = performance.now();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
+      // Drop the derived buffers (padded positions, expanded RGBA) AND the
+      // references they hold into tiles the tileset has already evicted —
+      // scrubbing to an empty range or panning away otherwise pins both
+      // indefinitely. Mirrors AnimatedColumnLayer.
+      this.preparedTileCache.clear();
+      this.sublayerCache.clear();
       this.lastTilesRef = null;
       return [];
     }
@@ -446,7 +497,7 @@ export class AnimatedPointCloudLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -512,6 +563,14 @@ export class AnimatedPointCloudLayer<
     const color = this.colorValue();
     const colorProp = typeof color === 'string' ? color : '';
     const mapping = this.props.colorMapping;
+    // The fallback colour is BAKED into the prepared getColor buffer twice (the
+    // unmapped-category slot and the 0xffff NULL slot), so a change to it must
+    // re-prepare the tile — otherwise flipping it to make unmapped points
+    // visible does nothing until the tile is evicted. Matches the sibling
+    // column layer's `d${mapDefault}` term.
+    const mapDefault = (this.props.colorMappingDefault ?? [0, 0, 0, 0]).join(
+      ',',
+    );
     const elevProp =
       typeof this.props.elevationProperty === 'string'
         ? this.props.elevationProperty
@@ -531,7 +590,7 @@ export class AnimatedPointCloudLayer<
       colorProp
         ? colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
         : 0
-    }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|e${elevProp}:${elevScale}|${rgbKey}|${updateTriggersDigest(
+    }|${mapping ? `m${colorMappingDigest(mapping)}` : 'g'}|d${mapDefault}|e${elevProp}:${elevScale}|${rgbKey}|${updateTriggersDigest(
       this.props.updateTriggers,
     )}`;
   }
@@ -544,8 +603,20 @@ export class AnimatedPointCloudLayer<
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0) return null;
+    // PointCloudLayer is instanced at points: `positions` is indexed by
+    // FEATURE. A linestring/polygon tile would silently bunch every point onto
+    // the first few paths' leading vertices — warn once and skip instead.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.Point],
+        'AnimatedPointCloudLayer',
+        tileLayer.name,
+      )
+    )
+      return null;
     const styleKey = this.computeStyleKey();
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -624,27 +695,36 @@ export class AnimatedPointCloudLayer<
       instanceEndTime: { value: binary.endTimes, size: 1 },
     };
 
-    // Per-point surface normal from an interleaved [nx,ny,nz] vector column,
-    // bound zero-copy. Absent ⇒ deck's default getNormal [0,0,1].
+    // Per-point surface normal from an interleaved [nx,ny,nz] vector column.
+    // `instanceNormals` is a FLOAT attribute, so the leaf type is load-bearing:
+    // a u8 leaf would bind as uint8x3 against a vec3 (a format mismatch, not a
+    // rescale) — bindFloatVector rejects it with a named warning. Absent ⇒
+    // deck's default getNormal [0,0,1].
     const normalN =
       typeof this.props.normalColumn === 'string'
         ? this.props.normalColumn
         : '';
-    const normal = normalN ? vec[normalN] : undefined;
-    if (normal && normal.size === 3) {
-      attributes.getNormal = { value: normal.value, size: 3 };
+    const normal = normalN
+      ? bindFloatVector(vec[normalN], 3, 'AnimatedPointCloudLayer', normalN)
+      : null;
+    if (normal) {
+      attributes.getNormal = normal;
     }
-
-    let gpuPalette: Color[] | null = null;
 
     // Per-point RGBA from ONE interleaved vector column (baked at build time):
     // bind the contiguous u8 buffer straight to the GPU, zero re-pack. Wins
     // over every other colour path; falls through when the column is absent.
+    // Again the leaf type decides the buffer format — binding an f32 leaf by
+    // `size` alone yields float32x4 against the shader's unorm8x4 and blows
+    // every point out to white, so bindColorVector converts it once (warning)
+    // instead.
     const colorVecN =
       typeof this.props.colorVectorColumn === 'string'
         ? this.props.colorVectorColumn
         : '';
-    const colorVec = colorVecN ? vec[colorVecN] : undefined;
+    const colorVec = colorVecN
+      ? bindColorVector(vec[colorVecN], 4, 'AnimatedPointCloudLayer', colorVecN)
+      : null;
 
     // Per-point RGB from three numeric columns (build-time camera-sampled
     // colours). Wins over the categorical / palette path; falls through to it
@@ -654,12 +734,8 @@ export class AnimatedPointCloudLayer<
     const gArr = rgbCols ? binary.numericProps[rgbCols[1]] : undefined;
     const bArr = rgbCols ? binary.numericProps[rgbCols[2]] : undefined;
 
-    if (colorVec && colorVec.size === 4) {
-      attributes.getColor = {
-        value: colorVec.value,
-        size: 4,
-        normalized: true,
-      };
+    if (colorVec) {
+      attributes.getColor = colorVec;
     } else if (rArr && gArr && bArr) {
       const out = new Uint8Array(count * 4);
       for (let i = 0; i < count; i++) {
@@ -741,7 +817,6 @@ export class AnimatedPointCloudLayer<
       styleKey,
       data: { length: count, attributes },
       timeOffset: binary.timeOffset,
-      gpuPalette,
       tile,
       layerName: tileLayer.name,
       features: binary,
@@ -751,7 +826,6 @@ export class AnimatedPointCloudLayer<
       tileKey,
       cached: false,
       features: count,
-      gpuPalette: gpuPalette !== null,
       ms: performance.now() - t0,
     });
     return prepared;
@@ -765,26 +839,15 @@ export class AnimatedPointCloudLayer<
       Array.isArray(colorValue) ? colorValue : DEFAULT_COLOR
     ) as Color;
 
-    // CategoryColorExtension props: when this tile uses the GPU palette path we
-    // pass the resolved palette + useCategoryColor=true. Otherwise the
-    // extension idles (its shader branch is gated by useCategoryColor).
-    const useGpuCategory = prepared.gpuPalette !== null;
-    if (useGpuCategory && prepared.gpuPalette!.length > CATEGORY_PALETTE_SIZE) {
-      warnOnce(
-        'AnimatedPointCloudLayer:paletteOverflow',
-        `[AnimatedPointCloudLayer] colorPalette has ${prepared.gpuPalette!.length} ` +
-          `entries; only the first ${CATEGORY_PALETTE_SIZE} will be used by ` +
-          'CategoryColorExtension.',
-      );
-    }
-
-    // Keep the extension list constant across sublayers — see
-    // animated-trips-layer.ts for the cache-storm rationale. User extensions
-    // from the top-level `extensions` prop are appended (composeExtensions).
-    const extensions = this.composeExtensions([
-      this.timeFilterExtension,
-      this.categoryColorExtension,
-    ]);
+    // NO CategoryColorExtension. This is a LIT layer, so every colour path —
+    // constant, vector, RGB columns, colorMapping, palette — resolves on the
+    // CPU into `instanceColors` (see the class docstring); the extension's
+    // fragment hook would replace colour AFTER lighting. Installing it anyway
+    // would cost a live `instanceCategoryIndex` attribute, a UBO, an
+    // fs:DECKGL_FILTER_COLOR branch and a palette-texture acquire/release per
+    // sublayer, all permanently idle. User extensions from the top-level
+    // `extensions` prop are appended (composeExtensions).
+    const extensions = this.composeExtensions([this.timeFilterExtension]);
 
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate
     // system, highlight props, …) + user `_subLayerProps.pointCloud` overrides.
@@ -820,12 +883,6 @@ export class AnimatedPointCloudLayer<
       // getPickingInfo can enrich info.tile / decode the picked feature.
       tile: prepared.tile,
       sttFeatures: prepared.features,
-
-      // Always set `useCategoryColor` so tests / debug tooling can distinguish
-      // the two paths via prop inspection. The extension itself only does work
-      // when the flag is true.
-      useCategoryColor: useGpuCategory,
-      ...(useGpuCategory ? { categoryPalette: prepared.gpuPalette! } : {}),
     });
     // `_subLayerProps: { pointCloud: { type } }` swaps the sublayer class — the
     // CompositeLayer-native override point.

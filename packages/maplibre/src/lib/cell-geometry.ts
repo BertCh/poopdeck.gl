@@ -1,5 +1,5 @@
 /**
- * Cell-geometry kernel (maplibre parity campaign, Wave M4 — summary family).
+ * Cell-geometry kernel for the summary family.
  *
  * The summary tier stores one row per spatial CELL, keyed by a u64 cell id in
  * the Arrow `id` column (`BinaryFeatures.featureIds64` — the 32-bit
@@ -17,10 +17,10 @@
  *   `@poopdeck.gl/three` both depend on `h3-js@^4.1` and both resolve cell
  *   boundaries with `cellToBoundary(index, true)`; this kernel consumes that
  *   exact function so all three backends share one source of truth.
- *   Injection (rather than a direct import) is deliberate: `h3-js` is not yet
- *   in this package's `dependencies`, and keeping the kernel dependency-free
+ *   Injection (rather than a direct import) is deliberate: `h3-js` is not in
+ *   this package's `dependencies`, and keeping the kernel dependency-free
  *   means the single `import {cellToBoundary} from 'h3-js'` lives in the layer
- *   that needs it. See the campaign concerns note.
+ *   that needs it.
  * - **Quadbin** (`SummaryScheme === 'quadbin'`) — a pure `(z, x, y)` bit
  *   layout. Decoded here (third copy of a ~40-line pure port; the other two are
  *   `@poopdeck.gl/layers` `lib/quadbin-cell.ts` and `@poopdeck.gl/three`
@@ -91,7 +91,7 @@ import { lngLatToMercatorInto, metersToMercatorUnits } from './projection.js';
  * (`@poopdeck.gl/three`'s `lib/h3-cell.ts` documents the same call as returning
  * an OPEN ring and fans over every returned vertex — with the closing duplicate
  * present that costs one extra vertex and one zero-area triangle per cell.
- * Harmless, but flagged in this wave's concerns.)
+ * Harmless, but it is not the same handling as here.)
  */
 export type H3CellToBoundary = (
   h3Index: string,
@@ -628,7 +628,7 @@ const HEX_KEY_OFFSET = 1 << 25;
  * This is the bridge to deck's convention. deck computes
  * `radiusCommon = unitsPerMeter(lat) · radius` in its 512-unit common space;
  * dividing by 512 gives exactly `radius / (EARTH_CIRCUMFERENCE · cos lat)` —
- * i.e. `metersToMercatorUnits`, the horizontal twin of the D10 elevation
+ * i.e. `metersToMercatorUnits`, the horizontal twin of the elevation
  * conversion. The two agree to 5.7e-6 relative (deck rounds the circumference
  * to 40.03e6 m; this backend uses maplibre's own 40 030 228.884 m).
  *

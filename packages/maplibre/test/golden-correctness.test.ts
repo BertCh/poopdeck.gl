@@ -94,8 +94,7 @@ import { STTPointLayer } from '../src/layers/point-layer';
 import { STTLineLayer } from '../src/layers/line-layer';
 import { STTPolygonLayer } from '../src/layers/polygon-layer';
 import { STTTripsLayer } from '../src/layers/trips-layer';
-import { tileKey } from '../src/lib/streaming-source';
-import { makeMockGl } from './mock-gl';
+import { makeMockGl, publishVisibleTiles } from './mock-gl';
 import { MockMap } from './mock-map';
 import {
   makePointTile,
@@ -479,9 +478,9 @@ describe('INTEGRATION: multi-kind mock-map lifecycle survives the full mount→u
 
   /** Load each kind's matching tile and render one frame; returns draw count. */
   function renderFrame(gl: any, kinds: MountedKind[]): number {
-    for (const k of kinds) {
-      k.layer.loadedTiles.set(tileKey(k.tile), k.tile);
-    }
+    // Publish through the tileset: the drawn set is derived from the visible
+    // set, so a tile poked straight into `loadedTiles` is wiped by beginFrame.
+    for (const k of kinds) publishVisibleTiles(k.layer, k.tile);
     gl.drawCalls.length = 0;
     for (const k of kinds) k.layer.render(gl, mat16());
     return gl.drawCalls.length;

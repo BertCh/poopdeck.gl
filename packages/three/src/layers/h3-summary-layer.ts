@@ -35,7 +35,7 @@ import {
   Sphere,
 } from 'three';
 import type { Tile } from '@poopdeck.gl/core';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   buildH3Buffers,
   DEFAULT_H3_COLOR_RANGE,
@@ -63,7 +63,7 @@ export interface STTH3SummaryLayerOptions {
   opacity?: number;
 }
 
-export class STTH3SummaryLayer extends BaseSttLayer {
+export class STTH3SummaryLayer extends BaseSTTLayer {
   readonly id: string;
   readonly object = new Group();
   private mesh: Mesh;
@@ -101,7 +101,7 @@ export class STTH3SummaryLayer extends BaseSttLayer {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     const buf = buildH3Buffers(tiles, ctx.projection, this.bufferOptions());
 

@@ -13,12 +13,22 @@ import type {
   CompositeLayerProps,
   DefaultProps,
   GetPickingInfoParams,
+  Layer,
   LayerContext,
   PickingInfo,
   UpdateParameters,
 } from '@deck.gl/core';
 import { STTArchive, getFeatureProperties } from '@poopdeck.gl/core';
-import { SpatiotemporalTileset } from '@poopdeck.gl/core';
+import { SpatioTemporalTileset } from '@poopdeck.gl/core';
+// The camera→bounds repair every backend shares; see getViewportBounds() and
+// docs/roadmap/tile-loading-3d-2026-07.md §4.1.
+import { normalizeViewportBounds, boundsFromCorners } from '@poopdeck.gl/core';
+// The cost cap on that box; see the `viewportCellBudget` prop and
+// docs/roadmap/tile-loading-3d-2026-07.md §4.4.
+import {
+  fitZoomToCellBudget,
+  DEFAULT_VIEWPORT_CELL_BUDGET,
+} from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import type {
   Tile,
@@ -27,7 +37,7 @@ import type {
   BoundingBox,
   ArchiveMetadata,
   OverviewPreloadResult,
-  SpatiotemporalTilesetOptions,
+  SpatioTemporalTilesetOptions,
   SttLoadOptions,
 } from '@poopdeck.gl/core';
 import { TimeController } from '@poopdeck.gl/playback';
@@ -61,6 +71,12 @@ export interface SpatioTemporalPickingInfo extends PickingInfo {
   tile?: Tile | null;
   /** The tile whose sublayer emitted the picking event. */
   sourceTile?: Tile | null;
+  /**
+   * The per-tile sublayer that emitted the picking event (upstream
+   * `TileLayerPickingInfo.sourceTileSubLayer`). `_updateAutoHighlight` routes
+   * the highlight to THIS sublayer instead of broadcasting it to all of them.
+   */
+  sourceTileSubLayer?: Layer | null;
 }
 
 /**
@@ -128,6 +144,9 @@ export interface _SpatioTemporalLayerProps {
    *   each point lives at exactly one zoom: coarse tiles are a sparse overview,
    *   finer tiles add only the residual, so zooming in streams in detail without
    *   re-fetching the coarse cloud.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 'parent-fallback'
    */
   lodMode?: 'parent-fallback' | 'additive';
@@ -136,42 +155,63 @@ export interface _SpatioTemporalLayerProps {
    * Maximum concurrent in-flight HTTP Range requests. Threaded into the
    * archive's range coalescer as its `maxConcurrentRequests` ceiling, so this
    * is the single knob that bounds actual fetch concurrency.
+   *
+   * CONSTRUCTION-ONLY: read once when the archive + tileset are built.
+   * Changing it after mount warns and has no effect until `data` changes.
    * @default 24
    */
   maxRequests?: number;
 
   /**
    * Debounce time for viewport changes in ms (deck.gl `TileLayer` pattern).
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 0
    */
   debounceTime?: number;
 
   /**
    * Maximum number of tiles to cache.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 2000
    */
   maxCacheSize?: number;
 
   /**
    * Maximum cache size in bytes.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 2147483648 (2 GiB)
    */
   maxCacheByteSize?: number;
 
   /**
    * Enable predictive prefetching for smooth animation.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default true
    */
   enablePrefetch?: boolean;
 
   /**
    * How far ahead to prefetch in animation time (milliseconds).
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 30000
    */
   prefetchAhead?: number;
 
   /**
    * Number of time steps to prefetch ahead.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 4
    */
   prefetchSteps?: number;
@@ -189,6 +229,9 @@ export interface _SpatioTemporalLayerProps {
    *
    * Has no effect on archives without a summary tier — the tileset falls
    * back to `'raw'` whenever no summary tier is present in the metadata.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Toggling the tier
+   * after mount warns and has no effect until `data` changes.
    * @default 'auto'
    */
   tier?: 'auto' | 'summary' | 'raw';
@@ -207,6 +250,9 @@ export interface _SpatioTemporalLayerProps {
    * prefetch keep tracking the fine tier, and release restores it.
    * `null`/absent (default) is the kill switch — behavior is identical to
    * today, scrub state is stored but changes nothing.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default null
    */
   scrubLod?: {
@@ -248,7 +294,7 @@ export interface _SpatioTemporalLayerProps {
    * Mirrors the `onTileLoad` callback pattern.
    */
   onTilesetReady?:
-    | ((tileset: SpatiotemporalTileset & BufferSource) => void)
+    | ((tileset: SpatioTemporalTileset & BufferSource) => void)
     | null;
 
   /**
@@ -286,6 +332,9 @@ export interface _SpatioTemporalLayerProps {
    * archive makes (manifest, directory, pack ranges) — auth headers,
    * credentials, CORS mode; per-request fields like the `Range` header
    * always win. A fetch-like FUNCTION replaces the transport instead.
+   *
+   * CONSTRUCTION-ONLY: read once when the archive is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    */
   loadOptions?: SttLoadOptions;
 
@@ -301,6 +350,9 @@ export interface _SpatioTemporalLayerProps {
    *   copy of the visible data — 4 fallback levels ≈ 5× the fetch, decode
    *   and vertex load for zero information gain. Costs the coarse-first-paint
    *   fallback: tiles are blank until their own zoom level arrives.
+   *
+   * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
+   * mount warns and has no effect until `data` changes.
    * @default 'best-available'
    */
   refinementStrategy?: 'best-available' | 'no-overlap';
@@ -313,6 +365,72 @@ export interface _SpatioTemporalLayerProps {
 
   /** Use global bounds instead of viewport bounds (for `GlobeView`). */
   useGlobalBounds?: boolean;
+
+  /**
+   * Vertical extent of the RENDERED content, `[minMeters, maxMeters]` above
+   * the ellipsoid — upstream `TileLayer.zRange`, and used for the same thing:
+   * the viewport box becomes the union of the frustum's footprint on the
+   * ground plane and on the plane at the top of the content, exactly as deck's
+   * own `Tileset2D.getBoundingBox` unions them.
+   *
+   * Only content lifted off the ground needs it: an extruded/volumetric layer
+   * (`storm-4d`, `earthquake-columns`) or time-as-height mode draws geometry
+   * whose screen position comes from a plane ABOVE `z = 0`, so under pitch the
+   * tiles that own that geometry can sit outside the ground-plane box — the
+   * near edge of a pitched frame loses about half a tile row of anvil.
+   *
+   * Named for deck's prop rather than `elevationRange` on purpose:
+   * `AnimatedHexagonLayer` already carries an `elevationRange`, deck's
+   * `HexagonLayer` meaning ("elevation scale OUTPUT range", default
+   * `[0, 1000]`), and a chassis prop of that name would silently read a
+   * subclass's aggregation setting as a camera altitude slab.
+   *
+   * `null` (the default) means the ground plane only. NOTHING is derived
+   * automatically, deliberately: the obvious candidate — `timeHeightScale` ×
+   * the dataset's time span — is wrong under the DEFAULT `timeHeightOrigin:
+   * null`, where altitude 0 is anchored per TILE (at each tile's own
+   * `timeOffset`) rather than dataset-wide, and an over-large slab does real
+   * damage (`getBounds({z: 1e7})` reports a near-global box and selects
+   * accordingly). A wrong guess here is not conservative, so the value is the
+   * app's to state.
+   *
+   * Cheap: at pitch 60 / z8 the `z = 0` and `z = 15000` boxes differ by
+   * 0.3–0.6%, so this is a correctness completion rather than a hot path.
+   * Requires a viewport that exposes `getBounds({z})` (every deck `Viewport`
+   * does); ignored on the `unproject` fallback path.
+   * @default null (ground plane only)
+   */
+  zRange?: [number, number] | null;
+
+  /**
+   * Cap on the number of tile CELLS the viewport box may enumerate at the
+   * selected zoom. Once the box exceeds it, the zoom steps down (never below
+   * the archive's `minZoom`) until it fits.
+   *
+   * This is the cost half of the 3D tile-selection work, and it does NOT walk
+   * back its correctness half: `docs/roadmap/tile-loading-3d-2026-07.md` §4.4
+   * rules that tile counts must be allowed to RISE under pitch, because the
+   * old two-corner footprint was a 36%-coverage under-selection. They still
+   * do. But an axis-aligned box around a strongly pitched frustum degrades
+   * non-linearly — at pitch 85 / z8 it enumerates 832 cells where a flat
+   * camera at the same zoom enumerates ~12, nearly all of them in the horizon
+   * band that occupies a few screen rows. Dropping one integer zoom quarters
+   * that while still covering the whole frame, and on a full-duplication
+   * archive (the no-thinning default) the coarser tile carries the same
+   * features at a coarser simplification rather than fewer of them.
+   *
+   * Note what this is NOT: a cap on the tile LIST. Truncating an enumeration
+   * leaves on-screen tiles unfetched, which is the blank-region symptom the
+   * whole roadmap exists to remove. The selection stays complete; only its
+   * resolution drops.
+   *
+   * Inert below roughly pitch 65 at every zoom (tile counts on screen are
+   * zoom-invariant), so most apps never reach it. `Infinity` disables it
+   * outright; `useGlobalBounds` and `zoomOverride` bypass it, both being
+   * explicit instructions about what to load.
+   * @default 256
+   */
+  viewportCellBudget?: number;
 
   /**
    * Time-as-height ("space-time cube"): meters of altitude per simulation
@@ -329,23 +447,65 @@ export interface _SpatioTemporalLayerProps {
   /**
    * Absolute time (Unix ms) rendered at altitude 0 in time-as-height mode,
    * typically `timeRange.start`.
-   * @default 0
+   *
+   * `null` (the default) anchors altitude 0 at each tile's own `timeOffset`,
+   * which is what keeps the lift representable: the shader computes
+   * `(heightTime - heightOrigin)` in FLOAT32, so an origin far from the tile's
+   * times destroys the difference. A literal `0` is the Unix epoch — ~1.7e12 ms
+   * away, where the f32 ULP is ~131 s — and is therefore treated as "unset"
+   * rather than honoured; passing it would collapse every feature within ~131 s
+   * to one altitude and lift the layer ~8.6e10 m off-planet.
+   * {@link import('../extensions/time-filter-extension.js').TimeFilterExtension}
+   * warns once when the resolved origin costs more than a metre of resolution.
+   *
+   * @default null (anchor at the tile's `timeOffset`)
    */
-  timeHeightOrigin?: number;
+  timeHeightOrigin?: number | null;
 }
 
 /** Complete props accepted by {@link SpatioTemporalLayer}. */
 export type SpatioTemporalLayerProps = _SpatioTemporalLayerProps &
   CompositeLayerProps;
 
+/**
+ * Layer state. EVERYTHING the layer's lifecycle depends on lives here rather
+ * than in class fields, because deck's `Layer._transferState`
+ * (`@deck.gl/core/src/lib/layer.ts`) moves ONLY `state` / `internalState` onto
+ * the new instance React hands it every render — class-field initializers
+ * re-run on that new instance, while the closures created in
+ * `initializeState` / `_initArchiveAndTileset` still capture the FIRST one.
+ * Guards split across two instances are not guards: deck would finalize the
+ * NEWEST layer (setting its `finalized`) while an awaiting init continuation
+ * read the OLD layer's `finalized === false` and attached a fresh
+ * archive/tileset — leaking the decoder worker pool, OPFS handles and every
+ * in-flight range request. One shared object, one truth.
+ */
 interface SpatioTemporalLayerState {
   archive: STTArchive | null;
-  tileset: SpatiotemporalTileset | null;
+  tileset: SpatioTemporalTileset | null;
   metadata: ArchiveMetadata | null;
   tiles: Tile[];
+  /**
+   * LIVE play-head (Unix ms), mirrored by the `_currentTime` accessor. Written
+   * directly (not via `setState`) on the tick path so a time-only change costs
+   * a `setNeedsRedraw()` instead of a full `renderLayers()`.
+   */
   currentTime: number;
-  isLoaded: boolean;
+  /**
+   * LAYER-OWNED monotonic render epoch — the single authority behind every
+   * "the visible data changed, re-run renderLayers()" decision. Bump it by
+   * `+1` (never assign a tileset-derived value); subclasses that force a
+   * re-aggregate on the tick path (`AnimatedHeatmapLayer`,
+   * `AnimatedHexagonLayer`) already follow that contract.
+   */
   frameNumber?: number;
+  /**
+   * Mirror of the tileset's OWN frame counter as last observed from
+   * `tileset.update()`. Only used to detect "the tileset saw a change";
+   * keeping it separate from {@link frameNumber} is what stops the two
+   * counters from drifting and making `frameChanged` spuriously true.
+   */
+  tilesetFrameNumber?: number;
   playStateHandler?: (playing: boolean, speed: number) => void;
   tickHandler?: (time: number) => void;
   /**
@@ -356,6 +516,30 @@ interface SpatioTemporalLayerState {
   resolvedTimeController?: TimeController | null;
   /** Tracks the URL whose archive init is currently in flight, to avoid racing duplicate inits. */
   initializingUrl?: string | null;
+
+  // ── Lifecycle bookkeeping (mirrored by the `_`-prefixed accessors) ────────
+  /** Sim time of the last tileset reselection (drives the tick-path throttle). */
+  lastTilesetUpdateTime?: number;
+  /** Wall clock of the last tick-driven tileset reselection. */
+  lastTilesetUpdateWall?: number;
+  /** Wall clock of the last VIEWPORT-driven tileset reselection. */
+  lastViewportSelectWall?: number;
+  /** Handle of the single pending trailing viewport-settle pass. */
+  viewportSettleTimer?: ReturnType<typeof setTimeout> | null;
+  /** rAF handle coalescing per-tile `onTileLoad` state updates. */
+  tileLoadRafId?: number | null;
+  /** Tile-ID set from the last `_tilesChanged` comparison. */
+  lastTileIdSet?: Set<string>;
+  /** Viewport identity the cached bounds were computed for. */
+  lastBoundsKey?: string;
+  /** Cached viewport bounds for {@link lastBoundsKey}. */
+  cachedBounds?: BoundingBox | null;
+  /** Set by `finalizeState`; every async continuation checks it before touching state. */
+  finalized?: boolean;
+  /** Outcome of the storyboard preload for the LIVE tileset (republished to the probe). */
+  overviewPreloadResult?: OverviewPreloadResult | null;
+  /** Once-per-settle latch: the tileset selection version `onViewportLoad` last fired for. */
+  viewportLoadVersion?: number;
 }
 
 const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
@@ -401,7 +585,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   tier: 'auto',
 
   // Scrub-time LOD degradation: off (the kill switch) until browser-verified
-  // on the heavy demos — see docs/roadmap/playback-and-loading.md §8.5.
+  // on the heavy demos — see docs/roadmap/playback-and-loading.md §7.
   scrubLod: { type: 'object', value: null, optional: true, compare: true },
 
   // Parent-fallback fetch policy; 'no-overlap' for full-duplication archives
@@ -412,9 +596,21 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   zoomOverride: null,
   useGlobalBounds: false,
 
-  // Time-as-height (space-time cube) — off by default.
+  // Altitude slab the viewport box is dilated over (upstream's `zRange`).
+  // `compare: true` so an app re-creating the literal `[0, 15000]` every
+  // render is a no-op rather than a fresh reference that invalidates the
+  // bounds cache every frame.
+  zRange: { type: 'array', value: null, optional: true, compare: true },
+
+  // Cell cap that turns an over-wide pitched viewport box into one coarser
+  // zoom instead of hundreds of fetches (see the prop docs). `Infinity` off.
+  viewportCellBudget: DEFAULT_VIEWPORT_CELL_BUDGET,
+
+  // Time-as-height (space-time cube) — off by default. The origin is `null`,
+  // not `0`: see the prop docs — `0` is the Unix epoch and is f32-unrepresentable
+  // as an offset from a tile's times.
   timeHeightScale: 0,
-  timeHeightOrigin: 0,
+  timeHeightOrigin: null,
 
   // Callbacks
   onViewportLoad: { type: 'function', value: null, optional: true },
@@ -490,12 +686,99 @@ export class SpatioTemporalLayer<
     );
   }
 
-  // Internal time tracking - updated every tick without setState overhead
-  // Sublayers read from this via getCurrentTime() method
-  protected _currentTime: number = 0;
+  /**
+   * Fallback store for the lifecycle accessors below while `this.state` does
+   * not exist yet — the window between construction and `initializeState`,
+   * and the `Object.create(Layer.prototype)` harness the unit tests drive.
+   * Once state IS available it always wins, so a value written before state
+   * existed stays readable afterwards (the tests set fields, then state).
+   */
+  private _detachedLifecycle?: Record<string, unknown>;
+
+  /**
+   * Read one lifecycle field, preferring `this.state` (the object deck
+   * transfers between layer instances) and falling back to the detached bag.
+   * See {@link SpatioTemporalLayerState} for why none of these may live in
+   * class fields.
+   */
+  private _lcRead<T>(key: string, fallback: T): T {
+    const state = this.state as Record<string, unknown> | undefined;
+    const live = state?.[key];
+    if (live !== undefined) return live as T;
+    const detached = this._detachedLifecycle?.[key];
+    return detached !== undefined ? (detached as T) : fallback;
+  }
+
+  /** Write one lifecycle field. Mirror of {@link _lcRead}. */
+  private _lcWrite(key: string, value: unknown): void {
+    const state = this.state as Record<string, unknown> | undefined;
+    if (state) {
+      state[key] = value;
+      return;
+    }
+    (this._detachedLifecycle ??= {})[key] = value;
+  }
+
+  /**
+   * Slots built before deck installed `this.state` (the class-field window
+   * between construction and `initializeState`, and the
+   * `Object.create(Layer.prototype)` unit-test harnesses, which never create a
+   * state at all). Adopted into `state` the moment one exists, so nothing
+   * prepared in that window is lost.
+   *
+   * Sibling of {@link _detachedLifecycle}: that one backs the named lifecycle
+   * scalars above, this one backs subclass-owned composite caches.
+   */
+  private _detachedSlots: Record<string, unknown> | undefined;
+
+  /**
+   * Read-or-create a named slot on `this.state`.
+   *
+   * Anything a subclass would otherwise hold in a class FIELD across frames
+   * belongs here: deck's `_transferState` moves `state`/`internalState` to the
+   * new instance but re-runs field initializers, so a field-held cache is
+   * silently discarded whenever the app hands deck a freshly-constructed layer
+   * (an unmemoized `new AnimatedTripsLayer({...})` inside a React render is the
+   * usual way this happens).
+   *
+   * Lives on the chassis rather than in each subclass because the state object
+   * deck transfers is the chassis's — `declare state` above already carries the
+   * `[key: string]: unknown` index signature that makes an arbitrary slot key
+   * legal. Subclasses only choose the key and the factory.
+   */
+  protected stateSlot<T>(key: string, create: () => T): T {
+    const state = this.state as Record<string, unknown> | undefined | null;
+    if (!state) {
+      const detached = (this._detachedSlots ??= {});
+      if (detached[key] === undefined) detached[key] = create();
+      return detached[key] as T;
+    }
+    if (state[key] === undefined) {
+      state[key] = this._detachedSlots?.[key] ?? create();
+      if (this._detachedSlots) delete this._detachedSlots[key];
+    }
+    return state[key] as T;
+  }
+
+  // Internal time tracking - updated every tick without setState overhead.
+  // Sublayers read from this via getCurrentTime(). Backed by
+  // `state.currentTime` so the value survives deck's `_transferState` — a
+  // class field would be reset to 0 on the instance React renders next while
+  // the TimeController's tick closure kept writing to the previous one.
+  protected get _currentTime(): number {
+    return this._lcRead('currentTime', 0);
+  }
+  protected set _currentTime(value: number) {
+    this._lcWrite('currentTime', value);
+  }
 
   // Track last time we updated the tileset to throttle updates
-  private _lastTilesetUpdateTime: number = 0;
+  private get _lastTilesetUpdateTime(): number {
+    return this._lcRead('lastTilesetUpdateTime', 0);
+  }
+  private set _lastTilesetUpdateTime(value: number) {
+    this._lcWrite('lastTilesetUpdateTime', value);
+  }
 
   // Wall-clock (real-ms) timestamp of the last animation-tick tileset update.
   // The sim-time threshold below (`timeWindow / 20`) is scale-relative, so at
@@ -504,50 +787,127 @@ export class SpatioTemporalLayer<
   // This floor caps tick-driven tileset updates to a fixed wall-clock rate so
   // the cadence is playback-speed-invariant; the shader still animates smoothly
   // because every tick calls setNeedsRedraw() and reads time live via getTime().
-  private _lastTilesetUpdateWall: number = 0;
+  private get _lastTilesetUpdateWall(): number {
+    return this._lcRead('lastTilesetUpdateWall', 0);
+  }
+  private set _lastTilesetUpdateWall(value: number) {
+    this._lcWrite('lastTilesetUpdateWall', value);
+  }
 
   // Wall-clock (real-ms) timestamp of the last VIEWPORT-driven (updateState)
   // tileset reselection, and the handle for the single pending trailing pass.
   // Together they rate-limit pan/zoom/follow-cam reselection to ~10Hz without
   // dropping the final settle position. See MIN_VIEWPORT_TILESET_WALL_MS.
-  private _lastViewportSelectWall: number = 0;
-  private _viewportSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  private get _lastViewportSelectWall(): number {
+    return this._lcRead('lastViewportSelectWall', 0);
+  }
+  private set _lastViewportSelectWall(value: number) {
+    this._lcWrite('lastViewportSelectWall', value);
+  }
+
+  private get _viewportSettleTimer(): ReturnType<typeof setTimeout> | null {
+    return this._lcRead('viewportSettleTimer', null);
+  }
+  private set _viewportSettleTimer(
+    value: ReturnType<typeof setTimeout> | null,
+  ) {
+    this._lcWrite('viewportSettleTimer', value);
+  }
 
   // rAF handle for coalescing onTileLoad setState calls. Many tiles can
   // finish loading within one frame; batching avoids one full
-  // renderLayers()/buildConsolidatedData() rebuild per tile.
-  private _tileLoadRafId: number | null = null;
+  // renderLayers()/buildConsolidatedData() rebuild per tile. Shared through
+  // state so `finalizeState` on ANY instance cancels the pending callback.
+  private get _tileLoadRafId(): number | null {
+    return this._lcRead('tileLoadRafId', null);
+  }
+  private set _tileLoadRafId(value: number | null) {
+    this._lcWrite('tileLoadRafId', value);
+  }
 
   /**
    * Snapshot of the tile-ID set from the last `_tilesChanged` comparison.
-   * Set-based membership is the authoritative signal — we no longer treat
-   * a reordered-but-identical tile array as a change (which used to spin
-   * up a spurious setState every frame the tileset re-prioritised).
+   * Set MEMBERSHIP is the authoritative signal: the tileset re-prioritises
+   * its visible-tile array, so a reordered-but-identical array must NOT count
+   * as a change — comparing order or array identity spins up a spurious
+   * setState on every frame the priority ordering shifts.
    */
-  private _lastTileIdSet: Set<string> = new Set();
+  private get _lastTileIdSet(): Set<string> {
+    const existing = this._lcRead<Set<string> | undefined>(
+      'lastTileIdSet',
+      undefined,
+    );
+    if (existing) return existing;
+    const fresh = new Set<string>();
+    this._lcWrite('lastTileIdSet', fresh);
+    return fresh;
+  }
+  private set _lastTileIdSet(value: Set<string>) {
+    this._lcWrite('lastTileIdSet', value);
+  }
 
   /**
    * Last viewport (id, zoom, width, height) we computed bounds for.
    * Lets `_updateTileset` skip `viewport.unproject()` on the steady-state
    * 60 Hz path where the viewport hasn't actually moved.
    */
-  private _lastBoundsKey: string = '';
-  private _cachedBounds: BoundingBox | null = null;
+  private get _lastBoundsKey(): string {
+    return this._lcRead('lastBoundsKey', '');
+  }
+  private set _lastBoundsKey(value: string) {
+    this._lcWrite('lastBoundsKey', value);
+  }
+
+  private get _cachedBounds(): BoundingBox | null {
+    return this._lcRead('cachedBounds', null);
+  }
+  private set _cachedBounds(value: BoundingBox | null) {
+    this._lcWrite('cachedBounds', value);
+  }
+
+  /**
+   * Zoom {@link getZoomLevel} returned last frame, the memory the cell
+   * budget's hysteresis band needs (see `fitZoomToCellBudget`). Lives in the
+   * lifecycle bag rather than a class field for the usual reason: deck's
+   * `_transferState` re-runs field initializers, and a reset here would let
+   * the zoom flap for one frame on every unmemoized re-render.
+   *
+   * `null` means "no previous decision" and is the honest first-frame value —
+   * it can only ever RELAX the band, never select a zoom above the camera's.
+   */
+  private get _budgetZoom(): number | null {
+    return this._lcRead<number | null>('budgetZoom', null);
+  }
+  private set _budgetZoom(value: number | null) {
+    this._lcWrite('budgetZoom', value);
+  }
 
   /**
    * Set once `finalizeState` runs, so an in-flight `_initArchiveAndTileset`
    * await that resolves AFTER the layer is gone can bail before attaching
    * a fresh archive/tileset to dead state. Without this, a fast
-   * dataset-switch leaks the archive that was racing to come online.
+   * dataset-switch leaks the archive that was racing to come online — and
+   * because deck finalizes the NEWEST instance while the continuation holds
+   * the OLD one, the flag only works when it lives in the shared state.
    */
-  private _finalized: boolean = false;
+  private get _finalized(): boolean {
+    return this._lcRead('finalized', false);
+  }
+  private set _finalized(value: boolean) {
+    this._lcWrite('finalized', value);
+  }
 
   /**
    * Outcome of the storyboard preload (WS-C4) for the LIVE tileset, kept so
    * the perf-probe snapshot can republish it (the one-shot callback may fire
    * before a HUD enables the probe). Reset on re-init.
    */
-  private _overviewPreload: OverviewPreloadResult | null = null;
+  private get _overviewPreload(): OverviewPreloadResult | null {
+    return this._lcRead('overviewPreloadResult', null);
+  }
+  private set _overviewPreload(value: OverviewPreloadResult | null) {
+    this._lcWrite('overviewPreloadResult', value);
+  }
 
   /**
    * Once-per-settle latch for `onViewportLoad`: the tileset selection
@@ -557,7 +917,12 @@ export class SpatioTemporalLayer<
    * paths (updateState, the tile-load rAF, throttled animation ticks).
    * Reset on re-init — a fresh tileset restarts its version counter.
    */
-  private _viewportLoadVersion = -1;
+  private get _viewportLoadVersion(): number {
+    return this._lcRead('viewportLoadVersion', -1);
+  }
+  private set _viewportLoadVersion(value: number) {
+    this._lcWrite('viewportLoadVersion', value);
+  }
 
   // Upstream idiom: a module-level const typed `DefaultProps<XxxLayerProps>`
   // assigned to the static. The named annotation keeps the emitted .d.ts
@@ -587,7 +952,9 @@ export class SpatioTemporalLayer<
   }
 
   initializeState(context: LayerContext): void {
-    // Initialize internal time tracking
+    // Initialize internal time tracking. These are `state` writes (see the
+    // accessors above), so `this.state` — assigned by deck right before this
+    // hook — is already live.
     this._currentTime = this.props.currentTime;
     this._lastTilesetUpdateTime = this.props.currentTime;
 
@@ -619,7 +986,7 @@ export class SpatioTemporalLayer<
       metadata: null,
       tiles: [],
       currentTime: this.props.currentTime,
-      isLoaded: false,
+      finalized: false,
       playStateHandler,
       tickHandler,
       resolvedTimeController: timeController,
@@ -631,8 +998,21 @@ export class SpatioTemporalLayer<
       timeController.on('tick', tickHandler);
     }
 
-    // Initialize archive and tileset
-    this._initArchiveAndTileset();
+    // Initialize archive and tileset.
+    this._startArchiveInit();
+  }
+
+  /**
+   * Kick `_initArchiveAndTileset` such that nothing can escape as an unhandled
+   * promise rejection. The init routes its OWN failures (404 / CORS / corrupt
+   * manifest) to `props.onTileError`; this net only fires when that handler
+   * itself throws. `Promise.resolve()` wraps the result so a subclass or test
+   * that overrides the method synchronously still works.
+   */
+  private _startArchiveInit(): void {
+    Promise.resolve(this._initArchiveAndTileset()).catch((error) => {
+      console.error('[STL] Archive initialization handler threw:', error);
+    });
   }
 
   finalizeState(context: LayerContext): void {
@@ -663,6 +1043,13 @@ export class SpatioTemporalLayer<
     if (archive) {
       archive.finalize();
     }
+    // Null the handles so every "is the tileset still mine?" bail-out (the
+    // settle timer, the tile-load rAF, the overview-preload continuation)
+    // reads a dead slot rather than a finalized object. `state` is shared with
+    // any instance deck transferred it to, so this is authoritative.
+    this.state.tileset = null;
+    this.state.archive = null;
+    this.state.initializingUrl = null;
 
     // Lifecycle contract: the base finalizeState still unsubscribes from the
     // resource manager and finalizes internal state even on composites.
@@ -689,7 +1076,17 @@ export class SpatioTemporalLayer<
     // and we get two parallel archive setups racing to attach workers.
     const liveUrl =
       this.state.archive?.url ?? this.state.initializingUrl ?? null;
-    const dataChanged = propsChanged && this.props.data !== liveUrl;
+    // `changeFlags.dataChanged` is NOT redundant with `propsChanged`: deck's
+    // `diffProps` runs `compareProps` with `ignoreProps: {data: null, …}`
+    // (@deck.gl/core/src/lifecycle/props.ts), so swapping ONLY the archive URL
+    // never sets `propsChanged` — it surfaces exclusively as `dataChanged`.
+    // Gating on `propsChanged` alone meant a `data`-only swap kept serving the
+    // previous archive forever. Both flags also gate a RETRY after a failed
+    // init (which clears `initializingUrl`), so a broken manifest re-attempts
+    // on the next real prop/data change instead of on every viewport frame.
+    const dataChanged =
+      (!!propsChanged || !!changeFlags.dataChanged) &&
+      this.props.data !== liveUrl;
 
     // Handle TimeController changes. Resolution is prop → context.userData, so
     // a change can come from the prop OR — when some other prop change drives
@@ -730,15 +1127,76 @@ export class SpatioTemporalLayer<
     }
 
     if (dataChanged) {
-      // Reinitialize with new data source
-      this._initArchiveAndTileset();
+      // Reinitialize with new data source.
+      this._startArchiveInit();
       return;
     }
+
+    // Re-push the mutable tileset options, exactly as upstream `TileLayer`
+    // does. Cheap when nothing changed: `setOptions` re-normalizes and only
+    // reselects / re-evicts / re-anchors prefetch for the keys that actually
+    // moved.
+    if (propsChanged) this._pushTilesetOptions();
 
     // Following deck.gl TileLayer pattern:
     // Always update tileset on any change (viewport, props, etc)
     // The tileset itself will detect what changed and update accordingly
     this._updateTileset(changeFlags);
+  }
+
+  /**
+   * Re-push the mutable tileset options against the live tileset, mirroring
+   * upstream `TileLayer.updateState`'s `tileset.setOptions(...)` call.
+   *
+   * Ten of the eleven knobs ride `SpatioTemporalTileset.setOptions`, which
+   * re-derives rather than merely reassigns — a `tier`/`lodMode`/
+   * `refinementStrategy` change reselects, a lowered cache bound evicts down to
+   * it immediately, and a prefetch change re-anchors the runway. `maxRequests`
+   * additionally reaches the archive's range coalescer through the
+   * `setMaxConcurrentRequests` callback wired by `makeTilesetCallbacks`.
+   *
+   * `loadOptions` is the exception: it is an `STTArchive` construction option
+   * (it builds the fetch transport), not a tileset option, so it cannot ride
+   * `setOptions` and goes straight to the archive. `setLoadOptions` re-derives
+   * `fetchFn` from the archive's retained base transport, so a rotated auth
+   * header REPLACES the previous wrapper rather than stacking another layer of
+   * interception on every request.
+   *
+   * The subclass overrides are re-applied on top, exactly as construction
+   * spreads them last. Without that, the FIRST `propsChanged` pass — any prop,
+   * including one this bag does not even carry — silently reverted
+   * `H3SummaryLayer`/`QuadbinSummaryLayer` from the summary tier's
+   * `'no-overlap'` back to the base `refinementStrategy`, and from the summary
+   * tier's zoom band back to the raw tier's, because `setOptions` treats every
+   * key PRESENT in the bag as an instruction.
+   */
+  private _pushTilesetOptions(): void {
+    const { tileset, archive, metadata } = this.state;
+    // Nothing live yet (or an init still in flight) — the pending build reads
+    // the current props directly, so there is nothing to re-push.
+    if (!tileset || this.state.initializingUrl) return;
+
+    const options: Partial<SpatioTemporalTilesetOptions> = {
+      tier: this.props.tier,
+      refinementStrategy: this.props.refinementStrategy ?? 'best-available',
+      lodMode: this.props.lodMode,
+      maxCacheSize: this.props.maxCacheSize,
+      maxCacheByteSize: this.props.maxCacheByteSize,
+      maxRequests: this.props.maxRequests,
+      debounceTime: this.props.debounceTime,
+      enablePrefetch: this.props.enablePrefetch,
+      prefetchAhead: this.props.prefetchAhead,
+      prefetchSteps: this.props.prefetchSteps,
+      scrubLod: this.props.scrubLod ?? undefined,
+    };
+
+    tileset.setOptions(
+      metadata
+        ? { ...options, ...this.getTilesetOptionOverrides(metadata) }
+        : options,
+    );
+
+    archive?.setLoadOptions(this.props.loadOptions);
   }
 
   /**
@@ -759,6 +1217,13 @@ export class SpatioTemporalLayer<
    * `_currentTime` live and the tileset throttle intact) and then forces a
    * throttled renderLayers() via `setState`. Layers whose per-frame value is a
    * shader uniform (point/path/trips via TimeFilterExtension) never need to.
+   *
+   * SUBCLASS CONTRACT: `state.frameNumber` is a LAYER-OWNED monotonic render
+   * epoch. Force a `renderLayers()` by bumping it — `setState({ frameNumber:
+   * (this.state.frameNumber || 0) + 1 })` — and never assign a value derived
+   * from the tileset. (The tileset's own counter is mirrored separately in
+   * `state.tilesetFrameNumber`; mixing the two is what used to make
+   * `frameChanged` spuriously true and cost an extra full render per tick.)
    */
   protected _handleTimeUpdate(time: number): void {
     const { tileset } = this.state;
@@ -795,8 +1260,11 @@ export class SpatioTemporalLayer<
         const bounds = this.getViewportBounds(viewport);
         const zoom = this.getZoomLevel(viewport);
 
-        // Update tileset - this triggers prefetch for upcoming tiles
-        tileset.update(
+        // Update tileset - this triggers prefetch for upcoming tiles.
+        // Its return value is the TILESET's own frame counter; mirror it so
+        // the next `_updateTileset` doesn't read a stale value and declare a
+        // spurious `frameChanged`.
+        const tilesetFrameNumber = tileset.update(
           {
             bounds,
             zoom,
@@ -813,9 +1281,12 @@ export class SpatioTemporalLayer<
           this.setState({
             tiles: newTiles,
             frameNumber: (this.state.frameNumber || 0) + 1,
+            tilesetFrameNumber,
           });
           this._commitTileIdSet(newTiles);
           tilesChanged = true;
+        } else {
+          this.state.tilesetFrameNumber = tilesetFrameNumber;
         }
         // Settle check rides the throttled block (≤10 Hz wall), NOT the raw
         // 60 Hz tick — it covers all-cache-hit selections, which never fire
@@ -838,10 +1309,10 @@ export class SpatioTemporalLayer<
    * Multiple tiles often finish loading within a single animation frame.
    * Instead of calling setState() per tile (each triggering a full
    * renderLayers() + buildConsolidatedData() rebuild), we batch them into one
-   * rAF-deferred setState. The frameNumber is bumped once per batch, only if
-   * the visible tile SET actually changed.
+   * rAF-deferred setState. The layer-owned `state.frameNumber` is bumped once
+   * per batch, only if the visible tile SET actually changed.
    */
-  private _scheduleTileLoadUpdate(tileset: SpatiotemporalTileset): void {
+  private _scheduleTileLoadUpdate(tileset: SpatioTemporalTileset): void {
     if (this._tileLoadRafId !== null) {
       // An update is already queued for this frame.
       return;
@@ -854,6 +1325,10 @@ export class SpatioTemporalLayer<
 
     this._tileLoadRafId = schedule(() => {
       this._tileLoadRafId = null;
+
+      // The tileset this batch was scheduled for may have been torn down
+      // (source switch / unmount) between the schedule and the callback.
+      if (this._finalized || this.state.tileset !== tileset) return;
 
       const visibleTiles = tileset.getVisibleTiles();
 
@@ -884,7 +1359,7 @@ export class SpatioTemporalLayer<
    * Version 0 means no selection has needed anything yet — firing there
    * would report an empty viewport during init.
    */
-  private _maybeFireViewportLoad(tileset: SpatiotemporalTileset): void {
+  private _maybeFireViewportLoad(tileset: SpatioTemporalTileset): void {
     if (!this.props.onViewportLoad) return;
     const version = tileset.selectionVersion;
     if (version === 0 || version === this._viewportLoadVersion) return;
@@ -924,28 +1399,12 @@ export class SpatioTemporalLayer<
       const { z, x, y, t } = tile.id;
       next.add(`${z}/${x}/${y}/${t}`);
     }
-    // TEMP-DIAGNOSTIC (flash repro): record visible-tile set deltas with the
-    // sim time at the swap, so removed-before-replaced churn shows up offline.
-    {
-      const probe = (
-        globalThis as unknown as {
-          __sttProbe?: { enabled?: boolean; tileSwaps?: unknown[] };
-        }
-      ).__sttProbe;
-      if (probe?.enabled && Array.isArray(probe.tileSwaps)) {
-        const added: string[] = [];
-        const removed: string[] = [];
-        for (const k of next) if (!this._lastTileIdSet.has(k)) added.push(k);
-        for (const k of this._lastTileIdSet) if (!next.has(k)) removed.push(k);
-        probe.tileSwaps.push({
-          wall: performance.now(),
-          sim: this._currentTime,
-          count: next.size,
-          added,
-          removed,
-        });
-      }
-    }
+    // (A `TEMP-DIAGNOSTIC` block used to push every visible-set delta onto
+    // `globalThis.__sttProbe.tileSwaps` from here. It bypassed
+    // `lib/telemetry.ts`, so it grew without the channel cap for the whole
+    // session, and the flash it was chasing was root-caused elsewhere — the
+    // extrusion seam-wall mask. Removed; re-add via `emit()` if it's ever
+    // needed again, so it inherits MAX_SAMPLES_PER_CHANNEL.)
     this._lastTileIdSet = next;
   }
 
@@ -992,10 +1451,25 @@ export class SpatioTemporalLayer<
     // Update internal time tracking
     this._currentTime = currentTime;
 
-    // Check if it's a time-only change for debouncing logic
-    const timeChanged =
-      changeFlags.propsChanged && currentTime !== this._lastTilesetUpdateTime;
-    const skipDebounce = timeChanged && !changeFlags.propsOrDataChanged;
+    // Skip the tileset's viewport debounce when the play-head — not the
+    // camera — is what moved.
+    //
+    // The previous condition (`timeChanged && !changeFlags.propsOrDataChanged`)
+    // was dead code and always false: `timeChanged` required
+    // `changeFlags.propsChanged`, and deck derives `propsOrDataChanged` as a
+    // SUPERSET of `propsChanged`, so the two conjuncts were mutually exclusive.
+    // An app driving the play-head through the `currentTime` prop with
+    // `debounceTime > 0` therefore paid the viewport debounce on every frame —
+    // exactly the delay this was meant to bypass. (The TimeController path
+    // never hit it: `_handleTimeUpdate` passes `skipDebounce = true` directly.)
+    //
+    // `timeChanged` also drops its `propsChanged` conjunct: with a
+    // TimeController the play-head advances through `controller.getTime()`,
+    // which no prop diff can see. The debounce still applies whenever the
+    // VIEWPORT moved in the same pass — coalescing camera motion is what it
+    // exists for.
+    const timeChanged = currentTime !== this._lastTilesetUpdateTime;
+    const skipDebounce = timeChanged && !changeFlags.viewportChanged;
 
     // Get viewport bounds and zoom
     const viewport = this.context.viewport;
@@ -1010,8 +1484,9 @@ export class SpatioTemporalLayer<
     // Get effective time window - subclasses can override for trail rendering etc.
     const timeWindow = this.getEffectiveTimeWindow();
 
-    // Update tileset - this returns a new frameNumber if tiles changed
-    const frameNumber = tileset.update(
+    // Update tileset - this returns the TILESET's own frame counter, which
+    // bumps when its needed-tile set changes or a tile finishes loading.
+    const tilesetFrameNumber = tileset.update(
       {
         bounds,
         zoom,
@@ -1025,26 +1500,31 @@ export class SpatioTemporalLayer<
     const tiles = tileset.getVisibleTiles();
 
     // Decide whether to setState. Two conditions matter for the consolidated
-    // render path: the visible tile SET changed, or the frameNumber bumped
-    // (a new tile finished loading). We check the tile content directly as
-    // defense in depth — historically the tileset bumped frameNumber on
-    // every selectAndLoadTiles() call, which made the trip consolidation
-    // rebuild every animation frame. The content check stays cheap and
-    // ensures we never re-consolidate when the visible set is unchanged.
-    const frameChanged = this.state.frameNumber !== frameNumber;
+    // render path: the visible tile SET changed, or the TILESET's counter
+    // bumped (a new tile finished loading). The direct content check is
+    // defense in depth: a counter that ticks on every selectAndLoadTiles()
+    // call would rebuild the trip consolidation every animation frame, so the
+    // (cheap) set comparison guarantees we never re-consolidate while the
+    // visible set is unchanged.
+    //
+    // The tileset's counter MUST be compared against its OWN mirror
+    // (`state.tilesetFrameNumber`), never against the layer-owned
+    // `state.frameNumber` — that one is bumped independently by the
+    // tick/tile-load paths as `frameNumber + 1`. Two authorities writing one
+    // slot drift apart permanently and pin `frameChanged` true on every pass:
+    // one extra full `renderLayers()` per update, forever.
+    const frameChanged = this.state.tilesetFrameNumber !== tilesetFrameNumber;
     const tilesChanged = this._tilesChanged(tiles);
 
     if (frameChanged || tilesChanged) {
       this._lastTilesetUpdateTime = currentTime;
       this.setState({
         tiles,
-        frameNumber,
+        frameNumber: (this.state.frameNumber || 0) + 1,
+        tilesetFrameNumber,
       });
       this._commitTileIdSet(tiles);
     }
-
-    // Track loading state (doesn't trigger re-render)
-    this.state.isLoaded = tiles.length > 0;
 
     this._maybeFireViewportLoad(tileset);
 
@@ -1075,8 +1555,10 @@ export class SpatioTemporalLayer<
 
     if (DEBUG) {
       console.log(
-        '[STL] Tileset updated - frame:',
-        frameNumber,
+        '[STL] Tileset updated - tileset frame:',
+        tilesetFrameNumber,
+        'render epoch:',
+        this.state.frameNumber,
         'tiles:',
         tiles.length,
         'stats:',
@@ -1160,6 +1642,22 @@ export class SpatioTemporalLayer<
       : this.props.timeWindow;
   }
 
+  /**
+   * Report a DATASET-level failure (no single failing tile) the way
+   * `TileLayer` reports tile failures: through `props.onTileError` when the
+   * app supplied one, otherwise `console.error`. The `tileId` argument is
+   * `undefined`, which is exactly what the `onTileError` prop doc promises for
+   * dataset-level failures.
+   */
+  private _reportDatasetError(error: unknown, url: string): void {
+    const err = error instanceof Error ? error : new Error(String(error));
+    if (this.props.onTileError) {
+      this.props.onTileError(err, undefined);
+    } else {
+      console.error('[STL] Archive init failed:', url, err);
+    }
+  }
+
   private async _initArchiveAndTileset(): Promise<void> {
     if (DEBUG) console.log('[STL] Initializing archive from', this.props.data);
 
@@ -1194,14 +1692,30 @@ export class SpatioTemporalLayer<
       url: targetUrl,
       loadOptions: this.props.loadOptions,
       // Single concurrency knob: the tileset's `maxRequests` IS the archive's
-      // in-flight Range-request ceiling. Previously the archive used its own
-      // default (24) and the layer's `maxRequests` never reached the wire, so
-      // setting it had no effect on actual fetch concurrency.
+      // in-flight Range-request ceiling, so it has to be forwarded here.
+      // Without it the archive falls back to its own default (24), the layer's
+      // `maxRequests` never reaches the wire, and setting it has no effect on
+      // actual fetch concurrency.
       maxConcurrentRequests: this.props.maxRequests,
     });
 
-    // Get metadata to configure tileset zoom range
-    const metadata = await archive.getMetadata();
+    // Get metadata to configure tileset zoom range. A 404, a CORS rejection or
+    // a corrupt manifest surfaces HERE: without the catch it became an
+    // unhandled promise rejection, `initializingUrl` stayed pinned to the dead
+    // URL (so `updateState` treated it as already-live and never retried), and
+    // `props.onTileError` — whose doc promises dataset-level failures arrive
+    // with `tileId === undefined` — never fired.
+    let metadata: ArchiveMetadata;
+    try {
+      metadata = await archive.getMetadata();
+    } catch (error) {
+      archive.finalize();
+      if (this.state.initializingUrl === targetUrl) {
+        this.state.initializingUrl = null;
+      }
+      if (!this._finalized) this._reportDatasetError(error, targetUrl);
+      return;
+    }
 
     // Bail out if the layer was finalized OR another init superseded ours
     // while we awaited metadata. In that case we own a stranded archive,
@@ -1211,6 +1725,34 @@ export class SpatioTemporalLayer<
       return;
     }
 
+    // Everything from here is synchronous, but a subclass hook
+    // (`onMetadataLoaded` / `getTilesetOptionOverrides`) or a malformed
+    // metadata block can still throw — the same cleanup contract applies.
+    try {
+      this._attachArchiveAndTileset(archive, metadata);
+    } catch (error) {
+      if (this.state.archive !== archive) {
+        // Never committed: we still own the archive, so tear it down instead
+        // of leaking its worker pool / OPFS handles, and release the slot.
+        archive.finalize();
+        if (this.state.initializingUrl === targetUrl) {
+          this.state.initializingUrl = null;
+        }
+      }
+      if (!this._finalized) this._reportDatasetError(error, targetUrl);
+    }
+  }
+
+  /**
+   * Build the tileset for a freshly-loaded `metadata` and commit the
+   * (archive, tileset) pair to state. Split out of
+   * {@link _initArchiveAndTileset} so the async error path there has one
+   * unambiguous "did we commit?" boundary (`state.archive === archive`).
+   */
+  private _attachArchiveAndTileset(
+    archive: STTArchive,
+    metadata: ArchiveMetadata,
+  ): void {
     // Subclass hook (e.g. H3SummaryLayer fires onMetadataLoad + the
     // no-summary-tier warning here).
     this.onMetadataLoaded(metadata);
@@ -1232,7 +1774,7 @@ export class SpatioTemporalLayer<
         ) => archive.getSummaryTileIdsInBounds(bounds, zoom, timeRange)
       : undefined;
 
-    // Temporal-LOD pyramid (scrub-LOD P2). Capability detection mirrors the
+    // Temporal-LOD pyramid (the scrub-LOD temporal axis). Capability detection mirrors the
     // summary-tier wiring above: only archives built with `--temporal-lod`
     // carry `metadata.temporalLod`, and only then is the LOD enumeration
     // callback wired — everything no-ops cleanly on every other archive.
@@ -1257,7 +1799,7 @@ export class SpatioTemporalLayer<
       : undefined;
 
     // Create tileset with archive as data source
-    const tileset = new SpatiotemporalTileset({
+    const tileset = new SpatioTemporalTileset({
       maxRequests: this.props.maxRequests,
       debounceTime: this.props.debounceTime,
       maxCacheSize: this.props.maxCacheSize,
@@ -1270,7 +1812,7 @@ export class SpatioTemporalLayer<
       refinementStrategy: this.props.refinementStrategy ?? 'best-available',
       // Additive-octree LOD: when 'additive', load + render the union of zoom
       // levels [minZoom..cameraZoom] (each point lives at one home zoom). See the
-      // lodMode prop and SpatiotemporalTilesetOptions.lodMode.
+      // lodMode prop and SpatioTemporalTilesetOptions.lodMode.
       lodMode: this.props.lodMode,
       // Prefetch configuration for smooth animation playback
       enablePrefetch: this.props.enablePrefetch,
@@ -1367,7 +1909,7 @@ export class SpatioTemporalLayer<
     // committed. The tileset implements the BufferSource readiness contract
     // (runway/cost/ETA queries), which is what a PlaybackGovernor consumes.
     this.props.onTilesetReady?.(
-      tileset as SpatiotemporalTileset & BufferSource,
+      tileset as SpatioTemporalTileset & BufferSource,
     );
 
     // Storyboard tier (WS-C4): kick the budget-gated overview preload WITHOUT
@@ -1380,13 +1922,23 @@ export class SpatioTemporalLayer<
         typeof this.props.overviewPreload === 'object'
           ? this.props.overviewPreload
           : undefined;
-      tileset.preloadOverviewTier(overviewOpts).then((result) => {
-        // Ignore results for a tileset this layer no longer owns (re-init /
-        // unmount races) — `clear()` settles those with reason 'disabled'.
-        if (this._finalized || this.state.tileset !== tileset) return;
-        this._overviewPreload = result;
-        this.props.onOverviewPreload?.(result);
-      });
+      tileset
+        .preloadOverviewTier(overviewOpts)
+        .then((result) => {
+          // Ignore results for a tileset this layer no longer owns (re-init /
+          // unmount races) — `clear()` settles those with reason 'disabled'.
+          if (this._finalized || this.state.tileset !== tileset) return;
+          this._overviewPreload = result;
+          this.props.onOverviewPreload?.(result);
+        })
+        // The preload is best-effort and deliberately non-blocking, but a
+        // rejected directory/pack fetch inside it must not escape as an
+        // unhandled rejection. It never fails the layer — the map renders fine
+        // without a storyboard tier — so it is reported, not propagated.
+        .catch((error) => {
+          if (this._finalized || this.state.tileset !== tileset) return;
+          this._reportDatasetError(error, this.props.data);
+        });
     }
   }
 
@@ -1397,17 +1949,86 @@ export class SpatioTemporalLayer<
   protected onMetadataLoaded(_metadata: ArchiveMetadata): void {}
 
   /**
-   * Subclass hook: partial {@link SpatiotemporalTilesetOptions} spread over
+   * Subclass hook: partial {@link SpatioTemporalTilesetOptions} spread over
    * the base tileset wiring at construction time (overrides win). Lets a
    * tier-specific subclass (H3SummaryLayer) swap zoom range / refinement
    * strategy without duplicating the whole `_initArchiveAndTileset` plumbing.
    */
   protected getTilesetOptionOverrides(
     _metadata: ArchiveMetadata,
-  ): Partial<SpatiotemporalTilesetOptions> {
+  ): Partial<SpatioTemporalTilesetOptions> {
     return {};
   }
 
+  /**
+   * Viewport bounds for tile selection, in degrees.
+   *
+   * PITCH AND BEARING: the box is the axis-aligned hull of ALL FOUR ground
+   * corners of the frustum, taken from `viewport.getBounds()`. It used to be
+   * built from two opposite screen corners — `unproject([0, height])` and
+   * `unproject([width, 0])` — which are the endpoints of ONE DIAGONAL of the
+   * ground quad and only bound that quad at `bearing === 0`. Under rotation the
+   * two-corner box is a strict subset of the true footprint, and past
+   * `bearing > atan2(height, width)` (45° on a square canvas) the two samples
+   * swap order and the box INVERTS: `boundsToTiles`' row loop then never
+   * executes, so the layer selects ZERO TILES while `isLoaded` and
+   * `getBufferedRunway` both report settled and fully buffered. Measured at z9
+   * on 1000×1000: bearing 45 selected 4 of 16 on-screen tiles, bearing 60
+   * selected none. See `docs/roadmap/tile-loading-3d-2026-07.md` §1.
+   *
+   * Pitch is the second, independent trigger. An `unproject` with a 2-element
+   * pixel array is an unclamped ray/plane solve, so once
+   * `pitch + fovy/2 > 90` — 71.57° at deck's default `altitude: 1.5` — the top
+   * rays point at sky and the returned "ground point" is BEHIND the camera:
+   * longitude inverts too, and an inverted longitude box is indistinguishable
+   * from the deliberate antimeridian crossing encoding below (510 of 512
+   * columns at z9). `getBounds()` is what fixes this and not merely the extra
+   * two samples: `@math.gl/web-mercator`'s `getBounds` substitutes
+   * `unprojectOnFarPlane` for the two top corners exactly when
+   * `halfFov > angleToGround - 0.01`, i.e. it carries the horizon clamp we
+   * would otherwise have to write here.
+   *
+   * This is NOT the same primitive deck's own `TileLayer` selects with — that
+   * routes geospatial viewports through `getOSMTileIndices`, a frustum-plane
+   * quadtree walk with per-node distance-based zoom. An axis-aligned box at one
+   * integer zoom still over-covers the sides of a pitched frustum and still
+   * gives the near and far thirds of the frame the same LOD. Closing that gap
+   * is Wave 3 / A1 in docs/roadmap/tile-loading-3d-2026-07.md; what `getBounds`
+   * buys here is a box that is CORRECT (never inverted, horizon-clamped) rather
+   * than one that is minimal.
+   *
+   * ANTIMERIDIAN: `getBounds()` — like `unproject()` — returns UNWRAPPED
+   * longitudes, so a camera centred at lon 179 reports `maxLon ≈ 184` and a
+   * camera at −179 reports `minLon ≈ −184`. That is deliberate and
+   * load-bearing: `worldToLngLat` is a pure linear map with no wrapping, and
+   * clamping the result into `[-180, 180]` silently DISCARDS the wrapped half
+   * of the screen — `ais-all-us` and `drifters` both straddle the seam and
+   * rendered nothing there.
+   *
+   * The wrap is resolved in core rather than worked around in the chassis: the
+   * archive's `tileXSpanForLonRange` walks UNWRAPPED column space and wraps at
+   * emit (`(start + i) % n`), capping the span at one world width so a >360°
+   * view cannot cover a column twice, and `SpatioTemporalTileset`'s
+   * `viewportTileXIntervals` is built on the same primitive so selection and
+   * the render-side cover check cannot disagree. For an in-world range
+   * (`-180 ≤ minLon ≤ maxLon ≤ 180`) that path is byte-identical to a plain
+   * clamped scan.
+   *
+   * So the bounds handed down are deliberately unwrapped and unclamped; the
+   * `minLon > maxLon` crossing encoding is accepted equally. Do NOT introduce
+   * a clamp here — it silently drops the far side of the seam.
+   *
+   * The one repair that IS applied is `normalizeViewportBounds` from
+   * `@poopdeck.gl/core`, the primitive every backend shares (§4.1 of the
+   * roadmap): it orders latitude, keeps `minLon > maxLon` only while the
+   * implied span stays under 350° (wider is an inversion, not a crossing),
+   * collapses a whole-world view to exactly `[-180, 180]`, and REJECTS a
+   * non-finite box. On a rejection we keep the previous bounds — selecting
+   * against garbage is strictly worse than selecting against a stale box.
+   *
+   * TILE COUNTS RISE under pitch and rotation. That is the fix, not a
+   * regression: the old footprint was a 36%-coverage under-selection.
+   */
   protected getViewportBounds(viewport: any): BoundingBox {
     // Use global bounds for GlobeView to load all tiles at zoom 0.
     // Static result — cache and return the same reference to dodge any
@@ -1425,31 +2046,180 @@ export class SpatioTemporalLayer<
       return this._cachedBounds;
     }
 
-    // Per-frame cache: skip the two `unproject()` calls (each a matrix
-    // multiply) when the viewport hasn't actually moved. Keyed on the
-    // identity dimensions: id, dims, zoom, lon/lat, pitch, bearing. Two
-    // unprojects are cheap on their own but the steady-state animation
-    // path hits this on every tick of the time controller AND every
-    // viewport callback, so the redundancy adds up.
+    // Per-frame cache: skip the corner unprojections (each a matrix multiply)
+    // when the viewport hasn't actually moved. Keyed on the identity
+    // dimensions: id, dims, zoom, lon/lat, pitch, bearing — plus `zRange`,
+    // which doubles the derivation and is a prop rather than a camera value,
+    // so a change to it must invalidate too. The unprojections are cheap on
+    // their own but the steady-state animation path hits this on every tick of
+    // the time controller AND every viewport callback, so the redundancy adds
+    // up.
+    //
+    // CONTRACT: every return path hands back the SAME OBJECT REFERENCE until
+    // the key changes. Callers (and the tileset's own change detection) may
+    // rely on that identity; do not build a fresh object per call.
     const v = viewport;
-    const key = `${v.id ?? ''}|${v.width}x${v.height}|${v.zoom}|${v.longitude ?? 0},${v.latitude ?? 0}|${v.pitch ?? 0}|${v.bearing ?? 0}`;
+    const zRange = this._resolveZRange();
+    const key =
+      `${v.id ?? ''}|${v.width}x${v.height}|${v.zoom}|` +
+      `${v.longitude ?? 0},${v.latitude ?? 0}|${v.pitch ?? 0}|${v.bearing ?? 0}|` +
+      `${zRange ? `${zRange[0]}:${zRange[1]}` : ''}`;
     if (this._cachedBounds && this._lastBoundsKey === key) {
       return this._cachedBounds;
     }
 
-    const [minLon, minLat] = viewport.unproject([0, viewport.height]);
-    const [maxLon, maxLat] = viewport.unproject([viewport.width, 0]);
+    const raw = this._deriveViewportBox(viewport, zRange);
+    const normalized = raw ? normalizeViewportBounds(raw) : null;
+
+    if (!normalized) {
+      // Rule 1 of the shared contract: a non-finite component carries no usable
+      // information, and there is no sane repair for it. KEEP THE PREVIOUS BOX
+      // — one stale frame of selection is invisible, whereas a NaN box makes
+      // `boundsToTiles` enumerate nothing (blank map, every readiness signal
+      // reporting "settled") or the whole world (a fetch storm). Caching under
+      // the current key keeps the reference stable while the camera stays bad.
+      warnOnce(
+        `STL:bounds-nonfinite:${this.props.id}`,
+        `[SpatioTemporalLayer] ${this.props.id}: viewport produced a non-finite ` +
+          `bounds box at pitch ${v.pitch ?? 0}, bearing ${v.bearing ?? 0}; ` +
+          'keeping the previous viewport. Tile selection is now one camera ' +
+          'position stale until the camera recovers.',
+      );
+      this._lastBoundsKey = key;
+      this._cachedBounds ??= this._cameraPointBounds(viewport);
+      return this._cachedBounds;
+    }
+
+    // Only the INVERSIONS say something about the producer. `full-world` and
+    // `clamped-lat` are ordinary consequences of a zoomed-out view (a z0 map
+    // legitimately reports a ±421° longitude span and latitudes past the
+    // pole), and a warning that fires on every global demo is a warning
+    // developers learn to skip past.
+    //
+    // Neither derivation above can invert on its own — both min/max over four
+    // corners — so an inversion means the VIEWPORT's own `getBounds` handed
+    // back a box whose ends are the wrong way round (the shape Cesium's
+    // `west > east` rectangle and any two-corner shim produce). The repair
+    // keeps selection correct, but the host should hear about it once.
+    const defects = normalized.issues.filter(
+      (issue) => issue === 'inverted-lat' || issue === 'inverted-lon',
+    );
+    if (defects.length > 0) {
+      warnOnce(
+        `STL:bounds-repaired:${this.props.id}:${defects.join('+')}`,
+        `[SpatioTemporalLayer] ${this.props.id}: repaired a degenerate viewport ` +
+          `box (${defects.join(', ')}) at pitch ${v.pitch ?? 0}, bearing ` +
+          `${v.bearing ?? 0}. Tile selection is correct, but this viewport's ` +
+          '`getBounds()` is reporting its ends in the wrong order.',
+      );
+    }
 
     this._lastBoundsKey = key;
-    this._cachedBounds = {
-      minLon: Math.max(-180, minLon),
-      minLat: Math.max(-90, minLat),
-      maxLon: Math.min(180, maxLon),
-      maxLat: Math.min(90, maxLat),
-    };
+    this._cachedBounds = normalized.bounds;
     return this._cachedBounds;
   }
 
+  /**
+   * The raw lon/lat hull of the frustum's ground quad, before normalization.
+   *
+   * `viewport.getBounds()` is the wanted path and every deck `Viewport` has it
+   * (`WebMercatorViewport` overrides it with the horizon-clamped four-corner
+   * derivation described on {@link getViewportBounds}). The `unproject`
+   * fallback exists for the viewport-shaped plain objects a host app — or this
+   * package's own test suite — hands to a layer directly. That path samples
+   * all FOUR corners through `boundsFromCorners` rather than the two it used
+   * to: two corners bound the ground quad only at `bearing === 0`, and there
+   * is no reason to keep that defect alive in the fallback.
+   *
+   * Returns `null` only when no corner produced a finite sample at all.
+   */
+  private _deriveViewportBox(
+    viewport: any,
+    zRange: [number, number] | null,
+  ): BoundingBox | null {
+    if (typeof viewport.getBounds === 'function') {
+      if (zRange) {
+        // Union the ground-plane box with the box at the top of the content,
+        // exactly as deck's own `Tileset2D.getBoundingBox` does for `zRange`.
+        // Feeding both boxes' corners through `boundsFromCorners` (rather than
+        // min/maxing them by hand) keeps the per-axis non-finite skip: if the
+        // upper plane degenerates, its longitudes can still widen the box
+        // while its latitudes are ignored.
+        const low = viewport.getBounds({ z: zRange[0] });
+        const high = viewport.getBounds({ z: zRange[1] });
+        return boundsFromCorners([
+          [low[0], low[1]],
+          [low[2], low[3]],
+          [high[0], high[1]],
+          [high[2], high[3]],
+        ]);
+      }
+      const b = viewport.getBounds();
+      return { minLon: b[0], minLat: b[1], maxLon: b[2], maxLat: b[3] };
+    }
+
+    // `zRange` is deliberately NOT honoured here: a viewport without
+    // `getBounds` is a hand-rolled object, and there is no reason to believe
+    // its `unproject` implements the `targetZ` option the union needs.
+    const { width, height } = viewport;
+    return boundsFromCorners([
+      viewport.unproject([0, 0]),
+      viewport.unproject([width, 0]),
+      viewport.unproject([0, height]),
+      viewport.unproject([width, height]),
+    ]);
+  }
+
+  /**
+   * The altitude slab to dilate the viewport box over, or `null` for the
+   * ground plane only. Currently just the `zRange` prop: see the prop docs
+   * for why nothing is derived automatically.
+   */
+  private _resolveZRange(): [number, number] | null {
+    const range = this.props.zRange;
+    if (!range) return null;
+    const [a, b] = range;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    // Order it here so the cache key is canonical and `_deriveViewportBox`
+    // can take [low, high] on faith.
+    return a <= b ? [a, b] : [b, a];
+  }
+
+  /**
+   * Degenerate stand-in used ONLY when the very first box a layer ever derives
+   * is unusable, so there is no previous viewport to keep.
+   *
+   * A zero-area box at the camera's own centre selects the single tile under
+   * the camera, which is certainly on screen. The alternatives are worse in
+   * both directions: the global band is a `4^zoom` fetch storm, and there is
+   * no "select nothing" value in this API — `{0,0,0,0}` would point at the
+   * Gulf of Guinea. The next frame with a finite camera replaces it.
+   */
+  private _cameraPointBounds(viewport: any): BoundingBox {
+    const lon = Number.isFinite(viewport.longitude) ? viewport.longitude : 0;
+    const lat = Number.isFinite(viewport.latitude)
+      ? Math.min(90, Math.max(-90, viewport.latitude))
+      : 0;
+    return { minLon: lon, minLat: lat, maxLon: lon, maxLat: lat };
+  }
+
+  /**
+   * The camera zoom → the integer tile zoom to select at.
+   *
+   * Three stages, in order: the explicit override, the archive's declared
+   * `[minZoom, maxZoom]`, then the viewport CELL BUDGET — a cap on how many
+   * cells the box derived by {@link getViewportBounds} is allowed to
+   * enumerate at that zoom, stepping down until it fits (never below
+   * `minZoom`). See the `viewportCellBudget` prop for why the budget exists
+   * and why it is not a cap on the tile list, and
+   * docs/roadmap/tile-loading-3d-2026-07.md §4.4.
+   *
+   * The two explicit instructions bypass the budget entirely. `zoomOverride`
+   * is an app saying which zoom to load and would be a lie to override.
+   * `useGlobalBounds` hands down the whole planet by request (the `GlobeView`
+   * path), so its cell count is `4^zoom` by construction and measuring it
+   * against a viewport budget would clamp every globe demo to z4.
+   */
   protected getZoomLevel(viewport: any): number {
     // Use zoomOverride if specified (useful for GlobeView)
     if (this.props.zoomOverride != null) {
@@ -1461,21 +2231,58 @@ export class SpatioTemporalLayer<
     const zoom = Math.floor(viewport.zoom);
     const { archive, metadata } = this.state;
 
+    let clamped = zoom;
+    let minZoom = 0;
     if (archive && metadata) {
       // Use metadata from state
-      const minZoom = metadata.minZoom;
-      const maxZoom = metadata.maxZoom;
-      return Math.max(minZoom, Math.min(maxZoom, zoom));
+      minZoom = metadata.minZoom;
+      clamped = Math.max(metadata.minZoom, Math.min(metadata.maxZoom, zoom));
     }
 
-    return zoom;
+    const budget =
+      this.props.viewportCellBudget ?? DEFAULT_VIEWPORT_CELL_BUDGET;
+    if (!Number.isFinite(budget) || this.props.useGlobalBounds) {
+      // Keep the memory in step with what we returned, so re-enabling the
+      // budget mid-session doesn't read a decision from before it was off.
+      this._budgetZoom = clamped;
+      return clamped;
+    }
+
+    // `getViewportBounds` is memoised on the camera key and both callers have
+    // just called it, so this is a cache hit rather than a second derivation.
+    const fitted = fitZoomToCellBudget(
+      this.getViewportBounds(viewport),
+      clamped,
+      {
+        minZoom,
+        maxCells: budget,
+        previousZoom: this._budgetZoom,
+      },
+    );
+    this._budgetZoom = fitted;
+    return fitted;
   }
 
   /**
-   * Check if layer is fully loaded
+   * `TileLayer`'s readiness contract: true once the CURRENT viewport×window
+   * selection has settled AND deck's own async props / sublayers are resolved.
+   *
+   * `state.tiles.length > 0` is NOT that predicate and must not stand in for
+   * it: a layer panned over empty ocean (a legitimately empty but fully
+   * settled selection) would report NOT loaded forever, and `state.tiles` is
+   * only ever written from `_updateTileset`, so it goes stale on the whole
+   * animation-tick path. `tileset.isLoaded` already mirrors
+   * `Tileset2D.isLoaded` (nothing queued, no needed tile in flight, failed
+   * tiles count as settled), so this composes it with the base
+   * `CompositeLayer.isLoaded` exactly as upstream `TileLayer` does.
+   *
+   * Before the archive is up there is no selection to be settled, so a layer
+   * whose tileset has not been created yet is deliberately NOT loaded.
    */
   get isLoaded(): boolean {
-    return this.state.isLoaded;
+    const tileset = this.state?.tileset;
+    if (!tileset) return false;
+    return tileset.isLoaded && super.isLoaded;
   }
 
   /**
@@ -1564,13 +2371,58 @@ export class SpatioTemporalLayer<
    * constant-extension-set shader-cache contract documented in
    * animated-trips-layer.ts. Adding/removing a user extension rebuilds the
    * cached sublayers via `extensionsDigest` inside `inheritedPropsDigest`.
+   *
+   * DEDUPED BY CONSTRUCTOR, internal instance wins. All four STT extensions are
+   * publicly exported and the `composeSubLayerProps` docstring above tells
+   * users to pass extensions through the top-level `extensions` prop, so a
+   * caller re-adding (say) `TimeFilterExtension` is entirely expected — and a
+   * plain concatenation broke the layer two ways:
+   *   1. deck's `mergeShaders` CONCATENATES each extension's `inject` strings,
+   *      so the same hook fires twice and its `in float instanceStartTime;`
+   *      style declarations are emitted twice → GLSL redeclaration error →
+   *      the layer compiles nothing and renders blank.
+   *   2. `LayerExtension.getSubLayerProps` copies the extension's
+   *      `defaultProps` keys off the COMPOSITE's props, clobbering the
+   *      per-tile `timeOffset` / `getTime` / `filterEnabled` /
+   *      `categoryPalette` the chassis just wired for that tile.
+   * The internal instance is the one kept because it carries that per-tile
+   * wiring; the duplicate is dropped with a one-time explanation.
+   * (`collisionFilterProps` in `extensions/collision-filter-extension.ts`
+   * applies the same rule from the other direction.)
    */
   protected composeExtensions(internal: any[]): any[] {
     const user = (this.props as CompositeLayerProps).extensions as
       | any[]
       | undefined;
     if (!user || user.length === 0) return internal;
-    return [...internal, ...user];
+    const merged = internal.slice();
+    for (const ext of user) {
+      // Dedupe by CLASS. A bare object literal (`{}`) is not a deck
+      // `LayerExtension`, and its constructor is `Object` for every instance —
+      // treating those as duplicates of each other would silently drop
+      // unrelated stubs, so they always pass through.
+      const ctor = (ext as any)?.constructor;
+      const duplicate =
+        !!ctor &&
+        ctor !== Object &&
+        internal.some((i) => i?.constructor === ctor);
+      if (!duplicate) {
+        merged.push(ext);
+        continue;
+      }
+      const name = (ext as any)?.constructor?.name ?? 'unknown extension';
+      warnOnce(
+        `${(this.constructor as any).layerName}:duplicateExtension:${name}`,
+        `[${(this.constructor as any).layerName}] \`${name}\` is already applied ` +
+          `internally by this layer, so the instance passed via the ` +
+          `\`extensions\` prop was dropped. Keeping both would emit its shader ` +
+          `injections twice (a GLSL redeclaration that makes the layer render ` +
+          `nothing) and would let its defaultProps, read off the composite, ` +
+          `overwrite the per-tile wiring. Configure the internal instance ` +
+          `through this layer's own props instead.`,
+      );
+    }
+    return merged.length === internal.length ? internal : merged;
   }
 
   /**
@@ -1591,6 +2443,9 @@ export class SpatioTemporalLayer<
     const sprops = sourceLayer?.props as SttSublayerPickingProps | undefined;
     const tile = sprops?.tile ?? null;
     out.sourceTile = tile;
+    // Upstream `TileLayer` sets this so `_updateAutoHighlight` can target the
+    // ONE sublayer that emitted the pick — see the override below.
+    out.sourceTileSubLayer = sourceLayer ?? null;
     if (info.index >= 0 && tile) {
       out.tile = tile;
       // Respect an object a sublayer already resolved (e.g. JS-row
@@ -1601,6 +2456,27 @@ export class SpatioTemporalLayer<
       }
     }
     return out;
+  }
+
+  /**
+   * Route `autoHighlight` to the sublayer that actually emitted the pick.
+   *
+   * `CompositeLayer._updateAutoHighlight` BROADCASTS the info to every
+   * sublayer, and each one matches the hovered object by its index-encoded
+   * picking colour. Since this chassis renders one sublayer per tile and every
+   * tile numbers its features from 0, hovering feature 7 of one tile lit
+   * feature 7 in all ~40 visible tiles. Delegating to `sourceTileSubLayer` is
+   * exactly how upstream `TileLayer` avoids it; the broadcast remains the
+   * fallback for picks that never passed through `getPickingInfo` (hover-off
+   * on an unmounted sublayer, synthetic infos in tests).
+   */
+  protected _updateAutoHighlight(info: SpatioTemporalPickingInfo): void {
+    const sublayer = info.sourceTileSubLayer;
+    if (sublayer) {
+      sublayer.updateAutoHighlight(info);
+      return;
+    }
+    super._updateAutoHighlight(info);
   }
 
   /**

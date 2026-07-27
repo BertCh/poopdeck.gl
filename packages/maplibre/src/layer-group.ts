@@ -1,19 +1,19 @@
 /**
  * STTLayerGroup — ONE MapLibre custom layer hosting an ordered list of STT
- * layers, driving them all in a single render pass (campaign D6b).
+ * layers, driving them all in a single render pass.
  *
  * ## Why
  *
  * Every custom layer costs the map a full lazy GL state re-apply per frame:
  * MapLibre runs `setCustomLayerDefaults()` + `context.setDirty()` around each
- * one and rebinds its framebuffer (`base-layer.ts` painter-contract notes,
- * campaign §1.1). A composite that stacks N STT layers on one map (the weather
+ * one and rebinds its framebuffer (see the `base-layer.ts` painter-contract
+ * notes). A composite that stacks N STT layers on one map (the weather
  * suite, AV static substrates) therefore pays that cycle N times. Hosting the N
  * layers behind ONE custom layer collapses it to a single cycle — the same
  * amortization deck's `MapboxLayerGroup` performs (N deck layers behind one
  * hosting custom layer). This is a NATIVE analogue: no deck/luma dependency.
  *
- * ## How it reuses the existing base-layer API (no base-layer edit)
+ * ## How it reuses the base-layer API
  *
  * `STTBaseLayer` already separates INITIALIZATION from MAP-REGISTRATION:
  *   - `onAdd(map, gl)` allocates programs, wires the tileset and installs the
@@ -27,16 +27,15 @@
  *
  * So the group calls each child's `onAdd`/`render`/`onRemove` DIRECTLY, and
  * never registers a child with `map.addLayer` — every child renders through the
- * group, not as its own map layer. That is exactly the "render into a
- * host-provided frame without being a standalone map layer" contract the D6b
- * task calls for, and the current base-layer API already satisfies it.
+ * group, not as its own map layer. A child therefore renders into a
+ * host-provided frame without ever being a standalone map layer.
  *
- * ## Repaint coalescing (task item 4)
+ * ## Repaint coalescing
  *
  * Children still hold a map reference and call `map.triggerRepaint()` on time
- * advance and on tile load. To make the GROUP the single repaint hook — "the
- * group installs ONE autoRepaint hook; children do not each triggerRepaint" —
- * every child is handed a thin {@link Proxy} over the real map that intercepts
+ * advance and on tile load. The GROUP is the single repaint hook — one
+ * autoRepaint hook for the group, never one per child — so every child is
+ * handed a thin {@link Proxy} over the real map that intercepts
  * ONLY `triggerRepaint`, routing it into {@link STTLayerGroup.requestRepaint}.
  * Batch updates ({@link STTLayerGroup.setCurrentTime} /
  * {@link STTLayerGroup.setTimeWindow}) suspend the hook while fanning out and
@@ -59,7 +58,7 @@
  * deck's group additionally BUCKETS sublayers by distinct `beforeId` into
  * several hosting custom layers; a caller wanting that constructs one
  * STTLayerGroup per anchor. Composites should pair the group with ONE
- * `SharedTilesetSource` (D6a) so the stacked layers also share a single archive
+ * `SharedTilesetSource` so the stacked layers also share a single archive
  * + governor `BufferSource`.
  */
 

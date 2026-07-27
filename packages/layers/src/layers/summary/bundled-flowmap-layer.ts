@@ -18,7 +18,10 @@
  * during playback, where the flowmap's tiles span the whole time range and never
  * re-fetch. (For this to be correct the OD tiles must be built with `--no-clip`
  * so each corridor keeps its true station endpoints instead of being cut at tile
- * edges.)
+ * edges.) The FIRST bundle for a view is built inline; every later set change is
+ * DEBOUNCED off the render path ({@link REBUILD_SETTLE_MS}) so a pan that
+ * streams tiles one at a time doesn't restart the relaxation on each arrival —
+ * the previous, converged bundle keeps drawing until the view settles.
  *
  * The bundle is a stable spatial skeleton (computed from the fixed edge set, not
  * the playhead, so the rivers don't writhe as you scrub). Only each ribbon's
@@ -27,9 +30,11 @@
  * circles keep {@link FlowmapLayer}'s cheap CPU aggregation.
  *
  * When the device can't additively blend into a float texture, or the merged
- * edge count exceeds `maxBundledEdges`, it falls back to {@link FlowmapLayer}'s
- * straight arrows (per tile). Picking is disabled on the merged bundle (a river
- * is many corridors); the node overlay carries the dataset's hover affordance.
+ * edge count exceeds `maxBundledEdges` or the device's `maxTextureDimension2D`,
+ * it falls back to {@link FlowmapLayer}'s straight arrows (per tile) — never a
+ * throw, because this all runs inside deck's synchronous render callback.
+ * Picking is disabled on the merged bundle (a river is many corridors); the node
+ * overlay carries the dataset's hover affordance.
  *
  * Sublayer short ids for `_subLayerProps`: **`flows`** and **`nodes`**.
  */
@@ -47,21 +52,34 @@ import {
   StaticBundle,
   isBundlingSupported,
   isStaticBundleSupported,
-  subdivide,
+  maxBundleEdges,
+  resampleInto,
 } from '../../lib/edge-bundler.js';
-import type { Vec2 } from '../../lib/edge-bundler.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
 import { bucketBlendAt, blendMatrixRow } from '../../lib/vertex-value-blend.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
+import {
+  inheritedPropsDigest,
+  updateTriggersDigest,
+} from '../../lib/style-digest.js';
 import { emit } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
+import { tileLayerKey } from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
   BinaryFeatures,
 } from '@poopdeck.gl/core';
 import type { Texture } from '@luma.gl/core';
-import type { _FlowmapLayerProps } from './flowmap-layer.js';
+import {
+  FLOW_COLUMN_CANDIDATES,
+  applyNodeRadii,
+  buildNodeTable,
+  compactActiveNodes,
+  nodeEndpointOffsets,
+  resolveFlowColumn,
+} from './flowmap-layer.js';
+import type { NodeTable, _FlowmapLayerProps } from './flowmap-layer.js';
 
 /** Props added by {@link BundledFlowmapLayer} (own KDEEB bundling props only). */
 export interface _BundledFlowmapLayerProps {
@@ -69,7 +87,15 @@ export interface _BundledFlowmapLayerProps {
   subdivisionPoints?: number;
   /**
    * Initial kernel bandwidth as a fraction of the visible extent — the headline
-   * knob: larger bundles flows together more aggressively. @default 0.05
+   * knob: larger bundles flows together more aggressively.
+   *
+   * COST MODEL: the density splat rasterizes `edges × subdivisionPoints`
+   * additively-blended quads of side `2·kernelRadius`, so its fill is
+   * **quadratic** in this value — doubling it QUADRUPLES the fragments per
+   * iteration, and `maxBundledEdges` bounds only the instance count, never the
+   * per-instance area. The bundler clamps it to an internal fill budget (and
+   * warns once) rather than let a dense view stall the frame.
+   * @default 0.05
    */
   kernelRadius?: number;
   /** Number of KDEEB density-advection iterations (more = tighter). @default 15 */
@@ -78,7 +104,11 @@ export interface _BundledFlowmapLayerProps {
   smoothingStrength?: number;
   /**
    * Above this many merged edges, skip bundling and render straight arrows
-   * (keeps the per-frame density splat bounded). @default 4000
+   * (keeps the per-frame density splat bounded). Independently of this prop the
+   * merged edge count is ALSO clamped to the device's `maxTextureDimension2D`
+   * (both bundle textures are `edgeCount` rows tall) — including on the
+   * `preBundled` path, which has no splat cost but the same texture ceiling.
+   * @default 4000
    */
   maxBundledEdges?: number;
   /**
@@ -87,7 +117,9 @@ export interface _BundledFlowmapLayerProps {
    * GPU KDEEB entirely: upload the baked control points once ({@link StaticBundle})
    * and render them. Cheaper, deterministic, stable under pan/zoom, and works on
    * devices without `EXT_float_blend`; `kernelRadius`/`bundlingIterations`/
-   * `smoothingStrength`/`maxBundledEdges` are ignored. @default false
+   * `smoothingStrength` are ignored — but `maxBundledEdges` and the device
+   * texture limit still apply: a baked bundle has no per-frame splat cost, yet
+   * exactly the same `pointCount × edgeCount` texture ceiling. @default false
    */
   preBundled?: boolean;
 }
@@ -104,11 +136,6 @@ const DEFAULT_NODE_LINE_COLOR: Color = [255, 255, 255, 220];
 
 /** Cross-fade granularity (fractions of a bucket) for the CPU node path. */
 const STEP = 0.1;
-
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
-}
 
 /** Geometry cached once per tile. */
 interface TileGeom {
@@ -136,10 +163,16 @@ interface GlobalBundle {
   edgeCount: number;
 }
 
-interface FlowNode {
-  position: number[];
-  radius: number;
-}
+/**
+ * Quiet period (ms) the visible tile set must hold before an EXISTING bundle is
+ * rebuilt. Rebuilding is a full re-derivation of the union (resample every
+ * edge, re-upload two textures, restart the 15-iteration relaxation), and the
+ * signature covers every live tile key — so without this, one tile arriving
+ * mid-pan restarted the relaxation and the rivers never converged. During the
+ * window the previous (coherent, converged) bundle keeps rendering; the newly
+ * arrived corridors join it once the pan settles.
+ */
+const REBUILD_SETTLE_MS = 150;
 
 /**
  * GPU-edge-bundled animated OD flowmap on the {@link SpatioTemporalLayer} chassis.
@@ -206,6 +239,14 @@ export class BundledFlowmapLayer<
   private lastTilesRef: Tile[] | null = null;
   private lastPropsKey = '';
   private _bundleRafId: number | null = null;
+  /** Sorted membership key of the live tile set (NOT array identity). */
+  private tileSetKey = '';
+  /** Station identity for {@link tileSetKey}; rebuilt only when the set changes. */
+  private nodeTable: NodeTable | null = null;
+  /** Debounced-rebuild bookkeeping — see {@link REBUILD_SETTLE_MS}. */
+  private pendingSig = '';
+  private _rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+  private _bundleEpoch = 0;
 
   // Global bucket axis (drives the node STEP gate + the merged matrix texture).
   private _bucket0Abs = 0;
@@ -224,9 +265,14 @@ export class BundledFlowmapLayer<
         );
       this._bundleRafId = null;
     }
+    if (this._rebuildTimer !== null) {
+      clearTimeout(this._rebuildTimer);
+      this._rebuildTimer = null;
+    }
     this.disposeBundle();
     this.geomCache.clear();
     this.fallbackCache.clear();
+    this.nodeTable = null;
   }
 
   private disposeBundle(): void {
@@ -267,7 +313,7 @@ export class BundledFlowmapLayer<
   private geomFor(tile: Tile, tileLayer: TileLayer): TileGeom | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0 || !binary.startIndices) return null;
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.geomCache.get(tileKey);
     if (cached) return cached;
 
@@ -293,6 +339,11 @@ export class BundledFlowmapLayer<
    * Resample every feature's FULL polyline to `P` control points (edge-major
    * then point-major). A 2-vertex OD pair stays straight; an N-vertex routed
    * trip / trajectory keeps its shape.
+   *
+   * Streams straight out of the tile's binary `positions` into `out` via
+   * {@link resampleInto} — the boxed-tuple form allocated a `Vec2[]`, a `cum[]`
+   * and `P` fresh tuples PER EDGE (~200k short-lived arrays for one E=4000,
+   * P=48 rebuild), all inside the render callback.
    */
   private controlPointsFor(
     geom: TileGeom,
@@ -306,23 +357,15 @@ export class BundledFlowmapLayer<
     const startIndices = binary.startIndices!;
     const E = binary.featureCount;
     for (let e = 0; e < E; e++) {
-      const v0 = startIndices[e];
-      const v1 = startIndices[e + 1];
-      const pts: Vec2[] = [];
-      for (let v = v0; v < v1; v++)
-        pts.push([positions[v * dims], positions[v * dims + 1]]);
-      const resampled =
-        pts.length >= 2
-          ? subdivide(pts, P)
-          : Array.from(
-              { length: P },
-              () => [pts[0]?.[0] ?? 0, pts[0]?.[1] ?? 0] as Vec2,
-            );
-      for (let i = 0; i < P; i++) {
-        const o = ((edgeOffset + e) * P + i) * dims;
-        out[o] = resampled[i][0];
-        out[o + 1] = resampled[i][1];
-      }
+      resampleInto(
+        positions,
+        dims,
+        startIndices[e],
+        startIndices[e + 1],
+        P,
+        out,
+        (edgeOffset + e) * P,
+      );
     }
   }
 
@@ -330,7 +373,7 @@ export class BundledFlowmapLayer<
   private bundleSignature(tiles: Tile[]): string {
     const keys: string[] = [];
     for (const tile of tiles)
-      for (const tl of tile.layers) keys.push(makeTileKey(tile, tl));
+      for (const tl of tile.layers) keys.push(tileLayerKey(tile.id, tl.name));
     keys.sort();
     const params = [
       this.props.subdivisionPoints,
@@ -344,8 +387,10 @@ export class BundledFlowmapLayer<
   }
 
   /**
-   * Build ONE bundle for the union of all visible corridors. Falls back when the
-   * device can't blend floats or the merged edge count exceeds maxBundledEdges.
+   * Build ONE bundle for the union of all visible corridors. Falls back — never
+   * throws — when the device can't blend floats, when the merged edge count
+   * exceeds `maxBundledEdges` or the device's texture ceiling, or when the GPU
+   * refuses the allocation.
    */
   private rebuildBundle(geoms: TileGeom[], sig: string): void {
     this.disposeBundle();
@@ -376,21 +421,37 @@ export class BundledFlowmapLayer<
       this.bundleSig = sig;
       return;
     }
-    // maxBundledEdges bounds the per-frame density splat; a baked bundle has no
-    // per-frame cost, so the cap doesn't apply to it.
-    if (!preBundled && E > this.props.maxBundledEdges) {
+
+    const P = Math.max(3, Math.floor(this.props.subdivisionPoints));
+
+    // Two independent ceilings, BOTH checked before anything is allocated (the
+    // merged control-point buffer alone is E·P·dims f64 — ~23 MB at E=30k):
+    //  • maxBundledEdges bounds the per-frame density splat. It does NOT apply
+    //    to a baked bundle (no splat), which is why it is skipped there.
+    //  • maxTextureDimension2D is a HARD device limit — both bundle textures
+    //    are `edgeCount` rows tall — and applies to EVERY path, baked included.
+    //    Exceeding it makes createTexture throw from inside renderLayers, which
+    //    takes down the whole layer tree, so it can never be opt-out.
+    const deviceCap = maxBundleEdges(device, P, nb);
+    const propCap = preBundled ? Infinity : this.props.maxBundledEdges;
+    const cap = Math.min(deviceCap, propCap);
+    if (E > cap) {
       warnOnce(
         'BundledFlowmapLayer:edgeCap',
-        `[BundledFlowmapLayer] ${E} visible edges > maxBundledEdges ` +
-          `(${this.props.maxBundledEdges}); rendering straight arrows. ` +
-          'Raise maxBundledEdges to bundle denser views.',
+        `[BundledFlowmapLayer] ${E} visible edges > the ${cap}-edge bundling cap ` +
+          `(maxBundledEdges ${preBundled ? 'n/a — baked' : this.props.maxBundledEdges}, ` +
+          `device maxTextureDimension2D ${deviceCap || 'too small for these textures'}); ` +
+          'rendering straight arrows. ' +
+          (cap === deviceCap
+            ? 'This is a hardware ceiling — reduce the visible edge count (zoom in, or ' +
+              'build a coarser summary tier) rather than raising maxBundledEdges.'
+            : 'Raise maxBundledEdges to bundle denser views.'),
       );
       this.bundle = base;
       this.bundleSig = sig;
       return;
     }
 
-    const P = Math.max(3, Math.floor(this.props.subdivisionPoints));
     const segments = P - 1;
     const dims = geoms[0].dims;
 
@@ -418,19 +479,6 @@ export class BundledFlowmapLayer<
     const meanLat = latSum / (2 * E);
     const cosLat0 = Math.max(0.1, Math.cos((meanLat * Math.PI) / 180));
 
-    const matrixTexture = device.createTexture({
-      width: nb,
-      height: E,
-      format: 'r32float',
-      sampler: {
-        minFilter: 'nearest',
-        magFilter: 'nearest',
-        addressModeU: 'clamp-to-edge',
-        addressModeV: 'clamp-to-edge',
-      },
-    });
-    matrixTexture.copyImageData({ data: matrixData });
-
     const count = E * segments;
     const edgeIndexArr = new Float32Array(count);
     const segIndexArr = new Float32Array(count);
@@ -442,28 +490,60 @@ export class BundledFlowmapLayer<
       }
     }
 
-    // Baked: upload the build-time control points once and render them as-is.
-    // Live: construct the GPU bundler and relax it one iteration per frame.
-    const bundler = preBundled
-      ? new StaticBundle({
-          device,
-          controlPoints,
-          edgeCount: E,
-          pointCount: P,
-          dims,
-          cosLat0,
-        })
-      : new EdgeBundler({
-          device,
-          controlPoints,
-          edgeCount: E,
-          pointCount: P,
-          dims,
-          cosLat0,
-          iterations: this.props.bundlingIterations,
-          kernelRadiusFraction: this.props.kernelRadius,
-          smoothingStrength: this.props.smoothingStrength,
-        });
+    // GPU allocation, FAIL-SOFT. The caps above are the intended guard, but
+    // this runs inside deck's synchronous render callback: any driver-side
+    // refusal (out of VRAM, an unreported limit, a context loss mid-frame) would
+    // otherwise propagate out of renderLayers and blank the entire layer tree,
+    // not just the rivers. Degrade to straight arrows instead.
+    let matrixTexture: Texture | undefined;
+    let bundler: EdgeBundler | StaticBundle | undefined;
+    try {
+      matrixTexture = device.createTexture({
+        width: nb,
+        height: E,
+        format: 'r32float',
+        sampler: {
+          minFilter: 'nearest',
+          magFilter: 'nearest',
+          addressModeU: 'clamp-to-edge',
+          addressModeV: 'clamp-to-edge',
+        },
+      });
+      matrixTexture.copyImageData({ data: matrixData });
+
+      // Baked: upload the build-time control points once and render them as-is.
+      // Live: construct the GPU bundler and relax it one iteration per frame.
+      bundler = preBundled
+        ? new StaticBundle({
+            device,
+            controlPoints,
+            edgeCount: E,
+            pointCount: P,
+            dims,
+            cosLat0,
+          })
+        : new EdgeBundler({
+            device,
+            controlPoints,
+            edgeCount: E,
+            pointCount: P,
+            dims,
+            cosLat0,
+            iterations: this.props.bundlingIterations,
+            kernelRadiusFraction: this.props.kernelRadius,
+            smoothingStrength: this.props.smoothingStrength,
+          });
+    } catch (error) {
+      warnOnce(
+        'BundledFlowmapLayer:bundleAllocFailed',
+        `[BundledFlowmapLayer] could not allocate the GPU bundle for ${E} edges × ` +
+          `${P} points; rendering straight arrows. ${String(error)}`,
+      );
+      matrixTexture?.destroy();
+      this.bundle = base;
+      this.bundleSig = sig;
+      return;
+    }
 
     this.bundle = {
       status: preBundled ? 'ready' : 'bundling',
@@ -501,39 +581,132 @@ export class BundledFlowmapLayer<
     }) as unknown as number;
   }
 
-  /** CPU per-edge widths for the current bucket (nodes + straight-arrow fallback). */
+  /**
+   * (Re)build the global bundle once the visible tile set has been QUIET for
+   * {@link REBUILD_SETTLE_MS}. See that constant for why this is debounced and
+   * off the synchronous render path; the first bundle for a view is still built
+   * inline so the opening frame has rivers.
+   *
+   * Only a change of SIGNATURE (re)arms the timer — a re-render at the same
+   * pending signature must not postpone it, or a playhead tick every ~100 ms
+   * would defer the rebuild forever.
+   */
+  private scheduleRebuild(sig: string): void {
+    if (this.pendingSig === sig && this._rebuildTimer !== null) return;
+    this.pendingSig = sig;
+    if (this._rebuildTimer !== null) clearTimeout(this._rebuildTimer);
+    this._rebuildTimer = setTimeout(() => {
+      this._rebuildTimer = null;
+      const tiles = (this.state as { tiles?: Tile[] }).tiles;
+      if (!tiles || tiles.length === 0) return;
+      const target = this.bundleSignature(tiles);
+      if (target === this.bundleSig) return;
+      const geoms: TileGeom[] = [];
+      for (const tile of tiles) {
+        for (const tl of tile.layers) {
+          const geom = this.geomFor(tile, tl);
+          if (geom) geoms.push(geom);
+        }
+      }
+      this.rebuildBundle(geoms, target);
+      // setState (not setNeedsRedraw) — renderLayers has to run again to hand
+      // deck a sublayer bound to the NEW bundler + matrix texture.
+      this.setState({ bundleEpoch: ++this._bundleEpoch });
+    }, REBUILD_SETTLE_MS);
+  }
+
+  /**
+   * CPU per-edge widths for the current bucket (node circles + the
+   * straight-arrow fallback). Mirrors {@link FlowmapLayer.widthsFor}, including
+   * the static `flowProperty` fallback for archives with no bucket matrix.
+   */
   private widthsFor(
     geom: TileGeom,
     stepped: number,
-    nodeFlow: Map<string, { position: number[]; flow: number }>,
+    table: NodeTable,
   ): Float32Array {
     const binary = geom.binary;
     const nb = binary.vertexValueBuckets ?? 0;
     const matrix = binary.vertexValueMatrix;
     const n = binary.featureCount;
     const widths = new Float32Array(n);
-    if (nb <= 0 || !matrix) return widths;
 
-    const blend = bucketBlendAt(stepped, nb);
+    const staticFlow =
+      nb > 0 && matrix
+        ? null
+        : resolveFlowColumn(binary, this.props.flowProperty);
+    if (!matrix && !staticFlow) {
+      warnOnce(
+        'BundledFlowmapLayer:noFlowSource',
+        '[BundledFlowmapLayer] tiles carry neither a per-bucket vertexValueMatrix nor a ' +
+          `per-feature flow column (${FLOW_COLUMN_CANDIDATES.join('/')}); every corridor ` +
+          'renders at width 0. Rebuild the archive with an OD value matrix, or point ' +
+          '`flowProperty` at the magnitude column.',
+      );
+      return widths;
+    }
+
+    const blend = staticFlow ? null : bucketBlendAt(stepped, nb);
     const widthScale = this.props.widthScale;
     const minFlow = this.props.minFlow;
-    const dims = geom.dims;
+    const nodeIdx = table.endpoints.get(geom.tileKey);
+    const flowAcc = table.flow;
 
     for (let i = 0; i < n; i++) {
-      const flow = blendMatrixRow(matrix, geom.srcVertexIndex[i] * nb, blend);
-      if (flow <= minFlow) {
+      const flow = staticFlow
+        ? staticFlow[i]
+        : blendMatrixRow(matrix!, geom.srcVertexIndex[i] * nb, blend!);
+      if (!(flow > minFlow)) {
         widths[i] = 0;
         continue;
       }
       widths[i] = widthScale * Math.sqrt(flow);
-      addNode(nodeFlow, geom.source, i * dims, dims, flow);
-      addNode(nodeFlow, geom.target, i * dims, dims, flow);
+      if (nodeIdx) {
+        flowAcc[nodeIdx[i * 2]] += flow;
+        flowAcc[nodeIdx[i * 2 + 1]] += flow;
+      }
     }
     return widths;
   }
 
+  /** Memoized {@link buildNodeTable} for the current tile set. */
+  private nodeTableFor(geoms: TileGeom[], setKey: string): NodeTable {
+    const cached = this.nodeTable;
+    if (cached && cached.setKey === setKey) return cached;
+    const table = buildNodeTable(geoms, setKey);
+    this.nodeTable = table;
+    return table;
+  }
+
   /**
-   * Accessor-alias resolution (audit B1) — mirrors {@link FlowmapLayer}: the
+   * Deck extensions cannot reach this family's shaders — both
+   * {@link FlowLinesLayer} and {@link BundledFlowLinesLayer} are custom-`Model`
+   * layers with no `DECKGL_FILTER_*` hooks, so deck merges the module and then
+   * drops every injection, silently. Strip and warn once instead of forwarding
+   * an inert list.
+   */
+  private flowExtensions(): unknown[] {
+    const user = (this.props as { extensions?: unknown[] }).extensions;
+    if (user && user.length > 0) {
+      const names = user
+        .map(
+          (e) =>
+            (e as { constructor?: { name?: string } })?.constructor?.name ??
+            '?',
+        )
+        .join(', ');
+      warnOnce(
+        'BundledFlowmapLayer:extensions',
+        `[BundledFlowmapLayer] ignoring extensions (${names}): the OD arrow/ribbon ` +
+          'sublayers use custom shaders with no DECKGL_FILTER_* hooks, so extension ' +
+          'injections never run.',
+      );
+    }
+    return [];
+  }
+
+  /**
+   * Accessor-alias resolution — mirrors {@link FlowmapLayer}: the
    * upstream-named alias wins when set; a function-valued alias warns once and
    * falls back to the legacy prop. Constant colors only.
    */
@@ -557,17 +730,29 @@ export class BundledFlowmapLayer<
     return (Array.isArray(resolved) ? resolved : DEFAULT_TARGET_COLOR) as Color;
   }
 
+  /**
+   * Everything baked into a cached sublayer at construction time — see
+   * {@link FlowmapLayer}'s twin. `inheritedPropsDigest` covers every composite
+   * prop `getSubLayerProps()` forwards (`pickable`, `autoHighlight`,
+   * `coordinateSystem`, `modelMatrix`, `parameters`, `_subLayerProps`,
+   * `extensions`, …); without it, toggling any of them on a paused, stable tile
+   * set reuses the cached sublayers verbatim and the change never renders.
+   */
   private computePropsKey(): string {
     return [
       this.props.widthMinPixels,
       this.props.widthMaxPixels,
       this.props.widthScale,
       this.props.minFlow,
+      this.props.flowProperty ?? '',
       this.props.gap,
+      this.props.nodeRadiusScale,
+      this.props.nodeRadiusMinPixels,
+      this.props.nodeRadiusMaxPixels,
       this.sourceColorValue().join(','),
       this.targetColorValue().join(','),
-      this.props.opacity,
-      this.props.visible,
+      inheritedPropsDigest(this.props),
+      updateTriggersDigest(this.props.updateTriggers),
     ].join('|');
   }
 
@@ -579,18 +764,22 @@ export class BundledFlowmapLayer<
       return [];
     }
 
-    // Prune the geom + fallback caches when the live tile set changes.
+    // Prune the geom + fallback caches when the live tile set changes, and
+    // re-derive the SORTED membership key (the `tiles` array is usually a fresh
+    // reference, so identity alone can't tell "same tiles" from "set changed").
     if (this.lastTilesRef !== tiles) {
       const live = new Set<string>();
       for (const tile of tiles) {
-        for (const tl of tile.layers) live.add(makeTileKey(tile, tl));
+        for (const tl of tile.layers) live.add(tileLayerKey(tile.id, tl.name));
       }
       for (const key of this.geomCache.keys())
         if (!live.has(key)) this.geomCache.delete(key);
       for (const key of this.fallbackCache.keys())
         if (!live.has(key)) this.fallbackCache.delete(key);
+      this.tileSetKey = [...live].sort().join('|');
       this.lastTilesRef = tiles;
     }
+    const setKey = this.tileSetKey;
 
     const propsKey = this.computePropsKey();
     if (propsKey !== this.lastPropsKey) {
@@ -601,56 +790,77 @@ export class BundledFlowmapLayer<
 
     const time = this.getCurrentTime();
     let stepKey = 0;
-    const nodeFlow = new Map<string, { position: number[]; flow: number }>();
 
-    // Pass 1: per-tile CPU width decode → node aggregation (+ fallback widths).
-    const prepared: { geom: TileGeom; widths: Float32Array }[] = [];
+    // Pass 1: per-tile geometry + stepped bucket position.
+    const prepared: { geom: TileGeom; stepped: number }[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
         const geom = this.geomFor(tile, tileLayer);
         if (!geom) continue;
         this.noteAxis(geom.binary);
         const pos = this.posFromBinary(geom.binary, time) ?? 0;
-        const stepped = Math.round(pos / STEP) * STEP;
+        prepared.push({ geom, stepped: Math.round(pos / STEP) * STEP });
         stepKey = Math.round(pos / STEP);
-        prepared.push({
-          geom,
-          widths: this.widthsFor(geom, stepped, nodeFlow),
-        });
       }
     }
 
-    const nodeRadius = this.nodeRadiiFor(nodeFlow);
+    // Pass 2: CPU width decode → node aggregation (+ fallback widths). Node
+    // IDENTITY is interned once per tile SET; the per-sub-step pass is pure
+    // index arithmetic.
+    const table = this.nodeTableFor(
+      prepared.map((p) => p.geom),
+      setKey,
+    );
+    table.flow.fill(0);
+    const withWidths = prepared.map(({ geom, stepped }) => ({
+      geom,
+      widths: this.widthsFor(geom, stepped, table),
+    }));
+    const activeNodes = applyNodeRadii(
+      table,
+      this.props.nodeRadiusScale,
+      this.props.nodeRadiusMinPixels,
+      this.props.nodeRadiusMaxPixels,
+    );
 
     // (Re)build the single global bundle when the visible set / params change.
+    // The FIRST bundle for a view is built inline so the opening frame has
+    // rivers; after that a change only ARMS the debounce (see scheduleRebuild)
+    // and the existing, converged bundle keeps rendering meanwhile. Playhead
+    // ticks never reach here — `bundleSignature` deliberately excludes time.
     const sig = this.bundleSignature(tiles);
     if (sig !== this.bundleSig) {
-      this.rebuildBundle(
-        prepared.map((p) => p.geom),
-        sig,
-      );
+      if (!this.bundle) {
+        this.rebuildBundle(
+          withWidths.map((p) => p.geom),
+          sig,
+        );
+      } else {
+        this.scheduleRebuild(sig);
+      }
     }
 
-    // Pass 2: one bundled ribbon layer for the union, or per-tile straight arrows.
+    // Pass 3: one bundled ribbon layer for the union, or per-tile straight arrows.
     const sublayers: Layer[] = [];
     if (this.bundle && this.bundle.status !== 'fallback') {
       const bundled = this.buildBundledSublayer(propsKey);
       if (bundled) sublayers.push(bundled);
     } else {
-      for (const { geom, widths } of prepared) {
+      for (const { geom, widths } of withWidths) {
         sublayers.push(
           this.buildFallbackSublayer(
             geom,
             widths,
-            nodeRadius,
+            table,
             stepKey,
             propsKey,
+            setKey,
           ),
         );
       }
     }
 
-    const nodeLayer = this.buildNodeSublayer(nodeFlow, stepKey, propsKey);
+    const nodeLayer = this.buildNodeSublayer(table, stepKey, propsKey);
     if (nodeLayer) sublayers.push(nodeLayer);
 
     emit('renderLayers', {
@@ -658,7 +868,7 @@ export class BundledFlowmapLayer<
       tiles: tiles.length,
       sublayers: sublayers.length,
       edges: this.bundle?.edgeCount ?? 0,
-      nodes: nodeFlow.size,
+      nodes: activeNodes,
       ms: performance.now() - t0,
     });
     return sublayers;
@@ -694,7 +904,7 @@ export class BundledFlowmapLayer<
       widthMinPixels: this.props.widthMinPixels,
       widthMaxPixels: this.props.widthMaxPixels,
       gap: this.props.gap,
-      extensions: this.composeExtensions([]),
+      extensions: this.flowExtensions(),
       // A merged river is many corridors — per-feature picking isn't meaningful;
       // the node overlay carries hover instead.
       pickable: false,
@@ -706,27 +916,27 @@ export class BundledFlowmapLayer<
     return layer;
   }
 
+  /**
+   * `setKey` is part of the cache key for the same reason as in
+   * {@link FlowmapLayer}: the endpoint insets are node radii aggregated across
+   * the WHOLE visible set, so a new tile feeding an existing hub invalidates
+   * every arrow that touches it, not just the new tile's.
+   */
   private buildFallbackSublayer(
     geom: TileGeom,
     widths: Float32Array,
-    nodeRadius: Map<string, number>,
+    table: NodeTable,
     stepKey: number,
     propsKey: string,
+    setKey: string,
   ): Layer {
     const cacheKey = geom.tileKey;
-    const key = `${propsKey}|${stepKey}`;
+    const key = `${propsKey}|${stepKey}|${setKey}`;
     const cached = this.fallbackCache.get(cacheKey);
     if (cached && cached.key === key) return cached.layer;
 
     const dims = geom.dims;
-    const offsets = new Float32Array(geom.binary.featureCount * 2);
-    for (let i = 0; i < geom.binary.featureCount; i++) {
-      const b = i * dims;
-      offsets[i * 2] =
-        nodeRadius.get(nodeKey(geom.source[b], geom.source[b + 1])) ?? 0;
-      offsets[i * 2 + 1] =
-        nodeRadius.get(nodeKey(geom.target[b], geom.target[b + 1])) ?? 0;
-    }
+    const offsets = nodeEndpointOffsets(table, geom);
     const data = {
       length: geom.binary.featureCount,
       attributes: {
@@ -745,7 +955,7 @@ export class BundledFlowmapLayer<
       gap: this.props.gap,
       widthMinPixels: this.props.widthMinPixels,
       widthMaxPixels: this.props.widthMaxPixels,
-      extensions: this.composeExtensions([]),
+      extensions: this.flowExtensions(),
       tile: geom.tile,
       sttFeatures: geom.binary,
     });
@@ -755,39 +965,21 @@ export class BundledFlowmapLayer<
     return layer;
   }
 
-  private nodeRadiiFor(
-    nodeFlow: Map<string, { position: number[]; flow: number }>,
-  ): Map<string, number> {
-    const scale = this.props.nodeRadiusScale;
-    const rmin = this.props.nodeRadiusMinPixels;
-    const rmax = this.props.nodeRadiusMaxPixels;
-    const out = new Map<string, number>();
-    for (const [key, entry] of nodeFlow) {
-      out.set(
-        key,
-        Math.min(rmax, Math.max(rmin, scale * Math.sqrt(entry.flow))),
-      );
-    }
-    return out;
-  }
-
+  /**
+   * The single node-circle overlay, mirroring {@link FlowmapLayer}: the ACTIVE
+   * nodes compacted into binary `getPosition`/`getRadius` attributes (this
+   * rebuilds on every sub-step, so it must not allocate per node).
+   */
   private buildNodeSublayer(
-    nodeFlow: Map<string, { position: number[]; flow: number }>,
+    table: NodeTable,
     stepKey: number,
     propsKey: string,
   ): ScatterplotLayer | null {
-    if (nodeFlow.size === 0) return null;
-    const scale = this.props.nodeRadiusScale;
-    const nodes: FlowNode[] = [];
-    for (const { position, flow } of nodeFlow.values()) {
-      nodes.push({ position, radius: scale * Math.sqrt(flow) });
-    }
-    const props = this.composeSubLayerProps('nodes', `${this.props.id}-nodes`, {
+    const nodes = compactActiveNodes(table, this.props.nodeRadiusScale);
+    if (!nodes) return null;
+    const props = this.composeSubLayerProps('nodes', 'all', {
       data: nodes,
-      positionFormat: 'XY',
       radiusUnits: this.props.nodeRadiusUnits,
-      getPosition: (d: FlowNode) => d.position,
-      getRadius: (d: FlowNode) => d.radius,
       radiusMinPixels: this.props.nodeRadiusMinPixels,
       radiusMaxPixels: this.props.nodeRadiusMaxPixels,
       stroked: true,
@@ -824,29 +1016,5 @@ export class BundledFlowmapLayer<
       // WIDTH animates on the GPU every frame via setNeedsRedraw (super call).
       this.setState({ flowStep: step });
     }
-  }
-}
-
-/** Quantized node key (~1 m) so the same dock collapses across tiles. */
-function nodeKey(lon: number, lat: number): string {
-  return `${lon.toFixed(5)},${lat.toFixed(5)}`;
-}
-
-function addNode(
-  nodeFlow: Map<string, { position: number[]; flow: number }>,
-  coords: Float64Array,
-  base: number,
-  dims: number,
-  flow: number,
-): void {
-  const lon = coords[base];
-  const lat = coords[base + 1];
-  const key = nodeKey(lon, lat);
-  const existing = nodeFlow.get(key);
-  if (existing) {
-    existing.flow += flow;
-  } else {
-    const position = dims === 3 ? [lon, lat, coords[base + 2]] : [lon, lat];
-    nodeFlow.set(key, { position, flow });
   }
 }

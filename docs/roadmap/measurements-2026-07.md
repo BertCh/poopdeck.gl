@@ -54,7 +54,7 @@ OPFS, so nothing persists between runs either.
 "First frame" is defined as: the archive is open and `getTilesInBounds(bounds,
 zoom, timeRange)` has resolved — i.e. every tile the primary zoom needs for the
 default camera at the default playhead is fetched and decoded. That is the same
-call `SpatiotemporalTileset` makes on its first selection pass.
+call `SpatioTemporalTileset` makes on its first selection pass.
 
 The viewport is derived exactly as `SpatioTemporalLayer` derives it, on a
 1280×800 px canvas:
@@ -67,7 +67,7 @@ time   = [playhead - timeWindow/2, playhead + timeWindow/2]
 
 ### What is deliberately NOT measured
 
-`SpatiotemporalTileset`'s speculative work: prefetch lookahead, coarse
+`SpatioTemporalTileset`'s speculative work: prefetch lookahead, coarse
 parent-fallback zoom levels, and the overview storyboard tier. All three are
 throughput spent _after_ the first frame is already drawable. **A real app's
 first-second traffic is therefore higher than the table above** — what these
@@ -213,6 +213,15 @@ machine and this network and do not.
    `DYNAMIC` reading has been fixed or was misread; either way the open defect
    should be closed against this measurement rather than carried forward.
 
+   _Closed 2026-07-26._ Re-probed independently: a ranged GET of an
+   `earthquakes-v2` pack returned `cf-cache-status: MISS` then `HIT`, carrying
+   `cache-control: public, max-age=31536000, immutable` and `age: 173536`
+   (~2 days at the edge). The item is struck from the
+   [roadmap README](./README.md) backlog and listed there as discharged. **The
+   lesson worth keeping:** a headline claim was carried as the top-priority
+   defect for weeks on the strength of one header reading that no second probe
+   ever reproduced. Re-measure before scheduling work against a measurement.
+
 3. **The numbers are per-camera.** A different default view changes the tile
    count and therefore the byte figure. The request count is far more stable —
    the archive coalesces adjacent ranges, so a wider viewport tends to widen the
@@ -240,7 +249,13 @@ URLs registered in `examples/showcase/src/datasets.ts`, probed 2026-07-24).
 The first three are deliberate — their demo ids sit in the showcase's
 `LOCAL_ONLY_DATASETS` gate. The last two are **not** gated: they belong to the
 ungated `severe-weather-2024` composite, which will 404-stall its fronts
-overlay until they are r2-synced.
+overlay until they are r2-synced. Still true on 2026-07-26; carried as **L1** in
+the [roadmap README](./README.md).
+
+A second sweep on 2026-07-26 probed all 64 registered manifest URLs for
+`formatVersion` as well as reachability: **35 v2, 24 v1, 5 404**. The 24 v1
+archives predate packed-v2 and are unopenable by the post-`e084ccd` reader —
+the fleet republish (**B2**).
 
 No dataset was included in this file on the strength of an assumption; every row
 was measured against a manifest that returned 200.

@@ -3,10 +3,12 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import {
   viewStateToCamera,
   cameraToViewState,
+  intersectSurface,
   type ViewState,
 } from '../src/projection/view-state';
 import { MercatorProjection } from '../src/projection/mercator';
 import { GlobeProjection } from '../src/projection/globe';
+import { EARTH_RADIUS } from '../src/projection/local-enu';
 
 function makeCamera(): PerspectiveCamera {
   // fov + aspect fixed so the scale math is deterministic.
@@ -105,5 +107,56 @@ describe('view-state ⇄ camera (globe)', () => {
     // target sits on the sphere; camera sits outside it.
     expect(target.length()).toBeCloseTo(6378137, 0);
     expect(cam.position.length()).toBeGreaterThan(target.length());
+  });
+});
+
+describe('intersectSurface (the one ray/surface solve)', () => {
+  const flat = new MercatorProjection();
+  const globe = new GlobeProjection();
+
+  it('hits the ground plane straight down on a planar frame', () => {
+    const hit = intersectSurface(
+      flat,
+      new Vector3(1000, -2000, 500),
+      new Vector3(0, 0, -1),
+    );
+    expect(hit?.toArray()).toEqual([1000, -2000, 0]);
+  });
+
+  it('rejects a planar ray at or above the horizon rather than reporting the point behind the camera', () => {
+    const origin = new Vector3(0, 0, 500);
+    // Level: parallel to the plane.
+    expect(intersectSurface(flat, origin, new Vector3(1, 0, 0))).toBeNull();
+    // Tilted UP: the plane solve has a root, but at negative t — behind the
+    // camera. That root is what inverted the longitude of a steeply pitched
+    // viewport, so it must not be returned.
+    expect(
+      intersectSurface(flat, origin, new Vector3(1, 0, 1).normalize()),
+    ).toBeNull();
+  });
+
+  it('hits the NEAR side of the sphere on a globe frame', () => {
+    const camera = new Vector3(EARTH_RADIUS * 3, 0, 0);
+    const hit = intersectSurface(globe, camera, new Vector3(-1, 0, 0));
+    expect(hit?.length()).toBeCloseTo(EARTH_RADIUS, 3);
+    // Near side: same hemisphere as the camera, not the far intersection.
+    expect(hit?.x).toBeCloseTo(EARTH_RADIUS, 3);
+  });
+
+  it('returns null for a globe ray that misses the planet', () => {
+    const camera = new Vector3(EARTH_RADIUS * 3, 0, 0);
+    expect(intersectSurface(globe, camera, new Vector3(0, 0, 1))).toBeNull();
+  });
+
+  it('solves against the projection radius, not a hard-coded earth', () => {
+    // A globe.gl-style unit sphere: hard-coding EARTH_RADIUS would put the
+    // solve six million units away from the geometry.
+    const unit = new GlobeProjection({ longitude: 0, latitude: 0 }, 100);
+    const hit = intersectSurface(
+      unit,
+      new Vector3(300, 0, 0),
+      new Vector3(-1, 0, 0),
+    );
+    expect(hit?.x).toBeCloseTo(100, 6);
   });
 });

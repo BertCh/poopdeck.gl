@@ -84,12 +84,12 @@ import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
 import { DEFAULT_WAKE_TAIL_SCALE } from '@poopdeck.gl/core/time-filter';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   expandPickIdColors,
   resolveTrailFade,
   type DrawContext,
   type RGBA8,
-  type STTBaseLayerOptions,
+  type STTFilterableLayerOptions,
   type STTTimeFilterMode,
   type TileGpuCache,
 } from '../base-layer.js';
@@ -133,9 +133,14 @@ import {
 } from '../shaders/flow.glsl.js';
 import {
   TIME_CUMULATIVE_GLSL,
+  TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE,
   TIME_TRAIL_GLSL,
   TIME_WAKE_GLSL,
   TIME_WINDOW_GLSL,
+  resolveTimeUniformLocations,
+  resolveWakeTailScaleUniformLocation,
+  type TimeUniformLocations,
+  type WakeTailScaleUniformLocation,
 } from '../shaders/time-window.glsl.js';
 import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
 import {
@@ -144,13 +149,12 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   expandFilterValues,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
-  type DataFilterUniforms,
-  type STTDataFilterOptions,
+  resolveDataFilterUniformLocations,
+  resolveFilterTransformSizeUniformLocation,
+  type DataFilterUniformLocations,
+  type FilterTransformSizeUniformLocation,
 } from '../shaders/data-filter.glsl.js';
 import {
   lngLatToMercatorInto,
@@ -325,8 +329,7 @@ export function resolveFlowCorridorTimeFilterMode(
 
 // ── options ─────────────────────────────────────────────────────────────────
 
-export interface STTFlowCorridorLayerOptions
-  extends STTBaseLayerOptions, STTDataFilterOptions {
+export interface STTFlowCorridorLayerOptions extends STTFilterableLayerOptions {
   /**
    * Corridor colour when no ramp / categorical column drives it. Accepts 0–255
    * ints (the deck convention, and what `colorPalette` uses) OR 0–1 floats —
@@ -498,27 +501,6 @@ const MODE_GLSL: Readonly<Record<FlowCorridorTimeFilterMode, string>> =
     trail: TIME_TRAIL_GLSL,
   });
 
-/** Uniforms each mode reads — only the active mode's block is declared. */
-const MODE_UNIFORMS: Readonly<Record<FlowCorridorTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-  uniform float uWakeTailScale;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
-
 /**
  * The `vAlpha = …` expression per mode. Every ribbon vertex carries its REACH's
  * `aTime`, so `trail` reads `aTime.x` — a corridor reveals whole (the
@@ -679,7 +661,7 @@ ${RIBBON_ATTRIBUTES}${cfg.filter ? FILTER_ATTRIBUTE : ''}${categoricalDecls}${co
   uniform vec2 uWidthClamp;      // [min, max] in widthUnits, ACTIVE corridors only
   uniform float uWidthToMercator;// widthUnits → mercator (resolveCorridorWidthScale)
   uniform float uOffsetWidths;   // twin-ribbon separation, in live widths
-${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
+${TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
 ${MODE_GLSL[cfg.mode]}${POSITION_DEQUANT_GLSL}${sampler}${FLOW_WIDTH_GLSL}${cfg.ramp ? FLOW_RAMP_FN_GLSL : ''}${cfg.filter ? DATA_FILTER_GLSL : ''}
   void main() {
     vec3 base = sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset);
@@ -767,7 +749,12 @@ const ID_FS_SOURCE = `
  * uniforms come back null (a no-op for `gl.uniform*`) and absent attributes come
  * back -1, which is exactly how a configuration that doesn't declare them reads.
  */
-interface FlowCorridorHandles {
+interface FlowCorridorHandles
+  extends
+    TimeUniformLocations,
+    WakeTailScaleUniformLocation,
+    DataFilterUniformLocations,
+    FilterTransformSizeUniformLocation {
   program: WebGLProgram;
   /** True when the vertex source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -803,20 +790,6 @@ interface FlowCorridorHandles {
   uFlowRampCount: WebGLUniformLocation | null;
   uFlowRampDomain: WebGLUniformLocation | null;
   uFlowRampGamma: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uWakeTailScale: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformSize: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 /** Host capabilities that decide the magnitude path. Probed once per context. */
@@ -923,7 +896,7 @@ function matrixDescriptor(packed: PackedValueMatrix): PackedValueMatrix {
  * rivers.attach(map);
  * ```
  */
-export class STTFlowCorridorLayer extends STTBaseLayer {
+export class STTFlowCorridorLayer extends STTFilterableLayer {
   protected readonly flowOpts: {
     color: [number, number, number, number];
     colorRamp?: ReadonlyArray<RGBA8>;
@@ -950,11 +923,7 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
     fadeTrail: number;
   };
 
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private readonly filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payloads never allocate. */
-  private readonly filterUniforms: DataFilterUniforms =
-    createDataFilterUniforms();
+  /** Allocated once — the per-draw uniform payload never allocates. */
   private readonly flowUniforms: FlowMatrixUniforms =
     createFlowMatrixUniforms();
   /** `[min, max]` width clamp, refilled in place. */
@@ -1000,7 +969,6 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
    */
   private readonly texturedCaches = new Set<FlowGpuCache>();
 
-  private warnedCategoricalFilter = false;
   private warnedIndexOverflow = false;
 
   constructor(opts: STTFlowCorridorLayerOptions) {
@@ -1029,14 +997,6 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
       wakeTailScale: opts.wakeTailScale ?? DEFAULT_WAKE_TAIL_SCALE,
       trailLength: opts.trailLength ?? 0,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.widthClamp[0] = this.flowOpts.widthMin;
     this.widthClamp[1] = this.flowOpts.widthMax;
@@ -1143,28 +1103,6 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
    */
   setOffsetWidths(offsetWidths: number): void {
     this.flowOpts.offsetWidths = offsetWidths;
-    this.map?.triggerRepaint();
-  }
-
-  /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only: no relink, no tile rebuild. `null` idles the filter, which
-   * renders everything.
-   */
-  setFilterRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin. Uniform-only, like `setFilterRange`. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every corridor unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
     this.map?.triggerRepaint();
   }
 
@@ -1502,13 +1440,7 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
     // `hasColumn: false`, which the uniform resolver turns into `enabled: 0` —
     // an UNFILTERED tile, never a blank one.
     const filterColumn = extractFilterColumn(f, this.filterOpts.filterProperty);
-    if (filterColumn.categorical && !this.warnedCategoricalFilter) {
-      this.warnedCategoricalFilter = true;
-      console.warn(
-        `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-          `categorical column; range filtering needs a numeric one — rendering unfiltered`,
-      );
-    }
+    if (filterColumn.categorical) this.warnCategoricalFilterOnce();
     const filterValues = filterColumn.values
       ? expandFilterValues(filterColumn.values, ribbonCounts, vertexTotal)
       : null;
@@ -1766,16 +1698,7 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
     this.setMagnitudeState(gl, h, cache, ctx);
     this.setTimeUniforms(gl, h, cache, ctx);
     if (this.shaderConfig.filter) {
-      const u = resolveDataFilterUniforms(
-        this.filterUniforms,
-        this.filterOpts,
-        cache.hasFilterColumn === true,
-      );
-      gl.uniform2fv(h.uFilterRange, u.range);
-      gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-      gl.uniform1f(h.uFilterEnabled, u.enabled);
-      gl.uniform1f(h.uFilterTransformSize, u.transformSize);
-      gl.uniform1f(h.uFilterTransformColor, u.transformColor);
+      this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn === true);
     }
     if (this.shaderConfig.ramp) {
       gl.uniform4fv(h.uFlowRamp, this.rampStops);
@@ -1973,29 +1896,10 @@ export class STTFlowCorridorLayer extends STTBaseLayer {
       uFlowRampCount: gl.getUniformLocation(program, 'uFlowRampCount'),
       uFlowRampDomain: gl.getUniformLocation(program, 'uFlowRampDomain'),
       uFlowRampGamma: gl.getUniformLocation(program, 'uFlowRampGamma'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uWakeTailScale: gl.getUniformLocation(program, 'uWakeTailScale'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformSize: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformSize,
-      ),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveWakeTailScaleUniformLocation(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
+      ...resolveFilterTransformSizeUniformLocation(gl, program),
     };
   }
 

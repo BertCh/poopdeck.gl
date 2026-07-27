@@ -37,6 +37,7 @@ import {
   type ArchiveMetadata,
   type ArchiveIndex,
   type ArchiveOptions,
+  type SttLoadOptions,
   type Tile,
   type TileId,
   type TileEntry,
@@ -52,6 +53,14 @@ import {
   type PropertyStyleHint,
   Compression,
 } from './types.js';
+import {
+  tileKey,
+  tileEntryKey,
+  tileCellKey,
+  type TileKey,
+  type TileEntryKey,
+  type TileCellKey,
+} from './tile-key.js';
 import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder.js';
 import { OpfsTileCache } from './opfs-cache.js';
 import { decompress, unzstdSync } from './compression.js';
@@ -68,6 +77,8 @@ import {
   createCancellationError,
   isCancellationError,
 } from './request-scheduler.js';
+import { MAX_SEAM_SPAN_DEG } from './geo/viewport-bounds.js';
+import { MAX_MERCATOR_LAT } from './geo/mercator.js';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
@@ -93,16 +104,20 @@ const OBJECT_MAGIC_LEN = 8;
  * `manifest.capabilities` values this reader implements — the
  * required-to-understand feature registry (docs/spec/stt-packed-format.md
  * §3.1). Each capability RE-TYPES existing tile columns (quantized geometry,
- * quantized numeric properties, elevation-folded 3-component points), so a
- * reader that lacks one wouldn't fail downstream — it would silently misdecode
- * (e.g. Int32 grid indices read as microscopic lon/lat degrees). Conformance
- * requires refusing, at open, a dataset declaring anything outside this set,
- * mirroring the Rust reader (`pack.rs`'s `KNOWN_CAPABILITIES`).
+ * quantized numeric properties, elevation-folded 3-component points, compact
+ * `UInt32` feature times, `UInt16` per-vertex values), so a reader that lacks
+ * one wouldn't fail downstream — it would silently misdecode (e.g. Int32 grid
+ * indices read as microscopic lon/lat degrees, millisecond offsets read as
+ * absolute Unix times, or 0..65534 value indices read as physical units).
+ * Conformance requires refusing, at open, a dataset declaring anything outside
+ * this set, mirroring the Rust reader (`pack.rs`'s `KNOWN_CAPABILITIES`).
  */
 export const KNOWN_MANIFEST_CAPABILITIES: readonly string[] = [
   'coord-quant',
   'attr-quant',
   'elevation-fold',
+  'time-delta',
+  'vertex-value-quant',
 ];
 
 /** `directory.layout` value for the paged container. */
@@ -172,6 +187,30 @@ const SPATIAL_TIEBREAK_WEIGHT = 0.4;
  * Overridable per-archive via `ArchiveOptions.transferTimeoutMs`; `0` disables.
  */
 const DEFAULT_TRANSFER_TIMEOUT_MS = 20_000;
+/**
+ * Hard ceiling on how many `(x, y)` cells ONE bounds scan may enumerate.
+ *
+ * The scan runs on the selection path, and the tileset's selection key folds in
+ * the time range — so during playback it re-runs at display refresh, not at
+ * 10 Hz. It is bounded by the viewport in principle, but two things break that:
+ * the camera zoom is CLAMPED up into the archive's `[minZoom, maxZoom]`, so a
+ * whole-world camera over a `min_zoom: 10` archive scans 2^10 × 2^10 cells; and
+ * a degenerate box (see {@link orderLonRange}) can claim nearly the whole world
+ * at any zoom. Both enumerate ~5e5 two-element arrays per pass, all of which
+ * miss `tileEntryIndex`.
+ *
+ * Crossing it WARNS ONLY — the scan still returns every cell. Truncating it
+ * (an earlier revision centred a window and dropped the rest) turns a
+ * frame-rate problem into a blank-region problem, and narrowing the query to
+ * `metadata.bounds` instead is unsound for the reason recorded above
+ * `lonToTileX`. The fix belongs upstream, at whatever asked for a scan this
+ * large. It is set FAR above any legitimate
+ * footprint on purpose — the corrected pitched-frustum footprint is ~750 cells
+ * at z8/pitch 80 (docs/roadmap/tile-loading-3d-2026-07.md §4.4: tile counts
+ * legitimately RISE under pitch and must not be tuned back down), so 8192 is an
+ * order of magnitude of headroom and only ever fires on a defect.
+ */
+const MAX_QUERY_SCAN_CELLS = 8192;
 
 /** Whether an error is a fetch cancellation (must propagate, never retry). */
 function isAbortError(error: unknown): boolean {
@@ -435,10 +474,11 @@ export interface PackedManifest {
    */
   capabilities?: string[];
   /**
-   * Per-blob compression codec — `"zstd"` or `"none"` for the packed format.
-   * (`"gzip"` is a retired legacy value, absent from the packed schema and
-   * rejected by the reader.) Typed `string` so a reader tolerates any future
-   * codec name rather than throwing on an unknown enum value.
+   * Per-blob compression codec: `"zstd"` or `"none"` — the enum in
+   * `docs/spec/manifest.schema.json` is the contract. Typed `string` rather
+   * than a union so parsing a manifest never throws on a codec name this
+   * reader does not know; the open path decides what to do with one.
+   * `"gzip"` is not a packed codec (see `compression.ts`).
    */
   compression: string;
   /**
@@ -608,7 +648,25 @@ export function estimateTileSize(tile: Tile): number {
 /** STT archive reader. */
 export class STTArchive {
   public url: string;
+  /**
+   * The transport every request actually goes through: {@link baseFetchFn}
+   * with the current `loadOptions.fetch` applied (see {@link applyLoadOptions}).
+   */
   private fetchFn: typeof fetch;
+  /**
+   * The UNDECORATED transport — `ArchiveOptions.fetch` or the global `fetch`.
+   * Kept separate so {@link setLoadOptions} can re-derive `fetchFn` from a
+   * clean base instead of stacking a second RequestInit wrapper on top of the
+   * previous one (which would make an auth-header rotation additive: the stale
+   * header would survive under the new one).
+   */
+  private baseFetchFn: typeof fetch;
+  /**
+   * True when the caller passed an explicitly-typed `ArchiveOptions.fetch`,
+   * which outranks the `loadOptions.fetch` FUNCTION form — permanently, so a
+   * later {@link setLoadOptions} can't smuggle a transport past it.
+   */
+  private hasExplicitTransport = false;
   /** Parsed manifest.json (one whole-object GET, cached). */
   private manifestCache?: PackedManifest;
   /** Promise guard so concurrent callers share one manifest fetch. */
@@ -646,7 +704,7 @@ export class STTArchive {
   /** Promise guard so concurrent callers share one directory fetch+decode. */
   private indexPromise?: Promise<ArchiveIndex>;
 
-  private byteCache = new Map<string, ByteCacheEntry>();
+  private byteCache = new Map<TileKey, ByteCacheEntry>();
   private maxCacheTiles: number;
   private currentCacheBytes = 0;
   private maxCacheBytes: number;
@@ -661,6 +719,8 @@ export class STTArchive {
   private transferTimeoutMs: number = DEFAULT_TRANSFER_TIMEOUT_MS;
   /** Fair-share weight in the process-shared scheduler (see options). */
   private schedulerWeight: number = DEFAULT_SCHEDULER_WEIGHT;
+  /** Zooms already reported by {@link warnOversizedScan} (warn once each). */
+  private warnedOversizedScans = new Set<number>();
 
   /**
    * Dual-EWMA throughput estimator fed by completed coalesced range
@@ -678,10 +738,10 @@ export class STTArchive {
   private transferWindowBytes = 0;
   private transferWindowStart = 0;
 
-  /** "z/x/y" -> temporal entries at that spatial cell. */
-  private tileEntryIndex = new Map<string, TileEntry[]>();
-  /** "z/x/y/t/<bucketMs|'base'>" -> exact entry (see {@link tileEntryKey}). */
-  private tileEntryByKey = new Map<string, TileEntry>();
+  /** {@link tileCellKey} -> temporal entries at that spatial cell. */
+  private tileEntryIndex = new Map<TileCellKey, TileEntry[]>();
+  /** {@link tileEntryKey} -> the one entry at that address and tier. */
+  private tileEntryByKey = new Map<TileEntryKey, TileEntry>();
   /**
    * The dataset's base temporal bucket width (manifest
    * `metadata.temporal_bucket_ms`, same 1 h default as {@link getMetadata}).
@@ -697,7 +757,7 @@ export class STTArchive {
    */
   private temporalLodDeclared = false;
 
-  // --- Paged directory (Wave 2) -------------------------------------------
+  // --- Paged directory ------------------------------------------------------
   /**
    * True when the manifest's `directory.layout === "paged"` AND the directory
    * is large enough to actually page (above {@link SMALL_DIR_THRESHOLD}). When
@@ -758,24 +818,14 @@ export class STTArchive {
   constructor(options: ArchiveOptions | string) {
     if (typeof options === 'string') {
       this.url = options;
-      this.fetchFn = fetch.bind(globalThis);
+      this.baseFetchFn = fetch.bind(globalThis);
+      this.fetchFn = this.baseFetchFn;
     } else {
       this.url = options.url;
-      this.fetchFn = options.fetch || fetch.bind(globalThis);
-      // loaders.gl-convention `loadOptions.fetch` (see SttLoadOptions):
-      // the FUNCTION form is a drop-in transport (the explicitly-typed
-      // `options.fetch` wins when both are set); the OBJECT form is a
-      // RequestInit merged into EVERY request this archive makes — manifest,
-      // directory, pack ranges — so auth headers / credentials reach the
-      // wire without a custom fetch function.
-      const loadFetch = options.loadOptions?.fetch;
-      if (typeof loadFetch === 'function') {
-        if (!options.fetch) this.fetchFn = loadFetch as typeof fetch;
-      } else if (loadFetch && typeof loadFetch === 'object') {
-        const transport = this.fetchFn;
-        this.fetchFn = ((input: RequestInfo | URL, init?: RequestInit) =>
-          transport(input, mergeRequestInit(loadFetch, init))) as typeof fetch;
-      }
+      this.baseFetchFn = options.fetch || fetch.bind(globalThis);
+      this.fetchFn = this.baseFetchFn;
+      this.hasExplicitTransport = !!options.fetch;
+      this.applyLoadOptions(options.loadOptions);
       this.decoderOption = options.decoder;
       if (options.retainArrowIpc !== undefined) {
         this.retainArrowIpc = options.retainArrowIpc;
@@ -839,6 +889,80 @@ export class STTArchive {
       this.maxCacheTiles <= MOBILE_MAX_CACHE_TILES
         ? 256 * 1024 * 1024
         : 512 * 1024 * 1024;
+  }
+
+  /**
+   * (Re)derive {@link fetchFn} from {@link baseFetchFn} + `loadOptions.fetch`
+   * (loaders.gl convention, see {@link SttLoadOptions}):
+   *
+   * - FUNCTION form — a drop-in transport. An explicitly-typed
+   *   `ArchiveOptions.fetch` outranks it (see {@link hasExplicitTransport}).
+   * - OBJECT form — a `RequestInit` merged into EVERY request this archive
+   *   makes (manifest, directory, pack ranges), so auth headers / credentials
+   *   reach the wire without a custom fetch function.
+   *
+   * Always rebuilds from the base transport, never from the current `fetchFn`,
+   * so repeated application can't stack wrappers.
+   */
+  private applyLoadOptions(loadOptions: SttLoadOptions | undefined): void {
+    const loadFetch = loadOptions?.fetch;
+    if (typeof loadFetch === 'function' && !this.hasExplicitTransport) {
+      this.fetchFn = loadFetch as typeof fetch;
+      return;
+    }
+    if (loadFetch && typeof loadFetch === 'object') {
+      const transport = this.baseFetchFn;
+      this.fetchFn = ((input: RequestInfo | URL, init?: RequestInit) =>
+        transport(input, mergeRequestInit(loadFetch, init))) as typeof fetch;
+      return;
+    }
+    this.fetchFn = this.baseFetchFn;
+  }
+
+  /**
+   * Replace the archive's `loadOptions` AFTER construction — the live analog
+   * of `ArchiveOptions.loadOptions`, for a consumer whose `loadOptions` prop
+   * changed (a rotated bearer token, a credentials-mode flip).
+   *
+   * Applies from the next request onward: in-flight requests keep the
+   * transport they started with, and ALREADY-CACHED bytes (manifest,
+   * directory, the byte/OPFS caches) are NOT re-fetched — the new options
+   * govern what still has to go to the wire, exactly like a fresh archive
+   * would for its cold reads. Pass `undefined` to drop back to the bare
+   * transport.
+   *
+   * This exists because `loadOptions` is an ARCHIVE option, not a
+   * {@link SpatioTemporalTilesetOptions} one: `SpatioTemporalTileset.setOptions`
+   * cannot reach it, so the layer that owns the archive calls this directly.
+   */
+  setLoadOptions(loadOptions: SttLoadOptions | undefined): void {
+    this.applyLoadOptions(loadOptions);
+  }
+
+  /**
+   * Re-cap concurrent range requests per coalesced batch after construction
+   * (the live analog of `ArchiveOptions.maxConcurrentRequests`).
+   *
+   * The cap is read per dispatch pass in {@link runGroupFetches}, so a change
+   * takes effect on the next batch — already-running requests are never
+   * cancelled to meet a lowered cap (that would waste bytes already on the
+   * wire; the cap's job is to bound what starts NEXT). Values below 1 are
+   * ignored, which would deadlock the pool.
+   */
+  setMaxConcurrentRequests(maxConcurrentRequests: number): void {
+    if (
+      typeof maxConcurrentRequests !== 'number' ||
+      !Number.isFinite(maxConcurrentRequests) ||
+      maxConcurrentRequests < 1
+    ) {
+      return;
+    }
+    this.maxConcurrentRequests = Math.floor(maxConcurrentRequests);
+  }
+
+  /** Current per-batch concurrent-range-request cap (see {@link setMaxConcurrentRequests}). */
+  getMaxConcurrentRequests(): number {
+    return this.maxConcurrentRequests;
   }
 
   private getDecoder(): TileDecoder {
@@ -967,13 +1091,19 @@ export class STTArchive {
           this.packCompression = Compression.None;
           break;
         case 'gzip':
-          // Retired codec, absent from the packed schema. No packed writer
-          // emits it; reject rather than silently mis-decoding as zstd.
+          // Named codec that is definitely NOT zstd: DEFLATE frames handed to
+          // fzstd would fail deep in the decoder on the first tile. Fail here
+          // instead, at open, with the cause named. See `compression.ts`.
           throw new Error(
             "STT manifest: 'gzip' is a retired codec — packed archives are zstd-only",
           );
         case 'zstd':
         default:
+          // An unrecognized name is assumed to be zstd: every packed writer
+          // emits zstd, so a future codec string is likelier to be a zstd
+          // variant than a foreign container, and guessing keeps old readers
+          // working against newer manifests. A genuinely foreign codec still
+          // fails loudly on the first blob.
           this.packCompression = Compression.Zstd;
           break;
       }
@@ -1037,9 +1167,10 @@ export class STTArchive {
 
   /**
    * {@link fetchWholeObject} with the same jittered backoff as
-   * {@link fetchRangeWithRetry}. The manifest and directory GETs used to be
-   * single-attempt while every tile range retried — exactly backwards for
-   * the two objects nothing else can proceed without.
+   * {@link fetchRangeWithRetry}. The manifest and directory GETs need retry at
+   * least as badly as any tile range does: nothing else in the archive can
+   * proceed until those two objects land, so fetching them single-attempt
+   * turns one transient failure into a dead archive.
    */
   private async fetchWholeObjectWithRetry(
     url: string,
@@ -1228,7 +1359,7 @@ export class STTArchive {
    * duration-weighted), published as `min(fast, slow)` — reacts fast to
    * drops, rises cautiously. `bytesPerMs` is `null` until the first sample.
    *
-   * Wire into `SpatiotemporalTileset`'s `getThroughput` option so the
+   * Wire into `SpatioTemporalTileset`'s `getThroughput` option so the
    * tileset can convert pending-byte counts into honest time-to-ready ETAs.
    */
   getThroughputEstimate(): ThroughputEstimate {
@@ -1515,28 +1646,10 @@ export class STTArchive {
     };
   }
 
-  /**
-   * `tileEntryByKey` key: `z/x/y/t` qualified by the entry's temporal-LOD
-   * tag (`temporalBucketMs`, `'base'` when the column is absent). A
-   * temporal-LOD tile shares its `z/x/y/timeStart` with the base tile whose
-   * bucket starts at the same instant, so an unqualified key made the map
-   * last-write-wins across tiers — a LOD tile silently shadowed (or was
-   * shadowed by) its base twin.
-   */
-  private tileEntryKey(
-    z: number,
-    x: number,
-    y: number,
-    t: number,
-    bucketMs: number | undefined,
-  ): string {
-    return `${z}/${x}/${y}/${t}/${bucketMs ?? 'base'}`;
-  }
-
   /** Insert entries into the (z/x/y → list) and tier-qualified key maps. */
   private mergeEntries(entries: TileEntry[]): void {
     for (const entry of entries) {
-      const spatialKey = `${entry.zoom}/${entry.x}/${entry.y}`;
+      const spatialKey = tileCellKey(entry.zoom, entry.x, entry.y);
       let list = this.tileEntryIndex.get(spatialKey);
       if (!list) {
         list = [];
@@ -1544,7 +1657,7 @@ export class STTArchive {
       }
       list.push(entry);
       this.tileEntryByKey.set(
-        this.tileEntryKey(
+        tileEntryKey(
           entry.zoom,
           entry.x,
           entry.y,
@@ -1744,6 +1857,12 @@ export class STTArchive {
    * is resident. No-op for single / small-paged archives (maps already full).
    * Geo-bbox ∩ viewport ∧ zoom membership ∧ temporal overlap — exactly the Rust
    * `PageDescriptor::overlaps` predicate.
+   *
+   * The longitude test runs against the WRAPPED query intervals (see
+   * {@link lonQueryIntervals}) so a seam-crossing viewport pages in the leaves
+   * on BOTH sides of the antimeridian. Without that, the wrapped half of the
+   * query selected tile columns (`boundsToTiles` is wrap-aware) whose leaf
+   * pages were never fetched, so the entry index came back empty for them.
    */
   private async ensurePagesForBounds(
     bounds: BoundingBox,
@@ -1752,13 +1871,28 @@ export class STTArchive {
     signal?: AbortSignal,
   ): Promise<void> {
     if (!this.paged || !this.pageTable) return;
+    const lonSpans = lonQueryIntervals(bounds.minLon, bounds.maxLon);
+    // Order the latitude band for the same reason `boundsToTiles` orders its
+    // row span: an inverted box turns the overlap test below into a REJECT-ALL
+    // (`p.maxLat < 10 || -10 < p.minLat` is true for essentially every page),
+    // so every leaf gets pruned and the columns the scan then selects resolve
+    // against an empty entry index.
+    const latLo = Math.min(bounds.minLat, bounds.maxLat);
+    const latHi = Math.max(bounds.minLat, bounds.maxLat);
     const needed: number[] = [];
     for (let i = 0; i < this.pageTable.length; i++) {
       if (this.residentPages.has(i)) continue;
       const p = this.pageTable[i];
       if (zoom < p.minZoom || zoom > p.maxZoom) continue;
-      if (p.maxLon < bounds.minLon || bounds.maxLon < p.minLon) continue;
-      if (p.maxLat < bounds.minLat || bounds.maxLat < p.minLat) continue;
+      let lonHit = false;
+      for (const [lo, hi] of lonSpans) {
+        if (p.maxLon >= lo && hi >= p.minLon) {
+          lonHit = true;
+          break;
+        }
+      }
+      if (!lonHit) continue;
+      if (p.maxLat < latLo || latHi < p.minLat) continue;
       if (p.tMax < timeRange.start || p.tMin > timeRange.end) continue;
       needed.push(i);
     }
@@ -1843,16 +1977,14 @@ export class STTArchive {
     // (`'base'` — legacy archives and pre-LOD builds). An untagged entry IS
     // a base-tier entry, so it also satisfies a base-bucket lookup.
     const exact =
-      this.tileEntryByKey.get(
-        this.tileEntryKey(id.z, id.x, id.y, id.t, want),
-      ) ??
+      this.tileEntryByKey.get(tileEntryKey(id.z, id.x, id.y, id.t, want)) ??
       (want === base
         ? this.tileEntryByKey.get(
-            this.tileEntryKey(id.z, id.x, id.y, id.t, undefined),
+            tileEntryKey(id.z, id.x, id.y, id.t, undefined),
           )
         : undefined);
     if (exact) return exact;
-    const entries = this.tileEntryIndex.get(`${id.z}/${id.x}/${id.y}`);
+    const entries = this.tileEntryIndex.get(tileCellKey(id.z, id.x, id.y));
     if (!entries) return undefined;
     // Interval-scan fallback. Tier-filtered only when the archive declares
     // a temporal-LOD pyramid — only then can two tiers alias one z/x/y/t
@@ -1884,24 +2016,19 @@ export class STTArchive {
     return this.findTileEntry(id)?.length;
   }
 
-  private tileIdToKey(id: TileId): string {
-    // `@<bucketMs>` keeps a temporal-LOD tile's cache identity distinct from
-    // the base tile sharing its z/x/y/t; base ids keep the historical key.
-    return id.bucketMs !== undefined
-      ? `${id.z}/${id.x}/${id.y}/${id.t}@${id.bucketMs}`
-      : `${id.z}/${id.x}/${id.y}/${id.t}`;
-  }
-
   /**
    * Build the OPFS cache key for a tile. Includes the archive URL and a
    * stable fingerprint so a redeployed archive (different ETag) doesn't
    * silently serve stale tiles. Returns `null` when the fingerprint isn't
    * known yet — in that case we just skip OPFS for this call; the next one
    * (post-header) will have a fingerprint and start hitting.
+   *
+   * This string reaches disk, so {@link tileKey}'s format is a persistence
+   * contract: altering it orphans every tile cached under the old spelling.
    */
   private opfsKey(id: TileId): string | null {
     if (!this.archiveFingerprint) return null;
-    return `${this.url}::${this.tileIdToKey(id)}::${this.archiveFingerprint}`;
+    return `${this.url}::${tileKey(id)}::${this.archiveFingerprint}`;
   }
 
   /**
@@ -2080,7 +2207,7 @@ export class STTArchive {
       signal,
       fetchPriority,
     );
-    this.storeBytes(this.tileIdToKey(id), compressed);
+    this.storeBytes(tileKey(id), compressed);
     return this.decodeBytes(id, entry, compressed, signal, true);
   }
 
@@ -2127,7 +2254,7 @@ export class STTArchive {
     const entry = this.findTileEntry(id);
     if (!entry) return null;
 
-    const key = this.tileIdToKey(id);
+    const key = tileKey(id);
     const cached = this.byteCache.get(key);
     if (cached) {
       cached.lastAccess = Date.now();
@@ -2190,7 +2317,7 @@ export class STTArchive {
 
   /**
    * Compute the cross-source EDF priority for a coalesced range-group
-   * (multi-source coordination, Phase 2 §2.8). LOWER value = higher priority
+   * (docs/roadmap/playback-and-loading.md §5). LOWER value = higher priority
    * (Cesium/scheduler semantics).
    *
    *   priority = tierBase + distance-to-playhead-in-sim-ms
@@ -2344,13 +2471,43 @@ export class STTArchive {
     let aborted = false;
     const removers: Array<() => void> = [];
 
+    // RANK THE GROUPS BEFORE DISPATCHING THEM. Above `perArchiveCap` the runner
+    // loop below schedules in pull order and waits for each group to settle, so
+    // only a sliding window of `perArchiveCap` groups is ever queued at once —
+    // and the scheduler can only rank what is queued. That truncates the
+    // cross-source EDF term ITSELF (not just the spatial tie-break) to pack/byte
+    // order: the tile the play-head reaches next waits behind every group that
+    // happens to sit earlier in the pack. Byte adjacency is exploited INSIDE a
+    // group — that is what coalescing is — so the ORDER of the groups carries no
+    // coalescing benefit and ranking them costs nothing.
+    //
+    // The sort is stable and `fallbackSeq` stays each group's ORIGINAL index, so
+    // when no play-head is threaded in (priority === seq, e.g. every directory
+    // page fetch) the order is byte order exactly as before.
+    const ranked = groups.map((group, seq) => {
+      const minDist = groupMinDistanceMs(group);
+      const spatialDistSq = groupSpatialDistSq(group);
+      return {
+        group,
+        seq,
+        minDist,
+        spatialDistSq,
+        priority: this.groupSchedulerPriority(
+          minDist,
+          seq,
+          fetchPriority,
+          spatialDistSq,
+        ),
+      };
+    });
+    ranked.sort((a, b) => a.priority - b.priority);
+
     // Schedule ONE group on the shared scheduler and return a promise for its
     // settlement (already error-observed so it never surfaces as an unhandled
     // rejection). Caller supersession → scheduled-request abort, detached when
     // the request settles so neither outlives the other.
-    const scheduleOne = (group: G, fallbackSeq: number): Promise<void> => {
-      const minDist = groupMinDistanceMs(group);
-      const spatialDistSq = groupSpatialDistSq(group);
+    const scheduleOne = (r: (typeof ranked)[number]): Promise<void> => {
+      const { group, seq: fallbackSeq, minDist, spatialDistSq } = r;
       const req = scheduler.scheduleRequest<void>({
         sourceId: this.url,
         weight: this.schedulerWeight,
@@ -2406,12 +2563,13 @@ export class STTArchive {
     // to the work-conserving "single source draws the whole budget" guarantee.
     const perArchiveCap = Math.max(1, this.maxConcurrentRequests);
     try {
-      if (groups.length <= perArchiveCap) {
-        await Promise.all(groups.map((g, i) => scheduleOne(g, i)));
+      if (ranked.length <= perArchiveCap) {
+        await Promise.all(ranked.map((r) => scheduleOne(r)));
       } else {
         // `perArchiveCap` runners pull from a shared cursor: each schedules one
         // group, awaits its settlement, then pulls the next — so at most
         // `perArchiveCap` of this archive's groups are scheduled at any instant.
+        // The cursor walks `ranked`, so the window slides in PRIORITY order.
         let next = 0;
         const runner = async (): Promise<void> => {
           for (;;) {
@@ -2423,8 +2581,8 @@ export class STTArchive {
               return;
             }
             const i = next++;
-            if (i >= groups.length) return;
-            await scheduleOne(groups[i], i);
+            if (i >= ranked.length) return;
+            await scheduleOne(ranked[i]);
           }
         };
         await Promise.all(
@@ -2477,7 +2635,7 @@ export class STTArchive {
       const id = ids[i];
       const entry = this.findTileEntry(id);
       if (!entry) continue;
-      const key = this.tileIdToKey(id);
+      const key = tileKey(id);
       const cached = this.byteCache.get(key);
       if (cached) {
         cached.lastAccess = Date.now();
@@ -2660,7 +2818,7 @@ export class STTArchive {
                 return;
               }
               try {
-                this.storeBytes(this.tileIdToKey(m.id), single);
+                this.storeBytes(tileKey(m.id), single);
                 deliver(
                   m.index,
                   await this.decodeBytes(m.id, m.entry, single, signal, true),
@@ -2671,7 +2829,7 @@ export class STTArchive {
                 // failure (the bytes arrived but the payload is unusable).
                 // Evict what we just cached — a poisoned entry would reject
                 // every later batch from the cache-hit path.
-                this.dropCachedBytes(this.tileIdToKey(m.id));
+                this.dropCachedBytes(tileKey(m.id));
               }
             }),
           );
@@ -2681,7 +2839,7 @@ export class STTArchive {
           group.members.map(async (m) => {
             const rel = m.entry.offset - group.start;
             const slice = buffer.slice(rel, rel + m.entry.length);
-            this.storeBytes(this.tileIdToKey(m.id), slice);
+            this.storeBytes(tileKey(m.id), slice);
             try {
               deliver(
                 m.index,
@@ -2693,7 +2851,7 @@ export class STTArchive {
               // per-tile `null`, same as the per-member fallback path — one
               // bad tile must not fail its whole coalesced group. Evict what
               // we just cached so the poison can't replay from cache hits.
-              this.dropCachedBytes(this.tileIdToKey(m.id));
+              this.dropCachedBytes(tileKey(m.id));
             }
           }),
         );
@@ -2726,7 +2884,7 @@ export class STTArchive {
     return results;
   }
 
-  private storeBytes(key: string, bytes: ArrayBuffer): void {
+  private storeBytes(key: TileKey, bytes: ArrayBuffer): void {
     const existing = this.byteCache.get(key);
     if (existing) this.currentCacheBytes -= existing.byteSize;
     this.byteCache.set(key, {
@@ -2745,7 +2903,7 @@ export class STTArchive {
    * it lets the next request re-fetch and self-heal after transient
    * corruption.
    */
-  private dropCachedBytes(key: string): void {
+  private dropCachedBytes(key: TileKey): void {
     const existing = this.byteCache.get(key);
     if (!existing) return;
     this.byteCache.delete(key);
@@ -2775,6 +2933,31 @@ export class STTArchive {
   }
 
   /**
+   * Report — once per zoom, so a stuck camera can't spam the console — that a
+   * bounds scan blew past {@link MAX_QUERY_SCAN_CELLS}. The scan still returns
+   * every cell; this is a performance warning, not a correctness one.
+   *
+   * This is deliberately loud and deliberately specific. A scan this size has
+   * exactly three causes, and the numbers below separate them: a degenerate
+   * viewport box (inverted by bearing or above-horizon pitch), a camera zoom
+   * clamped up into a regional archive's `[minZoom, maxZoom]`, or a declared
+   * extent that doesn't match the tiles. The 21-agent audit that produced
+   * docs/roadmap/tile-loading-3d-2026-07.md found all three shipping at once,
+   * silently — this one line would have surfaced every one of them.
+   */
+  private warnOversizedScan(zoom: number, cells: number, cap: number): void {
+    if (this.warnedOversizedScans.has(zoom)) return;
+    this.warnedOversizedScans.add(zoom);
+    console.warn(
+      `[stt] ${this.url}: tile scan at z${zoom} enumerated ${cells} cells ` +
+        `(expected under ${cap}). Every cell is still scanned — this costs ` +
+        `frame time, it does not drop tiles. Check for an inverted/degenerate ` +
+        `viewport box, or a camera zoom clamped up into this archive's ` +
+        `[minZoom, maxZoom].`,
+    );
+  }
+
+  /**
    * Tile IDs whose interval overlaps `timeRange` within `bounds` at `zoom`.
    *
    * For archives that ship a temporal LOD pyramid, this returns ONLY the
@@ -2782,6 +2965,11 @@ export class STTArchive {
    * archive's base bucket (or is unset, for legacy archives). Use
    * {@link getTileIdsInBoundsForTemporalLod} to request a coarser LOD
    * level's tiles.
+   *
+   * `bounds` is honoured AS GIVEN — deliberately not narrowed to the archive's
+   * declared extent, which does not bound the data (see the note above
+   * `lonToTileX`). An oversized scan warns via {@link MAX_QUERY_SCAN_CELLS}
+   * but still returns every cell.
    */
   async getTileIdsInBounds(
     bounds: BoundingBox,
@@ -2789,14 +2977,20 @@ export class STTArchive {
     timeRange: TimeRange,
   ): Promise<TileId[]> {
     await this.getIndex();
-    await this.ensurePagesForBounds(bounds, zoom, timeRange);
+    // The query box is used AS GIVEN. It is deliberately NOT narrowed to
+    // `meta.bounds` — see the note on `MAX_QUERY_SCAN_CELLS` for why that
+    // intersection is unsound.
     const meta = await this.getMetadata();
+    const clipped = bounds;
+    await this.ensurePagesForBounds(clipped, zoom, timeRange);
     const baseBucket = meta.temporalBucketMs;
     const filterToBase =
       meta.temporalLod !== undefined && meta.temporalLod.length > 0;
     const ids: TileId[] = [];
-    for (const [x, y] of boundsToTiles(bounds, zoom)) {
-      const entries = this.tileEntryIndex.get(`${zoom}/${x}/${y}`);
+    for (const [x, y] of boundsToTiles(clipped, zoom, (cells, cap) =>
+      this.warnOversizedScan(zoom, cells, cap),
+    )) {
+      const entries = this.tileEntryIndex.get(tileCellKey(zoom, x, y));
       if (!entries) continue;
       for (const e of entries) {
         if (filterToBase) {
@@ -2841,12 +3035,16 @@ export class STTArchive {
     bucketMs: number,
   ): Promise<TileId[]> {
     await this.getIndex();
-    await this.ensurePagesForBounds(bounds, zoom, timeRange);
+    // Box used as given, same as getTileIdsInBounds — see there.
     const meta = await this.getMetadata();
+    const clipped = bounds;
+    await this.ensurePagesForBounds(clipped, zoom, timeRange);
     const baseBucket = meta.temporalBucketMs;
     const ids: TileId[] = [];
-    for (const [x, y] of boundsToTiles(bounds, zoom)) {
-      const entries = this.tileEntryIndex.get(`${zoom}/${x}/${y}`);
+    for (const [x, y] of boundsToTiles(clipped, zoom, (cells, cap) =>
+      this.warnOversizedScan(zoom, cells, cap),
+    )) {
+      const entries = this.tileEntryIndex.get(tileCellKey(zoom, x, y));
       if (!entries) continue;
       for (const e of entries) {
         // The tile matches iff its tagged bucket equals the requested one.
@@ -3055,28 +3253,271 @@ export class STTArchive {
   }
 }
 
-/** Web-Mercator tile coordinates covering a bounding box at a zoom. */
-function boundsToTiles(bounds: BoundingBox, zoom: number): [number, number][] {
+/**
+ * Tile-x column span covering `[minLon, maxLon]` at `zoom`, WRAP-AWARE.
+ *
+ * Longitude is cyclic but tile x is not, and viewport bounds reach this
+ * function in two shapes that both leave the `[-180, 180]` world:
+ *
+ *  - UNWRAPPED (`WebMercatorViewport.unproject`, the common one): a camera
+ *    centred at lon 179 reports `{minLon: 174, maxLon: 184}`. The `[180, 184]`
+ *    slice is the right half of the screen and lives at tile columns `x ∈ [0…]`.
+ *  - CROSSING (`minLon > maxLon`): the explicit "this span runs east across the
+ *    antimeridian" encoding, e.g. `{minLon: 170, maxLon: -170}`.
+ *
+ * Clamping either shape into `[0, 2^z − 1]` silently DISCARDS the wrapped
+ * half, leaving a permanently blank eastern viewport on seam-crossing
+ * datasets (`ais-all-us`, `drifters`).
+ *
+ * The span is returned as a wrapped `start` column plus a `count`; column `i`
+ * is `(start + i) % n`. `count` is capped at one world width (`n`), so a
+ * >360°-wide span (a low-zoom unproject can produce one) covers every column
+ * exactly ONCE instead of emitting duplicate ids.
+ *
+ * The ordinary in-world case (`-180 ≤ minLon ≤ maxLon ≤ 180`) takes a fast
+ * path identical to a plain clamped scan — including the `maxLon === 180`
+ * edge, where `lonToTileX` returns the out-of-world column `n` and the clamp
+ * (not a wrap) is the right answer.
+ *
+ * A `minLon > maxLon` pair is read as a crossing only while the width it
+ * implies stays believable — see {@link orderLonRange}.
+ *
+ * Exported for the wrap-aware selection tests; not part of the public API.
+ */
+export function tileXSpanForLonRange(
+  minLon: number,
+  maxLon: number,
+  zoom: number,
+): { start: number; count: number } {
   const n = 1 << zoom;
-  const minX = lonToTileX(bounds.minLon, zoom);
-  const maxX = lonToTileX(bounds.maxLon, zoom);
-  const minY = latToTileY(bounds.maxLat, zoom); // y is flipped
-  const maxY = latToTileY(bounds.minLat, zoom);
+  const [west, east] = orderLonRange(minLon, maxLon);
+  // Fast path: an ordinary in-world bbox — byte-identical to the historical
+  // clamped scan, and the overwhelmingly common case (no wrap arithmetic).
+  if (west <= east && west >= -180 && east <= 180) {
+    const start = Math.max(0, lonToTileX(west, zoom));
+    const end = Math.min(lonToTileX(east, zoom), n - 1);
+    return { start, count: Math.max(0, end - start + 1) };
+  }
+  // Seam-crossing or unwrapped: walk the span in UNWRAPPED column space
+  // (which is always contiguous), then wrap each column at emit time.
+  const first = lonToTileX(west, zoom);
+  // `west > east` is the crossing encoding: the span runs east through
+  // +180, so its end column sits one world further along.
+  const last = lonToTileX(east, zoom) + (west > east ? n : 0);
+  const count = Math.min(n, Math.max(0, last - first + 1));
+  return { start: ((first % n) + n) % n, count };
+}
+
+/**
+ * Order a longitude pair for the scans below, deciding whether `minLon > maxLon`
+ * means "this span crosses the antimeridian" or "someone handed us an inverted
+ * box".
+ *
+ * The crossing encoding is load-bearing here — a viewport parked on the seam
+ * legitimately arrives as `{minLon: 170, maxLon: -170}` and both scans below
+ * depend on reading it that way. But it is also EXACTLY what a pitch-inverted
+ * viewport looks like: past `pitch + fovy/2 > 90` (71.57° at deck's default
+ * altitude) the above-horizon unproject returns a point BEHIND the camera and
+ * the longitude pair swaps. The pair alone cannot tell the two apart — only the
+ * width it implies can. A crossing viewport is a viewport: a few degrees, maybe
+ * a few tens. A box claiming to cross the seam AND wrap 350°+ of the planet
+ * selected 510 of 512 columns at z9 while the camera was looking at two of them.
+ *
+ * Same threshold and same reasoning as `normalizeViewportBounds`
+ * (docs/roadmap/tile-loading-3d-2026-07.md §4.1); `MAX_SEAM_SPAN_DEG` is
+ * imported rather than re-spelled so the producer-side repair and this
+ * last-line-of-defence can never drift apart.
+ *
+ * Note what this deliberately does NOT do: it never wraps or clamps longitude
+ * into `[-180, 180]`. The UNWRAPPED contract (`unproject` reporting lon 184 for
+ * a camera at lon 179) is what lets the scans walk unwrapped column space and
+ * wrap at emit; re-clamping here would silently drop the far side of the seam —
+ * the regression `ais-all-us` and `drifters` were fixed for.
+ */
+function orderLonRange(minLon: number, maxLon: number): [number, number] {
+  if (minLon > maxLon && maxLon - minLon + 360 >= MAX_SEAM_SPAN_DEG) {
+    return [maxLon, minLon];
+  }
+  return [minLon, maxLon];
+}
+
+/**
+ * Web-Mercator tile coordinates covering a bounding box at a zoom.
+ *
+ * x iteration is wrap-aware (see {@link tileXSpanForLonRange}) so a viewport
+ * straddling the antimeridian yields columns from BOTH edges of the world;
+ * y stays clamped (there is nothing to wrap around at the poles).
+ *
+ * `onOversized` is invoked when the scan exceeds {@link MAX_QUERY_SCAN_CELLS}.
+ * It is a WARNING ONLY — the scan still returns every cell.
+ *
+ * An earlier revision truncated the scan to a centred window at that threshold.
+ * That traded a frame-rate problem for a correctness one: the tiles outside the
+ * kept window are on screen and simply never load, which is the same blank-region
+ * symptom this whole module was fixed to remove, only now behind a single
+ * `console.warn` that a user never sees. A cell count this large IS a defect
+ * upstream — a camera zoom clamped far below the archive's `minZoom`, or a
+ * degenerate producer box — and it should be fixed there. A slow correct frame
+ * beats a fast wrong one.
+ */
+function boundsToTiles(
+  bounds: BoundingBox,
+  zoom: number,
+  onOversized?: (cells: number, cap: number) => void,
+): [number, number][] {
+  const n = 1 << zoom;
+  const { start, count } = tileXSpanForLonRange(
+    bounds.minLon,
+    bounds.maxLon,
+    zoom,
+  );
+  // ORDER the row span before clamping it. `y` runs the other way from
+  // latitude, so the natural reading (`minY` from `maxLat`) silently assumes
+  // `minLat <= maxLat`; the historical `Math.max(0, …)` / `Math.min(…, n - 1)`
+  // clamped to the WORLD, never to `minY <= maxY`. Under bearing rotation or
+  // above-horizon pitch the producer's box inverts, `minY > maxY`, and the loop
+  // body below NEVER RUNS — zero tiles, while `getBufferedRunway` reports
+  // `complete: true` and every readiness signal says settled. Ordering makes an
+  // inverted box degrade to the band it brackets instead of to nothing.
+  const yTop = latToTileY(bounds.maxLat, zoom);
+  const yBottom = latToTileY(bounds.minLat, zoom);
+  let minY = Math.max(0, Math.min(yTop, yBottom));
+  let maxY = Math.min(Math.max(yTop, yBottom), n - 1);
+  const startX = start;
+  const xCount = count;
+  const rows = maxY - minY + 1;
+  const cells = xCount * Math.max(0, rows);
+  if (cells > MAX_QUERY_SCAN_CELLS) onOversized?.(cells, MAX_QUERY_SCAN_CELLS);
   const tiles: [number, number][] = [];
-  for (let x = Math.max(0, minX); x <= Math.min(maxX, n - 1); x++) {
-    for (let y = Math.max(0, minY); y <= Math.min(maxY, n - 1); y++) {
+  for (let i = 0; i < xCount; i++) {
+    const x = (((startX + i) % n) + n) % n;
+    for (let y = minY; y <= maxY; y++) {
       tiles.push([x, y]);
     }
   }
   return tiles;
 }
 
+/**
+ * DELIBERATELY ABSENT: an intersection of the query box with the archive's
+ * declared `metadata.bounds`.
+ *
+ * It was added as a cheap fix for the enumeration blow-up described on
+ * {@link MAX_QUERY_SCAN_CELLS}, on the reasoning that a tile holding data must
+ * intersect the archive's extent, so any tile the intersection drops was
+ * already empty. That reasoning is WRONG, because `metadata.bounds` does not
+ * bound the data:
+ *
+ * - `stt-build.rs` fills the manifest bounds from `input::calculate_bounds`.
+ * - `calculate_bounds` takes the min/max of `ParsedFeature.lon` / `.lat`.
+ * - `ParsedFeature.lon`/`.lat` is the geometry's **CENTROID** (`input.rs`,
+ *   "Parse a WKB/EWKB blob into a GeoJSON geometry and its centroid").
+ * - but the tiler addresses tiles by **VERTEX** — `tiler.rs` places each point
+ *   of a multi-point/line geometry with `lonlat_to_tile(p[0], p[1], zoom)`, and
+ *   polygons are clipped across every tile they cross.
+ *
+ * So the declared bounds are the bbox of CENTROIDS while the tiles are laid out
+ * by VERTICES, and on any line / polygon / multi-point archive the occupied
+ * tiles provably extend PAST the declared extent. Intersecting against it
+ * silently drops real, non-empty tiles at the edges of the data — the same
+ * blank-region symptom the 3-D tile-loading work exists to remove.
+ * (`calculate_bounds` separately skips the `(0, 0)` null-island sentinel, so
+ * even a pure-point archive can have data outside its declared bounds.)
+ *
+ * The under-reporting is an upstream bug worth fixing on its own — it also
+ * mis-frames the showcase's opening camera and understates the bbox that
+ * `stt-validate` and the MCP `describe_dataset` report — but it must be fixed
+ * in the builder, and it only takes effect on a rebuild. Until then a query box
+ * is honoured as given. See `docs/roadmap/tile-loading-3d-2026-07.md`.
+ */
+
 function lonToTileX(lon: number, zoom: number): number {
   return Math.floor(((lon + 180) / 360) * (1 << zoom));
 }
 
-function latToTileY(lat: number, zoom: number): number {
-  const rad = (lat * Math.PI) / 180;
+/**
+ * Fold a longitude into `[-180, 180)`. Exported so the tileset can normalize
+ * an UNWRAPPED viewport centre (`unproject` happily reports lon 184) before
+ * handing it to anything that treats longitude as a geographic coordinate.
+ */
+export function wrapLon(lon: number): number {
+  return ((((lon + 180) % 360) + 360) % 360) - 180;
+}
+
+/**
+ * A query longitude range expressed as ONE or TWO in-world `[lo, hi]`
+ * intervals — the shape an overlap test against in-world geometry (leaf-page
+ * bboxes) needs.
+ *
+ * The ordinary in-world range returns a single interval identical to its
+ * input (the hot path: one allocation, same comparisons as before). A range
+ * that leaves the world — unwrapped (`maxLon > 180`) or crossing
+ * (`minLon > maxLon`) — is split at the antimeridian into the eastern and
+ * western halves; a range at least a full world wide collapses to `[-180, 180]`.
+ *
+ * The crossing/inversion split is {@link orderLonRange}'s, and must be: this
+ * function decides which leaf pages get fetched while `tileXSpanForLonRange`
+ * decides which columns get selected. If the two disagreed about an inverted
+ * box, the columns one selected would resolve against leaves the other never
+ * paged in — an empty entry index, which reads exactly like "no data here".
+ *
+ * Exported for the wrap-aware selection tests; not part of the public API.
+ */
+export function lonQueryIntervals(
+  minLon: number,
+  maxLon: number,
+): Array<[number, number]> {
+  const [west, east] = orderLonRange(minLon, maxLon);
+  if (west <= east && west >= -180 && east <= 180) {
+    return [[west, east]];
+  }
+  // A span of a full world (or more, e.g. a >360° unproject at low zoom)
+  // covers everything — one interval, no duplicate work.
+  const span = west > east ? east + 360 - west : east - west;
+  if (!(span < 360)) return [[-180, 180]];
+  const lo = wrapLon(west);
+  const hi = wrapLon(east);
+  // `lo <= hi` after wrapping means the span happened not to straddle the
+  // seam after all (e.g. `[-190, -185]` → `[170, 175]`).
+  return lo <= hi
+    ? [[lo, hi]]
+    : [
+        [lo, 180],
+        [-180, hi],
+      ];
+}
+
+/**
+ * Row index of a latitude at a zoom — the y half of the tile grid, UNCLAMPED
+ * (a latitude past the mercator limit returns a row outside `[0, 2^z)`, which
+ * every caller clamps after ordering; see {@link boundsToTiles}).
+ *
+ * Exported so `tile-budget.ts` can PREDICT the cell count `boundsToTiles` is
+ * about to enumerate using the identical arithmetic. Nothing moved: the y
+ * duplication with `spatiotemporal-tileset.ts`'s `latToTileClamped` is left
+ * alone deliberately, seam code that took real debugging being the last thing
+ * to refactor for tidiness.
+ */
+export function latToTileY(lat: number, zoom: number): number {
+  // Clamp to the Web Mercator edge BEFORE projecting. `tan(rad)` and
+  // `1 / cos(rad)` both diverge with opposite signs as `|lat| → 90`, so their
+  // sum is the difference of two enormous floats: in the sliver just inside a
+  // pole, cancellation drives it NEGATIVE and `Math.log` returns `NaN`. A `NaN`
+  // row bound makes the caller enumerate ZERO tiles — a blank render from a
+  // camera that is showing the whole world (measured at z2 from
+  // `minLat = -89.99999999998705`). Exactly ±90 happens to be safe, which is
+  // why this hid: the failure window is a hair INSIDE the pole.
+  //
+  // Nothing is lost by clamping — no tile row exists above this latitude.
+  // `normalizeViewportBounds` clamps to the same constant, so the viewport path
+  // never reaches here out of range; this guard covers every other caller.
+  const clamped =
+    lat > MAX_MERCATOR_LAT
+      ? MAX_MERCATOR_LAT
+      : lat < -MAX_MERCATOR_LAT
+        ? -MAX_MERCATOR_LAT
+        : lat;
+  const rad = (clamped * Math.PI) / 180;
   return Math.floor(
     ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) *
       (1 << zoom),

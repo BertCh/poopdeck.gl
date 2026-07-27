@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Capability descriptor for the MapLibre GL backend — Phase 5 of
+ * Capability descriptor for the MapLibre GL backend — see
  * docs/roadmap/renderer-architecture.md.
  *
  * This is what the maplibre adapter DECLARES about itself against the shared
@@ -12,46 +12,41 @@
  * cannot over-claim: every `supported: true` kind, every `true` capability and
  * every declared time-filter mode must have a passing case behind it.
  *
- * The adapter ships FIFTEEN layer classes (point/line/polygon/trips/tripHeads/
- * heatmap/icon/column/arc, plus the Wave M4 summary + flow families:
- * h3Summary/quadbinSummary/hexbin/flowCorridor/flowStroke/flowmap). Every other
- * layer kind degrades to deck.gl (`@poopdeck.gl/layers`) except the ones that
- * have an honest in-backend approximation (see `FALLBACK_KINDS`). The adapter
- * interleaves into the
- * basemap's own GL context and projects lon/lat → world on the CPU. Host
- * dispatch (Wave M1) covers maplibre v3–v6 + mapbox v3: on v5+ hosts the layers
- * render via the injected projection prelude — including globe — while
- * ≤v4/mapbox hosts ride the legacy mercator matrix path. Tileset ownership
- * defaults to one archive per layer; an opt-in `SharedTilesetSource` serves N
- * layers from one archive.
+ * The adapter ships FIFTEEN layer classes: point/line/polygon/trips/tripHeads/
+ * heatmap/icon/column/arc, plus the summary + flow families
+ * (h3Summary/quadbinSummary/hexbin/flowCorridor/flowStroke/flowmap). Every
+ * other layer kind degrades to deck.gl (`@poopdeck.gl/layers`) except the ones
+ * that have an honest in-backend approximation (see `FALLBACK_KINDS`). The
+ * adapter interleaves into the basemap's own GL context and projects
+ * lon/lat → world on the CPU. Host dispatch covers maplibre v3–v6 + mapbox v3:
+ * on v5+ hosts the layers render via the injected projection prelude —
+ * including globe — while ≤v4/mapbox hosts ride the legacy mercator matrix
+ * path. Tileset ownership defaults to one archive per layer; an opt-in
+ * `SharedTilesetSource` serves N layers from one archive.
  *
- * Wave M2 (D8–D11) landed the feature parity this file used to disclaim:
- * all four time-filter modes (`window`/`wake`/`cumulative`/`trail`, from the
- * shared kernel in `shaders/time-window.glsl.ts`), the GPU DataFilter, metric
- * (`'meters'`) point radii and line/trip widths, and id-FBO picking on every
- * kind that has feature identity. Heatmap is deliberately NOT pickable — a
- * density pixel is a sum of unbounded splats with no single feature behind it.
+ * Feature coverage is uniform across those kinds: all four time-filter modes
+ * (`window`/`wake`/`cumulative`/`trail`, from the shared kernel in
+ * `shaders/time-window.glsl.ts`), the GPU DataFilter, metric (`'meters'`) point
+ * radii and line/trip widths, and id-FBO picking on every kind that has feature
+ * identity. Heatmap is deliberately NOT pickable — a density pixel is a sum of
+ * unbounded splats with no single feature behind it.
  *
- * Wave M3 added four native kinds — `icon` (atlas billboards + wake + CPU
- * motion glide), `column` (instanced prisms + the space-time-cube lift),
- * `arc` (a real 3D, optionally great-circle strip, retiring the arc→line
- * fallback) and `tripHeads` (the moving head dot, interpolated through the
- * hoisted core track kernel, D7) — plus progressive path reveal on the line
- * layer. That flips four of the six layer features and `timeAsHeight`.
+ * `icon` draws atlas billboards + wake + CPU motion glide; `column` instanced
+ * prisms plus the space-time-cube lift; `arc` a real 3D, optionally
+ * great-circle strip; `tripHeads` the moving head dot, interpolated through the
+ * core track kernel. Progressive path reveal lives on the line layer.
  *
- * Wave M4 (P2) added the summary + flow families as SIX more native kinds:
- * `h3Summary`/`quadbinSummary` (summary-tier cell decode → ramp-coloured,
+ * `h3Summary`/`quadbinSummary` decode summary-tier cells into ramp-coloured,
  * optionally extruded prisms; H3 boundaries come from an injected h3-js
- * `cellToBoundary`, since h3-js is not a dependency of this thin backend),
- * `hexbin` (a REAL runtime hexbin — CPU binning at tile upload plus a GPU
- * scatter/gather aggregate, NOT a fallback to h3Summary; the old
- * `hexbin -> h3Summary` referral is gone), and the flow family
- * `flowCorridor`/`flowStroke`/`flowmap` (ref-stable value-matrix ribbons and OD
- * arrows whose width breathes off a single per-frame scalar). `liveBundling`
- * (GPU KDEEB) STAYS a declared fallback — the flowmap layer carries no bundling
- * path (campaign P2). All six read the DataFilter; only the flow family carries
- * categorical colour, so `stableColorMapping` extends to it and not to the
- * value-/aggregate-coloured summary and hexbin kinds.
+ * `cellToBoundary`, since h3-js is not a dependency of this thin backend.
+ * `hexbin` is a REAL runtime hexbin — CPU binning at tile upload plus a GPU
+ * scatter/gather aggregate, not a referral to h3Summary. The flow family
+ * `flowCorridor`/`flowStroke`/`flowmap` draws ref-stable value-matrix ribbons
+ * and OD arrows whose width breathes off a single per-frame scalar;
+ * `liveBundling` (GPU KDEEB) is a declared fallback, since the flowmap layer
+ * carries no bundling path. All six read the DataFilter; only the flow family
+ * carries categorical colour, so `stableColorMapping` extends to it and not to
+ * the value-/aggregate-coloured summary and hexbin kinds.
  */
 
 import {
@@ -69,12 +64,11 @@ const SUPPORTED_KINDS: readonly LayerKind[] = [
   'polygon',
   'trips',
   'heatmap',
-  // Wave M3.
   'icon',
   'column',
   'arc',
   'tripHeads',
-  // Wave M4 — summary + flow families.
+  // Summary + flow families.
   'h3Summary',
   'quadbinSummary',
   'hexbin',
@@ -93,17 +87,15 @@ const DECK_REFERRAL =
  * every target MUST itself be in {@link SUPPORTED_KINDS} — a fallback naming
  * another unsupported kind hands the caller a second unrenderable answer
  * instead of the honest "skip, go to deck" its `reason` intends. Pinned by the
- * conformance gate. `mesh → boundingBox` was copied from the three descriptor,
- * where that target IS supported; here boundingBox is not, so mesh skips. The
- * `hexbin → h3Summary` referral three carries is GONE: Wave M4 shipped a real
- * runtime `hexbin` kind (it is in {@link SUPPORTED_KINDS}, not this table), so
- * there is nothing to degrade.
+ * conformance gate.
  *
- * Wave M3 moved `arc` OUT of this table (it is now a real kind) and moved
- * `text` IN: the fallback three declares (`text → icon`) was dangling here
- * while there was no icon layer, and now resolves to `STTIconLayer` — a
- * labelled feature degrades to its marker with no glyphs, which is a real
- * approximation rather than a second dead end.
+ * This table deliberately diverges from the three backend's. `mesh →
+ * boundingBox` is absent because boundingBox is NOT supported here, so mesh
+ * skips to deck. `hexbin → h3Summary` is absent because `hexbin` is a real kind
+ * here (it lives in {@link SUPPORTED_KINDS}), so there is nothing to degrade.
+ * `text → icon` resolves to `STTIconLayer`: a labelled feature degrades to its
+ * marker with no glyphs, which is a real approximation rather than a second
+ * dead end.
  */
 const FALLBACK_KINDS: Readonly<
   Partial<Record<LayerKind, { kind: LayerKind; lost: string }>>
@@ -160,36 +152,37 @@ export const maplibreBackend: BackendDescriptor = {
     // and the globe↔mercator transition render natively. Legacy hosts
     // (maplibre ≤v4, mapbox v3) still render mercator via the uMatrix path.
     globe: true,
-    // D11: every kind with feature identity implements `drawPickTile`, so
-    // `STTBaseLayer.pick()` resolves a feature through the id FBO — the M4
-    // summary/hexbin/flow kinds included (a cell / a corridor / an OD arrow is
-    // the pick unit). Heatmap has no hook by design and reports
+    // Every kind with feature identity implements `drawPickTile`, so
+    // `STTBaseLayer.pick()` resolves a feature through the id FBO — summary,
+    // hexbin and flow kinds included (a cell / a corridor / an OD arrow is the
+    // pick unit). Heatmap has no hook by design and reports
     // `supportsPicking() === false`.
     picking: true,
     extrude3d: true,
-    // D10 + metric sizing: point `radiusUnits: 'meters'`, line/trips
-    // `widthUnits: 'meters'`, and polygon `elevation` in metres — all resolved
-    // per tile at its centre latitude (`lib/projection.ts`). Screen-space
-    // approximation under pitch, documented on `metersToPixelsAtLatitude`.
+    // Point `radiusUnits: 'meters'`, line/trips `widthUnits: 'meters'`, and
+    // polygon `elevation` in metres — all resolved per tile at its centre
+    // latitude (`lib/projection.ts`). Screen-space approximation under pitch,
+    // documented on `metersToPixelsAtLatitude`.
     metricSizing: true,
     gpuHeatmap: true,
-    // Wave M4 P2: PERMANENT declared fallback. `STTFlowmapLayer` renders
-    // pre-baked bundles (a quadratic control point per OD pair) but carries no
-    // GPU KDEEB path — porting the bundler off luma transform-feedback is
-    // counted out (campaign §4). Never flip this without a real bundling pass.
+    // PERMANENT declared fallback. `STTFlowmapLayer` renders pre-baked bundles
+    // (a quadratic control point per OD pair) but carries no GPU KDEEB path;
+    // the bundler cannot be ported off luma transform-feedback without a real
+    // compute pass here. Never flip this without one.
     liveBundling: false,
-    // Wave M3: `STTColumnLayer.timeHeightScale` lifts every vertex of a feature
-    // by `(startTime - timeHeightOrigin) * scale` METRES through the same D10
-    // elevation path the prisms use — a real space-time cube, not a proxy.
-    // Kept in lockstep with `maplibreLayerFeatures.timeHeightScale` by the
-    // conformance gate: the two claims are the same claim.
+    // `STTColumnLayer.timeHeightScale` lifts every vertex of a feature by
+    // `(startTime - timeHeightOrigin) * scale` METRES through the same
+    // latitude-correct elevation path the prisms use — a real space-time cube,
+    // not a proxy. Kept in lockstep with
+    // `maplibreLayerFeatures.timeHeightScale` by the conformance gate: the two
+    // claims are the same claim.
     timeAsHeight: true,
     interleavedBasemap: true,
     userExtensions: false,
     cameraRoll: false,
   } satisfies Record<Capability, boolean>,
-  // D8: all four modes ship as independent kernel snippets, selected at
-  // program-build time. point/line/polygon/heatmap/icon/column/arc and the M4
+  // All four modes ship as independent kernel snippets, selected at
+  // program-build time. point/line/polygon/heatmap/icon/column/arc and the
   // summary (h3Summary/quadbinSummary), hexbin and flow (flowCorridor/
   // flowStroke/flowmap) kinds compile any of the four; trips compiles trail +
   // wake (window/cumulative are meaningless for a per-vertex swept path, the
@@ -199,9 +192,9 @@ export const maplibreBackend: BackendDescriptor = {
   timeFilterModes: ['window', 'wake', 'cumulative', 'trail'],
   layerKinds,
   projectsOnCpu: true,
-  // DEFAULT ownership. An opt-in shared source (D6a `SharedTilesetSource`,
-  // layer option `source`) serves N layers from one archive; this field
-  // flips only if/when shared becomes the default path.
+  // DEFAULT ownership. An opt-in shared source (`SharedTilesetSource`, layer
+  // option `source`) serves N layers from one archive; this field flips only
+  // if/when shared becomes the default path.
   tilesetOwnership: 'per-layer',
   // Synchronous on-demand readback of a 1×1 texel from an offscreen id buffer
   // (`STTBaseLayer.pick`), not deck's persistent GPU id pass.
@@ -212,12 +205,12 @@ export const maplibreBackend: BackendDescriptor = {
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Layer-feature matrix (D9) — mirrors `deckLayerFeatures` in
+ * Layer-feature matrix — mirrors `deckLayerFeatures` in
  * `@poopdeck.gl/layers` and `threeLayerFeatures` in `@poopdeck.gl/three`.
  *
- * The LayerKind / Capability axes above prove a whole layer class exists. The
- * kind-parity campaign added finer per-layer PROP FAMILIES that don't map onto
- * a single cross-cutting Capability, so they get this frozen vocabulary. A
+ * The LayerKind / Capability axes above prove a whole layer class exists. This
+ * axis is finer: per-layer PROP FAMILIES that don't map onto a single
+ * cross-cutting Capability, so they get their own frozen vocabulary. A
  * backend either implements a feature or must record how it degrades; the
  * paired conformance gate (test/backend-descriptor.test.ts block (d)) proves
  * every `supported: true` claim by CONSTRUCTING the real exported layer class
@@ -263,10 +256,10 @@ export type LayerFeatureSupport =
     };
 
 /**
- * What the maplibre adapter implements after Wave M3. All six are now real; the
- * gate in test/backend-descriptor.test.ts block (d) proves each `prop` against
- * the REAL exported class for every kind the claim names, so a claim can never
- * outrun the code.
+ * What the maplibre adapter implements. All six features are real; the gate in
+ * test/backend-descriptor.test.ts block (d) proves each `prop` against the REAL
+ * exported class for every kind the claim names, so a claim can never outrun
+ * the code.
  *
  * `kinds` is deliberately the set the feature ACTUALLY covers here, not deck's
  * set: deck glides points too and reveals a dedicated `path` kind, and this
@@ -300,8 +293,8 @@ export const maplibreLayerFeatures: Readonly<
   },
   dataFilter: {
     supported: true,
-    // Every supported kind reads `filterProperty` (the Wave M4 summary + flow
-    // families each compile the same shared DataFilter kernel). On the summary
+    // Every supported kind reads `filterProperty` (the summary + flow families
+    // each compile the same shared DataFilter kernel). On the summary
     // and hexbin kinds `filterTransformSize` is inert — a cell's extent is
     // geography — but the range gate is honoured (a hexbin filters the raw
     // points that reach the aggregate).
@@ -338,8 +331,8 @@ export const maplibreLayerFeatures: Readonly<
   stableColorMapping: {
     supported: true,
     // Every kind with a categorical colour. The deliberate exclusions all lack
-    // a category: heatmap (a density pixel), and the Wave M4 summary + hexbin
-    // kinds (coloured by a VALUE ramp / aggregate, not a category). The flow
+    // a category: heatmap (a density pixel), and the summary + hexbin kinds
+    // (coloured by a VALUE ramp / aggregate, not a category). The flow
     // family DOES carry a per-feature category (`colorProperty` +
     // `colorMapping`), so it is included.
     kinds: [

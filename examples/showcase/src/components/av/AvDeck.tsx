@@ -47,12 +47,12 @@ import {
   type FollowCameraConfig,
 } from './followCamera';
 import type { PickedObject } from './ObjectInspector';
-import type { Dataset } from '../../types';
+import type { AvDataset } from '../../types';
 import type { AvStreamKey } from './sceneTypes';
 import { MAPBOX_ACCESS_TOKEN } from '../../lib/mapboxToken';
 
 export interface AvDeckProps {
-  dataset: Dataset;
+  dataset: AvDataset;
   timeController: TimeController;
   /** Streams currently shown; a layer is omitted when its stream is off. */
   visibleStreams: Set<AvStreamKey>;
@@ -155,6 +155,14 @@ function layerStream(layerId: string, datasetId: string): AvStreamKey {
 /** Tile streams that register a governor source (telemetry/camera are sidecars). */
 const GOVERNED_STREAMS: AvStreamKey[] = ['lidar', 'ego', 'objects', 'map'];
 
+/**
+ * Camera pitch ceiling for every AvDeck framing (street-level AND the
+ * space-time cube). Deliberately below deck's 71.57° horizon crossing at the
+ * default `altitude: 1.5` — see the note at the `viewState` seed and
+ * docs/roadmap/tile-loading-3d-2026-07.md §1/§4.
+ */
+const AV_MAX_PITCH = 70;
+
 /** Governor source id(s) a stream registers — the inverse of {@link layerStream}. */
 function streamSourceIds(stream: AvStreamKey, datasetId: string): string[] {
   switch (stream) {
@@ -194,15 +202,25 @@ const AvDeck: React.FC<AvDeckProps> = ({
   tiles3dOpacity = 1,
 }) => {
   // Space-time-cube mode: the track ribbons climb time = altitude. We pull the
-  // camera back + tilt it (and raise maxPitch) so the whole ~200 m-tall cube is
-  // framed, and we GATE OFF the ego-follow chase (you don't chase a climbing
-  // worm — you want the static cube in view).
+  // camera back + tilt it so the whole ~200 m-tall cube is framed (the pitch
+  // CEILING stays put — see AV_MAX_PITCH), and we GATE OFF the ego-follow chase
+  // (you don't chase a climbing worm — you want the static cube in view).
   const cubeMode = !!dataset.avCube && timeHeightScale > 0;
   // Controlled camera: seeded from the dataset, then driven by ego-follow and
   // the pitch toggle. The user can still drag/zoom (onViewStateChange).
+  //
+  // AV_MAX_PITCH is 70 everywhere below (it was 75 street-level / 85 in cube
+  // mode). At deck's default `altitude: 1.5` the top screen ray clears the
+  // horizon at pitch 71.57°: `unproject` then returns a ground point BEHIND the
+  // camera and the viewport lon/lat box the tile loader selects against
+  // inverts — an inverted latitude box selects zero tiles while every readiness
+  // signal still reports "settled and fully buffered". See
+  // docs/roadmap/tile-loading-3d-2026-07.md §1/§4. The chassis repairs a bad
+  // box now; this ceiling keeps the cockpit out of the band at all. Both old
+  // values sat above the cliff, so both moved.
   const [viewState, setViewState] = useState<any>(() => ({
     ...dataset.initialViewState,
-    maxPitch: 75,
+    maxPitch: AV_MAX_PITCH,
   }));
   const viewRef = useRef(viewState);
   viewRef.current = viewState;
@@ -242,7 +260,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
     setViewState({
       ...dataset.initialViewState,
       pitch: targetPitch,
-      maxPitch: 75,
+      maxPitch: AV_MAX_PITCH,
     });
     // targetPitch is read fresh from this render's closure but is deliberately
     // NOT a dep — toggling top-down WITHIN a scene must not recenter the camera.
@@ -263,14 +281,17 @@ const AvDeck: React.FC<AvDeckProps> = ({
       ...vs,
       ...sceneView,
       pitch: targetPitch,
-      maxPitch: 75,
+      maxPitch: AV_MAX_PITCH,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneView, cubeMode]);
 
   // Space-time-cube framing. When the "Spacetime" mode turns on, pull the camera
-  // BACK + tilt it up (and raise maxPitch to 85) so the whole time-as-height cube
-  // is in view rather than the street-level cloud framing. Seeded from the scene
+  // BACK + tilt it up so the whole time-as-height cube is in view rather than
+  // the street-level cloud framing. The ceiling stays AV_MAX_PITCH — this
+  // framing used to raise it to 85, which is inside the band where the tile
+  // loader's viewport box inverts (docs/roadmap/tile-loading-3d-2026-07.md
+  // §1/§4). Seeded from the scene
   // center (sceneView wins, else the dataset fallback). Snaps once on entering
   // cube mode; the user can then orbit freely. Leaving cube mode lets the
   // [dataset]/sceneView effects re-frame to street level on the next switch.
@@ -285,7 +306,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
       zoom: (center.zoom ?? dataset.initialViewState.zoom ?? 18) - 4,
       pitch: topDown ? 0 : 58,
       bearing: center.bearing ?? dataset.initialViewState.bearing ?? 20,
-      maxPitch: 85,
+      maxPitch: AV_MAX_PITCH,
     }));
     // Only re-run when cube mode toggles or the scene/view changes; topDown is
     // read fresh from the closure (toggling it within cube mode shouldn't recenter).

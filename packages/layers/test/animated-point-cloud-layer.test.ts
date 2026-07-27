@@ -5,8 +5,9 @@
  * layer mirrors AnimatedPointLayer's WINDOW-mode binary-sublayer path: one
  * PointCloudLayer per (tile, layer), zero-copy positions/times, the four-way
  * colour resolution (interleaved RGBA vector column / three RGB numeric columns
- * / categorical GPU palette / constant), a zero-copy [nx,ny,nz] normal vector
- * column, and per-tile timeOffset.
+ * / CPU-expanded categorical palette — this layer is phong-LIT, so it never
+ * lifts categories to the post-lighting CategoryColorExtension / constant), a
+ * zero-copy [nx,ny,nz] normal vector column, and per-tile timeOffset.
  *
  * These tests exercise `prepareTile` + `buildSublayer` directly (via
  * Object.create, bypassing CompositeLayer's lifecycle) with a deck.gl mock that
@@ -182,8 +183,9 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     expect(attrs.getColor.value).toBe(rgba);
     expect(attrs.getColor.size).toBe(4);
     expect(attrs.getColor.normalized).toBe(true);
-    // GPU category path stays idle when a vector colour column is used.
-    expect(built.props.useCategoryColor).toBe(false);
+    // No GPU category surface at all on this layer (see the extension-removal
+    // test below).
+    expect(built.props.useCategoryColor).toBeUndefined();
   });
 
   it('expands getColor from three RGB numeric columns', () => {
@@ -241,14 +243,14 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
     expect(Array.from(attrs.getColor.value.slice(0, 4))).toEqual([
       70, 80, 90, 255,
     ]);
-    // The GPU category path stays idle (no unlit fragment replace).
-    expect(built.props.useCategoryColor).toBe(false);
+    // No GPU category surface at all (no unlit fragment replace).
+    expect(built.props.useCategoryColor).toBeUndefined();
     expect(built.props.categoryPalette).toBeUndefined();
   });
 
-  it('leaves the GPU category path idle (useCategoryColor false) for constant colour', () => {
+  it('passes the constant colour fallback with no category surface', () => {
     const built = buildSublayerForTile(bigPointTile(10));
-    expect(built.props.useCategoryColor).toBe(false);
+    expect(built.props.useCategoryColor).toBeUndefined();
     expect(built.props.categoryPalette).toBeUndefined();
     // Constant colour fallback reaches the sublayer.
     expect(built.props.getColor).toEqual([255, 255, 255, 255]);
@@ -316,5 +318,140 @@ describe('AnimatedPointCloudLayer per-tile sublayer architecture', () => {
   it('passes the bound getTime getter so the time uniform advances each draw', () => {
     const built = buildSublayerForTile(bigPointTile(3));
     expect(typeof built.props.getTime).toBe('function');
+  });
+
+  // ── colorMappingDefault is baked, so it must key the tile (review fix 8) ────
+
+  /** A tile whose `vtype` column has one mapped and one NULL feature. */
+  function mappedTile() {
+    const tile = bigPointTile(2);
+    tile.layers[0].features.categoricalProps['vtype'] = {
+      indices: new Uint16Array([0, 0xffff]),
+      categories: ['a'],
+    };
+    return tile;
+  }
+
+  it('re-prepares the tile when colorMappingDefault changes (palette branch)', () => {
+    // The fallback is baked into the prepared getColor buffer TWICE (unmapped
+    // category + the 0xffff NULL slot), so flipping it to make unmapped points
+    // visible used to do nothing until the tile was evicted.
+    const layer = makeLayer({
+      color: 'vtype',
+      colorVectorColumn: null,
+      colorPalette: [[1, 2, 3, 255]],
+      colorMappingDefault: [0, 0, 0, 0],
+    });
+    const tile = mappedTile();
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(
+      Array.from(first.data.attributes.getColor.value.slice(4, 8)),
+    ).toEqual([0, 0, 0, 0]);
+
+    layer.props.colorMappingDefault = [200, 0, 200, 255];
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first);
+    expect(
+      Array.from(second.data.attributes.getColor.value.slice(4, 8)),
+    ).toEqual([200, 0, 200, 255]);
+  });
+
+  it('re-prepares the tile when colorMappingDefault changes (colorMapping branch)', () => {
+    const layer = makeLayer({
+      color: 'vtype',
+      colorVectorColumn: null,
+      colorMapping: { a: [1, 2, 3, 255] },
+      colorMappingDefault: [0, 0, 0, 0],
+    });
+    const tile = mappedTile();
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    layer.props.colorMappingDefault = [7, 7, 7, 255];
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first);
+    expect(
+      Array.from(second.data.attributes.getColor.value.slice(4, 8)),
+    ).toEqual([7, 7, 7, 255]);
+  });
+
+  // ── No CategoryColorExtension at all (review fix 9) ────────────────────────
+
+  it('installs ONLY the time-filter extension (no idle category attribute/UBO)', () => {
+    // The GPU category path was unreachable dead code (gpuPalette was never
+    // assigned), yet the extension was installed on every sublayer —
+    // registering instanceCategoryIndex, a UBO, an fs:DECKGL_FILTER_COLOR
+    // branch and a palette-texture acquire/release for nothing.
+    const layer = makeLayer();
+    const sentinel = { __ext: 'time' };
+    layer.timeFilterExtension = sentinel;
+    const tile = bigPointTile(3);
+    const built = (layer as any).buildSublayer(
+      (layer as any).prepareTile(tile, tile.layers[0]),
+    );
+    expect(built.props.extensions).toEqual([sentinel]);
+  });
+
+  // ── vectorProps bind by LEAF TYPE, not size (review fix 10) ────────────────
+
+  it('converts an f32 colour vector column instead of binding float32x4', () => {
+    // deck derives the buffer format from the typed array and `normalized` only
+    // upgrades uint8→unorm8, so binding an f32 leaf by size alone produced a
+    // float32x4 buffer of 0–255 values → every point blown out white.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = bigPointTile(2);
+    tile.layers[0].features.vectorProps = {
+      point_rgba: {
+        value: new Float32Array([255, 128, 0, 255, 0, 64, 255, 255]),
+        size: 4,
+      },
+    };
+    const built = buildSublayerForTile(tile);
+    const color = built.props.data.attributes.getColor;
+    expect(color.value).toBeInstanceOf(Uint8Array);
+    expect(color.normalized).toBe(true);
+    expect(Array.from(color.value.slice(0, 4))).toEqual([255, 128, 0, 255]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/float32 leaf/);
+    warn.mockRestore();
+  });
+
+  it('ignores a u8 normal column rather than binding uint8x3 to a float vec3', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = bigPointTile(2);
+    tile.layers[0].features.vectorProps = {
+      normal: { value: new Uint8Array([0, 0, 1, 1, 0, 0]), size: 3 },
+    };
+    const built = buildSublayerForTile(tile);
+    expect(built.props.data.attributes.getNormal).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/u8 leaf/);
+    warn.mockRestore();
+  });
+
+  // ── Geometry-kind guard (review fix 11) ────────────────────────────────────
+
+  it('skips (and warns once about) a non-Point tile instead of misreading it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = bigPointTile(4);
+    tile.layers[0].features.geometryType = 2 as any; // Polygon
+    const layer = makeLayer();
+    expect((layer as any).prepareTile(tile, tile.layers[0])).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/Polygon.*reads Point/);
+    warn.mockRestore();
+  });
+
+  // ── Empty tile set releases derived buffers (review fix 12) ────────────────
+
+  it('clears the prepared/sublayer caches when the tile set empties', () => {
+    const layer = makeLayer();
+    layer.state = { tiles: [bigPointTile(3)] };
+    expect((layer as any).renderLayers().length).toBe(1);
+    expect(layer.preparedTileCache.size).toBe(1);
+    expect(layer.sublayerCache.size).toBe(1);
+
+    layer.state = { tiles: [] };
+    expect((layer as any).renderLayers()).toEqual([]);
+    expect(layer.preparedTileCache.size).toBe(0);
+    expect(layer.sublayerCache.size).toBe(0);
   });
 });

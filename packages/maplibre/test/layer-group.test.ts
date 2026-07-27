@@ -25,7 +25,7 @@ import {
   type STTBaseLayerOptions,
 } from '../src/base-layer';
 import { STTLayerGroup } from '../src/layer-group';
-import { makeMockGl } from './mock-gl';
+import { makeMockGl, publishVisibleTiles } from './mock-gl';
 import { MockMap } from './mock-map';
 import { makePointTile } from './fixtures';
 
@@ -254,14 +254,9 @@ describe('STTLayerGroup — render forwarding', () => {
     const group = new STTLayerGroup({ id: 'grp', layers: [a, b] });
     map.addLayer(group);
     await tick();
-    (a as unknown as { loadedTiles: Map<string, Tile> }).loadedTiles.set(
-      '2/1/1/0',
-      makePointTile(),
-    );
-    (b as unknown as { loadedTiles: Map<string, Tile> }).loadedTiles.set(
-      '2/1/1/0',
-      makePointTile(),
-    );
+    // Each child derives its drawn set from its own tileset's visible set.
+    publishVisibleTiles(a, makePointTile());
+    publishVisibleTiles(b, makePointTile());
 
     group.render(gl, new Float32Array(16));
 

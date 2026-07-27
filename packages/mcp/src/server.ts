@@ -124,10 +124,8 @@ const RESOURCE_LIST_CAP = 100;
  * (dates, ranges, `--synthetic`, …) that the `generate_dataset` tool forwards
  * via `extraArgs`. Kept in sync with `stt-generate`'s `Commands` enum
  * (`tools/stt-generate/src/main.rs`) — `test/contract.test.ts` fails if this
- * hand-copy drifts. The `all` fan-out was dropped from the generator (it
- * re-spawned `current_exe()` for three of the datasets), so it is not offered
- * here: an agent that asked for it would only get clap's "unrecognized
- * subcommand".
+ * hand-copy drifts. There is no `all` fan-out subcommand to offer: an agent that
+ * asked for one would only get clap's "unrecognized subcommand".
  */
 const STT_GENERATE_DATASETS = [
   'earthquakes',
@@ -1252,8 +1250,8 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
     ) => {
       if (!name && !explicitPath)
         return errorResult('validate_dataset requires either `name` or `path`');
-      // `name` and `path` are documented as mutually exclusive — reject both
-      // rather than silently dropping `path` (the previously ignored one).
+      // `name` and `path` are documented as mutually exclusive — reject the pair
+      // rather than silently resolving one and ignoring the other.
       if (name && explicitPath) {
         return errorResult(
           'validate_dataset: `name` and `path` are mutually exclusive — pass exactly one (got both).',
@@ -1339,8 +1337,8 @@ function registerExecutionTools(server: McpServer, config: SttMcpConfig): void {
         process.cwd(),
       ]);
       const args: string[] = [dataset];
-      // Every subcommand takes `--output <file.stt>` (the old `all` fan-out,
-      // which took `--output-dir`, no longer exists in the generator).
+      // Every subcommand writes ONE archive and takes `--output <file.stt>`;
+      // none takes a directory.
       if (output) args.push('--output', output);
       if (extraArgs) args.push(...extraArgs);
 

@@ -2,7 +2,7 @@
 
 `@poopdeck.gl/core` exposes a small surface for decoding STT tile payloads. In normal
 use you don't call it directly — `STTArchive` and
-[`SpatiotemporalTileset`](./spatiotemporal-tileset.md) do — but the pieces are
+[`SpatioTemporalTileset`](./spatiotemporal-tileset.md) do — but the pieces are
 documented here for tests, custom integrations, and GeoArrow hand-offs.
 
 > **No single-buffer loader.** The packed multi-object format has no

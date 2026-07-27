@@ -122,7 +122,11 @@ const FileTree: React.FC = () => (
     >
       A new build writes new hashed objects and flips one pointer in{' '}
       <span className="font-mono">manifest.json</span> — deploys are atomic and
-      additive, and every heavy object is cacheable forever.
+      additive, and every heavy object is cacheable forever. To hand the dataset
+      to someone rather than serve it,{' '}
+      <span className="font-mono">stt-bundle pack</span> folds the tree into one{' '}
+      <span className="font-mono">.sttb</span> file and back out again,
+      re-verifying every content address on the way.
     </p>
   </Card>
 );
@@ -288,8 +292,8 @@ const TimeMini: React.FC<{ leaf: Leaf; active: boolean }> = ({
 );
 
 const DirectoryPruning: React.FC = () => (
-  <Card>
-    <SubHead>The directory prunes before anything is fetched</SubHead>
+  <>
+    <SubHead>Above: it prunes before anything is fetched</SubHead>
     <p className="mt-1 text-[11px]" style={{ color: 'var(--ink-500)' }}>
       The root page carries one 52-byte descriptor per leaf — zoom range, geo
       bbox and time span. Only leaves overlapping the query are downloaded.
@@ -348,7 +352,7 @@ const DirectoryPruning: React.FC = () => (
         );
       })}
     </div>
-  </Card>
+  </>
 );
 
 /* ── 3b. Directory internals: sorted keys + run-length encoding ───────── */
@@ -405,10 +409,8 @@ const DIR_CHIPS = [
 ];
 
 const DirectoryInternals: React.FC = () => (
-  <Card>
-    <SubHead>
-      Deeper: inside the directory — sorted keys plus run-length encoding
-    </SubHead>
+  <div className="mt-6 pt-4" style={{ borderTop: '1px solid var(--hairline)' }}>
+    <SubHead>Below: sorted keys plus run-length encoding</SubHead>
     <p className="mt-1 text-[11px]" style={{ color: 'var(--ink-500)' }}>
       Entries sort by (zoom, <em>hilbert(x, y)</em>, time) — the 2D walk drawn
       in the next figure — so consecutive keys differ by almost nothing and
@@ -512,7 +514,7 @@ const DirectoryInternals: React.FC = () => (
       entries' worth of blob columns. Tens of thousands of tiles index in a few
       hundred kilobytes.
     </p>
-  </Card>
+  </div>
 );
 
 /* ── 4. Pack diagram: dedup + range coalescing ────────────────────────── */
@@ -689,8 +691,22 @@ const ArchiveAnatomy: React.FC = () => (
         <ColdStart />
       </div>
     </div>
-    <DirectoryPruning />
-    <DirectoryInternals />
+    <Card>
+      <SubHead>
+        The directory: 52 bytes per leaf up front, ~1 byte per tile inside
+      </SubHead>
+      <p
+        className="mt-1 mb-3 text-[11px] leading-relaxed"
+        style={{ color: 'var(--ink-500)' }}
+      >
+        One object holds every tile address in the archive, and it has to stay
+        small enough to fetch cold. Two mechanisms do that: a root page that
+        rules whole leaves out before they're downloaded, and a body that
+        exploits how little consecutive tile keys differ.
+      </p>
+      <DirectoryPruning />
+      <DirectoryInternals />
+    </Card>
     <SpaceTimeCurve />
     <CubeInLineExplorer
       title="Deeper still: the same walk on real archives"

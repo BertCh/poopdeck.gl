@@ -38,6 +38,10 @@
  */
 
 import {
+  Field,
+  Float32,
+  Int64,
+  List,
   makeData,
   RecordBatch,
   Schema,
@@ -45,7 +49,7 @@ import {
   Table,
   tableFromIPC,
   Type as ArrowType,
-  type Field,
+  type Data,
   type Vector,
 } from 'apache-arrow';
 import {
@@ -76,6 +80,24 @@ const SECTION_PROPS_BATCH = 0x05;
 const REF_KIND_INLINE = 0;
 const REF_KIND_TEMPLATE_HASH = 1;
 const REF_KIND_NO_PROPS = 2;
+
+/**
+ * The columns `TILE_META.vq` may name — a CLOSED set, mirroring Rust's
+ * `QUANTIZABLE_VERTEX_VALUE_COLUMNS`. Anything else in the map is a crafted or
+ * corrupt section rather than an additive extension, because a `vq` entry
+ * re-types the column it names.
+ */
+const QUANTIZABLE_VERTEX_VALUE_COLUMNS = [
+  'vertex_value',
+  'vertex_value_matrix',
+];
+
+/**
+ * Reserved `UInt16` index in a quantized per-vertex value column meaning "this
+ * vertex has no value" — the `Float32` shape's `NaN`, which `UInt16` cannot
+ * represent. Mirrors Rust's `VERTEX_VALUE_QUANT_SENTINEL`.
+ */
+const VERTEX_VALUE_QUANT_SENTINEL = 0xffff;
 
 /**
  * The dataset's schema-template registry: blake3-128 hex (32 lowercase hex
@@ -228,6 +250,43 @@ function validateTileMeta(meta: unknown, label: string): TileMetaJson {
   }
   if (m.vb !== undefined && !isFinite_(m.vb)) {
     fail("'vb' must be a finite number", m.vb);
+  }
+  // Compact feature times. An unknown VALUE of a known key is a hard error,
+  // not a silent misread: the `time-delta` manifest capability is the version
+  // gate that keeps a reader from ever seeing one it does not understand.
+  if (m.st !== undefined && m.st !== 'u32') {
+    fail('\'st\' must be the string "u32"', m.st);
+  }
+  if (m.st === 'u32' && !isFinite_(m.t0)) {
+    // With a u32 start column `t0` is the offsets' anchor — load-bearing, so
+    // its absence has to fail here rather than decode every feature to 1970.
+    fail("'st' = \"u32\" requires a finite 't0' anchor", m.t0);
+  }
+  if (m.et !== undefined && m.et !== 'dur32' && m.et !== 'zero') {
+    fail('\'et\' must be the string "dur32" or "zero"', m.et);
+  }
+  // Per-vertex value quantization. Same shape rules as `qa`, plus a closed key
+  // set: the affine RE-TYPES a named column, so applying one to a column
+  // outside the two per-vertex value columns could only corrupt it.
+  if (m.vq !== undefined) {
+    if (m.vq === null || typeof m.vq !== 'object' || Array.isArray(m.vq)) {
+      fail("'vq' must be an object of column → [o, s] pairs", m.vq);
+    }
+    for (const [column, affine] of Object.entries(m.vq as object)) {
+      if (!QUANTIZABLE_VERTEX_VALUE_COLUMNS.includes(column)) {
+        fail(
+          `'vq' names column "${column}", which is not a per-vertex value column ` +
+            `(this reader knows ${QUANTIZABLE_VERTEX_VALUE_COLUMNS.join(', ')})`,
+          column,
+        );
+      }
+      if (!isAffinePair(affine)) {
+        fail(
+          `'vq' affine for column "${column}" must be an [o, s] pair of finite numbers`,
+          affine,
+        );
+      }
+    }
   }
   if (m.sorted !== undefined && typeof m.sorted !== 'boolean') {
     fail("'sorted' must be a boolean", m.sorted);
@@ -556,15 +615,26 @@ function readCoordRun(
   return out;
 }
 
-/** Extract interleaved positions + per-feature start indices from geometry. */
+/**
+ * Extract interleaved positions + per-feature start indices from geometry.
+ *
+ * `partVec` is the optional `part_offsets` column (`List<UInt32>`, per feature
+ * the RING INDEX each of its parts starts at, relative to that feature's own
+ * first ring). It is resolved HERE rather than beside the other reserved
+ * columns because turning those ring indices into the `partIndices` contract —
+ * global, layer-rebased VERTEX indices — needs the very offset buffers this
+ * function already walks.
+ */
 function extractGeometry(
   geomVec: Vector,
   kind: GeometryType,
   affine?: QuantAffine,
+  partVec?: Vector | null,
 ): {
   positions: Float64Array;
   startIndices?: Uint32Array;
   ringIndices?: Uint32Array;
+  partIndices?: Uint32Array;
   positionDimensions: 2 | 3;
 } {
   const geom = chunk(geomVec);
@@ -645,17 +715,64 @@ function extractGeometry(
     2,
     affine,
   );
-  return { positions, startIndices, ringIndices, positionDimensions: 2 };
+  // MultiPolygon part boundaries. The wire column is per-feature RING indices;
+  // `partIndices` is the same nested-offsets contract as `ringIndices` — global
+  // vertex indices rebased to the layer's first vertex, with a total-count
+  // terminator — so the two compose without the consumer re-deriving anything.
+  let partIndices: Uint32Array | undefined;
+  if (partVec) {
+    const partData = chunk(partVec);
+    const partOffsets: Int32Array = partData.valueOffsets;
+    const partValues = partData.children[0].values as Uint32Array;
+    const partBase = partOffsets[partData.offset];
+    const totalParts =
+      partOffsets[partData.offset + partData.length] - partBase;
+    partIndices = new Uint32Array(totalParts + 1);
+    let w = 0;
+    for (let i = 0; i < n; i++) {
+      // Ring index the feature starts at, so its own `[0]` maps back here.
+      const featureFirstRing = featureOffsets[geom.offset + i];
+      const begin = partOffsets[partData.offset + i] - partBase;
+      const end = partOffsets[partData.offset + i + 1] - partBase;
+      for (let p = begin; p < end; p++) {
+        // `partValues[partBase + p]`, not `partValues[p]`: `p` is REBASED
+        // (`- partBase`) while the child buffer is absolute — the same
+        // `childValues[base + i]` convention `extractVertexTimes` and
+        // `extractVertexFloats` use. Identical today (a single-batch IPC
+        // table makes `partBase` 0) and wrong the moment the column arrives
+        // as a sliced chunk.
+        partIndices[w++] =
+          ringOffsets[featureFirstRing + partValues[partBase + p]] -
+          startVertex;
+      }
+    }
+    partIndices[totalParts] = endVertex - startVertex;
+  }
+  return {
+    positions,
+    startIndices,
+    ringIndices,
+    partIndices,
+    positionDimensions: 2,
+  };
 }
 
 /**
  * Extract the per-vertex time column.
  *
- * v3 layers carry the column as `List<UInt16>` deltas relative to a
- * per-layer `(origin, step)` recorded in schema metadata. v2 layers (and
- * v3 layers whose temporal span exceeds u16 * step) keep the absolute
- * `List<Int64>` shape. Either way we return one f32 relative to the
- * tile-level `timeOffset` for direct GPU upload.
+ * The column is delta-coded against a per-layer `(origin, step)` — v1 schema
+ * metadata / v2 `TILE_META.vt` — in one of two widths the encoder picks per
+ * layer from its own temporal span, and the Arrow child type is
+ * self-describing:
+ *
+ * - `List<UInt16>` — spans up to 65 535 * step (18.2 h at the 1 s default);
+ * - `List<UInt32>` — up to 4 294 967 295 * step, i.e. **49.7 days at exact
+ *   millisecond precision**, half the bytes the absolute fallback costs;
+ * - `List<Int64>` — absolute timestamps, when even a u32 delta would need a
+ *   step past the encoder's precision ceiling (and for layers with no `vt`).
+ *
+ * Either way we return one f32 relative to the tile-level `timeOffset` for
+ * direct GPU upload.
  */
 function extractVertexTimes(
   vec: Vector | null,
@@ -669,16 +786,20 @@ function extractVertexTimes(
   const childValues = data.children[0].values as
     | BigInt64Array
     | Uint16Array
+    | Uint32Array
     | Int32Array;
   const base = offsets[data.offset];
   const total = offsets[data.offset + data.length] - base;
   const out = new Float32Array(total);
-  // childValues is a BigInt64Array for the v2 absolute path and a
-  // Uint16Array for the v3 delta path. Branch once outside the loop so
-  // the tight loop stays monomorphic.
+  // Branch once outside the loop so each tight loop stays monomorphic — one
+  // arm per child-array type, never a union inside the loop.
   if (childValues instanceof BigInt64Array) {
     for (let i = 0; i < total; i++) {
       out[i] = Number(childValues[base + i]) - timeOffset;
+    }
+  } else if (childValues instanceof Uint32Array) {
+    for (let i = 0; i < total; i++) {
+      out[i] = origin + childValues[base + i] * step - timeOffset;
     }
   } else {
     for (let i = 0; i < total; i++) {
@@ -689,19 +810,27 @@ function extractVertexTimes(
 }
 
 /**
- * Extract the per-vertex scalar column (`vertex_value`, a `List<Float32>`)
- * into a flat `Float32Array` aligned 1:1 with `positions`. Unlike vertex
- * times there's no delta/origin/step encoding — values are stored verbatim.
- * `NaN` entries mark vertices with no value (rendered with a fallback color).
+ * Extract a per-vertex scalar column (`vertex_value` / `vertex_value_matrix`)
+ * into a flat `Float32Array` aligned 1:1 with `positions`.
+ *
+ * ONE wire shape reaches here: a `List<Float32>` (or `Float64`) holding the
+ * values verbatim, `NaN` marking a vertex with no value (rendered with a
+ * fallback colour). Unlike vertex times there is no delta/origin/step.
+ *
+ * The `vertex-value-quant` capability's `List<UInt16>` shape never reaches
+ * this function: {@link reinflateQuantizedVertexValues} has already turned it
+ * back into `List<Float32>` at the TABLE level (where `toGeoArrowTable` sees
+ * the same reconstruction), which is why there is no `TILE_META.vq` branch
+ * here to keep in sync.
  */
 function extractVertexFloats(vec: Vector | null): Float32Array | undefined {
   if (!vec) return undefined;
   const data = chunk(vec);
   const offsets: Int32Array = data.valueOffsets;
-  const childValues = data.children[0].values as Float32Array | Float64Array;
   const base = offsets[data.offset];
   const total = offsets[data.offset + data.length] - base;
   const out = new Float32Array(total);
+  const childValues = data.children[0].values as Float32Array | Float64Array;
   for (let i = 0; i < total; i++) {
     out[i] = childValues[base + i];
   }
@@ -740,6 +869,16 @@ interface ResolvedTileMeta {
   /** v2 `TILE_META.sorted`: rows stable-sorted by `start_time`. v1: absent. */
   sorted?: boolean;
 }
+
+/*
+ * Deliberately ABSENT from {@link ResolvedTileMeta}: `TILE_META.st`, `.et` and
+ * `.vq`. Those three keys RE-TYPE a CORE column, and {@link reinflateCoreTable}
+ * has already undone every one of them by the time a table reaches
+ * `tableToBinaryFeatures` — so the extractor sees the classic `Int64` /
+ * `List<Float32>` shapes and only the classic shapes. Re-reading them here is
+ * how the two decode surfaces would drift apart again (and how an affine would
+ * get applied twice).
+ */
 
 /**
  * Resolve the per-tile metadata from a v2 frame's `TILE_META` section.
@@ -813,10 +952,397 @@ function withQaFieldMetadata(field: Field, qa: TileMetaJson['qa']): Field {
   });
 }
 
+// ─── TILE_META re-inflation (the TS mirror of Rust's merge_v2_layer) ────────
+
+/** `2^32`, the u32 radix the BigInt-free i64 helpers below split on. */
+const TWO_32 = 4294967296;
+
+/**
+ * Platform byte order, probed once at module load.
+ *
+ * Every platform this renderer targets (x86-64, ARM64, wasm32) is
+ * little-endian; the probe exists only so the BigInt-free `i64` fast paths
+ * ({@link readInt64AsNumbers}, {@link makeInt64Data},
+ * {@link materializeFeatureIds}) can never silently read or write the wrong
+ * half on a hypothetical big-endian host — each falls back to `BigInt` there.
+ */
+const LITTLE_ENDIAN =
+  new Uint8Array(new Uint32Array([0x01020304]).buffer)[0] === 0x04;
+
+/**
+ * Read an `Int64` column's values into exact JS numbers, WITHOUT boxing a
+ * `BigInt` per element.
+ *
+ * On a little-endian host an `Int64` buffer viewed as `Uint32` reads
+ * `[lo0, hi0, lo1, hi1, …]`, so `hi·2³² + lo` (with `hi` reinterpreted as a
+ * signed int32 via `| 0`) reconstructs the value in pure float math — exact
+ * for every `|v| < 2⁵³`, which every Unix-millisecond timestamp is by four
+ * orders of magnitude. Measured over 200 k elements: **1.4 ns/elem** vs
+ * 14.7 ns/elem for `Number(bigint)`, the conversion this replaces on the
+ * decode hot path.
+ *
+ * `out.length` is the row count and wins over the column length, mirroring
+ * {@link materializeFeatureIds}: a short column leaves the tail zero-filled
+ * rather than `NaN`-filled.
+ */
+function readInt64AsNumbers(data: Data, out: Float64Array): void {
+  const raw = data.values as unknown as BigInt64Array;
+  const base = data.offset;
+  const n = Math.min(out.length, Math.max(0, raw.length - base));
+  if (LITTLE_ENDIAN) {
+    // A BigInt64Array's byteOffset is 8-aligned by construction, so a u32
+    // view over its buffer is always legal.
+    const halves = new Uint32Array(
+      raw.buffer as ArrayBuffer,
+      raw.byteOffset,
+      raw.length * 2,
+    );
+    for (let i = 0; i < n; i++) {
+      const j = (base + i) * 2;
+      out[i] = (halves[j + 1] | 0) * TWO_32 + halves[j];
+    }
+  } else {
+    for (let i = 0; i < n; i++) out[i] = Number(raw[base + i]);
+  }
+}
+
+/**
+ * Materialize an `Int64` Arrow column from exact integer milliseconds — the
+ * inverse of {@link readInt64AsNumbers}, and BigInt-free the same way (2.3
+ * ns/elem vs 16.1 for `BigInt(v)`). Negative (pre-1970) timestamps fall out
+ * of the `Math.floor` / remainder pair as correct two's complement.
+ *
+ * `nulls` carries the source column's validity buffer through unchanged
+ * (Rust's `…nulls().cloned()`): the compact forms are declared non-null, but
+ * a reader that DROPPED a validity buffer would silently turn a null time
+ * into a real one, which is a worse failure than carrying a redundant one.
+ */
+function makeInt64Data(
+  abs: Float64Array,
+  nulls?: { nullBitmap: Uint8Array | null | undefined; nullCount: number },
+): Data<Int64> {
+  const n = abs.length;
+  const values = new BigInt64Array(n);
+  if (LITTLE_ENDIAN) {
+    const halves = new Uint32Array(values.buffer);
+    for (let i = 0; i < n; i++) {
+      const v = abs[i];
+      const hi = Math.floor(v / TWO_32);
+      halves[i * 2] = v - hi * TWO_32;
+      halves[i * 2 + 1] = hi;
+    }
+  } else {
+    // `Math.trunc` because `BigInt()` THROWS on a non-integer: a crafted
+    // TILE_META may carry a fractional `t0` (the section validator only
+    // requires finite), and a decoder must not turn that into a RangeError.
+    for (let i = 0; i < n; i++) values[i] = BigInt(Math.trunc(abs[i]));
+  }
+  return makeData({
+    type: new Int64(),
+    length: n,
+    nullCount: nulls?.nullCount ?? 0,
+    nullBitmap: nulls?.nullBitmap ?? undefined,
+    data: values,
+  });
+}
+
+/**
+ * Re-inflate the compact feature-time columns declared by `TILE_META.st` /
+ * `.et` into the absolute, non-null `Int64` `start_time` / `end_time` pair
+ * every consumer of a decoded layer already expects — the TS mirror of Rust's
+ * `reinflate_compact_times`, error messages included.
+ *
+ * This is the whole reason the compact encoding needs no downstream change:
+ * the merged table is INDISTINGUISHABLE from a non-compact tile's, right down
+ * to column order — a synthesized `end_time` (`et: "zero"`) is inserted
+ * immediately after `start_time`, its canonical index, rather than appended.
+ *
+ * Operates on the CORE prefix, before property columns are appended, and is a
+ * no-op for every archive built before the feature existed (both keys absent).
+ */
+function reinflateCompactTimes(
+  fields: Field[],
+  children: Data[],
+  meta: TileMetaJson,
+  what: string,
+): void {
+  if (meta.st === undefined && meta.et === undefined) return;
+  const startIdx = fields.findIndex((f) => f.name === 'start_time');
+  if (startIdx < 0) {
+    throw new Error(
+      `${what}: TILE_META declares a compact time encoding but the layer has ` +
+        "no 'start_time' column",
+    );
+  }
+
+  if (meta.st === 'u32') {
+    // `t0` is the offsets' anchor — load-bearing, not an optimization.
+    // `validateTileMeta` already rejected a tile that declares the form
+    // without it; this is the belt to that braces.
+    const t0 = meta.t0;
+    if (t0 === undefined) {
+      throw new Error(
+        `${what}: TILE_META declares st="u32" (start_time as a u32 offset) ` +
+          "but carries no 't0' anchor to reconstruct against",
+      );
+    }
+    const data = children[startIdx];
+    const offsets = data.values;
+    if (!(offsets instanceof Uint32Array)) {
+      throw new Error(
+        `${what}: TILE_META declares st="u32" but 'start_time' is ${data.type}`,
+      );
+    }
+    const n = data.length;
+    const abs = new Float64Array(n);
+    for (let i = 0; i < n; i++) abs[i] = t0 + offsets[data.offset + i];
+    children[startIdx] = makeInt64Data(abs, data);
+    fields[startIdx] = fields[startIdx].clone({ type: new Int64() });
+  }
+
+  const et = meta.et;
+  if (et === undefined) return;
+  // Both end forms are relative to the (now absolute) start column.
+  const startData = children[startIdx];
+  if (!(startData.values instanceof BigInt64Array)) {
+    throw new Error(
+      `${what}: TILE_META declares a compact 'end_time' but 'start_time' is ` +
+        `${startData.type} (expected Int64 after re-inflation)`,
+    );
+  }
+
+  if (et === 'zero') {
+    if (fields.some((f) => f.name === 'end_time')) {
+      throw new Error(
+        `${what}: TILE_META declares et="zero" (the end_time column is ` +
+          "omitted) but the layer carries an 'end_time' column",
+      );
+    }
+    // `end === start` for every feature. Rust shares the start column here
+    // (an `Arc` clone, free); this reader COPIES it, deliberately.
+    // apache-arrow's JS IPC *writer* cannot serialize a record batch whose
+    // two columns alias one `ArrayBuffer` — it double-counts the body length
+    // and then writes the buffer once, so the stream is short and every
+    // reader rejects it ("Expected to read N bytes for message body, but
+    // only read M"). Since the whole point of this function is a table that
+    // behaves EXACTLY like a non-compact one for generic consumers — Lonboard
+    // writing Parquet, a `tableToIPC` hand-off — 8 bytes per feature is the
+    // right trade for not handing out a table that cannot be re-serialized.
+    const values = (startData.values as unknown as BigInt64Array).slice(
+      startData.offset,
+      startData.offset + startData.length,
+    );
+    fields.splice(
+      startIdx + 1,
+      0,
+      new Field('end_time', new Int64(), fields[startIdx].nullable),
+    );
+    children.splice(
+      startIdx + 1,
+      0,
+      makeData({
+        type: new Int64(),
+        length: startData.length,
+        nullCount: startData.nullCount,
+        nullBitmap: startData.nullBitmap,
+        data: values,
+      }),
+    );
+    return;
+  }
+
+  const endIdx = fields.findIndex((f) => f.name === 'end_time');
+  if (endIdx < 0) {
+    throw new Error(
+      `${what}: TILE_META declares et="dur32" but the layer has no ` +
+        "'end_time' column",
+    );
+  }
+  const endData = children[endIdx];
+  const durations = endData.values;
+  if (!(durations instanceof Uint32Array)) {
+    throw new Error(
+      `${what}: TILE_META declares et="dur32" but 'end_time' is ${endData.type}`,
+    );
+  }
+  if (endData.length !== startData.length) {
+    throw new Error(
+      `${what}: compact time columns disagree on length: start_time ` +
+        `${startData.length} vs end_time ${endData.length}`,
+    );
+  }
+  const n = startData.length;
+  const abs = new Float64Array(n);
+  readInt64AsNumbers(startData, abs);
+  for (let i = 0; i < n; i++) abs[i] += durations[endData.offset + i];
+  children[endIdx] = makeInt64Data(abs, endData);
+  fields[endIdx] = fields[endIdx].clone({ type: new Int64() });
+}
+
+/**
+ * Re-inflate the per-vertex value columns declared by `TILE_META.vq` from
+ * their `UInt16` leaf back to the `List<Float32>` shape every consumer of a
+ * decoded layer already expects (`value = o + q*s`, with the reserved
+ * {@link VERTEX_VALUE_QUANT_SENTINEL} index becoming `NaN`) — the TS mirror
+ * of Rust's `reinflate_quantized_vertex_values`, error messages included.
+ *
+ * The sibling of {@link reinflateCompactTimes}, and the reason the
+ * quantization needs no downstream change: the merged table is
+ * INDISTINGUISHABLE from a non-quantized tile's — same column, same position,
+ * same Arrow type, same list offsets and null buffers.
+ *
+ * The leaf-type check is not decoration. A crafted or corrupt tile whose `vq`
+ * names a column that actually shipped `Float32` would otherwise reinterpret
+ * those bytes as `UInt16` indices and decode to plausible-looking garbage;
+ * Rust refuses it loudly, and so must this reader.
+ */
+function reinflateQuantizedVertexValues(
+  fields: Field[],
+  children: Data[],
+  meta: TileMetaJson,
+  what: string,
+): void {
+  if (!meta.vq) return;
+  for (const [name, affine] of Object.entries(meta.vq)) {
+    // `validateTileMeta` has already closed the key set and pinned the pair
+    // shape, so `name` is one of QUANTIZABLE_VERTEX_VALUE_COLUMNS here.
+    const idx = fields.findIndex((f) => f.name === name);
+    if (idx < 0) {
+      throw new Error(
+        `${what}: TILE_META.vq carries an affine for '${name}' but the layer ` +
+          'has no such column',
+      );
+    }
+    const data = children[idx];
+    if (data.type.typeId !== ArrowType.List) {
+      throw new Error(
+        `${what}: TILE_META.vq declares '${name}' quantized but the column ` +
+          `is ${data.type} (expected a List)`,
+      );
+    }
+    const child = data.children[0];
+    const leaf = child?.values;
+    if (!(leaf instanceof Uint16Array)) {
+      throw new Error(
+        `${what}: TILE_META.vq declares '${name}' quantized but its list leaf ` +
+          `is ${child?.type} (expected UInt16)`,
+      );
+    }
+    const [o, s] = affine;
+    // The LOGICAL extent, not `leaf.length`: an Arrow IPC buffer is padded to
+    // an 8-byte boundary, so a `UInt16` leaf of 6 values arrives as an
+    // 8-element view. Sizing the reconstruction off the raw view would leave
+    // two phantom `0`s past the end of the column — invisible through the
+    // list offsets, but visible to anything that reads the child buffer, and
+    // a gratuitous difference from the non-quantized tile this is supposed to
+    // be indistinguishable from.
+    const end = Math.min(child.offset + child.length, leaf.length);
+    // The sentinel is the format's `NaN` (no value at this vertex); every
+    // other index is the affine applied in f64 and narrowed once, exactly
+    // mirroring the encoder.
+    const values = new Float32Array(end);
+    for (let i = child.offset; i < end; i++) {
+      const q = leaf[i];
+      values[i] = q === VERTEX_VALUE_QUANT_SENTINEL ? NaN : o + q * s;
+    }
+    const inflatedChild = makeData({
+      type: new Float32(),
+      length: child.length,
+      offset: child.offset,
+      nullCount: child.nullCount,
+      nullBitmap: child.nullBitmap,
+      data: values,
+    });
+    const inflated = makeData({
+      type: new List(new Field('item', new Float32(), true)),
+      length: data.length,
+      offset: data.offset,
+      nullCount: data.nullCount,
+      nullBitmap: data.nullBitmap,
+      valueOffsets: data.valueOffsets,
+      child: inflatedChild,
+    });
+    fields[idx] = fields[idx].clone({ type: inflated.type });
+    children[idx] = inflated;
+  }
+}
+
+/**
+ * Undo every `TILE_META`-declared RE-TYPING of a CORE column, so the table
+ * that leaves decode is the classic shape regardless of which compact
+ * encodings the tile happened to use.
+ *
+ * Runs on the CORE table BEFORE the property columns are appended — exactly
+ * where Rust's `merge_v2_layer` runs it — for two reasons: a synthesized
+ * `end_time` has to land at its canonical index rather than after the
+ * properties, and both consumers of the merged table (`tableToBinaryFeatures`
+ * AND the public {@link toGeoArrowTable}) must see the same thing. Doing it
+ * inside `tableToBinaryFeatures` instead would leave `toGeoArrowTable` —
+ * documented as the hand-off to generic GeoArrow consumers
+ * (`@geoarrow/deck.gl-layers`, Lonboard) — handing out a `UInt32`
+ * milliseconds-since-`t0` `start_time`, no `end_time` at all, and a raw
+ * `UInt16` `vertex_value`.
+ *
+ * Zero-copy and allocation-free for every tile that declares none of the
+ * compact encodings (the returned table IS the input).
+ */
+function reinflateCoreTable(
+  core: Table,
+  meta: TileMetaJson,
+  what: string,
+): Table {
+  const compactTimes = meta.st !== undefined || meta.et !== undefined;
+  const quantVertexValues = meta.vq !== undefined;
+  if (!compactTimes && !quantVertexValues) return core;
+  const batch = core.batches[0];
+  if (!batch || core.batches.length !== 1) {
+    throw new Error(
+      `${what}: expected exactly one record batch in the CORE stream ` +
+        `(got ${core.batches.length})`,
+    );
+  }
+  const fields = core.schema.fields.slice();
+  const children = batch.data.children.slice();
+  reinflateCompactTimes(fields, children, meta, what);
+  reinflateQuantizedVertexValues(fields, children, meta, what);
+  const schema = new Schema(
+    fields,
+    core.schema.metadata,
+    core.schema.dictionaries,
+  );
+  const data = makeData({
+    type: new Struct(fields),
+    length: batch.numRows,
+    nullCount: 0,
+    children,
+  });
+  return new Table(schema, [new RecordBatch(schema, data)]);
+}
+
+/**
+ * Rebuild ONE v2 layer's v1-shaped table: re-inflate the CORE column
+ * re-typings, merge the PROPS columns back in, and re-inject the
+ * `TILE_META`-hoisted schema metadata. The TS counterpart of Rust's
+ * `merge_v2_layer`, and the single entry point both decode paths
+ * ({@link decodeTile} inline, {@link toGeoArrowTable} worker-rehydrate) go
+ * through — so neither can drift from the other.
+ */
+function mergeV2Layer(
+  core: Table,
+  props: Table | undefined,
+  meta: TileMetaJson,
+  what: string,
+): Table {
+  const inflated = reinflateCoreTable(core, meta, what);
+  return props
+    ? mergeCorePropsTables(inflated, props, meta, what)
+    : injectTileMetaIntoCoreTable(inflated, meta);
+}
+
 /**
  * Merge a v2 layer's decoded CORE and PROPS tables back into ONE table —
  * the v1-shaped record batch every consumer downstream of decode sees, so
- * the core/props section split stays invisible (design §4.1). Zero-copy:
+ * the core/props section split stays invisible. Zero-copy:
  * the merged batch reuses both source batches' column `Data` children.
  *
  * The merged schema carries the union of both schemas' (dataset-constant)
@@ -898,6 +1424,178 @@ function injectTileMetaIntoCoreTable(core: Table, meta: TileMetaJson): Table {
   );
 }
 
+// ─── Feature ids ────────────────────────────────────────────────────────────
+
+/**
+ * Seed for the `featureIds` slot of a freshly built {@link BinaryFeatures}.
+ * {@link defineLazyFeatureIds} replaces it with the memoising accessor before
+ * the object escapes `tableToBinaryFeatures`, so the value is never
+ * observable — it exists purely so the object literal satisfies the
+ * (non-optional) field without a cast.
+ */
+const FEATURE_IDS_SEED = new Uint32Array(0);
+
+/**
+ * Materialise `BinaryFeatures.featureIds` — the **masked low 32 bits** of the
+ * archive's UInt64 `id` column.
+ *
+ * THE CONTRACT, and the one thing every consumer has to know: this is
+ * `id & 0xffffffff`, NOT a faithful stand-in for the id. Where the column
+ * carries values above 2³² — H3 cell indices at resolution ≥ 7, and EVERY
+ * Quadbin cell id (whose header and zoom bits live in the high half) — the
+ * discriminating bits are simply gone and what remains is meaningless as an
+ * identity. Those consumers must read {@link BinaryFeatures.featureIds64},
+ * which is the column verbatim.
+ *
+ * The masking is load-bearing, not cosmetic. The obvious `Number(raw[i])`
+ * rounds the u64 to the nearest f64 BEFORE the `Uint32Array` store applies
+ * its own mod-2³², so above 2⁵³ the stored low half is not even a truncation
+ * — it is garbage:
+ *
+ * ```text
+ *   id                    true low 32   Number(id) stored
+ *   0x872830828ffffff      687865855     687865856   H3 r7,  off by one
+ *   0x8f2830828052d25      671427877     671427840   H3 r15, off by 37
+ *   0x4CFFFFFFFFFFFFFF    4294967295             0   Quadbin, total loss
+ * ```
+ *
+ * On a little-endian host the mask is free: a `BigUint64Array` reinterpreted
+ * as u32 reads `[lo0, hi0, lo1, hi1, …]`, so the low halves are a stride-2
+ * gather and no BigInt ever materialises. Measured over 1M ids: **0.8 ms**
+ * for the gather, 8.7 ms for the correct-but-boxed
+ * `Number(raw[i] & 0xffffffffn)`, 12.4 ms for the wrong `Number(raw[i])` this
+ * replaces. A `BigUint64Array`'s `byteOffset` is 8-aligned by construction,
+ * so the u32 view over its buffer is always legal.
+ *
+ * `count` is the tile's row count and wins over the column length: a short
+ * column leaves the tail zero-filled, exactly as the old loop's
+ * `Number(undefined) → NaN → 0` did.
+ */
+function materializeFeatureIds(
+  raw: BigUint64Array | Uint32Array | undefined,
+  count: number,
+): Uint32Array {
+  const out = new Uint32Array(count);
+  if (!raw) return out; // no `id` column at all → zeros, as before
+  const n = Math.min(count, raw.length);
+  if (raw instanceof BigUint64Array) {
+    if (LITTLE_ENDIAN) {
+      const halves = new Uint32Array(
+        raw.buffer,
+        raw.byteOffset,
+        raw.length * 2,
+      );
+      for (let i = 0; i < n; i++) out[i] = halves[i * 2];
+    } else {
+      // Big-endian fallback: the pair order is [hi, lo], so gather through
+      // BigInt rather than guessing at the stride.
+      for (let i = 0; i < n; i++) out[i] = Number(raw[i] & 0xffffffffn);
+    }
+  } else {
+    // Already 32-bit (defensive — no shipped archive writes a u32 `id`): one
+    // memcpy beats the per-element loop it replaces.
+    out.set(raw.subarray(0, n));
+  }
+  return out;
+}
+
+/**
+ * Install `featureIds` as a MEMOISING accessor on a decoded
+ * {@link BinaryFeatures}, so the low-half mirror is only ever built for tiles
+ * whose ids someone actually reads.
+ *
+ * Why bother: `featureIds` has no reader on the render path. No layer in
+ * `@poopdeck.gl/layers`, `/three` or `/maplibre` touches it (the summary
+ * layers read `featureIds64`; picking is by index), and its one consumer in
+ * this package — {@link getFeatureProperties} — is a picking/tooltip path
+ * that prefers `featureIds64` whenever it is present. Building it eagerly
+ * spent a full pass over every feature of every tile for nothing.
+ *
+ * Why an ACCESSOR rather than simply omitting the field: `BinaryFeatures`
+ * declares it non-optional and several decode-path tests read it straight off
+ * decoded tiles, so it has to keep answering. Lazy-but-present is
+ * transparent — reads, spreads, `Object.keys`, `JSON.stringify` and
+ * structured clone all behave exactly as they did with a data property.
+ *
+ * What this does NOT buy, and why it is still shaped this way: the property
+ * is `enumerable`, and structured clone reads every enumerable own property,
+ * so a worker-decoded tile materialises its ids at `postMessage` time
+ * regardless (this is deliberate — a NON-enumerable accessor is silently
+ * DROPPED by the clone, which would strand `getFeatureProperties` on the main
+ * thread with no id at all; both behaviours verified, not assumed). The
+ * tileset likewise forces it via `estimateTileSize` → `forEachBufferView`.
+ * Laziness therefore pays on the direct-`STTArchive` paths today (Node
+ * tooling, `stt-optimize`, tests), and is the half of this change that keeps
+ * working if `featureIds` is ever made genuinely optional — at which point
+ * `forEachBufferView`'s existing `ArrayBuffer.isView` guard already skips it
+ * with no edit.
+ *
+ * The getter self-replaces with a plain data property on first read, so
+ * repeat access is a normal field load and the closure — which pins the id
+ * column — becomes collectable. The setter exists so ordinary assignment
+ * keeps working; an accessor without one throws in strict mode.
+ */
+function defineLazyFeatureIds(
+  features: BinaryFeatures,
+  raw: BigUint64Array | Uint32Array | undefined,
+  count: number,
+): void {
+  const pin = (target: BinaryFeatures, value: Uint32Array): void => {
+    Object.defineProperty(target, 'featureIds', {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value,
+    });
+  };
+  Object.defineProperty(features, 'featureIds', {
+    configurable: true,
+    enumerable: true,
+    get(this: BinaryFeatures): Uint32Array {
+      const value = materializeFeatureIds(raw, count);
+      pin(this, value);
+      return value;
+    },
+    set(this: BinaryFeatures, value: Uint32Array): void {
+      pin(this, value);
+    },
+  });
+}
+
+/**
+ * Relativise an absolute Unix-ms time column against `timeOffset` for f32
+ * upload — the shared body of the `start_time` and `end_time` extraction.
+ *
+ * The `Int64` arm never boxes a `BigInt` (see {@link readInt64AsNumbers}):
+ * 1.4 ns/elem against 14.7 for the `Number(bigint)` loop it replaces, which
+ * is what pays for re-inflating the compact columns to `Int64` in the first
+ * place. Narrower integer columns (hand-built fixtures, an `id`-only tile)
+ * fall through to the generic `Number()` arm, and a missing or short column
+ * leaves the tail zero-filled rather than `NaN`-filled.
+ */
+function relativeTimes(
+  raw: BigInt64Array | Uint32Array | undefined,
+  count: number,
+  timeOffset: number,
+): Float32Array {
+  const out = new Float32Array(count);
+  if (!raw) return out;
+  const n = Math.min(count, raw.length);
+  if (raw instanceof BigInt64Array && LITTLE_ENDIAN) {
+    const halves = new Uint32Array(
+      raw.buffer as ArrayBuffer,
+      raw.byteOffset,
+      raw.length * 2,
+    );
+    for (let i = 0; i < n; i++) {
+      out[i] = (halves[i * 2 + 1] | 0) * TWO_32 + halves[i * 2] - timeOffset;
+    }
+  } else {
+    for (let i = 0; i < n; i++) out[i] = Number(raw[i]) - timeOffset;
+  }
+  return out;
+}
+
 /** Convert one Arrow RecordBatch table into deck.gl binary features. */
 function tableToBinaryFeatures(
   table: Table,
@@ -907,30 +1605,38 @@ function tableToBinaryFeatures(
   const featureCount = table.numRows;
 
   // --- ids ---
+  // The archive's `id` column is UInt64. For raw tiles the lower 32 bits are
+  // enough (we generate ids from a hash); for summary tiers the ID IS the
+  // H3/Quadbin cell index, which at H3 resolutions ≥ 7 — and for every
+  // Quadbin cell — does not fit in 32 bits. `featureIds64` therefore keeps
+  // the column VERBATIM and is the only correct source for those consumers;
+  // `featureIds` is the masked low-half mirror, built lazily. See
+  // {@link materializeFeatureIds} for the exact contract (and for why
+  // `Number(raw[i])` was wrong, not merely lossy) and
+  // {@link defineLazyFeatureIds} for why it is deferred.
   const idVec = table.getChild('id');
-  const featureIds = new Uint32Array(featureCount);
-  // The archive's `id` column is UInt64. For raw tiles, the lower 32 bits
-  // are always sufficient (we generate IDs from a hash); for summary tiles
-  // the ID IS the H3/quadbin cell index, which at H3 resolutions ≥ 7 does
-  // not fit in 32 bits. We preserve the full BigUint64Array verbatim on
-  // `featureIds64` so the H3SummaryLayer can recover the original cell.
-  let featureIds64: BigUint64Array | undefined;
-  if (idVec) {
-    const raw = idVec.toArray() as BigUint64Array | Uint32Array;
-    if (raw instanceof BigUint64Array) {
-      // Copy so the slice into the Arrow buffer doesn't keep the IPC view
-      // alive longer than the rest of the binary feature.
-      featureIds64 = new BigUint64Array(raw);
-    }
-    for (let i = 0; i < featureCount; i++) featureIds[i] = Number(raw[i]);
-  }
+  const rawIds = idVec
+    ? (idVec.toArray() as BigUint64Array | Uint32Array)
+    : undefined;
+  // Copy so the slice into the Arrow buffer doesn't keep the IPC view alive
+  // longer than the rest of the binary feature.
+  const featureIds64 =
+    rawIds instanceof BigUint64Array ? new BigUint64Array(rawIds) : undefined;
 
   // --- times (relativised to timeOffset for f32 precision) ---
+  // ONE shape reaches here: absolute Unix-ms `Int64` columns, both present.
+  // The compact `TILE_META.st` / `.et` forms have already been re-inflated to
+  // it by {@link reinflateCoreTable}, at the table level, so this extractor
+  // and the public `toGeoArrowTable()` can never disagree about a tile's
+  // times. (A hand-built fixture may still hand us a narrower integer column;
+  // {@link relativeTimes} tolerates that.)
   const startRaw = table.getChild('start_time')?.toArray() as
     | BigInt64Array
+    | Uint32Array
     | undefined;
   const endRaw = table.getChild('end_time')?.toArray() as
     | BigInt64Array
+    | Uint32Array
     | undefined;
   let timeOffset = 0;
   // Fast path: the resolved meta carries the baked global start-time min
@@ -947,12 +1653,8 @@ function tableToBinaryFeatures(
     }
     timeOffset = min;
   }
-  const startTimes = new Float32Array(featureCount);
-  const endTimes = new Float32Array(featureCount);
-  for (let i = 0; i < featureCount; i++) {
-    startTimes[i] = startRaw ? Number(startRaw[i]) - timeOffset : 0;
-    endTimes[i] = endRaw ? Number(endRaw[i]) - timeOffset : 0;
-  }
+  const startTimes = relativeTimes(startRaw, featureCount, timeOffset);
+  const endTimes = relativeTimes(endRaw, featureCount, timeOffset);
 
   // --- geometry ---
   const geomVec = table.getChild('geometry');
@@ -961,8 +1663,21 @@ function tableToBinaryFeatures(
   // Quantized tiles store i32 grid indices + an affine; reconstruct Float64
   // here so every downstream layer still sees standard lon/lat positions.
   const quantAffine = readQuantAffine(table);
-  const { positions, startIndices, ringIndices, positionDimensions } =
-    extractGeometry(geomVec, kind, quantAffine);
+  const {
+    positions,
+    startIndices,
+    ringIndices,
+    partIndices,
+    positionDimensions,
+  } = extractGeometry(
+    geomVec,
+    kind,
+    quantAffine,
+    // MultiPolygon part boundaries. The column is emitted only when some
+    // feature really is multi-part, so its ABSENCE means every feature is
+    // single-part (and `partIndices` would just repeat `startIndices`).
+    kind === GeometryType.Polygon ? table.getChild('part_offsets') : null,
+  );
 
   // --- per-vertex times ---
   // The u16-delta origin/step pair rides the resolved meta (v1 schema
@@ -977,6 +1692,8 @@ function tableToBinaryFeatures(
   );
 
   // --- per-vertex scalar values (e.g. SST) ---
+  // Always a raw Float32/Float64 leaf here: the `TILE_META.vq` UInt16 shape
+  // was re-inflated at the table level (see `reinflateQuantizedVertexValues`).
   const vertexValues = extractVertexFloats(
     table.getChild('vertex_value') ?? null,
   );
@@ -1049,6 +1766,11 @@ function tableToBinaryFeatures(
     'vertex_value',
     'vertex_value_matrix',
     'triangles',
+    // Consumed by `extractGeometry` above into `partIndices`. Listing it here
+    // is what keeps an ADDITIVE reserved column from being misread as a
+    // property: the numeric branch below would otherwise hand a `List<UInt32>`
+    // to `Number(raw[i])` and publish a `numericProps.part_offsets` of NaNs.
+    'part_offsets',
   ]);
   for (const field of table.schema.fields) {
     if (reserved.has(field.name)) continue;
@@ -1166,20 +1888,23 @@ function tableToBinaryFeatures(
     }
   }
 
-  return {
+  const features: BinaryFeatures = {
     featureCount,
     geometryType: kind,
     positionDimensions,
     positions,
     startIndices,
     ringIndices,
+    partIndices,
     // Grid resolution the (already dequantized) coordinates snapped to, so
     // edge consumers know how far a builder-emitted vertex may sit from the
     // exact line it was clipped against. Undefined for Float64 layers.
     coordQuantStep: quantAffine
       ? ([quantAffine.sx, quantAffine.sy] as [number, number])
       : undefined,
-    featureIds,
+    // Placeholder only — `defineLazyFeatureIds` below swaps in the memoising
+    // accessor before this object escapes the function.
+    featureIds: FEATURE_IDS_SEED,
     featureIds64,
     startTimes,
     endTimes,
@@ -1195,6 +1920,13 @@ function tableToBinaryFeatures(
     vectorProps,
     timesSorted: meta.sorted,
   };
+  // Derive the mirror from our own `featureIds64` copy when we made one, so
+  // the deferred closure does not additionally pin the Arrow IPC view. (The
+  // u32 fallback closes over the Arrow view, which is the same retention
+  // `positions` already has on point tiles — and that branch is unreachable
+  // for every archive the builder writes.)
+  defineLazyFeatureIds(features, featureIds64 ?? rawIds, featureCount);
+  return features;
 }
 
 /**
@@ -1240,18 +1972,17 @@ export function decodeTile(
     const rawLayers = parseLayerFrameV2(payload, tileKey, options?.templates);
     const layers: STTTileLayer[] = rawLayers.map((raw) => {
       const coreTable = tableFromIPC(raw.coreIpc);
-      // Eager PROPS materialization (design §4.1 — this reader ships
-      // eager-only): parse the PROPS batch now and merge its columns into
+      // Eager PROPS materialization (this reader ships eager-only):
+      // parse the PROPS batch now and merge its columns into
       // the core table's, so the section split is invisible downstream.
-      // Both paths re-inject the TILE_META-hoisted metadata (v1 parity).
-      const table = raw.propsIpc
-        ? mergeCorePropsTables(
-            coreTable,
-            tableFromIPC(raw.propsIpc),
-            raw.tileMeta,
-            `tile ${tileKey} layer '${raw.name}'`,
-          )
-        : injectTileMetaIntoCoreTable(coreTable, raw.tileMeta);
+      // `mergeV2Layer` also re-inflates the TILE_META-declared column
+      // re-typings and re-injects the hoisted metadata (v1 parity).
+      const table = mergeV2Layer(
+        coreTable,
+        raw.propsIpc ? tableFromIPC(raw.propsIpc) : undefined,
+        raw.tileMeta,
+        `tile ${tileKey} layer '${raw.name}'`,
+      );
       return {
         name: raw.name,
         extent: 0, // coordinates are real lon/lat; no quantization extent
@@ -1277,6 +2008,31 @@ export function decodeTile(
 }
 
 /**
+ * Test-only: run one layer's decode over an already-parsed Arrow
+ * {@link Table}, skipping the layer frame — the exact pipeline
+ * {@link decodeTile} runs per layer ({@link mergeV2Layer} →
+ * `tableToBinaryFeatures`).
+ *
+ * It exists because the Arrow IPC writer NORMALIZES away shapes the decode
+ * paths nevertheless have to tolerate: it rebases a list column's
+ * `valueOffsets` to start at 0 and re-slices the child buffer to match, so a
+ * chunk whose child run does NOT start at 0 — the case the
+ * `childValues[base + i]` convention exists for — is simply unreachable from
+ * a serialized fixture. Building the column `Data` by hand is the only way to
+ * pin it. NOT re-exported from the package index (`src/tile.ts` is not a
+ * public entry point); nothing outside `test/` may import it.
+ */
+export function _decodeTableForTest(
+  table: Table,
+  meta: TileMetaJson = {},
+): BinaryFeatures {
+  return tableToBinaryFeatures(
+    mergeV2Layer(table, undefined, meta, 'test layer'),
+    resolveMetaFromTileMeta(meta),
+  );
+}
+
+/**
  * Decode ONE feature's property columns into a plain JS object — the
  * event-driven counterpart to the columnar {@link BinaryFeatures} layout.
  * The render path never materializes per-feature objects (that's the whole
@@ -1287,8 +2043,13 @@ export function decodeTile(
  * (categorical nulls — the `0xffff` sentinel — decode to `null`), plus the
  * reserved columns reconstructed from their GPU encodings:
  *
- * - `id` — the feature id; the full 64-bit value (bigint) when the archive
- *   needed one (e.g. H3 cell indices at res ≥ 7), else the 32-bit number.
+ * - `id` — the feature id, read from `featureIds64` (the verbatim u64 column)
+ *   whenever the decoder produced one, so H3 / Quadbin cell ids come back as
+ *   the exact `bigint`. Only when it is absent do we fall back to the
+ *   `featureIds` mirror, which is the MASKED low 32 bits and therefore a
+ *   valid identity solely for ids that fit in 32 bits — see
+ *   {@link materializeFeatureIds}. This ordering is the reason a picking
+ *   tooltip on a summary tier shows the real cell rather than a truncation.
  * - `start_time` / `end_time` — absolute Unix ms (`timeOffset + relative`).
  *   The relative times are stored as f32, so on datasets spanning years the
  *   reconstruction is quantized to tens of ms — fine for display.
@@ -1306,9 +2067,15 @@ export function getFeatureProperties(
     return null;
   }
   const props: Record<string, unknown> = {
+    // `featureIds64` first — see the doc above. Reading it also avoids
+    // FORCING the lazy `featureIds` accessor on summary tiles, where the
+    // mirror would be built only to be discarded. The optional chain on the
+    // mirror is defensive rather than decorative: hand-built BinaryFeatures
+    // (synthetic layers, fixtures) legitimately omit both id columns, and an
+    // `undefined` id beats a TypeError inside a picking callback.
     id: features.featureIds64
       ? features.featureIds64[index]
-      : features.featureIds[index],
+      : features.featureIds?.[index],
     start_time: features.timeOffset + features.startTimes[index],
     end_time: features.timeOffset + features.endTimes[index],
   };
@@ -1356,20 +2123,17 @@ export function toGeoArrowTable(layer: STTTileLayer): Table {
     // Worker-decoded tiles arrive without the (non-cloneable) Table but
     // with the layer's raw IPC bytes; rehydrate on first use and memoize
     // so repeat calls don't re-parse. v2 layers with property columns carry
-    // TWO streams (spliced core + props) — re-merge them, re-injecting the
-    // layer's TILE_META (`layer.tileMeta` rides postMessage as plain JSON),
-    // so the rehydrated table matches the inline-decoded shape exactly.
-    table = tableFromIPC(layer.arrowIpc);
-    if (layer.arrowIpcProps) {
-      table = mergeCorePropsTables(
-        table,
-        tableFromIPC(layer.arrowIpcProps),
-        layer.tileMeta ?? {},
-        `STT layer '${layer.name}'`,
-      );
-    } else if (layer.tileMeta) {
-      table = injectTileMetaIntoCoreTable(table, layer.tileMeta);
-    }
+    // TWO streams (spliced core + props) — re-merge them through the SAME
+    // `mergeV2Layer` the inline decode uses, re-inflating the compact column
+    // encodings and re-injecting the layer's TILE_META (`layer.tileMeta`
+    // rides postMessage as plain JSON), so the rehydrated table matches the
+    // inline-decoded shape exactly.
+    table = mergeV2Layer(
+      tableFromIPC(layer.arrowIpc),
+      layer.arrowIpcProps ? tableFromIPC(layer.arrowIpcProps) : undefined,
+      layer.tileMeta ?? {},
+      `STT layer '${layer.name}'`,
+    );
     layer.arrowTable = table;
   }
   if (!table) {

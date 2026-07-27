@@ -40,8 +40,16 @@
  * small number of consolidated "slabs" (one ScatterplotLayer per slab, capped
  * at SLAB_CAPACITY_POINTS): frozen slabs keep a stable `data` ref (zero
  * re-upload), only the single open slab grows. Per-tile times are rebased to
- * one common slab offset — Float32-safe here because cumulative reveal already
- * tolerates tens-of-seconds time quantization (see TimeFilterExtension.draw).
+ * one common slab offset — the dataset `timeRange.start` when it is known,
+ * else the FIRST absorbed tile's `timeOffset`, never epoch 0. Rebasing against
+ * 0 would store ~1.7e12 ms into the slabs' Float32Arrays, where one ULP is
+ * ~131 s: every start time snaps onto a ~2-minute grid and `fadeInDuration`
+ * stops doing anything. Relative to a real base the residual quantization is
+ * far below what the cumulative reveal can show (see
+ * TimeFilterExtension.draw).
+ *
+ * All of this render state lives in `this.state` (see PointRenderCache), not
+ * in instance fields — deck builds a NEW layer object for every render.
  */
 
 import { ScatterplotLayer } from '@deck.gl/layers';
@@ -85,15 +93,23 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
   NumericAccessorValue,
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import { bindColorVector } from '../../lib/vector-props.js';
 import {
   getFeatureProperties,
   DEFAULT_CATEGORICAL_PALETTE,
+  GeometryType,
+  tileLayerKey,
 } from '@poopdeck.gl/core';
 import type {
   Tile,
@@ -128,12 +144,20 @@ export interface _AnimatedPointLayerProps {
 
   /**
    * Radius units.
+   *
+   * DEFAULT DRIFT vs `@deck.gl/layers` ScatterplotLayer, which defaults to
+   * `'meters'`. STT points are overwhelmingly event markers rather than
+   * ground footprints, so a pixel radius keeps them legible across the whole
+   * zoom range; pass `'meters'` explicitly for upstream behaviour.
    * @default 'pixels'
    */
   radiusUnits?: 'pixels' | 'meters' | 'common';
 
   /**
    * Fill color — constant {@link Color}, or property name for categorical coloring.
+   *
+   * DEFAULT DRIFT vs upstream `getFillColor`, which defaults to opaque black
+   * `[0, 0, 0, 255]` — invisible on the dark basemaps these demos use.
    * @default [255, 128, 0, 255]
    */
   fillColor?: Color | string;
@@ -144,11 +168,19 @@ export interface _AnimatedPointLayerProps {
    * function accessor (binary tiles can't run per-feature JS; a function
    * warns once and falls back to `fillColor`). When set, it wins over
    * `fillColor`.
+   *
+   * DEFAULT DRIFT: unset here (so `fillColor` wins unless you opt in); when
+   * neither is set the effective constant is `[255, 128, 0, 255]`, not
+   * upstream's `[0, 0, 0, 255]`.
    */
   getFillColor?: ColorAccessorValue | null;
 
   /**
    * Radius — constant number, or property name for per-feature radius.
+   *
+   * DEFAULT DRIFT vs upstream `getRadius` (which defaults to `1`): 5 in the
+   * STT default `radiusUnits: 'pixels'` is a legible marker, whereas 1 px is
+   * a near-invisible speck.
    * @default 5
    */
   radius?: number | string;
@@ -157,6 +189,9 @@ export interface _AnimatedPointLayerProps {
    * Upstream-vocabulary alias of {@link radius}. Accepts a constant number
    * OR a property-column NAME — NOT a function accessor (a function warns
    * once and falls back to `radius`). When set, it wins over `radius`.
+   *
+   * DEFAULT DRIFT: unset here (so `radius` wins unless you opt in); when
+   * neither is set the effective constant is `5`, not upstream's `1`.
    */
   getRadius?: NumericAccessorValue | null;
 
@@ -356,11 +391,11 @@ export interface _AnimatedPointLayerProps {
    *
    * The tile loader must span at least `2 × wakeLength` so the past half of
    * the wake stays resident (the shader filter is independent of the loading
-   * window). This is now ENFORCED by the layer — `getEffectiveTimeWindow()`
-   * returns `max(timeWindow, 2 × wakeLength)` in wake mode — so a caller that
-   * leaves `timeWindow` too narrow no longer sees the wake's tail pop in and
-   * out as tiles evict. Passing `timeWindow >= 2 × wakeLength` yourself is a
-   * harmless no-op.
+   * window). The layer ENFORCES it — `getEffectiveTimeWindow()` returns
+   * `max(timeWindow, 2 × wakeLength)` in wake mode — so a caller that leaves
+   * `timeWindow` too narrow does not see the wake's tail pop in and out as
+   * tiles evict. Passing `timeWindow >= 2 × wakeLength` yourself is a harmless
+   * no-op.
    */
   wakeLength?: number;
 
@@ -507,6 +542,81 @@ export interface _AnimatedPointLayerProps {
 export type AnimatedPointLayerProps = _AnimatedPointLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Where each own prop lands, and therefore whether editing it must throw away
+ * the cached per-tile ScatterplotLayers (and, in cumulative mode, the slab
+ * layers). The annotation makes the table total over
+ * {@link _AnimatedPointLayerProps}, so a prop added to that interface is a
+ * compile error until it is classified here.
+ */
+const POINT_PROP_EFFECTS: PropEffects<_AnimatedPointLayerProps> = {
+  // Forwarded to every emitted ScatterplotLayer through
+  // {@link AnimatedPointLayer.commonStyleProps}, so a cached instance — per-tile
+  // sublayer or consolidated slab — holds a frozen copy.
+  radiusScale: 'sublayer',
+  radiusUnits: 'sublayer',
+  radiusMinPixels: 'sublayer',
+  radiusMaxPixels: 'sublayer',
+  lineWidthUnits: 'sublayer',
+  lineWidthScale: 'sublayer',
+  lineWidthMinPixels: 'sublayer',
+  lineWidthMaxPixels: 'sublayer',
+  stroked: 'sublayer',
+  filled: 'sublayer',
+  billboard: 'sublayer',
+  antialiasing: 'sublayer',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+  wakeLength: 'sublayer',
+  wakeTailScale: 'sublayer',
+  // Rides commonStyleProps AND selects the consolidated-slab render path.
+  cumulative: 'sublayer',
+  // Constant fallbacks the sublayer is built with, used when the tile baked no
+  // corresponding binary attribute. Keyed through the alias-resolved value (see
+  // the `overrides` at the call site) so a change confined to the `get*` alias
+  // invalidates too.
+  fillColor: 'sublayer',
+  getFillColor: 'sublayer',
+  radius: 'sublayer',
+  getRadius: 'sublayer',
+  strokeColor: 'sublayer',
+  getLineColor: 'sublayer',
+  strokeWidth: 'sublayer',
+  getLineWidth: 'sublayer',
+  // Decide the sublayer's extension list: SplatExtension and
+  // STTDataFilterExtension are installed per layer, at construction time.
+  splat: 'sublayer',
+  filterProperty: 'sublayer',
+  // Filter uniforms ride as sublayer props.
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+  // Gate and inputs of the CPU glide path, which replaces the cached per-tile
+  // sublayers with one interpolated ScatterplotLayer.
+  interpolate: 'sublayer',
+  idProperty: 'sublayer',
+  maxInterpolationGap: 'sublayer',
+  reducedMotion: 'sublayer',
+  // Read only while building a tile's prepared attributes / gpuPalette, and
+  // covered by {@link AnimatedPointLayer.computeStyleKey}: a change re-prepares
+  // the tile, and the preparedKey identity check then rebuilds the sublayer
+  // (in cumulative mode it resets the slab schema, which repacks the slabs).
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+  rgbColorColumns: 'prepare',
+  colorVectorColumn: 'prepare',
+  rampProperty: 'prepare',
+  rampDomain: 'prepare',
+  rampColorRamp: 'prepare',
+  radiusTransform: 'prepare',
+  elevationProperty: 'prepare',
+  elevationScale: 'prepare',
+  // 3D geometry is inferred from the tile's `positionDimensions` and z is
+  // sourced from `elevationProperty`; nothing reads this flag.
+  use3D: 'inert',
+};
+
 // Default color palette for categorical data — the single source of truth in
 // @poopdeck.gl/core, shared with the maplibre adapter.
 const DEFAULT_PALETTE: Color[] = DEFAULT_CATEGORICAL_PALETTE;
@@ -579,15 +689,41 @@ function findSlabProvenance(
 }
 
 /**
- * Optional per-feature attributes a consolidated slab carries. Derived once
- * from the first absorbed tile — every tile in a slab shares one styleKey, so
- * one schema describes them all.
+ * Optional per-feature attributes a consolidated slab carries. Seeded from the
+ * first absorbed tile, then PROMOTED (never demoted) if a later (tile, layer)
+ * turns out to carry a column the first one lacked — see
+ * {@link AnimatedPointLayer.absorbTile}. One styleKey covers every tile in a
+ * slab, but a multi-layer archive can still hand the same styleKey a layer
+ * whose columns differ, so the schema can't be assumed final after tile one.
  */
 interface SlabSchema {
   hasFillColor: boolean;
   hasCategoryIndex: boolean;
   hasRadius: boolean;
   gpuPalette: Color[] | null;
+}
+
+/**
+ * Write one RGBA constant across `[start, start + count)` of a slab's
+ * interleaved fill-colour buffer.
+ */
+function fillRgba(
+  buf: Uint8Array,
+  start: number,
+  count: number,
+  color: Color,
+): void {
+  const r = color[0];
+  const g = color[1];
+  const b = color[2];
+  const a = color[3] ?? 255;
+  for (let i = 0; i < count; i++) {
+    const o = (start + i) * 4;
+    buf[o] = r;
+    buf[o + 1] = g;
+    buf[o + 2] = b;
+    buf[o + 3] = a;
+  }
 }
 
 /**
@@ -630,9 +766,106 @@ function deriveSlabSchema(built: PreparedTile): SlabSchema {
   };
 }
 
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
+/**
+ * Everything the render path carries between frames.
+ *
+ * Held inside `this.state` — NOT in instance fields. deck's layer matching
+ * constructs a NEW layer object for every render and moves only
+ * `state`/`internalState` across (`Layer._transferState`); class-field
+ * initializers re-run on the new instance. So an unmemoized
+ * `new AnimatedPointLayer({...})` inside a React render emptied every cache
+ * each frame: a full re-prepare of every resident tile on the per-tile path,
+ * and — far worse — a synchronous re-absorb of the ENTIRE dataset in
+ * cumulative mode, where `getEffectiveTimeWindow()` widens the loader window
+ * to `2 × span` so every tile is resident by design.
+ */
+interface PointRenderCache {
+  /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
+  prepared: Map<string, PreparedTile>;
+  /**
+   * Per-tile sublayer-instance cache. Returning the SAME ScatterplotLayer
+   * reference across renderLayers() calls lets deck.gl short-circuit prop
+   * diff entirely. Allocating a fresh layer per visible tile per frame (as
+   * the v2 consolidation rewrite would in any non-trivial workflow) was the
+   * single largest source of frame-time variance at 50+ tiles.
+   */
+  sublayers: Map<
+    string,
+    {
+      layer: ScatterplotLayer;
+      preparedKey: PreparedTile;
+      layerPropsKey: string;
+    }
+  >;
+  /** Digest of every prop baked into a sublayer at construction time. */
+  layerPropsKey: string;
+  /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
+  tilesRef: Tile[] | null;
+
+  /* ── Cumulative consolidation ──────────────────────────────────────────── */
+  /** Packed slabs, in arrival order. The last entry is the open (growing) slab. */
+  slabs: ConsolidatedSlab[];
+  /** Tile keys already packed into a slab — skipped on subsequent renders. */
+  absorbed: Set<string>;
+  /**
+   * Common timeOffset every slab's times are rebased to. `null` ⇒ not yet
+   * seeded; {@link AnimatedPointLayer.absorbTile} takes the FIRST absorbed
+   * tile's `timeOffset`.
+   */
+  slabBaseOffset: number | null;
+  /** `styleKey|zoom|timeRange.start` of the current slabs; a change forces a full data rebuild. */
+  slabSchemaKey: string | null;
+  /** Optional-attribute schema shared by every slab (seeded from the first absorbed tile). */
+  slabSchema: SlabSchema | null;
+  /** Visual layer-prop digest; a change rebuilds slab LAYERS but keeps the packed data. */
+  slabLayerPropsKey: string;
+
+  /* ── Glide (motion-interpolation) ──────────────────────────────────────── */
+  /** Pooled, id-keyed track index (glide). Null when not in the glide path. */
+  interpTracks: Map<string, Track> | null;
+  interpTracksKey: string;
+  /**
+   * Incremental maintainer of {@link interpTracks}: re-pools only ADDED tiles
+   * and re-sorts only AFFECTED tracks across tile churn, instead of the
+   * O(all snapshots) full rebuild that spiked frame time.
+   */
+  interpMaintainer: TrackIndexMaintainer | null;
+  /**
+   * Per-track representative decoded source feature, for glide picking. Pruned
+   * to the RESIDENT track set on every tile-set change — see
+   * {@link AnimatedPointLayer.scanInterpPickRows}.
+   */
+  interpPickRows: Map<string, Record<string, unknown>> | null;
+  /** Tile keys already scanned for {@link interpPickRows}; pruned to the live tile set. */
+  interpPickRowsScanned: Set<string> | null;
+  /** Sim-time of the last glide re-interpolation; skips redundant ticks. */
+  interpFrameTime: number;
+  /** Grow-only per-frame output buffers (avoid a fresh alloc every glide frame). */
+  interpPosBuf: Float64Array | null;
+  interpColBuf: Uint8Array | null;
+}
+
+function emptyPointRenderCache(): PointRenderCache {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    layerPropsKey: '',
+    tilesRef: null,
+    slabs: [],
+    absorbed: new Set(),
+    slabBaseOffset: null,
+    slabSchemaKey: null,
+    slabSchema: null,
+    slabLayerPropsKey: '',
+    interpTracks: null,
+    interpTracksKey: '',
+    interpMaintainer: null,
+    interpPickRows: null,
+    interpPickRowsScanned: null,
+    interpFrameTime: NaN,
+    interpPosBuf: null,
+    interpColBuf: null,
+  };
 }
 
 /**
@@ -804,67 +1037,161 @@ export class AnimatedPointLayer<
     reducedMotion: false,
   };
 
-  /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
-  private preparedTileCache = new Map<string, PreparedTile>();
-
   /**
-   * Per-tile sublayer-instance cache. Returning the SAME ScatterplotLayer
-   * reference across renderLayers() calls lets deck.gl short-circuit prop
-   * diff entirely. Allocating a fresh layer per visible tile per frame (as
-   * the v2 consolidation rewrite would in any non-trivial workflow) was the
-   * single largest source of frame-time variance at 50+ tiles.
+   * The render caches, lazily created inside `this.state` so they survive
+   * deck's layer matching — see {@link PointRenderCache} for why an instance
+   * field is the wrong home.
    */
-  private sublayerCache = new Map<
-    string,
-    {
-      layer: ScatterplotLayer;
-      preparedKey: PreparedTile;
-      layerPropsKey: string;
+  private get cache(): PointRenderCache {
+    // `state` is assigned by deck (`_initialize` / `_transferState`) long
+    // before renderLayers runs; the guard is for the Object.create-based unit
+    // harnesses, which touch a cache before assigning one.
+    if (!this.state) this.state = {} as this['state'];
+    const state = this.state;
+    let cache = state.sttPointCache as PointRenderCache | undefined;
+    if (!cache) {
+      cache = emptyPointRenderCache();
+      state.sttPointCache = cache;
     }
-  >();
+    return cache;
+  }
 
-  /** Digest of every prop baked into a sublayer at construction time. */
-  private lastLayerPropsKey: string = '';
-  /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
-  private lastTilesRef: Tile[] | null = null;
+  /* Named views onto {@link cache}. Accessors (not fields) so every existing
+   * call site — and the test harnesses that seed these by name — keep working
+   * while the storage itself lives in `state`. */
+
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.cache.prepared;
+  }
+  private set preparedTileCache(v: Map<string, PreparedTile>) {
+    this.cache.prepared = v;
+  }
+
+  private get sublayerCache(): PointRenderCache['sublayers'] {
+    return this.cache.sublayers;
+  }
+  private set sublayerCache(v: PointRenderCache['sublayers']) {
+    this.cache.sublayers = v;
+  }
+
+  private get lastLayerPropsKey(): string {
+    return this.cache.layerPropsKey;
+  }
+  private set lastLayerPropsKey(v: string) {
+    this.cache.layerPropsKey = v;
+  }
+
+  private get lastTilesRef(): Tile[] | null {
+    return this.cache.tilesRef;
+  }
+  private set lastTilesRef(v: Tile[] | null) {
+    this.cache.tilesRef = v;
+  }
 
   /* ── Glide (motion-interpolation) state — only the `interpolate` path ─────
    * Mirrors AnimatedBoundingBoxLayer: pool the loaded tiles' samples into one
    * id-keyed track index (rebuilt only when the tile SET or a feeding prop
    * changes), then re-interpolate one pose per active entity every frame. */
-  /** Pooled, id-keyed track index (glide). Null when not in the glide path. */
-  private interpTrackIndex: Map<string, Track> | null = null;
-  private interpTrackIndexKey = '';
-  /**
-   * Incremental maintainer of {@link interpTrackIndex}: re-pools only ADDED
-   * tiles and re-sorts only AFFECTED tracks across tile churn, instead of the
-   * O(all snapshots) full rebuild that spiked frame time. Lazily created (the
-   * test harness bypasses field initializers via Object.create).
-   */
-  private interpMaintainer: TrackIndexMaintainer | null = null;
-  /** Per-track representative decoded source feature, for glide picking. */
-  private interpPickRows: Map<string, Record<string, unknown>> | null = null;
-  /** Tile keys already scanned for {@link interpPickRows} — accumulate-only. */
-  private interpPickRowsScanned: Set<string> | null = null;
-  /** Sim-time of the last glide re-interpolation; skips redundant ticks. */
-  private lastInterpFrameTime = NaN;
-  /** Grow-only per-frame output buffers (avoid a fresh alloc every glide frame). */
-  private interpPosBuf: Float64Array | null = null;
-  private interpColBuf: Uint8Array | null = null;
+
+  private get interpTrackIndex(): Map<string, Track> | null {
+    return this.cache.interpTracks;
+  }
+  private set interpTrackIndex(v: Map<string, Track> | null) {
+    this.cache.interpTracks = v;
+  }
+
+  private get interpTrackIndexKey(): string {
+    return this.cache.interpTracksKey;
+  }
+  private set interpTrackIndexKey(v: string) {
+    this.cache.interpTracksKey = v;
+  }
+
+  private get interpMaintainer(): TrackIndexMaintainer | null {
+    return this.cache.interpMaintainer;
+  }
+  private set interpMaintainer(v: TrackIndexMaintainer | null) {
+    this.cache.interpMaintainer = v;
+  }
+
+  private get interpPickRows(): Map<string, Record<string, unknown>> | null {
+    return this.cache.interpPickRows;
+  }
+  private set interpPickRows(v: Map<string, Record<string, unknown>> | null) {
+    this.cache.interpPickRows = v;
+  }
+
+  private get interpPickRowsScanned(): Set<string> | null {
+    return this.cache.interpPickRowsScanned;
+  }
+  private set interpPickRowsScanned(v: Set<string> | null) {
+    this.cache.interpPickRowsScanned = v;
+  }
+
+  private get lastInterpFrameTime(): number {
+    return this.cache.interpFrameTime;
+  }
+  private set lastInterpFrameTime(v: number) {
+    this.cache.interpFrameTime = v;
+  }
+
+  private get interpPosBuf(): Float64Array | null {
+    return this.cache.interpPosBuf;
+  }
+  private set interpPosBuf(v: Float64Array | null) {
+    this.cache.interpPosBuf = v;
+  }
+
+  private get interpColBuf(): Uint8Array | null {
+    return this.cache.interpColBuf;
+  }
+  private set interpColBuf(v: Uint8Array | null) {
+    this.cache.interpColBuf = v;
+  }
 
   /* ── Cumulative consolidation state (cumulative mode only) ─────────────── */
-  /** Packed slabs, in arrival order. The last entry is the open (growing) slab. */
-  private slabs: ConsolidatedSlab[] = [];
-  /** Tile keys already packed into a slab — skipped on subsequent renders. */
-  private absorbedTileKeys = new Set<string>();
-  /** Common timeOffset every slab's times are rebased to (Float32-safe in cumulative). */
-  private slabBaseOffset = 0;
-  /** `styleKey|zoom` of the current slabs; a change forces a full data rebuild. */
-  private slabSchemaKey: string | null = null;
-  /** Optional-attribute schema shared by every slab (from the first absorbed tile). */
-  private slabSchema: SlabSchema | null = null;
-  /** Visual layer-prop digest; a change rebuilds slab LAYERS but keeps the packed data. */
-  private lastSlabLayerPropsKey = '';
+
+  private get slabs(): ConsolidatedSlab[] {
+    return this.cache.slabs;
+  }
+  private set slabs(v: ConsolidatedSlab[]) {
+    this.cache.slabs = v;
+  }
+
+  private get absorbedTileKeys(): Set<string> {
+    return this.cache.absorbed;
+  }
+  private set absorbedTileKeys(v: Set<string>) {
+    this.cache.absorbed = v;
+  }
+
+  private get slabBaseOffset(): number | null {
+    return this.cache.slabBaseOffset;
+  }
+  private set slabBaseOffset(v: number | null) {
+    this.cache.slabBaseOffset = v;
+  }
+
+  private get slabSchemaKey(): string | null {
+    return this.cache.slabSchemaKey;
+  }
+  private set slabSchemaKey(v: string | null) {
+    this.cache.slabSchemaKey = v;
+  }
+
+  private get slabSchema(): SlabSchema | null {
+    return this.cache.slabSchema;
+  }
+  private set slabSchema(v: SlabSchema | null) {
+    this.cache.slabSchema = v;
+  }
+
+  private get lastSlabLayerPropsKey(): string {
+    return this.cache.slabLayerPropsKey;
+  }
+  private set lastSlabLayerPropsKey(v: string) {
+    this.cache.slabLayerPropsKey = v;
+  }
 
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Extensions are
@@ -913,22 +1240,14 @@ export class AnimatedPointLayer<
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);
-    this.preparedTileCache.clear();
-    this.sublayerCache.clear();
-    this.slabs = [];
-    this.absorbedTileKeys.clear();
-    this.slabSchema = null;
-    this.slabSchemaKey = null;
-    this.interpTrackIndex = null;
+    // Release the maintainer's internal maps eagerly, then drop every cache in
+    // one assignment (they all live in the same state-held bag).
     this.interpMaintainer?.reset();
-    this.interpPickRows = null;
-    this.interpPickRowsScanned = null;
-    this.interpPosBuf = null;
-    this.interpColBuf = null;
+    if (this.state) this.state.sttPointCache = emptyPointRenderCache();
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy
    * prop. Same value domain as the legacy props (constant or column name).
    */
@@ -983,58 +1302,67 @@ export class AnimatedPointLayer<
   }
 
   /**
+   * The constant fill colour every emitted sublayer passes as `getFillColor`
+   * — i.e. what deck falls back to for a tile that baked no colour attribute.
+   * The cumulative path ALSO writes it straight into a slab's colour buffer
+   * for a tile that lacks the column (see {@link absorbTile}), so the two
+   * paths must agree on it; hence one accessor rather than three copies.
+   */
+  private constantFillColor(): Color {
+    const value = this.fillColorValue();
+    return (
+      Array.isArray(value) ? value : ([255, 128, 0, 255] as Color)
+    ) as Color;
+  }
+
+  /** Constant radius fallback — the {@link constantFillColor} story for radius. */
+  private constantRadius(): number {
+    const value = this.radiusValue();
+    return typeof value === 'number' ? value : 5;
+  }
+
+  /**
+   * Index of the trailing "unknown category" palette slot
+   * {@link categoryIndicesToFloat32} redirects NULLs to and
+   * {@link appendNullCategorySlot} appends — i.e. `colorPalette.length`.
+   */
+  private nullCategorySlot(): number {
+    return (this.props.colorPalette ?? DEFAULT_PALETTE).length;
+  }
+
+  /**
    * Compute a digest of the layer-level props that affect every sublayer.
    * When this changes we throw away the entire sublayer cache.
    */
   private computeLayerPropsKey(): string {
-    const fillColor = this.fillColorValue();
-    const radius = this.radiusValue();
-    const lineColor = this.lineColorValue();
-    const lineWidth = this.lineWidthValue();
-    return [
-      this.props.radiusScale,
-      this.props.radiusUnits,
-      this.props.radiusMinPixels,
-      this.props.radiusMaxPixels,
-      this.props.lineWidthUnits,
-      this.props.lineWidthScale,
-      this.props.lineWidthMinPixels,
-      this.props.lineWidthMaxPixels,
-      this.props.stroked,
-      this.props.filled,
-      this.props.billboard,
-      this.props.antialiasing,
-      Array.isArray(lineColor) ? lineColor.join(',') : '',
-      // strokeWidth constant branch only — the column branch lives in
-      // `prepared` and is keyed via styleKey/preparedKey.
-      typeof lineWidth === 'number' ? lineWidth : 0,
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinateSystem, modelMatrix, highlight
-      // props, _subLayerProps overrides…) plus the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      this.props.wakeLength,
-      this.props.wakeTailScale,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      // fillColor/radius constant branches only — the property-driven path
-      // lives in `prepared` and is keyed via preparedKey.
-      Array.isArray(fillColor) ? fillColor.join(',') : '',
-      typeof radius === 'number' ? radius : 0,
-      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
-      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
-      // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedPointLayerProps>(
+      this.props,
+      POINT_PROP_EFFECTS,
+      {
+        // The sublayer is constructed from the RESOLVED value, so the key must
+        // track it — keying the raw prop leaves every cached sublayer stale
+        // when only the alias changes.
+        overrides: {
+          fillColor: this.fillColorValue(),
+          radius: this.radiusValue(),
+          strokeColor: this.lineColorValue(),
+          strokeWidth: this.lineWidthValue(),
+          filterProperty: this.filterPropertyValue(),
+        },
+        // Inputs that are not own props: the composite props getSubLayerProps
+        // bakes into every sublayer (opacity/pickable/visible, coordinateSystem,
+        // modelMatrix, highlight props, _subLayerProps overrides…), the user's
+        // updateTriggers, and the base class's time props that
+        // buildSublayer / commonStyleProps forward.
+        extra: [
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   /**
@@ -1155,7 +1483,7 @@ export class AnimatedPointLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -1173,10 +1501,15 @@ export class AnimatedPointLayer<
       this.sublayerCache.clear();
     }
 
+    // styleKey is layer-global (same for every tile this render) — compute it
+    // ONCE here instead of once in prepareTile AND again inside buildTileData
+    // on every miss. Mirrors SplatLayer.renderLayers.
+    const styleKey = this.computeStyleKey();
+
     const sublayers: Layer[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const prepared = this.prepareTile(tile, tileLayer);
+        const prepared = this.prepareTile(tile, tileLayer, styleKey);
         if (!prepared) continue;
         const cached = this.sublayerCache.get(prepared.tileKey);
         if (
@@ -1237,6 +1570,17 @@ export class AnimatedPointLayer<
     // Elevation column + scale are baked into the prepared `positions` z, so
     // they belong in the styleKey: changing either must re-pad the buffer
     // (and, in cumulative mode, re-pack the slabs).
+    //
+    // KNOWN COST: that makes an `elevationScale` exaggeration slider O(points)
+    // per tick — a fresh Float64Array(count*3) plus a full re-pad of every
+    // resident tile. The sibling SplatLayer avoids it by binding elevation as
+    // its OWN zero-copy attribute and scaling it in a shader uniform
+    // (splat-primitive-layer.ts), which ScatterplotLayer has no equivalent of:
+    // lifting the scale downstream needs either a shader extension (a separate
+    // file) or a `modelMatrix` z-scale, which would change the documented and
+    // asserted "z = column × elevationScale is baked into
+    // data.attributes.getPosition" contract the other backends mirror. Left
+    // as-is deliberately; see the review note rather than "fixing" it here.
     const elevProp =
       typeof this.props.elevationProperty === 'string'
         ? this.props.elevationProperty
@@ -1287,11 +1631,18 @@ export class AnimatedPointLayer<
    * Fetch the cached binary `data` object for a single tile, building (and
    * caching) it on a miss. Returns a reference-stable PreparedTile so deck.gl
    * can short-circuit GPU re-uploads.
+   *
+   * `styleKey` is layer-global; the render loops hoist it out and pass it in.
+   * It defaults to a fresh digest so direct callers (tests, one-off probes)
+   * keep the two-argument form.
    */
-  private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+  private prepareTile(
+    tile: Tile,
+    tileLayer: TileLayer,
+    styleKey: string = this.computeStyleKey(),
+  ): PreparedTile | null {
     if (tileLayer.features.featureCount === 0) return null;
-    const styleKey = this.computeStyleKey();
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -1302,7 +1653,7 @@ export class AnimatedPointLayer<
       });
       return cached;
     }
-    const prepared = this.buildTileData(tile, tileLayer);
+    const prepared = this.buildTileData(tile, tileLayer, styleKey);
     if (prepared) this.preparedTileCache.set(tileKey, prepared);
     return prepared;
   }
@@ -1311,18 +1662,37 @@ export class AnimatedPointLayer<
    * Build the binary `data` object for a single tile from scratch (no caching).
    * Shared by the cached per-tile path (`prepareTile`) and the cumulative
    * consolidation path, which copies the result into a slab and discards it.
+   *
+   * `styleKey` defaults to a fresh digest for direct two-argument callers; the
+   * render loops hoist it (it is the same for every tile in a render).
    */
-  private buildTileData(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
+  private buildTileData(
+    tile: Tile,
+    tileLayer: TileLayer,
+    styleKey: string = this.computeStyleKey(),
+  ): PreparedTile | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0) return null;
+    // This layer indexes `positions` by FEATURE index, which is only the same
+    // thing as a vertex index for point geometry. A linestring/polygon tile
+    // would silently bunch every marker onto the first few paths' vertices.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.Point],
+        String(this.props.id ?? 'AnimatedPointLayer'),
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
 
     const fillColorValue = this.fillColorValue();
     const radiusValue = this.radiusValue();
     const fillColorProp =
       typeof fillColorValue === 'string' ? fillColorValue : '';
     const radiusProp = typeof radiusValue === 'string' ? radiusValue : '';
-    const styleKey = this.computeStyleKey();
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
 
     const t0 = performance.now();
     const count = binary.featureCount;
@@ -1386,11 +1756,23 @@ export class AnimatedPointLayer<
     // Per-point RGBA from ONE interleaved vector column (baked at build time):
     // bind the contiguous u8 buffer straight to the GPU, zero re-pack. Wins over
     // every other colour path; falls through when the column is absent.
+    //
+    // Bound through `bindColorVector`, which makes the LEAF TYPE load-bearing:
+    // gating on `size === 4` alone let an f32 leaf through as a `float32x4`
+    // (16-byte stride) buffer against the `unorm8x4` attribute, blowing every
+    // point out to white with no diagnostic (see lib/vector-props.ts).
     const colorVecN =
       typeof this.props.colorVectorColumn === 'string'
         ? this.props.colorVectorColumn
         : '';
-    const colorVec = colorVecN ? binary.vectorProps?.[colorVecN] : undefined;
+    const colorVec = colorVecN
+      ? bindColorVector(
+          binary.vectorProps?.[colorVecN],
+          4,
+          String(this.props.id ?? 'AnimatedPointLayer'),
+          colorVecN,
+        )
+      : null;
 
     // Per-point RGB from three numeric columns (build-time camera-sampled
     // colors). Wins over the categorical / palette color path; falls through
@@ -1433,12 +1815,8 @@ export class AnimatedPointLayer<
     }
 
     // Property-driven color
-    if (colorVec && colorVec.size === 4) {
-      attributes.getFillColor = {
-        value: colorVec.value,
-        size: 4,
-        normalized: true,
-      };
+    if (colorVec) {
+      attributes.getFillColor = colorVec;
     } else if (rArr && gArr && bArr) {
       const out = new Uint8Array(count * 4);
       for (let i = 0; i < count; i++) {
@@ -1615,20 +1993,14 @@ export class AnimatedPointLayer<
   private buildSublayer(prepared: PreparedTile): ScatterplotLayer {
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
-    const radiusValue = this.radiusValue();
-    const fillColorValue = this.fillColorValue();
     // Column filter: install STTDataFilterExtension only when a column is named
     // (per-layer constant ⇒ stable list across this layer's sublayers). Whether
     // THIS tile actually baked the attribute gates the per-tile enable, so a
     // tile missing the column renders unfiltered (idle extension).
     const filterProp = this.filterPropertyValue();
     const hasFilter = !!prepared.data.attributes.filterValue;
-    const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
-    const constColor = (
-      Array.isArray(fillColorValue)
-        ? fillColorValue
-        : ([255, 128, 0, 255] as Color)
-    ) as Color;
+    const constRadius = this.constantRadius();
+    const constColor = this.constantFillColor();
 
     // CategoryColorExtension props: when this tile uses the GPU palette path
     // we pass the resolved palette + useCategoryColor=true. Otherwise the
@@ -1715,9 +2087,9 @@ export class AnimatedPointLayer<
    * emits, whether a per-tile sublayer or a consolidated slab. Excludes the
    * bits that differ per path: `data`/`dataComparator`, the constant
    * radius/color fallbacks, `extensions`, and the time wiring
-   * (`getTime`/`timeOffset`/`timeWindow`). `opacity`/`visible`/`pickable`
-   * are no longer listed here — getSubLayerProps inherits them from the
-   * composite with the exact values this method used to forward.
+   * (`getTime`/`timeOffset`/`timeWindow`). `opacity`/`visible`/`pickable` are
+   * deliberately absent: getSubLayerProps already inherits them from the
+   * composite, so restating them here would only duplicate deck's own values.
    */
   private commonStyleProps(): Record<string, any> {
     const lineWidthValue = this.lineWidthValue();
@@ -1780,19 +2152,41 @@ export class AnimatedPointLayer<
       return [];
     }
 
-    // All resident tiles share one zoom (the viewport's). styleKey + that zoom
-    // key the packed attributes; a change in either (restyle, or zoom in/out)
-    // means the existing slabs no longer describe the current view → full
-    // rebuild from the now-resident tiles. Cheap: zoom/style changes are rare
-    // and user-driven, unlike the per-frame tile arrivals consolidation targets.
-    const zoom = tiles[0].id.z;
-    const schemaKey = `${this.computeStyleKey()}|${zoom}`;
+    // styleKey + the zoom key the packed attributes; a change in either
+    // (restyle, or zoom in/out) means the existing slabs no longer describe the
+    // current view → full rebuild from the now-resident tiles. The zoom has to
+    // be in the key because — outside additive-octree archives — a tile and its
+    // parent hold the SAME features, so packing both double-draws them.
+    //
+    // Derive it from the DEEPEST resident tile, never `tiles[0]`: the tileset
+    // hands back a Set-ordered union, whose first element is arbitrary under
+    // `lodMode: 'additive'` and is a mix of primary + fallback parents
+    // otherwise. Keying on `tiles[0].id.z` therefore churned between renders
+    // and threw away every slab each time; the deepest zoom is the primary one
+    // as soon as any primary tile lands, so a zoom step costs ONE repack.
+    let zoom = tiles[0].id.z;
+    for (let i = 1; i < tiles.length; i++) {
+      if (tiles[i].id.z > zoom) zoom = tiles[i].id.z;
+    }
+    const styleKey = this.computeStyleKey();
+    // `timeRange` seeds the slab time base below, so it MUST key the slabs too:
+    // a timeRange that only arrives after the first render (async archive
+    // metadata) would otherwise leave every packed time rebased against the
+    // old base, with no path back.
+    const baseSeed = this.props.timeRange?.start;
+    const schemaKey = `${styleKey}|${zoom}|${baseSeed ?? ''}`;
     if (schemaKey !== this.slabSchemaKey) {
       this.slabSchemaKey = schemaKey;
       this.slabs = [];
       this.absorbedTileKeys.clear();
       this.slabSchema = null;
-      this.slabBaseOffset = this.props.timeRange?.start ?? 0;
+      // `null` ⇒ NOT YET SEEDED: absorbTile takes the first absorbed tile's
+      // timeOffset. Never fall back to 0 — that stores epoch-absolute times
+      // (~1.7e12 ms) into a Float32Array, whose ULP up there is ~131 s, so
+      // every start time snaps onto a ~2-minute grid and `fadeInDuration`
+      // silently becomes a no-op. Cumulative is the one mode where
+      // TimeFilterExtension skips `assertRelTimeInRange`, so nothing warns.
+      this.slabBaseOffset = baseSeed ?? null;
     }
 
     // Append every not-yet-packed tile into the open slab. In cumulative mode
@@ -1802,10 +2196,10 @@ export class AnimatedPointLayer<
     // is what makes the fast path O(new points), not O(resident points).
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const key = makeTileKey(tile, tileLayer);
+        const key = tileLayerKey(tile.id, tileLayer.name);
         if (this.absorbedTileKeys.has(key)) continue;
         this.absorbedTileKeys.add(key); // mark even if empty so we never retry it
-        const built = this.buildTileData(tile, tileLayer);
+        const built = this.buildTileData(tile, tileLayer, styleKey);
         if (!built) continue;
         if (!this.slabSchema) this.slabSchema = deriveSlabSchema(built);
         this.absorbTile(built);
@@ -1843,10 +2237,32 @@ export class AnimatedPointLayer<
     return sublayers;
   }
 
-  /** Copy one prepared tile's attributes into the open slab, rebasing times. */
+  /**
+   * Copy one prepared tile's attributes into the open slab, rebasing times.
+   *
+   * The OPTIONAL columns are the subtle part. A slab's arrays are allocated
+   * from the schema seeded by the first absorbed tile and are zero-filled, and
+   * deck SKIPS the constant-prop fallback for any accessor that has a binary
+   * buffer (`attribute-manager.ts`: `!buffers[accessorName] &&
+   * setConstantValue(...)`). So a later (tile, layer) that does not produce a
+   * column used to leave its whole range as zeros — RGBA `[0,0,0,0]` and
+   * radius 0, i.e. INVISIBLE for the rest of the session. Both orderings are
+   * handled here:
+   *
+   *  - column ABSENT on a tile the slab already carries the array for → fill
+   *    its range with the same constant the per-tile path would fall back to
+   *    ({@link constantFillColor} / {@link constantRadius}), or the trailing
+   *    "unknown category" palette slot for the categorical path;
+   *  - column APPEARS on a later tile → PROMOTE the slab (allocate the array
+   *    and backfill that constant across the already-packed range), and the
+   *    schema with it so subsequent slabs allocate it up front.
+   */
   private absorbTile(built: PreparedTile): void {
     const n = built.data.length;
     if (n === 0) return;
+    // Seed the shared time base from the FIRST tile that actually packs points
+    // (see renderConsolidated for why not 0 and not the epoch).
+    if (this.slabBaseOffset === null) this.slabBaseOffset = built.timeOffset;
     const slab = this.slabForAppend(n);
     const o = slab.count;
     const a = built.data.attributes;
@@ -1875,22 +2291,93 @@ export class AnimatedPointLayer<
       slab.endTimes[o + i] = et[i] + delta;
     }
 
-    if (slab.fillColors && a.getFillColor) {
-      slab.fillColors.set(a.getFillColor.value as Uint8Array, o * 4);
+    // ── Fill colour ────────────────────────────────────────────────────────
+    if (a.getFillColor) {
+      this.slabFillColors(slab).set(a.getFillColor.value as Uint8Array, o * 4);
+    } else if (slab.fillColors) {
+      fillRgba(slab.fillColors, o, n, this.constantFillColor());
     }
-    if (slab.categoryIndex && a.instanceCategoryIndex) {
-      slab.categoryIndex.set(a.instanceCategoryIndex.value as Float32Array, o);
+
+    // ── GPU categorical index ──────────────────────────────────────────────
+    if (a.instanceCategoryIndex) {
+      this.slabCategoryIndex(slab, built.gpuPalette).set(
+        a.instanceCategoryIndex.value as Float32Array,
+        o,
+      );
+    } else if (slab.categoryIndex) {
+      // This (tile, layer) has no categorical column: point its range at the
+      // trailing NULL/"unknown category" palette slot so it renders
+      // `colorMappingDefault`. Leaving the range zero-filled instead would
+      // make index 0 masquerade as a real category.
+      slab.categoryIndex.fill(this.nullCategorySlot(), o, o + n);
+      warnOnce(
+        'AnimatedPointLayer:cumulativeMissingCategoryColumn',
+        `[AnimatedPointLayer] tile layer ${JSON.stringify(built.layerName)} ` +
+          'carries no categorical color column while other layers in the same ' +
+          'cumulative slab do; its points render in `colorMappingDefault` ' +
+          '(transparent unless you set one).',
+      );
     }
-    if (
-      slab.radii &&
-      a.getRadius &&
-      a.getRadius.value instanceof Float32Array
-    ) {
-      slab.radii.set(a.getRadius.value, o);
+
+    // ── Per-feature radius ─────────────────────────────────────────────────
+    const radii =
+      a.getRadius && a.getRadius.value instanceof Float32Array
+        ? (a.getRadius.value as Float32Array)
+        : null;
+    if (radii) {
+      this.slabRadii(slab).set(radii, o);
+    } else if (slab.radii) {
+      slab.radii.fill(this.constantRadius(), o, o + n);
     }
 
     slab.count += n;
     slab.version++;
+  }
+
+  /**
+   * The slab's fill-colour buffer, allocating it (and backfilling the constant
+   * colour over the already-packed range) the first time a tile actually
+   * carries the column. Promotes the shared schema so later slabs allocate it
+   * up front.
+   */
+  private slabFillColors(slab: ConsolidatedSlab): Uint8Array {
+    if (!slab.fillColors) {
+      slab.fillColors = new Uint8Array(slab.capacity * 4);
+      fillRgba(slab.fillColors, 0, slab.count, this.constantFillColor());
+      if (this.slabSchema) this.slabSchema.hasFillColor = true;
+    }
+    return slab.fillColors;
+  }
+
+  /** {@link slabFillColors} for the per-feature radius buffer. */
+  private slabRadii(slab: ConsolidatedSlab): Float32Array {
+    if (!slab.radii) {
+      slab.radii = new Float32Array(slab.capacity);
+      slab.radii.fill(this.constantRadius(), 0, slab.count);
+      if (this.slabSchema) this.slabSchema.hasRadius = true;
+    }
+    return slab.radii;
+  }
+
+  /**
+   * {@link slabFillColors} for the GPU categorical index. Also adopts the
+   * tile's resolved palette when the schema has none yet — without it the slab
+   * layers would leave `useCategoryColor` off and ignore the indices entirely.
+   */
+  private slabCategoryIndex(
+    slab: ConsolidatedSlab,
+    gpuPalette: Color[] | null,
+  ): Float32Array {
+    const schema = this.slabSchema;
+    if (schema && gpuPalette && !schema.gpuPalette) {
+      schema.gpuPalette = gpuPalette;
+    }
+    if (!slab.categoryIndex) {
+      slab.categoryIndex = new Float32Array(slab.capacity);
+      slab.categoryIndex.fill(this.nullCategorySlot(), 0, slab.count);
+      if (schema) schema.hasCategoryIndex = true;
+    }
+    return slab.categoryIndex;
   }
 
   /**
@@ -1977,15 +2464,13 @@ export class AnimatedPointLayer<
   ): ScatterplotLayer {
     if (slab.layer && slab.builtVersion === slab.version) return slab.layer;
 
-    const radiusValue = this.radiusValue();
-    const fillColorValue = this.fillColorValue();
-    const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
-    const constColor = (
-      Array.isArray(fillColorValue)
-        ? fillColorValue
-        : ([255, 128, 0, 255] as Color)
-    ) as Color;
-    const useGpuCategory = !!this.slabSchema?.gpuPalette;
+    const constRadius = this.constantRadius();
+    const constColor = this.constantFillColor();
+    // Per SLAB, not per layer: a slab sealed before the categorical column
+    // first appeared carries no index buffer, and enabling the extension for it
+    // would sample palette entry 0 for every one of its points.
+    const useGpuCategory =
+      !!slab.categoryIndex && !!this.slabSchema?.gpuPalette;
 
     // Same `points` short id as the per-tile path: one `_subLayerProps.points`
     // override covers both render modes. Only runs when a slab grew/restyled.
@@ -1999,15 +2484,19 @@ export class AnimatedPointLayer<
       getFillColor: constColor,
 
       // Constant extension list (cache-storm rationale, as in buildSublayer);
-      // user extensions from the top-level prop are appended.
+      // user extensions from the top-level prop are appended. `splat` is a
+      // per-layer constant and a pure fragment effect (no per-tile attribute),
+      // so it installs here exactly as it does on the per-tile path — dropping
+      // it silently rendered `splat: true, cumulative: true` as hard discs.
       extensions: this.composeExtensions([
         this.timeFilterExtension,
         this.categoryColorExtension,
+        ...(this.props.splat ? [this.splatExtension] : []),
       ]),
 
       // TimeFilterExtension wiring — one shared offset for every slab.
       getTime: this.boundGetTime,
-      timeOffset: this.slabBaseOffset,
+      timeOffset: this.slabBaseOffset ?? 0,
       timeWindow: this.props.timeWindow,
 
       // A slab merges many tiles, so there is no single `tile` to carry;
@@ -2145,20 +2634,49 @@ export class AnimatedPointLayer<
 
   /**
    * Decode ONE representative source feature per entity id, for glide picking.
-   * Incremental + accumulate-only: only (tile, layer)s not scanned before are
-   * walked, and an id already present is never re-decoded (entity-level props
-   * are sample-invariant, so any sample is representative). Evicted entities'
-   * rows are left in place — harmless, since only ACTIVE tracks (resident tiles)
-   * are ever picked. Reset with the maintainer on a feeding-prop change.
+   * Incremental: only (tile, layer)s not scanned before are walked, and an id
+   * already present is never re-decoded (entity-level props are
+   * sample-invariant, so any sample is representative).
+   *
+   * BOUNDED, not accumulate-only: both caches are pruned to the RESIDENT set on
+   * every call — pick rows to the ids still in {@link interpTrackIndex}, scanned
+   * keys to the live (tile, layer) pairs. Retention was correct (only active
+   * tracks are ever picked) but not bounded: over a long AIS / ADS-B session
+   * every entity id ever seen kept a decoded `getFeatureProperties` object alive
+   * forever — on `ais-all-us` (~19M features) that is the whole session's id
+   * space, not the resident one. Pruning costs O(cached ids) per tile-set change
+   * — strictly less than the pooling pass that precedes it — and a re-entering
+   * tile is simply re-scanned. Reset wholesale with the maintainer on a
+   * feeding-prop change. Mirrors AnimatedIconLayer.scanInterpPickRows.
    */
   private scanInterpPickRows(tiles: Tile[], idProp: string): void {
     if (!this.interpPickRows) this.interpPickRows = new Map();
     if (!this.interpPickRowsScanned) this.interpPickRowsScanned = new Set();
     const prov = this.interpPickRows;
     const scanned = this.interpPickRowsScanned;
+
+    const live = new Set<string>();
+    for (const tile of tiles) {
+      for (const tileLayer of tile.layers)
+        live.add(tileLayerKey(tile.id, tileLayer.name));
+    }
+    for (const key of scanned) {
+      if (!live.has(key)) scanned.delete(key);
+    }
+    // Drop rows for entities no longer in the pooled (resident) track index, so
+    // the map's high-water mark is the resident track count, not the session's.
+    // Caller ordering matters: syncInterpIndex assigns interpTrackIndex from the
+    // maintainer BEFORE calling here, so `tracks` is already the new set.
+    const tracks = this.interpTrackIndex;
+    if (tracks) {
+      for (const id of prov.keys()) {
+        if (!tracks.has(id)) prov.delete(id);
+      }
+    }
+
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
-        const key = makeTileKey(tile, tileLayer);
+        const key = tileLayerKey(tile.id, tileLayer.name);
         if (scanned.has(key)) continue;
         scanned.add(key);
         const binary = tileLayer.features;
@@ -2202,8 +2720,82 @@ export class AnimatedPointLayer<
    * pose per active entity at the playhead straight into the reused output
    * buffers and emit a single ScatterplotLayer.
    */
+  /**
+   * One-shot diagnostics for the props the CPU glide path cannot honour.
+   *
+   * The glide sublayer emits ONE instance per active ENTITY, positioned and
+   * coloured from the pooled track (see {@link renderInterpolated}). Anything
+   * sourced from a per-SAMPLE column (radius, filter value, baked RGB/RGBA or
+   * ramp colour, elevation) has no per-entity value to attach to, and the
+   * cube-lift props need the TimeFilterExtension this path deliberately omits.
+   * Silently dropping them is what the cumulative path already refuses to do
+   * for the two props IT drops, so mirror that instead of rendering a map that
+   * quietly ignores half the styling.
+   */
+  private warnGlideDroppedProps(): void {
+    const drop = (prop: string, why: string) =>
+      warnOnce(
+        `AnimatedPointLayer:glideDrops:${prop}`,
+        `[AnimatedPointLayer] \`${prop}\` is not applied on the glide ` +
+          `(\`interpolate\`) path — ${why}. Turn \`interpolate\` off to get ` +
+          `the GPU window path, which honours it.`,
+      );
+
+    if (typeof this.radiusValue() === 'string') {
+      drop(
+        'radius/getRadius (column)',
+        'the glide path emits one marker per entity and has no per-sample ' +
+          'radius to interpolate; the constant radius still applies',
+      );
+    }
+    if (this.filterPropertyValue()) {
+      drop(
+        'filterProperty',
+        'STTDataFilterExtension binds a per-feature column the pooled tracks ' +
+          'do not carry',
+      );
+    }
+    if (typeof this.props.elevationProperty === 'string') {
+      drop(
+        'elevationProperty',
+        'the track kernel reads altitude from 3D tile geometry only, never ' +
+          'from a numeric column',
+      );
+    }
+    if (this.props.timeHeightScale) {
+      drop(
+        'timeHeightScale/timeHeightOrigin',
+        'the space-time-cube lift lives in TimeFilterExtension, which the ' +
+          'glide path omits (visibility is implicit — only active entities ' +
+          'are emitted)',
+      );
+    }
+    if (typeof this.props.rampProperty === 'string') {
+      drop(
+        'rampProperty',
+        'glide resolves ONE colour per track through `colorMapping`, not a ' +
+          'per-sample numeric ramp',
+      );
+    }
+    if (this.props.rgbColorColumns) {
+      drop(
+        'rgbColorColumns',
+        'glide resolves ONE colour per track through `colorMapping`, not ' +
+          'per-sample baked RGB',
+      );
+    }
+    if (typeof this.props.colorVectorColumn === 'string') {
+      drop(
+        'colorVectorColumn',
+        'glide resolves ONE colour per track through `colorMapping`, not ' +
+          'per-sample baked RGBA',
+      );
+    }
+  }
+
   private renderInterpolated(): Layer[] {
     const t0 = performance.now();
+    this.warnGlideDroppedProps();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       this.interpTrackIndex = null;
@@ -2289,14 +2881,8 @@ export class AnimatedPointLayer<
     pickRows: (Record<string, unknown> | undefined)[],
     n: number,
   ): ScatterplotLayer {
-    const fillColorValue = this.fillColorValue();
-    const constColor = (
-      Array.isArray(fillColorValue)
-        ? fillColorValue
-        : ([255, 128, 0, 255] as Color)
-    ) as Color;
-    const radiusValue = this.radiusValue();
-    const constRadius = typeof radiusValue === 'number' ? radiusValue : 5;
+    const constColor = this.constantFillColor();
+    const constRadius = this.constantRadius();
 
     const data = {
       length: n,
@@ -2309,7 +2895,13 @@ export class AnimatedPointLayer<
     const lineWidthValue = this.lineWidthValue();
     // No TimeFilterExtension: visibility is implicit (only active entities are
     // emitted), so no start/end-time attributes and no window uniform.
-    const extensions = this.composeExtensions([]);
+    // `splat` DOES forward: it is a pure fragment-alpha effect with no
+    // per-feature attribute, so the soft-gaussian marker survives the glide
+    // path. Everything else this path can't honour is reported by
+    // warnGlideDroppedProps().
+    const extensions = this.composeExtensions(
+      this.props.splat ? [this.splatExtension] : [],
+    );
     const props = this.composeSubLayerProps('points', 'interp', {
       data: data as any,
       dataComparator: (a: any, b: any) => a === b,

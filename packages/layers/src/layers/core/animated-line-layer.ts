@@ -50,6 +50,10 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
+import {
+  buildLayerPropsKey,
+  type PropEffects,
+} from '../../lib/layer-props-key.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type {
   ColorAccessorValue,
@@ -57,7 +61,12 @@ import type {
   WeightAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { deriveSourceTargetPositions } from '../../lib/od-positions.js';
-import { DEFAULT_LINE_PALETTE } from '@poopdeck.gl/core';
+import { expectGeometry } from '../../lib/geometry-guard.js';
+import {
+  DEFAULT_LINE_PALETTE,
+  GeometryType,
+  tileLayerKey,
+} from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -73,6 +82,10 @@ export interface _AnimatedLineLayerProps {
    * Line color — constant {@link Color}, or property name for categorical
    * coloring. LineLayer interpolates one color across each line, so the
    * categorical GPU path colors the whole line by the named column.
+   *
+   * DEFAULT DRIFT: STT blue, where upstream LineLayer's `getColor` defaults to
+   * opaque black `[0, 0, 0, 255]`. Deliberate — a black default is invisible on
+   * the dark basemaps these tiles are usually drawn over.
    * @default [0, 150, 255, 255]
    */
   color?: Color | string;
@@ -175,6 +188,42 @@ export interface _AnimatedLineLayerProps {
 export type AnimatedLineLayerProps = _AnimatedLineLayerProps &
   SpatioTemporalLayerProps;
 
+/**
+ * Where each own prop lands, and therefore whether editing it must throw away
+ * the cached per-tile LineLayers. The annotation makes the table total over
+ * {@link _AnimatedLineLayerProps}, so a prop added to that interface is a
+ * compile error until it is classified here.
+ */
+const LINE_PROP_EFFECTS: PropEffects<_AnimatedLineLayerProps> = {
+  // Passed straight to the LineLayer that {@link AnimatedLineLayer.buildSublayer}
+  // constructs, so a cached instance holds a frozen copy.
+  widthUnits: 'sublayer',
+  widthScale: 'sublayer',
+  widthMinPixels: 'sublayer',
+  widthMaxPixels: 'sublayer',
+  fadeInDuration: 'sublayer',
+  fadeOutDuration: 'sublayer',
+  // Constant fallbacks the sublayer is built with. Keyed through the
+  // alias-resolved value (see the `overrides` at the call site) so a change
+  // confined to the `get*` alias invalidates too.
+  color: 'sublayer',
+  getColor: 'sublayer',
+  width: 'sublayer',
+  getWidth: 'sublayer',
+  // Decides whether STTDataFilterExtension is in the sublayer's extension list.
+  filterProperty: 'sublayer',
+  // Filter uniforms ride as sublayer props.
+  filterRange: 'sublayer',
+  filterSoftRange: 'sublayer',
+  filterEnabled: 'sublayer',
+  // Read only while building a tile's prepared attributes / gpuPalette, and
+  // covered by the styleKey in prepareTile: a change re-prepares the tile, and
+  // the preparedKey identity check then rebuilds the sublayer.
+  colorPalette: 'prepare',
+  colorMapping: 'prepare',
+  colorMappingDefault: 'prepare',
+};
+
 const DEFAULT_COLOR: Color = [0, 150, 255, 255];
 const DEFAULT_MAPPING_DEFAULT: Color = [120, 120, 120, 255];
 
@@ -209,17 +258,17 @@ interface PreparedTile {
     >;
   };
   timeOffset: number;
+  /**
+   * 2 or 3 — the dimensionality of the derived source/target buffers.
+   * INFORMATIONAL: LineLayer reads the stride from each descriptor's own `size`
+   * and never consults `positionFormat`, so nothing downstream consumes this.
+   */
   dims: number;
   /** Resolved palette when GPU categorical-color path is active for this tile. */
   gpuPalette: Color[] | null;
   /** Source tile + decoded columns — picking enrichment context (references, not copies). */
   tile: Tile;
   features: BinaryFeatures;
-}
-
-function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
 }
 
 /**
@@ -338,7 +387,7 @@ export class AnimatedLineLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named alias wins when
+   * Accessor-alias resolution: the upstream-named alias wins when
    * set; a function-valued alias warns once and falls back to the legacy prop.
    * Same value domain as the legacy props (constant or column name).
    */
@@ -360,37 +409,36 @@ export class AnimatedLineLayer<
     );
   }
 
+  /**
+   * Digest of everything baked into a cached sublayer at construction time.
+   * When it changes the whole sublayer cache is dropped.
+   */
   private computeLayerPropsKey(): string {
-    const color = this.colorValue();
-    const width = this.widthValue();
-    return [
-      this.props.widthUnits,
-      this.props.widthScale,
-      this.props.widthMinPixels,
-      this.props.widthMaxPixels,
-      this.props.fadeInDuration,
-      this.props.fadeOutDuration,
-      // Composite props that getSubLayerProps bakes into every sublayer
-      // (opacity/pickable/visible, coordinate system, _subLayerProps, …) plus
-      // the user's updateTriggers.
-      inheritedPropsDigest(this.props),
-      updateTriggersDigest(this.props.updateTriggers),
-      this.props.timeWindow,
-      this.props.timeHeightScale,
-      this.props.timeHeightOrigin,
-      Array.isArray(color) ? color.join(',') : '',
-      typeof width === 'number' ? width : 0,
-      // Column-filter uniforms (STTDataFilterExtension). A range/enabled change is
-      // a uniform-only edit, so — like timeWindow — it rebuilds the cached
-      // sublayers (whose props carry the values) rather than re-preparing tiles.
-      Array.isArray(this.props.filterRange)
-        ? this.props.filterRange.join(',')
-        : '',
-      Array.isArray(this.props.filterSoftRange)
-        ? this.props.filterSoftRange.join(',')
-        : '',
-      this.props.filterEnabled,
-    ].join('|');
+    return buildLayerPropsKey<_AnimatedLineLayerProps>(
+      this.props,
+      LINE_PROP_EFFECTS,
+      {
+        // The sublayer is constructed from the RESOLVED value, so the key must
+        // track it — keying the raw prop leaves every cached sublayer stale
+        // when only the alias changes.
+        overrides: {
+          color: this.colorValue(),
+          width: this.widthValue(),
+          filterProperty: this.filterPropertyValue(),
+        },
+        // Inputs that are not own props: the composite props getSubLayerProps
+        // bakes into every sublayer (opacity/pickable/visible, coordinate
+        // system, _subLayerProps, …), the user's updateTriggers, and the base
+        // class's time props that buildSublayer forwards.
+        extra: [
+          inheritedPropsDigest(this.props),
+          updateTriggersDigest(this.props.updateTriggers),
+          this.props.timeWindow,
+          this.props.timeHeightScale,
+          this.props.timeHeightOrigin,
+        ],
+      },
+    );
   }
 
   renderLayers(): Layer[] {
@@ -407,7 +455,7 @@ export class AnimatedLineLayer<
       const live = new Set<string>();
       for (const tile of tiles) {
         for (const tileLayer of tile.layers)
-          live.add(makeTileKey(tile, tileLayer));
+          live.add(tileLayerKey(tile.id, tileLayer.name));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
@@ -466,6 +514,22 @@ export class AnimatedLineLayer<
   private prepareTile(tile: Tile, tileLayer: TileLayer): PreparedTile | null {
     const binary = tileLayer.features;
     if (binary.featureCount === 0 || !binary.startIndices) return null;
+    // `deriveSourceTargetPositions` reads the FIRST and LAST vertex of each
+    // `startIndices` run as an origin→destination pair — LineString semantics.
+    // Polygon tiles carry `startIndices` too, so the guard above does not
+    // separate them; their runs are closed rings, whose first and last vertex
+    // coincide, and every "flow" would collapse to a zero-length line. Skip
+    // anything that is not LineString with one named warning.
+    if (
+      !expectGeometry(
+        binary.geometryType,
+        [GeometryType.LineString],
+        this.props.id,
+        tileLayer.name,
+      )
+    ) {
+      return null;
+    }
 
     const colorValue = this.colorValue();
     const widthValue = this.widthValue();
@@ -496,7 +560,7 @@ export class AnimatedLineLayer<
         : 0
     }|${mapSig}|d${mapDefault}|f${filterProp}|${updateTriggersDigest(this.props.updateTriggers)}`;
 
-    const tileKey = makeTileKey(tile, tileLayer);
+    const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached && cached.styleKey === styleKey) {
       emit('tilePrepare', {
@@ -650,15 +714,16 @@ export class AnimatedLineLayer<
     ]);
     // getSubLayerProps inheritance (opacity/pickable/visible, coordinate system,
     // highlight props, …) + user `_subLayerProps.lines` overrides. Only runs
-    // inside this cache-gated build path — never per frame. positionFormat is
-    // passed explicitly (sublayerProps beats inheritance): the composite's
-    // default 'XYZ' would misread 2D tile buffers.
+    // inside this cache-gated build path — never per frame.
+    // NOTE no `positionFormat`: LineLayer never reads it (it has no tessellator
+    // — `getSourcePosition`/`getTargetPosition` bind as plain instanced
+    // attributes whose stride comes from the descriptor's own `size`). Passing
+    // it was inert; `prepared.dims` still records what the buffers carry.
     const props = this.composeSubLayerProps('lines', prepared.tileKey, {
       data: prepared.data,
       // Identity comparator pairs with the preparedTileCache: deck.gl skips the
       // entire prop-diff for `data` when the same object reference comes back.
       dataComparator: (a: any, b: any) => a === b,
-      positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
       // `Required<>`-typed (defaults guarantee values) — no `??` refetches.
       widthUnits: this.props.widthUnits,
       widthScale: this.props.widthScale,

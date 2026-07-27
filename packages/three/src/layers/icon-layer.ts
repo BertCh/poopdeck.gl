@@ -36,7 +36,7 @@ import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { TrackIndexMaintainer } from '@poopdeck.gl/core';
 import type { TrackColor, TrackFieldConfig } from '@poopdeck.gl/core';
 import { InstanceProvenance, buildIdColors } from '@poopdeck.gl/core/picking';
-import { BaseSttLayer, type SttLayerContext } from './layer.js';
+import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import {
   resolveTimeWindow,
   type ThreeTimeWindowOptions,
@@ -66,8 +66,8 @@ import { makePaletteTexture } from '../tsl/palette.js';
 import type { DataFilterRange } from '../tsl/data-filter.js';
 import {
   resolveIdPick,
-  type SttIdPickInfo,
-  type SttIdPickable,
+  type STTIdPickInfo,
+  type STTIdPickable,
 } from '../lib/id-pick.js';
 import type { GpuPicker } from '../lib/gpu-pick.js';
 
@@ -209,7 +209,7 @@ export interface STTIconLayerOptions extends ThreeTimeWindowOptions {
 
 const DEFAULT_TINT: RGBA = [255, 255, 255, 255];
 
-export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
+export class STTIconLayer extends BaseSTTLayer implements STTIdPickable {
   readonly id: string;
   readonly object = new Mesh();
 
@@ -337,7 +337,7 @@ export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
     };
   }
 
-  setTiles(tiles: Tile[], ctx: SttLayerContext): void {
+  setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     if (this.interpolationActive()) {
       this.setTilesGlide(tiles, ctx);
       return;
@@ -466,7 +466,7 @@ export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
    * build ONE instanced billboard whose centres AND headings glide on the GPU.
    * The entity-constant icon geometry (uv rect, anchor, size) is baked once.
    */
-  private setTilesGlide(tiles: Tile[], ctx: SttLayerContext): void {
+  private setTilesGlide(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.currentTimeMs = ctx.timeOrigin;
     // Glide carries no merged-buffer provenance (per-track picking deferred, as in
@@ -686,7 +686,7 @@ export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
 
   // ── Picking (GPU id-buffer catalog: icon variant) ──────────────────────────
   //
-  // Two halves: `resolvePick` (pure, unit-tested — merged index → SttIdPickInfo
+  // Two halves: `resolvePick` (pure, unit-tested — merged index → STTIdPickInfo
   // via the provenance buffer, the shared `resolveIdPick` seam) and `pick` (the
   // opt-in GPU id-pass + readback, which needs a live WebGPU device and is
   // browser-verify only). STATIC icon path only — the glide path defers picking
@@ -694,10 +694,10 @@ export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
 
   /**
    * Resolve a merged instance index (as decoded from a GPU id-buffer readback)
-   * to a normalised {@link SttIdPickInfo} (`kind: 'icon'`), or `null` for a miss.
+   * to a normalised {@link STTIdPickInfo} (`kind: 'icon'`), or `null` for a miss.
    * Pure — the unit-tested seam; call it directly with a decoded index.
    */
-  resolvePick(index: number, screen?: [number, number]): SttIdPickInfo | null {
+  resolvePick(index: number, screen?: [number, number]): STTIdPickInfo | null {
     return resolveIdPick({
       index,
       provenance: this.provenance,
@@ -744,7 +744,7 @@ export class STTIconLayer extends BaseSttLayer implements SttIdPickable {
     camera: unknown,
     cssX: number,
     cssY: number,
-  ): Promise<SttIdPickInfo | null> {
+  ): Promise<STTIdPickInfo | null> {
     if (this.provenance.length === 0 || !this.object.visible) return null;
     this.ensurePickPass();
     const idBundle = this.idBundle;

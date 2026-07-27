@@ -87,10 +87,17 @@ describe('STTDataFilterExtension getShaders', () => {
   });
 
   it('binds a `filterValue` attribute and a `vDataFilterAlpha` varying', () => {
-    const inject = getShaders(new STTDataFilterExtension()).inject;
-    expect(inject['vs:#decl']).toContain('in float filterValue;');
-    expect(inject['vs:#decl']).toContain('out float vDataFilterAlpha;');
-    expect(inject['fs:#decl']).toContain('in float vDataFilterAlpha;');
+    // The declarations live in the shader MODULE source, never in a #decl
+    // INJECTION: deck's mergeShaders concatenates same-key injections with no
+    // dedup, so a duplicated extension would redeclare them and fail to link,
+    // whereas luma dedupes modules by name. See dedup-safe-shaders.test.ts.
+    const shaders = getShaders(new STTDataFilterExtension());
+    const [module] = shaders.modules as any[];
+    expect(module.vs).toContain('in float filterValue;');
+    expect(module.vs).toContain('out float vDataFilterAlpha;');
+    expect(module.fs).toContain('in float vDataFilterAlpha;');
+    expect(shaders.inject['vs:#decl']).toBeUndefined();
+    expect(shaders.inject['fs:#decl']).toBeUndefined();
   });
 
   it('hard-clips with step() and discards fully-filtered fragments', () => {
@@ -271,6 +278,83 @@ describe('STTDataFilterExtension filterSize v1 guard', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('STTDataFilterExtension unsupported construction options', () => {
+  // Regression: `super({...defaultOptions, ...options, filterSize: 1})` used to
+  // absorb upstream-only options silently. Two costs: no diagnostic, AND
+  // `LayerExtension.equals()` (a depth-1 deepEqual over this.opts) then reported
+  // UNEQUAL against a default-constructed instance, so deck rebuilt the model
+  // every render for an option that does nothing.
+  beforeEach(() => _resetWarnOnce());
+
+  it.each(['fp64', 'countItems', 'categorySize', 'onFilteredItemsChange'])(
+    'warns once for the deferred `%s` option',
+    (key) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const value = key === 'categorySize' ? 2 : true;
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+        new STTDataFilterExtension({ [key]: value } as any);
+        const hits = warn.mock.calls.filter(([m]) => String(m).includes(key));
+        expect(hits.length).toBe(1);
+        // warnOnce: a second construction stays quiet.
+        new STTDataFilterExtension({ [key]: value } as any);
+        expect(
+          warn.mock.calls.filter(([m]) => String(m).includes(key)).length,
+        ).toBe(1);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  // The `opts` normalization + `equals()` stability itself is proved in
+  // test/extension-option-hygiene.test.ts, which runs against the REAL
+  // `LayerExtension` (this suite mocks @deck.gl/core, and the fake base class
+  // stores no opts).
+});
+
+describe('STTDataFilterExtension filterSoftRange is independent of filterRange', () => {
+  // Upstream sets `useSoftMargin: Boolean(opts.filterSoftRange)` with no
+  // reference to filterRange. This extension used to compute
+  // `useSoft = active && …`, quietly making one prop conditional on another.
+  function softUniform(props: Record<string, any>) {
+    const ext = new STTDataFilterExtension();
+    let captured: any;
+    (ext.draw as any).call(
+      {
+        props,
+        setShaderModuleProps: (u: any) => {
+          captured = u;
+        },
+      },
+      {},
+      ext,
+    );
+    return captured.sttFilter;
+  }
+
+  it('sets useSoftMargin from filterSoftRange alone (no filterRange)', () => {
+    const u = softUniform({ filterSoftRange: [2, 8] });
+    expect(u.useSoftMargin).toBe(1);
+    // The filter itself is still IDLE — that is the documented `filterRange:
+    // null` divergence, and it is what actually gates visibility.
+    expect(u.enabled).toBe(0);
+    expect(u.filterSoftMin).toBe(2);
+    expect(u.filterSoftMax).toBe(8);
+  });
+
+  it('still ignores a non-finite soft range (stricter than upstream truthiness)', () => {
+    expect(softUniform({ filterSoftRange: [NaN, 8] }).useSoftMargin).toBe(0);
+    expect(softUniform({ filterSoftRange: [2] }).useSoftMargin).toBe(0);
+  });
+
+  it('leaves the active hard+soft combination untouched', () => {
+    const u = softUniform({ filterRange: [0, 10], filterSoftRange: [2, 8] });
+    expect(u.enabled).toBe(1);
+    expect(u.useSoftMargin).toBe(1);
   });
 });
 
@@ -486,18 +570,16 @@ describe.each([
   },
 );
 
-// Regression: the path pipeline sits at WebGL2's 16 vertex-attribute floor
-// (NoPickingPathLayer 12 + TimeFilterExtension 3 + one extension attribute).
-// Installing BOTH CategoryColorExtension (`instanceCategoryIndex`) AND
-// STTDataFilterExtension (`filterValue`) would make 17 — a fatal link failure
-// (blank paths) on GPUs reporting exactly 16. The path family never uses the
-// GPU category path (categorical color is CPU-expanded into `getColor`;
-// `gpuPalette` is always null), so when a filter is installed the layer DROPS
-// the idle CategoryColorExtension and spends that slot on `filterValue`,
-// keeping the count at 16. The point layer (roomier budget, genuine GPU
-// category) must be UNAFFECTED — it keeps both.
+// Regression: the path pipeline is tight against WebGL2's 16 vertex-attribute
+// floor (NoPickingPathLayer 12 / stock PathLayer 13, + TimeFilterExtension 3,
+// + one per extension attribute). The path family never uses the GPU category
+// path — categorical color is CPU-expanded into a per-vertex `getColor`, since
+// PathLayer instances are SEGMENTS — so CategoryColorExtension is never
+// installed here at all, and the filter attribute lands the non-pickable
+// pipeline at 16 rather than 17. The point layer (roomier budget, genuine GPU
+// category) must be UNAFFECTED — it keeps its CategoryColorExtension.
 describe('AnimatedPathLayer filterProperty attribute budget (16-slot floor)', () => {
-  it('DROPS the idle CategoryColorExtension when a filter is installed (stays at 16, not 17)', async () => {
+  it('composes time + filter only — no CategoryColorExtension slot to spend', async () => {
     const layer = await makePathLayer({
       filterProperty: 'score',
       filterRange: [0, 5],
@@ -505,7 +587,7 @@ describe('AnimatedPathLayer filterProperty attribute budget (16-slot floor)', ()
     const sub = buildSub(layer, pathTile());
     // filterValue IS composed …
     expect(sub.props.extensions).toContain(layer.dataFilterExtension);
-    // … and the always-idle CategoryColorExtension is REMOVED to free its slot.
+    // … and the always-idle CategoryColorExtension is nowhere in sight.
     expect(sub.props.extensions).not.toContain(layer.categoryColorExtension);
     // TimeFilterExtension stays. Exactly two internal extensions: time + filter.
     expect(sub.props.extensions).toContain(layer.timeFilterExtension);
@@ -515,15 +597,12 @@ describe('AnimatedPathLayer filterProperty attribute budget (16-slot floor)', ()
     ]);
   });
 
-  it('keeps the CategoryColorExtension when NO filter is installed (baseline)', async () => {
+  it('composes the time filter ALONE when no filter is installed (baseline)', async () => {
     const layer = await makePathLayer();
     const sub = buildSub(layer, pathTile());
-    expect(sub.props.extensions).toContain(layer.categoryColorExtension);
+    expect(sub.props.extensions).not.toContain(layer.categoryColorExtension);
     expect(sub.props.extensions).not.toContain(layer.dataFilterExtension);
-    expect(sub.props.extensions).toEqual([
-      layer.timeFilterExtension,
-      layer.categoryColorExtension,
-    ]);
+    expect(sub.props.extensions).toEqual([layer.timeFilterExtension]);
   });
 
   it('does NOT drop CategoryColorExtension on the point layer when filtering (roomy budget, genuine GPU category)', async () => {

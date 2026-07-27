@@ -41,10 +41,10 @@ import type {
   WorldScenario,
   WorldsIndex,
 } from './worldsTypes';
-import type { Dataset } from '../../types';
+import type { WorldsDataset } from '../../types';
 
 export interface WorldsDeckProps {
-  dataset: Dataset;
+  dataset: WorldsDataset;
   worlds: WorldsIndex | null;
   worldsBase: string;
   timeController: TimeController;

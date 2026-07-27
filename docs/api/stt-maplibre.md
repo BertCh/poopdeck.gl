@@ -431,14 +431,14 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | `setExtruded(b: boolean)`    | (Polygon) Toggle extrusion. Same cache rebuild as `setStroked`                                                                                                                             |
 | `setColorRange(range)`       | (Heatmap) Replace the colour ramp                                                                                                                                                          |
 | `ready()`                    | `Promise<ArchiveMetadata>` resolved when the archive metadata is parsed                                                                                                                    |
-| `getTileset()`               | The live `SpatiotemporalTileset`, or `undefined` before metadata resolves (subscribe via `onTilesetReady` to avoid polling)                                                                |
+| `getTileset()`               | The live `SpatioTemporalTileset`, or `undefined` before metadata resolves (subscribe via `onTilesetReady` to avoid polling)                                                                |
 
 ## How it works
 
 1. The constructor opens an `STTArchive` against the URL. No fetches happen yet.
 2. MapLibre calls `onAdd(map, gl)` when the layer is added. The adapter
    compiles its shader, requests `archive.getMetadata()` asynchronously, and
-   builds a [`SpatiotemporalTileset`](./spatiotemporal-tileset.md) configured
+   builds a [`SpatioTemporalTileset`](./spatiotemporal-tileset.md) configured
    with the archive's `minZoom` / `maxZoom` / `temporalBucketMs` — wiring the
    batched `getTiles` path, `getTileByteSize`, throughput, and buffer-change
    forwarding exactly like the deck.gl layer does.

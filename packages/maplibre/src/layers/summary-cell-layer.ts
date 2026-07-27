@@ -1,5 +1,5 @@
 /**
- * Summary-tier cell adapter (maplibre parity campaign, Wave M4) — renders the
+ * Summary-tier cell adapter — renders the
  * SERVER-AGGREGATED summary tier as filled H3 hexagons ({@link STTH3SummaryLayer})
  * or CARTO Quadbin quads ({@link STTQuadbinSummaryLayer}).
  *
@@ -53,7 +53,7 @@
  * flickers as tiles stream; this converges instead. Pinning the domain is still
  * the recommendation.
  *
- * ── Elevation units (D10) ───────────────────────────────────────────────────
+ * ── Elevation units ─────────────────────────────────────────────────────────
  * `elevationScale` is METRES OF HEIGHT PER WEIGHT UNIT and the metres→shader
  * conversion is host-variant-dependent, exactly as in `STTColumnLayer` /
  * `STTPolygonLayer`:
@@ -63,7 +63,8 @@
  *   - the v5 GLOBE prelude takes METRES while its transition FALLBACK term
  *     wants mercator-z again.
  * Both branches come from the ONE `shaders/globe-elevation.glsl.ts` kernel.
- * Never re-adopt the pre-D10 flat `1e-7` factor.
+ * A flat `1e-7` factor is latitude-blind and ~4× too tall — never substitute
+ * one.
  *
  * ── Globe ───────────────────────────────────────────────────────────────────
  * A summary cell at low zoom is HUGE (an H3 res-2 hexagon spans hundreds of
@@ -86,7 +87,7 @@ import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
 import { GeometryType, DEFAULT_SUMMARY_COLOR_RANGE } from '@poopdeck.gl/core';
 import { expandRampColors } from '@poopdeck.gl/core/style';
 import {
-  STTBaseLayer,
+  STTFilterableLayer,
   expandPickIdColors,
   resolveTrailFade,
   type STTBaseLayerOptions,
@@ -122,6 +123,9 @@ import {
   TIME_WAKE_GLSL,
   TIME_CUMULATIVE_GLSL,
   TIME_TRAIL_GLSL,
+  TIME_MODE_UNIFORM_DECLS,
+  resolveTimeUniformLocations,
+  type TimeUniformLocations,
 } from '../shaders/time-window.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
@@ -129,11 +133,10 @@ import {
   DATA_FILTER_GLSL,
   DATA_FILTER_NAMES,
   DATA_FILTER_UNIFORMS_GLSL,
-  createDataFilterUniforms,
   expandFilterValues,
   extractFilterColumn,
-  resolveDataFilterUniforms,
-  type DataFilterRange,
+  resolveDataFilterUniformLocations,
+  type DataFilterUniformLocations,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
 import { buildElevatedProjection } from '../shaders/globe-elevation.glsl.js';
@@ -146,7 +149,7 @@ export type SummaryCellTimeFilterMode = STTTimeFilterMode;
  * reads as a solid rather than a silhouette — the package-wide 25%-darker
  * convention (`STTPolygonLayer`'s extrusion walls, `STTColumnLayer.WALL_SHADE`).
  * Duplicated rather than imported so this file takes no dependency on a sibling
- * LAYER; see this wave's concerns for the extraction candidate.
+ * LAYER. Change one and the other two must follow.
  */
 export const SUMMARY_WALL_SHADE = 0.75;
 
@@ -429,29 +432,6 @@ const MODE_GLSL: Readonly<Record<SummaryCellTimeFilterMode, string>> =
   });
 
 /**
- * Uniforms each mode reads. Only the active mode's block is declared, so an
- * unused uniform can never be silently mis-set.
- */
-const MODE_UNIFORMS: Readonly<Record<SummaryCellTimeFilterMode, string>> =
-  Object.freeze({
-    window: `  uniform float uWindowStart;
-  uniform float uWindowEnd;
-  uniform float uFadeIn;
-  uniform float uFadeOut;
-`,
-    wake: `  uniform float uCurrentTime;
-  uniform float uWakeLength;
-`,
-    cumulative: `  uniform float uCurrentTime;
-  uniform float uFadeIn;
-`,
-    trail: `  uniform float uCurrentTime;
-  uniform float uTrailLength;
-  uniform float uFadeTrail;
-`,
-  });
-
-/**
  * The `vAlpha = …` expression per mode. Every vertex of a cell carries that
  * cell's `aTime`, so `trail` reads `aTime.x` — a cell reveals whole, never
  * half-drawn. (Wake's FOOTPRINT taper has no analogue here: a summary cell's
@@ -570,7 +550,7 @@ function buildFillVs(
   precision highp float;
   attribute vec3 aMercator;    // [mercatorX, mercatorY, isTop]
 ${sharedDeclarations(usesPrelude, cfg)}  attribute vec4 aColor;       // per-vertex ramp colour in 0..1 (id pass gates on its alpha)
-${idAttribute}${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
+${idAttribute}${TIME_MODE_UNIFORM_DECLS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
 ${varying}${MODE_GLSL[cfg.mode]}${cfg.filter ? DATA_FILTER_GLSL : ''}
   void main() {
     vAlpha = ${MODE_ALPHA[cfg.mode]} * uOpacity;
@@ -615,7 +595,7 @@ function buildStrokeVs(
 ${sharedDeclarations(usesPrelude, cfg)}${idAttribute}  uniform vec2 uViewport;
   uniform float uWidth;
   uniform vec4 uColor;         // outline colour (the FS paints it; the id pass gates on its alpha)
-${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
+${TIME_MODE_UNIFORM_DECLS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
 ${idVarying}${MODE_GLSL[cfg.mode]}${cfg.filter ? DATA_FILTER_GLSL : ''}
   void main() {
     vAlpha = ${MODE_ALPHA[cfg.mode]} * uOpacity;
@@ -724,8 +704,13 @@ const ID_FS_SOURCE = `
 
 // ── program handles ─────────────────────────────────────────────────────────
 
-/** Locations every summary-cell program shares. */
-interface SharedHandles {
+/**
+ * Locations every summary-cell program shares. `uFilterTransformSize` is absent
+ * on purpose: a cell's extent is geography, so the size transform stays unwired
+ * (see {@link FILTER_BODY}).
+ */
+interface SharedHandles
+  extends TimeUniformLocations, DataFilterUniformLocations {
   program: WebGLProgram;
   /** True when the vertex source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -736,18 +721,6 @@ interface SharedHandles {
   uElevationScale: WebGLUniformLocation | null;
   uMercatorZPerMeter: WebGLUniformLocation | null;
   uOpacity: WebGLUniformLocation | null;
-  uWindowStart: WebGLUniformLocation | null;
-  uWindowEnd: WebGLUniformLocation | null;
-  uFadeIn: WebGLUniformLocation | null;
-  uFadeOut: WebGLUniformLocation | null;
-  uCurrentTime: WebGLUniformLocation | null;
-  uWakeLength: WebGLUniformLocation | null;
-  uTrailLength: WebGLUniformLocation | null;
-  uFadeTrail: WebGLUniformLocation | null;
-  uFilterRange: WebGLUniformLocation | null;
-  uFilterSoftRange: WebGLUniformLocation | null;
-  uFilterEnabled: WebGLUniformLocation | null;
-  uFilterTransformColor: WebGLUniformLocation | null;
 }
 
 interface FillHandles extends SharedHandles {
@@ -792,7 +765,7 @@ interface SummaryCellGpuCache extends TileGpuCache {
    * (0 = unrefined — every mercator host).
    */
   subdivisionGranularity: number;
-  /** METRES → mercator-z at this tile's centre latitude (D10), resolved once. */
+  /** METRES → mercator-z at this tile's centre latitude, resolved once. */
   mercatorZScale: number;
   /** Rings emitted (cells drawn, seam twins included). */
   cellCount: number;
@@ -842,7 +815,7 @@ interface CellMeshBuild {
  * the {@link cellScheme} and (for H3) the injected boundary resolver; see
  * {@link STTH3SummaryLayer} / {@link STTQuadbinSummaryLayer}.
  */
-export abstract class STTSummaryCellLayer extends STTBaseLayer {
+export abstract class STTSummaryCellLayer extends STTFilterableLayer {
   /**
    * Host depth participation, decided at CONSTRUCTION (maplibre reads it at
    * `addLayer` time) — see {@link STTSummaryCellLayerOptions.renderingMode}.
@@ -869,11 +842,6 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
     trailLength: number;
     fadeTrail: number;
   };
-
-  /** Mutated in place by the filter setters; read by `resolveDataFilterUniforms`. */
-  private readonly filterOpts: STTDataFilterOptions;
-  /** Allocated once — the per-draw uniform payload never allocates. */
-  private readonly filterUniforms = createDataFilterUniforms();
 
   /**
    * Compiled shader configuration. Both knobs are fixed for the layer's
@@ -915,7 +883,6 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
   private autoLo = Infinity;
   private autoHi = -Infinity;
 
-  private warnedCategoricalFilter = false;
   private warnedMissingWeight = false;
   private warnedLayerName = false;
   private warnedMissingIds = false;
@@ -947,14 +914,6 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
       wakeLength: opts.wakeLength ?? 0,
       trailLength: opts.trailLength ?? 0,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
-    };
-    this.filterOpts = {
-      filterProperty: opts.filterProperty,
-      filterRange: opts.filterRange,
-      filterSoftRange: opts.filterSoftRange,
-      filterEnabled: opts.filterEnabled,
-      filterTransformSize: opts.filterTransformSize,
-      filterTransformColor: opts.filterTransformColor,
     };
     this.shaderConfig = Object.freeze({
       mode: resolveSummaryTimeFilterMode(
@@ -1083,33 +1042,6 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
     if (this.cellOpts.coverage === coverage) return;
     this.cellOpts.coverage = coverage;
     this.rebuildTileCaches();
-  }
-
-  /**
-   * Move the DataFilter's hard `[min, max]` bounds (the slider hot path).
-   * Uniform-only: no relink, no tile rebuild. `null` idles the filter, which
-   * renders everything. Passing `softRange` explicitly (including `null`)
-   * replaces the soft margin; omitting it leaves the configured one alone.
-   */
-  setFilterRange(
-    range: DataFilterRange | null,
-    softRange?: DataFilterRange | null,
-  ): void {
-    this.filterOpts.filterRange = range;
-    if (softRange !== undefined) this.filterOpts.filterSoftRange = softRange;
-    this.map?.triggerRepaint();
-  }
-
-  /** Move the DataFilter's soft fade margin alone. Uniform-only. */
-  setFilterSoftRange(range: DataFilterRange | null): void {
-    this.filterOpts.filterSoftRange = range;
-    this.map?.triggerRepaint();
-  }
-
-  /** Master DataFilter switch. `false` renders every cell unfiltered. */
-  setFilterEnabled(enabled: boolean): void {
-    this.filterOpts.filterEnabled = enabled;
-    this.map?.triggerRepaint();
   }
 
   /**
@@ -1299,7 +1231,7 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
     if (!this.acceptsSummaryLayer(layer)) return null;
     const f = layer.features;
 
-    // Globe correctness (D4): refine long chords to the host's subdivision
+    // Globe correctness: refine long chords to the host's subdivision
     // granularity, and drop the seam twin (it projects onto the same place on a
     // sphere and would double-blend). Mercator — legacy OR the v5 prelude — is
     // affine, so chords there are exact and no subdivision runs.
@@ -1329,13 +1261,7 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
     // resolver turns into `enabled: 0` — the tile renders UNFILTERED, never
     // blank.
     const filterColumn = extractFilterColumn(f, this.filterOpts.filterProperty);
-    if (filterColumn.categorical && !this.warnedCategoricalFilter) {
-      this.warnedCategoricalFilter = true;
-      console.warn(
-        `[${this.id}] filterProperty '${this.filterOpts.filterProperty}' is a ` +
-          'categorical column; range filtering needs a numeric one — rendering unfiltered',
-      );
-    }
+    if (filterColumn.categorical) this.warnCategoricalFilterOnce();
 
     const build = this.bakeCellMesh(batch, f, granularity);
     const totalVertices = build.positions.length / 3;
@@ -1805,15 +1731,7 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
     cache: SummaryCellGpuCache,
   ): void {
     if (!this.shaderConfig.filter) return;
-    const u = resolveDataFilterUniforms(
-      this.filterUniforms,
-      this.filterOpts,
-      cache.hasFilterColumn,
-    );
-    gl.uniform2fv(h.uFilterRange, u.range);
-    gl.uniform2fv(h.uFilterSoftRange, u.softRange);
-    gl.uniform1f(h.uFilterEnabled, u.enabled);
-    gl.uniform1f(h.uFilterTransformColor, u.transformColor);
+    this.uploadDataFilterUniforms(gl, h, cache.hasFilterColumn);
   }
 
   /**
@@ -1859,24 +1777,8 @@ export abstract class STTSummaryCellLayer extends STTBaseLayer {
       uElevationScale: gl.getUniformLocation(program, 'uElevationScale'),
       uMercatorZPerMeter: gl.getUniformLocation(program, 'uMercatorZPerMeter'),
       uOpacity: gl.getUniformLocation(program, 'uOpacity'),
-      uWindowStart: gl.getUniformLocation(program, 'uWindowStart'),
-      uWindowEnd: gl.getUniformLocation(program, 'uWindowEnd'),
-      uFadeIn: gl.getUniformLocation(program, 'uFadeIn'),
-      uFadeOut: gl.getUniformLocation(program, 'uFadeOut'),
-      uCurrentTime: gl.getUniformLocation(program, 'uCurrentTime'),
-      uWakeLength: gl.getUniformLocation(program, 'uWakeLength'),
-      uTrailLength: gl.getUniformLocation(program, 'uTrailLength'),
-      uFadeTrail: gl.getUniformLocation(program, 'uFadeTrail'),
-      uFilterRange: gl.getUniformLocation(program, DATA_FILTER_NAMES.range),
-      uFilterSoftRange: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.softRange,
-      ),
-      uFilterEnabled: gl.getUniformLocation(program, DATA_FILTER_NAMES.enabled),
-      uFilterTransformColor: gl.getUniformLocation(
-        program,
-        DATA_FILTER_NAMES.transformColor,
-      ),
+      ...resolveTimeUniformLocations(gl, program),
+      ...resolveDataFilterUniformLocations(gl, program),
     };
   }
 

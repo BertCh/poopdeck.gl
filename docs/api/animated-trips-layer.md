@@ -51,18 +51,19 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Render Options
 
-| Property         | Type                               | Default    | Description                                                                                                         |
-| :--------------- | :--------------------------------- | :--------- | :------------------------------------------------------------------------------------------------------------------ |
-| `widthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | `'meters'` makes widths world-space so trails thicken/thin with zoom (clamped by the pixel bounds).                 |
-| `widthScale`     | `number`                           | `1`        | Global multiplier for path widths.                                                                                  |
-| `widthMinPixels` | `number`                           | `2`        | Minimum width in pixels.                                                                                            |
-| `widthMaxPixels` | `number`                           | `10`       | Maximum width in pixels.                                                                                            |
-| `trailLength`    | `number`                           | `180000`   | Trail length in milliseconds (3 minutes default).                                                                   |
-| `fadeTrail`      | `boolean`                          | `true`     | Fade the trail older→transparent (vs a solid constant-opacity snake).                                               |
-| `capRounded`     | `boolean`                          | `true`     | Round caps on path ends.                                                                                            |
-| `jointRounded`   | `boolean`                          | `true`     | Round joints between path segments.                                                                                 |
-| `miterLimit`     | `number`                           | `4`        | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`). |
-| `billboard`      | `boolean`                          | `false`    | Extrude lines in screen space so they always face the camera (PathLayer pass-through).                              |
+| Property         | Type                               | Default    | Description                                                                                                                                                                                                                                                                                       |
+| :--------------- | :--------------------------------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `widthUnits`     | `'pixels' \| 'meters' \| 'common'` | `'pixels'` | `'meters'` makes widths world-space so trails thicken/thin with zoom (clamped by the pixel bounds).                                                                                                                                                                                               |
+| `widthScale`     | `number`                           | `1`        | Global multiplier for path widths.                                                                                                                                                                                                                                                                |
+| `widthMinPixels` | `number`                           | `2`        | Minimum width in pixels.                                                                                                                                                                                                                                                                          |
+| `widthMaxPixels` | `number`                           | `10`       | Maximum width in pixels.                                                                                                                                                                                                                                                                          |
+| `trailLength`    | `number`                           | `180000`   | Trail length in milliseconds (3 minutes default).                                                                                                                                                                                                                                                 |
+| `fadeTrail`      | `boolean`                          | `true`     | Fade the trail older→transparent. **Diverges from upstream `TripsLayer`** — read [Trail semantics](#trail-semantics-fadetrail-diverges-from-upstream) before porting a config.                                                                                                                    |
+| `capRounded`     | `boolean`                          | `true`     | Round caps on path ends. Upstream `PathLayer` defaults to `false`; trails read better round.                                                                                                                                                                                                      |
+| `jointRounded`   | `boolean`                          | `true`     | Round joints between path segments. Same upstream drift as `capRounded`.                                                                                                                                                                                                                          |
+| `miterLimit`     | `number`                           | `4`        | Miter-joint length cap in multiples of line width (PathLayer pass-through; applies when `jointRounded` is `false`).                                                                                                                                                                               |
+| `pathType`       | `'open' \| 'loop'`                 | `'open'`   | Path closure — `PathLayer._pathType` pass-through. `'open'` draws each LineString as-is; `'loop'` closes it back onto its first vertex. STT tiles arrive pre-normalized, so upstream's third mode (`undefined` ⇒ normalize on the CPU) is deliberately not offered — it would re-walk every path. |
+| `billboard`      | `boolean`                          | `false`    | Extrude lines in screen space so they always face the camera (PathLayer pass-through).                                                                                                                                                                                                            |
 
 ### Data Accessors
 
@@ -84,6 +85,58 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `gradientDomain`    | `[number, number]` | `[0, 1]` | Value range mapped onto the ramp.                                                                                                                                                                                                                                                                                           |
 | `gradientColorRamp` | `Color[]`          | `[]`     | Low→high color stops (piecewise-lerped).                                                                                                                                                                                                                                                                                    |
 
+## Trail semantics: `fadeTrail` diverges from upstream
+
+Upstream `TripsLayer` discards a vertex only when
+`vTime > currentTime || (fadeTrail && vTime < currentTime - trailLength)`, so
+**`fadeTrail: false` never culls the tail** — the whole traversed path stays
+drawn at full opacity ("ink the route as it is driven").
+
+STT's [`TimeFilterExtension`](./time-filter-extension.md) **always** culls at
+`vertexTime < trailStart` and uses this prop only to pick a ramped vs a flat
+alpha. So here `fadeTrail: false` yields a fixed-length **solid snake**, not an
+accumulating path. For the upstream accumulating look, use the inherited
+`cumulative` prop (whole-feature reveal) or set `trailLength` to the dataset's
+full span.
+
+The cull is shared with the `trailAlpha()` kernel oracle in
+`@poopdeck.gl/core/time-filter` that the three/maplibre backends are pinned
+against, so this is not a deck-only knob.
+
+## Deliberate default drift
+
+Against upstream `PathLayer`/`TripsLayer`:
+
+| Property         | STT default | deck default       |
+| :--------------- | :---------- | :----------------- |
+| `widthUnits`     | `'pixels'`  | `'meters'`         |
+| `widthMinPixels` | `2`         | `0`                |
+| `widthMaxPixels` | `10`        | `MAX_SAFE_INTEGER` |
+| `jointRounded`   | `true`      | `false`            |
+| `capRounded`     | `true`      | `false`            |
+
+The `widthMaxPixels` cap is the one that bites: a caller who switches to
+`widthUnits: 'meters'` and scales up silently clamps at 10 px. That combination
+warns once.
+
+## Known parity gap: per-segment trail time
+
+Upstream `TripsLayer` registers its `timestamps` attribute with **two** shader
+views of the same buffer (`instanceTimestamps {vertexOffset: 0}` and
+`instanceNextTimestamps {vertexOffset: 1}`) and interpolates the trail time
+along each segment quad. STT's `TimeFilterExtension` registers **one** view
+(`instanceVertexTime`), so each segment instance reads only its start vertex's
+time and the alpha is constant across the quad: the trail head advances one
+whole segment at a time and the fade is a staircase, not a glide. On sparse
+geometry (bridges, highways, coarse-sampled trips) that reads as popping.
+
+Closing it costs one more vertex-attribute slot — a second `in` declaration
+gets its own slot even though it shares the GL buffer — and the WebGL2 budget
+has none free (`NoPickingPathLayer` 12 + `TimeFilterExtension` 3 = 15). It is
+**deferred on those grounds**, which is precisely why
+[`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md) exists: its dot is a
+CPU-interpolated position, so it glides.
+
 ## Tile loading window
 
 The layer widens the effective loading window to `max(timeWindow, 2 × trailLength)` so tiles containing trail data behind the playhead are resident — the shader's trail filter is independent of the loader window.
@@ -100,6 +153,9 @@ To show a moving marker at each vehicle's current position instead of a trail, s
 
 ## Architecture & performance
 
+- **Geometry-kind guard**: tile layers whose `geometryType` is not `LineString`
+  are skipped with one named console warning, rather than misreading the
+  position buffer.
 - **Per-tile binary sublayers** (one `PathLayer` per tile/layer pair) with
   zero-copy Arrow-backed attributes; streaming is additive.
 - **Per-vertex times**: `vertexTimestamps` ride straight from the tile;

@@ -4,15 +4,18 @@
  * ColumnLayer is instanced at points exactly like ScatterplotLayer, so the
  * column layer mirrors AnimatedPointLayer's WINDOW-mode binary-sublayer path:
  * one ColumnLayer per (tile, layer), zero-copy positions/times, a per-feature
- * numeric column baked into the size-1 `getElevation` attribute, categorical
- * fill driven by the GPU `instanceCategoryIndex` path.
+ * numeric column baked into the size-1 `getElevation` attribute, and a
+ * categorical fill that CPU-expands into `instanceFillColors` when EXTRUDED
+ * (so the lit color survives DECKGL_FILTER_COLOR) and only lifts to the GPU
+ * `instanceCategoryIndex` path for unlit flat disks.
  *
  * These tests exercise the layer's `prepareTile` + `buildSublayer` paths
  * directly (via Object.create, which bypasses CompositeLayer's lifecycle) with
  * a deck.gl mock that captures the constructor args. They pin: the elevation
- * column is baked per-feature, categorical fill builds instanceCategoryIndex,
- * the time attributes reach the GPU under the registered names, and
- * elevationScale flows through to the sublayer.
+ * column is baked per-feature, both categorical-fill branches agree on color,
+ * the time attributes reach the GPU under the registered names, elevationScale
+ * flows through to the sublayer, the getLineWidth alias invalidates cached
+ * sublayers, and a non-Point tile is skipped with one named warning.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -205,7 +208,7 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
     expect(attrs.getElevation.value[1]).toBe(2);
   });
 
-  it('hands category indices to the GPU (no per-feature RGBA buffer) for categorical fill', () => {
+  it('hands category indices to the GPU (no per-feature RGBA buffer) for FLAT disks', () => {
     const N = 1000;
     const tile = bigPointTile(N);
     const binary = tile.layers[0].features;
@@ -215,6 +218,8 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
     };
 
     const built = buildSublayerForTile(tile, {
+      // Flat disks are UNLIT, so the GPU palette write is safe there.
+      extruded: false,
       fillColor: 'vtype',
       colorPalette: [
         [10, 20, 30, 255],
@@ -319,5 +324,155 @@ describe('AnimatedColumnLayer per-tile sublayer architecture', () => {
   it('passes the bound getTime getter so the time uniform advances each draw', () => {
     const built = buildSublayerForTile(bigPointTile(3));
     expect(typeof built.props.getTime).toBe('function');
+  });
+
+  // ── Categorical fill vs. lighting (review fix 1) ────────────────────────────
+  //
+  // ColumnLayer computes lighting BEFORE DECKGL_FILTER_COLOR (gouraud into
+  // vColor, phong into fragColor under flatShading), and
+  // CategoryColorExtension's hook REPLACES rgb — so on an EXTRUDED column the
+  // GPU palette write discards the lit color and every bar renders as a flat
+  // single-tone silhouette. Extruded columns must therefore CPU-expand the
+  // palette into instanceFillColors, exactly like the colorMapping path.
+
+  /** A tile whose `vtype` column cycles through `categories`. */
+  function categoricalTile(n: number, categories: string[]) {
+    const tile = bigPointTile(n);
+    const indices = new Uint16Array(n);
+    for (let i = 0; i < n; i++) indices[i] = i % categories.length;
+    tile.layers[0].features.categoricalProps['vtype'] = { indices, categories };
+    return tile;
+  }
+
+  const PALETTE = [
+    [10, 20, 30, 255],
+    [40, 50, 60, 255],
+    [70, 80, 90, 255],
+  ];
+
+  it('CPU-expands the categorical palette when extruded (the DEFAULT) so lighting survives', () => {
+    const built = buildSublayerForTile(categoricalTile(6, ['a', 'b', 'c']), {
+      extruded: true,
+      fillColor: 'vtype',
+      colorPalette: PALETTE,
+    });
+    const attrs = built.props.data.attributes;
+
+    // Per-feature RGBA rides instanceFillColors → `color` is lit in the vertex
+    // stage and the extension never overwrites it.
+    expect(attrs.instanceCategoryIndex).toBeUndefined();
+    expect(built.props.useCategoryColor).toBe(false);
+    expect(built.props.categoryPalette).toBeUndefined();
+
+    expect(attrs.getFillColor).toBeDefined();
+    expect(attrs.getFillColor.value).toBeInstanceOf(Uint8Array);
+    expect(attrs.getFillColor.size).toBe(4);
+    expect(attrs.getFillColor.normalized).toBe(true);
+    expect(Array.from(attrs.getFillColor.value.slice(0, 4))).toEqual(
+      PALETTE[0],
+    );
+    expect(Array.from(attrs.getFillColor.value.slice(4, 8))).toEqual(
+      PALETTE[1],
+    );
+    expect(Array.from(attrs.getFillColor.value.slice(8, 12))).toEqual(
+      PALETTE[2],
+    );
+  });
+
+  it('gives the SAME colors CPU-expanded (extruded) as GPU-sampled (flat)', () => {
+    // NULL sentinel + palette overflow are the two cases the two paths could
+    // disagree on; the CPU expansion reuses categoryIndicesToFloat32 +
+    // appendNullCategorySlot so flipping `extruded` never restyles anything.
+    const tile = bigPointTile(3);
+    tile.layers[0].features.categoricalProps['vtype'] = {
+      // slot 1, palette OVERFLOW (index 5 of a 3-color palette), NULL.
+      indices: new Uint16Array([1, 5, 0xffff]),
+      categories: ['a', 'b', 'c', 'd', 'e', 'f'],
+    };
+    const opts = {
+      fillColor: 'vtype',
+      colorPalette: PALETTE,
+      colorMappingDefault: [9, 9, 9, 0],
+    };
+
+    const flat = buildSublayerForTile(tile, { ...opts, extruded: false });
+    const flatSlots = flat.props.categoryPalette;
+    const flatIdx = flat.props.data.attributes.instanceCategoryIndex.value;
+
+    const lit = buildSublayerForTile(tile, { ...opts, extruded: true });
+    const rgba = lit.props.data.attributes.getFillColor.value;
+
+    for (let i = 0; i < 3; i++) {
+      expect(Array.from(rgba.slice(i * 4, i * 4 + 4))).toEqual(
+        flatSlots[flatIdx[i]],
+      );
+    }
+    // Spot-check the intent: overflow clamps to the last real color, NULL takes
+    // the appended default slot.
+    expect(Array.from(rgba.slice(4, 8))).toEqual(PALETTE[2]);
+    expect(Array.from(rgba.slice(8, 12))).toEqual([9, 9, 9, 0]);
+  });
+
+  it('re-prepares the tile when `extruded` flips (it selects the color branch)', () => {
+    const layer = makeLayer({ fillColor: 'vtype', colorPalette: PALETTE });
+    const tile = categoricalTile(4, ['a', 'b']);
+    const first = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(first.data.attributes.getFillColor).toBeDefined();
+    layer.props.extruded = false;
+    const second = (layer as any).prepareTile(tile, tile.layers[0]);
+    expect(second).not.toBe(first);
+    expect(second.data.attributes.getFillColor).toBeUndefined();
+    expect(second.data.attributes.instanceCategoryIndex).toBeDefined();
+  });
+
+  it('still CPU-expands an explicit colorMapping regardless of `extruded`', () => {
+    for (const extruded of [true, false]) {
+      const built = buildSublayerForTile(categoricalTile(2, ['a', 'b']), {
+        extruded,
+        fillColor: 'vtype',
+        colorMapping: { a: [1, 2, 3, 255], b: [4, 5, 6, 255] },
+      });
+      const attrs = built.props.data.attributes;
+      expect(attrs.instanceCategoryIndex).toBeUndefined();
+      expect(Array.from(attrs.getFillColor.value.slice(0, 4))).toEqual([
+        1, 2, 3, 255,
+      ]);
+    }
+  });
+
+  // ── getLineWidth alias reaches the sublayer (review fix 2) ──────────────────
+
+  it('rebuilds the cached ColumnLayer when the getLineWidth ALIAS changes', () => {
+    // computeLayerPropsKey used to hash the RAW `lineWidth`, so an alias-only
+    // edit left every cached sublayer at the old width (lineColor, two lines
+    // below it, always used its resolver — this was a slip, not a convention).
+    const layer = makeLayer({ stroked: true });
+    const tile = bigPointTile(3);
+    layer.state = { tiles: [tile] };
+    const first = (layer as any).renderLayers();
+    expect(first[0].props.getLineWidth).toBe(1);
+    layer.props.getLineWidth = 6;
+    const second = (layer as any).renderLayers();
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].props.getLineWidth).toBe(6);
+  });
+
+  // ── Geometry-kind guard (review fix 11) ────────────────────────────────────
+
+  it('skips (and warns once about) a non-Point tile instead of misreading it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tile = bigPointTile(4);
+    tile.layers[0].features.geometryType = 1 as any; // LineString
+    const layer = makeLayer();
+    expect((layer as any).prepareTile(tile, tile.layers[0])).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/LineString.*reads Point/);
+    warn.mockRestore();
+  });
+
+  // ── Documented default divergence (review fix 15) ──────────────────────────
+
+  it('keeps the documented radius divergence from deck ColumnLayer (100, not 1000)', () => {
+    expect(LayerCtor.defaultProps.radius.value).toBe(100);
   });
 });

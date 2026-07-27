@@ -1,5 +1,5 @@
 /**
- * Globe-correctness geometry kit (maplibre parity campaign D4).
+ * Globe-correctness geometry kit.
  *
  * MapLibre v5+'s injected shader prelude (`projectTile*`) projects *vertices*,
  * not edges: a long straight chord between two far-apart vertices cuts through

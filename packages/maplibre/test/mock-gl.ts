@@ -6,6 +6,7 @@
  */
 
 import { vi } from 'vitest';
+import type { TileId } from '@poopdeck.gl/core';
 
 let nextHandleId = 1;
 
@@ -340,6 +341,33 @@ export function makeMockGl(
   };
 
   return gl;
+}
+
+/**
+ * The `z/x/y/t` key the base layer files a drawn tile under. Exported so a test
+ * asserting on `loadedTiles` keys does not hand-spell it.
+ */
+export const testTileKey = (tile: { id: TileId }): string =>
+  `${tile.id.z}/${tile.id.x}/${tile.id.y}/${tile.id.t}`;
+
+/**
+ * Publish `tiles` as the layer's VISIBLE set — the injection point for every
+ * draw / pick test.
+ *
+ * The base layer derives its drawn set from `tileset.getVisibleTiles()`, not
+ * from whatever is resident in the tileset's cache (a cache legitimately holds
+ * several zoom levels at once, and compositing all of them was the A6 defect).
+ * So seeding `loadedTiles` by hand no longer survives the first `render()` —
+ * a test that wants a tile drawn has to say the tileset considers it visible.
+ * `loadedTiles` is primed too, for tests that pick or aggregate without ever
+ * rendering a frame.
+ *
+ * Attaches a minimal stub tileset when the layer has none.
+ */
+export function publishVisibleTiles(layer: any, ...tiles: Array<any>): void {
+  layer.tileset ??= { update: vi.fn(), finalize: vi.fn() };
+  layer.tileset.getVisibleTiles = vi.fn(() => tiles);
+  layer.loadedTiles = new Map(tiles.map((t) => [testTileKey(t), t]));
 }
 
 /** Minimal MapLibre Map shape — only the methods the layer touches. */

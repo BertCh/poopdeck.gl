@@ -8,9 +8,22 @@ It extends [`AnimatedTripsLayer`](./animated-trips-layer.md), keeping all of its
 
 A flow-corridor tile stores its geometry once and carries a per-vertex × per-time-bucket value matrix (`BinaryFeatures.vertexValueMatrix`, `vertexValueBuckets` columns). The geometry never re-uploads as time advances — only the per-vertex color changes:
 
-- For the current playhead the layer finds the continuous bucket position, selects the two adjacent bucket columns, and **linearly blends** them into a per-vertex scalar. The base class maps that scalar through the gradient ramp into per-vertex RGBA.
-- The cross-fade is quantized to a sub-step grid (`STEP = 0.1`, ~10 sub-steps per bucket ≈ 5 Hz at default playback), so the CPU re-expansion fires only when the playhead crosses a sub-step — between sub-steps the prepared-tile cache hits and nothing re-uploads.
+- For the current playhead the layer finds the continuous bucket position, selects the two adjacent bucket columns, and **linearly blends** them into a per-vertex scalar (or, with `persistenceMs`, takes a trailing-window **max**). The base class maps that scalar through the gradient ramp into per-vertex RGBA.
+- The cross-fade is quantized to a sub-step grid (`STEP = 0.5`, i.e. 2 sub-steps per bucket), so the CPU re-expansion fires only when the playhead crosses a sub-step — between sub-steps the prepared-tile cache hits and nothing re-uploads. The fine (1-minute) buckets `chevronPerTripLight` targets are why the step is this coarse: a smaller one would re-expand the two per-vertex signals ~24× per bucket.
 - Corridors are **timeless**: each feature's `[start, end]` spans the whole range, so the window-mode time filter never hides the network.
+
+### `trailLength` is pinned to `0`
+
+`FlowCorridorLayer` overrides `AnimatedTripsLayer`'s `trailLength: 180000`
+default with **`0`**. A corridor is static geometry animated by colour: it runs
+the time filter in **window** mode and repurposes the `instanceVertexTime` slot
+to carry the chevron direction sign. Any `trailLength > 0` switches the shader
+into trail mode (precedence: cumulative > wake > trail > window), where that
+slot is read as a relative vertex time — so once the relative playhead passed
+`trailLength`, every vertex satisfied `vertexTime < trailStart` and the **entire
+corridor network went blank** for the rest of playback, silently. With
+`signedFlow` on it also misreads the direction signs as timestamps. Overriding
+it warns once; leave it at `0`.
 
 ## Installation
 
@@ -41,23 +54,25 @@ The active-bucket scalar is colored through the inherited per-vertex gradient pr
 
 Inherits all properties from [`AnimatedTripsLayer`](./animated-trips-layer.md) (and through it [`SpatioTemporalLayer`](./spatiotemporal-layer.md)). The relevant inherited props are:
 
-| Property                                                          | Type               | Default  | Description                                                    |
-| :---------------------------------------------------------------- | :----------------- | :------- | :------------------------------------------------------------- |
-| `gradientDomain`                                                  | `[number, number]` | `[0, 1]` | Flow-value range mapped onto the color ramp.                   |
-| `gradientColorRamp`                                               | `Color[]`          | `[]`     | Low→high color stops (piecewise-lerped) for the pulsing color. |
-| `tripWidth`                                                       | `number \| string` | `3`      | Corridor line width (constant; widths do not animate here).    |
-| `widthUnits` / `widthScale` / `widthMinPixels` / `widthMaxPixels` | —                  | —        | `PathLayer` width controls (see `AnimatedTripsLayer`).         |
+| Property                                                          | Type               | Default  | Description                                                                                                            |
+| :---------------------------------------------------------------- | :----------------- | :------- | :--------------------------------------------------------------------------------------------------------------------- |
+| `gradientDomain`                                                  | `[number, number]` | `[0, 1]` | Flow-value range mapped onto the color ramp.                                                                           |
+| `gradientColorRamp`                                               | `Color[]`          | `[]`     | Low→high color stops (piecewise-lerped) for the pulsing color.                                                         |
+| `tripWidth`                                                       | `number \| string` | `3`      | Corridor line width (constant; widths do not animate here).                                                            |
+| `widthUnits` / `widthScale` / `widthMinPixels` / `widthMaxPixels` | —                  | —        | `PathLayer` width controls (see `AnimatedTripsLayer`).                                                                 |
+| `trailLength`                                                     | `number`           | `0`      | **Overridden to `0`** here, unlike `AnimatedTripsLayer`'s `180000`. See above — any non-zero value blanks the network. |
 
 `FlowCorridorLayer` also adds its own props, all optional, that control how the active-bucket scalar is derived and how a paired [`ChevronFlowExtension`](./chevron-flow-extension.md) reads direction/intensity off it:
 
-| Property                   | Type      | Default                    | Description                                                             |
-| :------------------------- | :-------- | :------------------------- | :---------------------------------------------------------------------- |
-| `signedFlow`               | `boolean` | `false`                    | Read the value matrix as signed, so the sign carries travel direction.  |
-| `chevronPerTripLight`      | `boolean` | `false`                    | Pack a rolling aggregate and an instantaneous flash into one buffer.    |
-| `chevronAggregateWindowMs` | `number`  | `240000`                   | Half-span (ms of data time) of the `chevronPerTripLight` RGB aggregate. |
-| `chevronInstantDomain`     | `number`  | `1.5`                      | Trailing-sum value that reads as a full-brightness flash.               |
-| `chevronInstantDecayMs`    | `number`  | `120000`                   | Decay time constant (ms of data time) of the instant flash.             |
-| `chevronDirectionWindowMs` | `number`  | `chevronAggregateWindowMs` | Half-span of the `signedFlow` directional-coherence window.             |
+| Property                   | Type      | Default                                   | Description                                                                                                                                                                                                           |
+| :------------------------- | :-------- | :---------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signedFlow`               | `boolean` | `false`                                   | Read the value matrix as signed, so the sign carries travel direction.                                                                                                                                                |
+| `chevronPerTripLight`      | `boolean` | `false`                                   | Pack a rolling aggregate and an instantaneous flash into one buffer.                                                                                                                                                  |
+| `chevronAggregateWindowMs` | `number`  | `240000`                                  | Half-span (ms of data time) of the `chevronPerTripLight` RGB aggregate.                                                                                                                                               |
+| `chevronInstantDomain`     | `number`  | `1.5`                                     | Trailing-sum value that reads as a full-brightness flash.                                                                                                                                                             |
+| `chevronInstantDecayMs`    | `number`  | `120000`                                  | Decay time constant (ms of data time) of the instant flash.                                                                                                                                                           |
+| `chevronDirectionWindowMs` | `number`  | `0` (inherits `chevronAggregateWindowMs`) | Half-span of the `signedFlow` directional-coherence window.                                                                                                                                                           |
+| `persistenceMs`            | `number`  | `0` (off)                                 | TRAILING persistence window (ms of data time) for the default matrix path: each vertex holds the **max** of the bucket signal over `[t − persistenceMs, t]` instead of the instantaneous two-bucket blend. See below. |
 
 **`signedFlow`** — `abs(value)` drives the color (volume) while the sign carries
 per-bucket travel direction. Set it for tiles built with
@@ -74,11 +89,20 @@ period), and the colour buffer's alpha byte carries a separate instantaneous
 per-trip flash — a short trailing decay of the nearest fine bucket. No extra GPU
 attribute is needed.
 
+**`persistenceMs`** — generators bin a trip's whole route into its START bucket,
+so without persistence a corridor's highlight fades one bucket after departure
+while the ride (a moving-heads overlay) is still traversing it. Set it to the
+typical trip DURATION and the highlight rises over one bucket, holds for the
+window, then fades over one bucket. Time-CHUNKED archives clamp the window at
+each chunk's first column (a brief reset at chunk boundaries); whole-range
+corridor archives are unaffected. Only applies on the default matrix path, not
+under `chevronPerTripLight`.
+
 `chevronAggregateWindowMs` defaults to ±4 min; wider windows smooth the ramp
 colour further. A non-positive `chevronInstantDomain` falls back to the default.
-`chevronDirectionWindowMs` defaults to sharing the aggregate window so colour and
-direction resolve at the same temporal granularity — set it separately to
-decouple them.
+`chevronDirectionWindowMs` defaults to `0`, which inherits the aggregate window
+so colour and direction resolve at the same temporal granularity — set it
+non-zero to decouple them.
 
 These props drive the directional chevrons in the `bixi-streets-flow` demo, where
 `signedFlow` and `chevronPerTripLight` pair with a `ChevronFlowExtension` added

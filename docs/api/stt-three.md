@@ -7,9 +7,9 @@ transparently. It consumes the exact same decoded tiles as
 [`@poopdeck.gl/layers`](./spatiotemporal-layer.md) (via `@poopdeck.gl/core`)
 and the same playback clock from `@poopdeck.gl/playback`, so it is a drop-in
 alternative renderer rather than a separate data pipeline. It ships two
-surfaces: a framework-agnostic engine core (`SttScene`, `createSttRenderer`,
-individual `SttLayer`s) and a declarative react-three-fiber binding at the
-`@poopdeck.gl/three/r3f` subpath (`<SttCanvas>` + layer components). It covers
+surfaces: a framework-agnostic engine core (`STTScene`, `createSTTRenderer`,
+individual `STTLayer`s) and a declarative react-three-fiber binding at the
+`@poopdeck.gl/three/r3f` subpath (`<STTCanvas>` + layer components). It covers
 a first-class local-metric (ENU) frame for the AV LIDAR cockpit — oriented
 Gaussian surfels included — alongside mercator and globe projections, viewport
 streaming, and a near-full port of the geographic layer catalog. See
@@ -35,14 +35,14 @@ has no React dependency.
 > when the browser has no WebGPU adapter); the classic `WebGLRenderer` cannot
 > run them. There is no WebGL1 fallback — `isWebGPUAvailable()` /
 > `canRenderGpu()`-style feature detection is worth gating on (the r3f
-> `<SttCanvas>` does this for you, see below).
+> `<STTCanvas>` does this for you, see below).
 
 ## Renderer bootstrap
 
 ```ts
-import { createSttRenderer, isWebGPUAvailable } from '@poopdeck.gl/three';
+import { createSTTRenderer, isWebGPUAvailable } from '@poopdeck.gl/three';
 
-const { renderer, backend } = await createSttRenderer({
+const { renderer, backend } = await createSTTRenderer({
   canvas: document.querySelector('canvas')!,
   antialias: true,
   alpha: true, // transparent clear, lets a basemap show through
@@ -50,7 +50,7 @@ const { renderer, backend } = await createSttRenderer({
 console.log(backend); // 'webgpu' | 'webgl2'
 ```
 
-`createSttRenderer` builds and `init()`s a `WebGPURenderer` — always `await`
+`createSTTRenderer` builds and `init()`s a `WebGPURenderer` — always `await`
 it before the first render. It also pre-requests a WebGPU device with its
 buffer-size limits raised to the adapter maximum (`createHighLimitDevice`),
 because Three's default device caps a single buffer at the WebGPU spec
@@ -59,10 +59,10 @@ that; `forceWebGL: true` skips this (the WebGL2 backend has no such cap).
 
 | Function                                  | Description                                                                                                                                                                      |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createSttRenderer(opts?)`                | Builds + `init()`s a `WebGPURenderer`. Returns `{ renderer, backend }`.                                                                                                          |
+| `createSTTRenderer(opts?)`                | Builds + `init()`s a `WebGPURenderer`. Returns `{ renderer, backend }`.                                                                                                          |
 | `isWebGPUAvailable()`                     | `true` if the page can request a WebGPU adapter (`navigator.gpu` present). Does not guarantee adapter/device acquisition succeeds.                                               |
 | `resolveBackend(renderer, forceWebGL?)`   | Inspects a live renderer to report which backend `init()` actually chose.                                                                                                        |
-| `createHighLimitDevice(powerPreference?)` | Pre-creates a `GPUDevice` with raised buffer-size limits; used internally by `createSttRenderer` and the r3f binding's `gl` factory. Returns `undefined` on WebGL2 / on failure. |
+| `createHighLimitDevice(powerPreference?)` | Pre-creates a `GPUDevice` with raised buffer-size limits; used internally by `createSTTRenderer` and the r3f binding's `gl` factory. Returns `undefined` on WebGL2 / on failure. |
 
 ### `CreateRendererOptions`
 
@@ -77,24 +77,24 @@ that; `forceWebGL: true` skips this (the WebGL2 backend has no such cap).
 ### Non-React mount
 
 For apps without React there is no viewer wrapper — you own the camera and
-the loop, and the package gives you the two halves: `createSttRenderer()`
+the loop, and the package gives you the two halves: `createSTTRenderer()`
 (which `await`s `renderer.init()` **before** you ever call `render()`, so the
 "render() before the backend is initialized" warning cannot happen) and
-`SttScene`, whose `root` is a plain `Group` you add to any Three scene.
+`STTScene`, whose `root` is a plain `Group` you add to any Three scene.
 
 ```ts
 import { Scene, PerspectiveCamera, Group } from 'three';
 import {
-  SttScene,
+  STTScene,
   STTPointCloudLayer,
-  createSttRenderer,
+  createSTTRenderer,
 } from '@poopdeck.gl/three';
 
-const { renderer } = await createSttRenderer({
+const { renderer } = await createSTTRenderer({
   canvas: document.getElementById('viewport') as HTMLCanvasElement,
 });
 
-const stt = new SttScene({
+const stt = new STTScene({
   anchor: { longitude: -122.4, latitude: 37.77 },
   timeOrigin: Date.now(),
 });
@@ -116,7 +116,7 @@ renderer.setAnimationLoop(() => {
 ```
 
 For a camera rig, orbit controls and a follow-ego mode, use the r3f binding
-(`<SttCanvas>`) below rather than hand-rolling them.
+(`<STTCanvas>`) below rather than hand-rolling them.
 
 ## Projections
 
@@ -170,7 +170,7 @@ globe scene with planet-aware near/far clipping.
 
 ## Layer catalog
 
-Every layer implements the small `SttLayer` contract (`setTiles(tiles, ctx)`,
+Every layer implements the small `STTLayer` contract (`setTiles(tiles, ctx)`,
 `setTime(absoluteMs)`, `dispose()`) and owns one Three `Object3D`; a layer
 merges every resident tile into **one** `InstancedMesh`/indexed mesh per
 layer (not one draw call per tile, unlike the maplibre adapter), and
@@ -239,10 +239,10 @@ directly; the half-width names win only when set explicitly.
 
 Two tile sources cover the two shapes of dataset this renderer targets:
 
-| Source                | Strategy                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Use                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `SttTileSource`       | Eager — loads every tile of an archive once (optionally the union of every zoom level under `lodMode: 'additive'`), hands the layer the full set, and lets the GPU time-filter cull per frame. No viewport reselection, no per-frame rebuild.                                                                                                                                                                                                                             | Small, local archives (the AV cockpit's ~20 s scenes).            |
-| `StreamingTileSource` | Wraps the core `SpatiotemporalTileset` (the same selection/prefetch/eviction machinery the deck renderer uses). A camera-derived `{bounds, zoom, time}` viewport (via `cameraToViewport`, which unprojects the four NDC frustum corners onto the ground plane and derives a slippy-map zoom from the measured ground resolution) drives `tileset.update`, and `onTilesChanged` fires with the fresh resident tile set only when it actually changes (`residentSetEqual`). | Heavy multi-km / wide-area datasets that can't be loaded eagerly. |
+| Source                | Strategy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Use                                                               |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `STTTileSource`       | Eager — loads every tile of an archive once (optionally the union of every zoom level under `lodMode: 'additive'`), hands the layer the full set, and lets the GPU time-filter cull per frame. No viewport reselection, no per-frame rebuild.                                                                                                                                                                                                                                                                                                                                                        | Small, local archives (the AV cockpit's ~20 s scenes).            |
+| `StreamingTileSource` | Wraps the core `SpatioTemporalTileset` (the same selection/prefetch/eviction machinery the deck renderer uses). A camera-derived `{bounds, zoom, time}` viewport (via `cameraToViewport`, which casts a grid of NDC rays against the projection's reference surface — the ground plane on mercator, the sphere on globe — clamps grazing rays at the horizon so a near-horizontal view cannot claim the world, and takes the zoom from `cameraToViewState`) drives `tileset.update`, and `onTilesChanged` fires with the fresh resident tile set only when it actually changes (`residentSetEqual`). | Heavy multi-km / wide-area datasets that can't be loaded eagerly. |
 
 `TilesetBufferSource` is the real playback `BufferSource` for a streaming
 dataset — it delegates buffered-runway / ranges / cost / ETA straight to the
@@ -252,52 +252,52 @@ tileset's coverage index, replacing the always-`complete:true`
 
 ## react-three-fiber (`@poopdeck.gl/three/r3f`)
 
-`<SttCanvas>` owns the `WebGPURenderer`, a Z-up camera, `MapControls`
+`<STTCanvas>` owns the `WebGPURenderer`, a Z-up camera, `MapControls`
 (left-drag pans, matching the deck `MapController` gesture), the ground, and
 an optional follow-ego rig; layer components compose inside it declaratively.
 r3f's reconciler drives the lifecycle — mounting a layer adds it to the
 scene, unmounting disposes it — and tile loading is coordinated through React
-Suspense (each layer suspends on its archive load via `useSttTiles`, with a
+Suspense (each layer suspends on its archive load via `useSTTTiles`, with a
 bounded LRU across mount/unmount cycles).
 
 ```tsx
-import { SttCanvas, SttPointCloudLayer } from '@poopdeck.gl/three/r3f';
+import { STTCanvas, STTPointCloudLayer } from '@poopdeck.gl/three/r3f';
 
 function Viewport({ getTime }: { getTime: () => number }) {
   return (
-    <SttCanvas
+    <STTCanvas
       anchor={{ longitude: -122.4, latitude: 37.77 }}
       timeOrigin={Date.now()}
       getTime={getTime}
     >
-      <SttPointCloudLayer
+      <STTPointCloudLayer
         url="/data/points/manifest.json"
         colorProperty="category"
       />
-    </SttCanvas>
+    </STTCanvas>
   );
 }
 ```
 
-Every `Stt*Layer` component (`SttSurfelLayer`, `SttPointCloudLayer`,
-`SttBoundingBoxLayer`, `SttMapPolygonLayer`/`SttPolygonLayer`,
-`SttMapLineLayer`/`SttPathLayer`, `SttOdLineLayer`, `SttArcLayer`,
-`SttIconLayer`, `SttColumnLayer`, `SttTripsLayer`, `SttTripHeadsLayer`,
-`SttQuadbinLayer`, `SttH3Layer`, `SttFlowmapLayer`, `SttFlowCorridorLayer`,
-`SttIsoLayer`, `SttEgoLayer`) takes the corresponding engine layer's options
+Every `Stt*Layer` component (`STTSurfelLayer`, `STTPointCloudLayer`,
+`STTBoundingBoxLayer`, `STTMapPolygonLayer`/`STTPolygonLayer`,
+`STTMapLineLayer`/`STTPathLayer`, `STTOdLineLayer`, `STTArcLayer`,
+`STTIconLayer`, `STTColumnLayer`, `STTTripsLayer`, `STTTripHeadsLayer`,
+`STTQuadbinLayer`, `STTH3Layer`, `STTFlowmapLayer`, `STTFlowCorridorLayer`,
+`STTIsoLayer`, `STTEgoLayer`) takes the corresponding engine layer's options
 plus a `url` (archive manifest) and an optional `lodMode`/`sourceRequired`.
-`SttGlobeBasemap` mounts a static earth-sphere mesh for globe scenes.
+`STTGlobeBasemap` mounts a static earth-sphere mesh for globe scenes.
 
-### `SttCanvasProps`
+### `STTCanvasProps`
 
 | Field                     | Type                                  | Default                       | Description                                                                                                                                                |
 | ------------------------- | ------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `anchor`                  | `GeoAnchor`                           | —                             | lon/lat mapped to the world origin (the `LocalEnuProjection` anchor).                                                                                      |
 | `timeOrigin`              | `number`                              | —                             | Common time base (epoch-ms) every layer rebases to.                                                                                                        |
 | `getTime`                 | `() => number`                        | —                             | Playback clock — absolute playhead each frame.                                                                                                             |
-| `registry`                | `SttSourceRegistry`                   | —                             | Playback governor registry; when set, each mounted layer registers a `BufferSource` so the transport's buffered bar / Auto-speed / ETA reflect this scene. |
+| `registry`                | `STTSourceRegistry`                   | —                             | Playback governor registry; when set, each mounted layer registers a `BufferSource` so the transport's buffered bar / Auto-speed / ETA reflect this scene. |
 | `timeRange`               | `{ start, end }`                      | —                             | Reported to the governor as the buffered span.                                                                                                             |
-| `followEgo`               | `boolean`                             | `false`                       | Camera chases the `SttEgoLayer` pose with an exponential filter.                                                                                           |
+| `followEgo`               | `boolean`                             | `false`                       | Camera chases the `STTEgoLayer` pose with an exponential filter.                                                                                           |
 | `topDown`                 | `boolean`                             | `false`                       | Steeper framing pitch.                                                                                                                                     |
 | `pitchDeg` / `headingDeg` | `number`                              | —                             | Explicit initial camera pitch / heading (degrees), overriding the framing defaults.                                                                        |
 | `background`              | `string`                              | `'#05070d'`                   | Canvas background (CSS color string).                                                                                                                      |
@@ -305,7 +305,7 @@ plus a `url` (archive manifest) and an optional `lodMode`/`sourceRequired`.
 | `pixelRatio`              | `number \| [number, number]`          | clamped device ratio `[1, 2]` | Device-pixel-ratio cap — the single biggest perf lever for fill-bound clouds on retina.                                                                    |
 | `reducedMotion`           | `boolean`                             | `false`                       | Snap the camera instead of easing/damping (`prefers-reduced-motion`).                                                                                      |
 | `ground`                  | `GroundOptions \| false`              | `{}`                          | Metric reference grid, or `false` to omit.                                                                                                                 |
-| `onPick`                  | `(info: SttPickInfo \| null) => void` | —                             | Click-to-inspect callback over registered pickable layers (boxes + ego); omit to disable picking.                                                          |
+| `onPick`                  | `(info: STTPickInfo \| null) => void` | —                             | Click-to-inspect callback over registered pickable layers (boxes + ego); omit to disable picking.                                                          |
 | `renderFallback`          | `ReactNode`                           | built-in message              | Shown when WebGPU/WebGL2 is unavailable or the canvas subtree errors.                                                                                      |
 | `fallback`                | `ReactNode`                           | `null`                        | Suspense fallback while layer archives load.                                                                                                               |
 
@@ -316,14 +316,14 @@ first render — no blank frame, no "render before init" warning). Because the
 STT layers read the playback `TimeController` in `useFrame` rather than
 reacting to React state, and r3f's `frameloop="always"` only repaints on
 demand under an async `gl` factory (camera/control events, not clock ticks),
-`<SttCanvas>` runs `frameloop="never"` and drives its own `requestAnimationFrame`
+`<STTCanvas>` runs `frameloop="never"` and drives its own `requestAnimationFrame`
 pump (`advance(now)` every frame) so the scene tracks the external clock.
 
 ## Picking
 
 Two independent mechanisms exist:
 
-- **CPU ray-OBB** (`pickBoxes`/`rayObbHit`, wired by default in `<SttCanvas>`
+- **CPU ray-OBB** (`pickBoxes`/`rayObbHit`, wired by default in `<STTCanvas>`
   via `onPick`) — hit-tests a pointer click against every registered
   pickable layer's boxes (objects + ego). This is the mechanism the backend
   descriptor reports (`pickMechanism: 'cpu-ray'`).
@@ -342,7 +342,7 @@ Two independent mechanisms exist:
 | Mercator projection                               | ✓                                                                                                                        | ✓                                                      |
 | Globe projection                                  | ✓ (ECEF mesh — real 3D sphere/ellipsoid, standard MVP depth)                                                             | ✓ (`GlobeView` — in-shader vertex warp)                |
 | Local metric (ENU) projection                     | ✓ (native — the AV cockpit frame)                                                                                        | —                                                      |
-| Viewport streaming                                | ✓ (`StreamingTileSource` wraps the shared `SpatiotemporalTileset`)                                                       | ✓                                                      |
+| Viewport streaming                                | ✓ (`StreamingTileSource` wraps the shared `SpatioTemporalTileset`)                                                       | ✓                                                      |
 | GPU time filtering (window/wake/cumulative/trail) | ✓ (`tsl/time-filter.ts`, parity across all 4 modes)                                                                      | ✓ (`TimeFilterExtension`)                              |
 | Basemap                                           | Host-owned maplibre **overlay canvas**, camera-synced (not interleaved — WebGPU/WebGL contexts can't share a GL context) | Interleaved (`interleaved: true`) or overlay           |
 | GPU heatmap aggregation                           | — (deferred; fall back to a point-density layer)                                                                         | ✓ (`AnimatedHeatmapLayer`)                             |
@@ -360,7 +360,7 @@ machine-generated, drift-guarded capability matrix across all four backends
 ## Limitations
 
 - **No WebGL1 fallback.** `WebGPURenderer` requires WebGPU or WebGL2; older
-  browsers/devices render nothing (`<SttCanvas>` shows a "needs WebGPU or
+  browsers/devices render nothing (`<STTCanvas>` shows a "needs WebGPU or
   WebGL2" fallback by default).
 - **Basemap is a separate overlay canvas, never interleaved.** TSL only
   compiles on `WebGPURenderer`, and WebGL/WebGPU contexts are non-interoperable

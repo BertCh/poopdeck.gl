@@ -124,7 +124,7 @@ const GESTURE_KEYS: GestureKey[] = [
 const ORDER_LABEL: Record<OrderKey, string> = {
   spatial: 'spatial',
   hilbert3: 'hilbert3',
-  time: 'time',
+  time: 'time-major',
 };
 
 const ORDERS: Record<OrderKey, Cell[]> = {
@@ -1013,13 +1013,18 @@ const SpaceTimeCurve: React.FC = () => {
           borderTop: '1px solid var(--hairline)',
         }}
       >
-        <span className="font-mono">--blob-ordering auto</span> measures the
-        archive's shape and picks the walk: time-deep datasets (a buoy's
-        four-year track over a few cells) get{' '}
+        <span className="font-mono">--blob-ordering auto</span> — the default —
+        reads the archive's occupied space-vs-time extent and picks: time-deep
+        datasets (a buoy's four-year track over a few cells) get{' '}
         <span className="font-mono">spatial</span>, because playback wants each
-        cell's whole timeline in one pull — measured ~3× fewer requests than the
-        cube walk there. Balanced or space-heavy datasets (a day of global
-        flights) get the <span className="font-mono">hilbert3</span> generalist.
+        cell's whole timeline in one pull; balanced or space-heavy datasets (a
+        day of global flights) get the{' '}
+        <span className="font-mono">hilbert3</span> generalist. To decide from
+        measurement instead of shape, build with{' '}
+        <span className="font-mono">--blob-ordering measured</span> or audit an
+        existing archive with{' '}
+        <span className="font-mono">stt-optimize order-audit</span>, which
+        simulates the range-read cost of each walk over the real directory.
         Either way the directory index keeps its own{' '}
         <span className="font-mono">(zoom, hilbert(x,y), t)</span> sort — the
         knob permutes bytes inside packs, never keys.

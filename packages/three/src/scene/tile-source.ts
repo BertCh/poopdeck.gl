@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `SttTileSource` — a thin STTArchive-backed loader for one archive.
+ * `STTTileSource` — a thin STTArchive-backed loader for one archive.
  *
  * The AV cockpit scenes are small and local (≈20 s spans, a handful of MB per
  * stream), so this renderer takes the simplest correct strategy: **eagerly load
@@ -12,15 +12,15 @@
  * time-filter alpha). No viewport-driven reselection, no per-frame rebuild — the
  * data is fully resident and playback is a pure uniform update.
  *
- * (The deck renderer streams via `SpatiotemporalTileset`; that machinery can be
- * wired here later for the heavy multi-km clouds, but it is overkill for the
- * cockpit milestone.)
+ * (The deck renderer streams via `SpatioTemporalTileset`; that machinery can be
+ * wired here for the heavy multi-km clouds, but it is overkill for scenes this
+ * small.)
  */
 
 import { STTArchive } from '@poopdeck.gl/core';
 import type { ArchiveMetadata, Tile, TileId } from '@poopdeck.gl/core';
 
-export interface SttTileSourceOptions {
+export interface STTTileSourceOptions {
   /** Resolved archive manifest URL. */
   url: string;
   /** Custom fetch (e.g. to add auth headers / rewrite the base). */
@@ -32,7 +32,7 @@ export interface SttTileSourceOptions {
    * additive-octree `-lod` bundle materializes each return at exactly ONE home
    * zoom, so a coarse level holds sparse overview points that exist in no other
    * level — loading only `maxZoom` would drop most of the cloud. Mirrors
-   * `SpatiotemporalTileset`'s additive union.
+   * `SpatioTemporalTileset`'s additive union.
    */
   lodMode?: 'parent-fallback' | 'additive';
 }
@@ -42,14 +42,14 @@ export interface LoadedSource {
   tiles: Tile[];
 }
 
-export class SttTileSource {
+export class STTTileSource {
   readonly url: string;
   private readonly archive: STTArchive;
   private readonly lodMode: 'parent-fallback' | 'additive';
   private loaded: LoadedSource | null = null;
   private inflight: Promise<LoadedSource> | null = null;
 
-  constructor(opts: SttTileSourceOptions) {
+  constructor(opts: STTTileSourceOptions) {
     this.url = opts.url;
     this.lodMode = opts.lodMode ?? 'parent-fallback';
     this.archive = new STTArchive({ url: opts.url, fetch: opts.fetch });
@@ -73,7 +73,7 @@ export class SttTileSource {
     if (this.lodMode === 'additive') {
       // Additive octree: each return lives at exactly ONE home zoom, so the
       // resident cloud is the UNION of [minZoom..maxZoom] — load every level and
-      // dedupe (mirrors SpatiotemporalTileset's additive union). Loading only
+      // dedupe (mirrors SpatioTemporalTileset's additive union). Loading only
       // maxZoom would drop every coarse-level point.
       const seen = new Set<string>();
       const ids: TileId[] = [];

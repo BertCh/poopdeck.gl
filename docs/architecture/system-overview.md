@@ -37,7 +37,7 @@ graph TD
         ARCHIVE["@poopdeck.gl/core: STTArchive"]
         OPFS["OPFS persistent cache"]
         DECODER["WorkerTileDecoder pool"]
-        TILESET[SpatiotemporalTileset]
+        TILESET[SpatioTemporalTileset]
         LAYERS["renderer backend: layers (deck) / three / maplibre / cesium"]
         ARCHIVE --> OPFS
         ARCHIVE --> DECODER
@@ -184,7 +184,7 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 - **`TileDecoder`** — see [stt-loader.md](../api/stt-loader.md). Worker-pool
   by default in browsers; inline fallback elsewhere. Crashed workers are
   replaced automatically.
-- **`SpatiotemporalTileset`** — viewport + time-aware tile selection,
+- **`SpatioTemporalTileset`** — viewport + time-aware tile selection,
   bucket-aligned prefetch, direction hysteresis to suppress scrub jitter,
   grace-period LRU eviction. Dispatches between the raw and **summary**
   tiers per zoom (`tier: 'raw' | 'summary' | 'auto'`). Temporal-LOD
@@ -216,7 +216,7 @@ hand-maintaining forks (see
 - **`core/picking`** — `SttPickResult` shape, the 24-bit id scheme, and the
   `InstanceProvenance` merged-buffer identity contract.
 - **`core/tileset-adapter`** — `makeTilesetCallbacks(archive)`, the single
-  `SpatiotemporalTileset` fetch-callback bundle all backends consume.
+  `SpatioTemporalTileset` fetch-callback bundle all backends consume.
 - **`core/capabilities`** — the `LayerKind`/`Capability`/`TimeFilterMode`
   vocabulary + `BackendDescriptor` + typed `Degradation` + `assertDescriptorConsistent`
   over-claim gate. Each backend publishes a descriptor; the generated

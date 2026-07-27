@@ -5,7 +5,7 @@
 /**
  * The deck.gl backend's capability descriptor — what this renderer DECLARES
  * about itself against the shared contract in `@poopdeck.gl/core/capabilities`
- * (see docs/roadmap/renderer-architecture.md, Phase 5).
+ * (see docs/roadmap/renderer-architecture.md).
  *
  * This is the retro-documentation of reality: deck is the reference backend —
  * full catalog coverage, GPU id-buffer picking, all four linear time-filter

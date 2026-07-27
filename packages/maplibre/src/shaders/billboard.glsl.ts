@@ -3,7 +3,7 @@
 
 /**
  * The point-sprite (billboard) disc — one definition of the circle every
- * `gl.POINTS` layer in this package draws and hit-tests (Wave M3 seam pass).
+ * `gl.POINTS` layer in this package draws and hit-tests.
  *
  * `STTPointLayer` and `STTTripHeadsLayer` both render round billboards, and
  * each needs the SAME disc in two fragment stages: the visual one (antialiased)

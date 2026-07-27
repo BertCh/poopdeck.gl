@@ -3,7 +3,7 @@
 // Copyright (c) @poopdeck.gl/three contributors
 
 /**
- * `SttScene` — the framework-agnostic engine core.
+ * `STTScene` — the framework-agnostic engine core.
  *
  * It owns a single Three {@link Group} (`root`) holding the ground + each layer's
  * object, a {@link Projection} (the local ENU frame), and the per-source tile
@@ -23,8 +23,8 @@ import {
   type GeoAnchor,
   type Projection,
 } from '../projection/local-enu.js';
-import type { SttLayer, SttLayerContext } from '../layers/layer.js';
-import { SttTileSource } from './tile-source.js';
+import type { STTLayer, STTLayerContext } from '../layers/layer.js';
+import { STTTileSource } from './tile-source.js';
 import {
   StreamingTileSource,
   type StreamingLayerOptions,
@@ -32,7 +32,7 @@ import {
 } from './streaming-tile-source.js';
 import { makeGround, type GroundOptions } from './ground.js';
 
-export interface SttSceneOptions {
+export interface STTSceneOptions {
   /** lon/lat anchor that maps to the world origin (usually the scene's view centre).
    *  Used to build the default {@link LocalEnuProjection} when `projection` is omitted. */
   anchor: GeoAnchor;
@@ -49,21 +49,21 @@ export interface SttSceneOptions {
   /** Custom fetch for archive requests (base rewrite / auth). */
   fetch?: typeof fetch;
   /**
-   * Scene-level streaming default applied to every {@link SttScene.addLayer} that
+   * Scene-level streaming default applied to every {@link STTScene.addLayer} that
    * doesn't override it. `true` streams all layers with the archive defaults; an
    * options object streams with those tileset knobs. Omit / `false` (the default)
    * keeps the backward-compatible EAGER load-everything path
-   * ({@link SttTileSource}). A per-layer `streaming` option always wins.
+   * ({@link STTTileSource}). A per-layer `streaming` option always wins.
    */
   streaming?: boolean | StreamingLayerOptions;
 }
 
-/** Per-layer overrides for {@link SttScene.addLayer}. */
+/** Per-layer overrides for {@link STTScene.addLayer}. */
 export interface AddLayerOptions {
   /**
    * Back this layer with the viewport-driven {@link StreamingTileSource} (real
    * LOD selection + prefetch + eviction) instead of the eager
-   * {@link SttTileSource}. `true` streams with the archive defaults; an options
+   * {@link STTTileSource}. `true` streams with the archive defaults; an options
    * object passes tileset knobs; omit to inherit the scene's `streaming` default.
    * `false` forces eager even when the scene defaults to streaming.
    */
@@ -72,17 +72,17 @@ export interface AddLayerOptions {
 
 interface EagerSceneSource {
   kind: 'eager';
-  source: SttTileSource;
-  layer: SttLayer;
+  source: STTTileSource;
+  layer: STTLayer;
 }
 interface StreamingSceneSource {
   kind: 'streaming';
   source: StreamingTileSource;
-  layer: SttLayer;
+  layer: STTLayer;
 }
 type SceneSource = EagerSceneSource | StreamingSceneSource;
 
-export class SttScene {
+export class STTScene {
   /** Add this to the host scene graph. */
   readonly root = new Group();
   readonly projection: Projection;
@@ -91,10 +91,10 @@ export class SttScene {
   private readonly fetchFn?: typeof fetch;
   private readonly defaultStreaming?: boolean | StreamingLayerOptions;
   private readonly sources: SceneSource[] = [];
-  private readonly layers: SttLayer[] = [];
+  private readonly layers: STTLayer[] = [];
   private disposed = false;
 
-  constructor(opts: SttSceneOptions) {
+  constructor(opts: STTSceneOptions) {
     this.projection = opts.projection ?? new LocalEnuProjection(opts.anchor);
     this.timeOrigin = opts.timeOrigin;
     this.fetchFn = opts.fetch;
@@ -106,7 +106,7 @@ export class SttScene {
   }
 
   /** The rebuild context every layer receives from `setTiles`. */
-  private layerContext(): SttLayerContext {
+  private layerContext(): STTLayerContext {
     return { projection: this.projection, timeOrigin: this.timeOrigin };
   }
 
@@ -118,7 +118,7 @@ export class SttScene {
    * instead. Streaming layers are fed by {@link updateStreaming} + a live
    * `onTilesChanged` re-publish rather than the one-shot {@link load}.
    */
-  addLayer(layer: SttLayer, url: string, opts: AddLayerOptions = {}): this {
+  addLayer(layer: STTLayer, url: string, opts: AddLayerOptions = {}): this {
     this.layers.push(layer);
     this.root.add(layer.object);
     const streaming = opts.streaming ?? this.defaultStreaming;
@@ -147,7 +147,7 @@ export class SttScene {
     } else {
       this.sources.push({
         kind: 'eager',
-        source: new SttTileSource({ url, fetch: this.fetchFn }),
+        source: new STTTileSource({ url, fetch: this.fetchFn }),
         layer,
       });
     }
@@ -155,7 +155,7 @@ export class SttScene {
   }
 
   /** Register a layer that needs no archive (host-fed geometry, e.g. an ego marker). */
-  addStaticLayer(layer: SttLayer): this {
+  addStaticLayer(layer: STTLayer): this {
     this.layers.push(layer);
     this.root.add(layer.object);
     return this;
@@ -243,7 +243,7 @@ export class SttScene {
   }
 
   /** The registered layers (read-only view for introspection). */
-  getLayers(): readonly SttLayer[] {
+  getLayers(): readonly STTLayer[] {
     return this.layers;
   }
 

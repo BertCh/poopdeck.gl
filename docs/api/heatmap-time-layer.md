@@ -31,6 +31,18 @@ gaussian splats accumulate correctly across tile borders. The consolidated
 buffers are cached by visible-tile-set key and rebuilt only when that set (or
 the channel config) changes; per frame only the small `filterRange` array
 changes, so nothing is re-uploaded — only the GPU aggregation re-runs.
+`filterRange` / `filterSoftRange` are additionally memoized **by content**: a
+tick that lands inside the same window hands back the _same array reference_ and
+the sublayer sees no change at all, so only a window that actually moved pays
+for the rebuild (and it must, since that rebuild is what re-runs the
+aggregation).
+
+**Geometry kinds.** Point tiles splat one gaussian per feature. **LineString
+tiles splat one per VERTEX** (walked through `startIndices`), which is what makes
+a "density of AIS tracks / flight paths" heatmap read correctly — indexing
+`positions` by feature index there would have splatted the first N vertices of
+the first few paths instead. Polygon tiles are **rejected** with a named console
+warning rather than mis-rendered.
 
 f32 precision: both the per-point filter value and `filterRange` are
 relativized against a single layer time offset (the first visible tile's

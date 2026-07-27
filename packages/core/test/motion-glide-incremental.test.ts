@@ -27,9 +27,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildTrackIndex,
+  sampleTrack,
   TrackIndexMaintainer,
 } from '../src/render/track-kernel';
-import type { Track, TrackFieldConfig } from '../src/render/track-kernel';
+import type {
+  Track,
+  TrackFieldConfig,
+  TrackSampleConfig,
+} from '../src/render/track-kernel';
+import type { MotionMode } from '../src/render/motion';
 import { makePointTile, categorical } from './helpers/track-tiles';
 import type { Tile } from '../src/types';
 
@@ -200,6 +206,54 @@ describe('TrackIndexMaintainer (motion-glide incremental index)', () => {
     }
     // onlyA lived only in the removed tile → dropped, not re-sorted.
     expect(resorted.has('onlyA')).toBe(false);
+  });
+
+  // ── (c) MOTION MODES DO NOT REACH THE POOL ────────────────────────────────
+
+  it('still matches a fresh build when a motion config is sampling the pool', () => {
+    // Motion modes are a property of SAMPLING (`TrackSampleConfig.motion`), not
+    // of POOLING (`TrackFieldConfig`) — the maintainer has no motion input and
+    // must not acquire one. This case exists because the extended sampler reads
+    // the same parallel arrays the maintainer owns, including past the terminal
+    // keyframe: a sampler that wrote a scratch value into `track.lon` (or
+    // appended a predicted keyframe, the obvious wrong way to implement
+    // extrapolation) would corrupt the incremental index and the corruption
+    // would only surface as drift after a tile churn.
+    const m = new TrackIndexMaintainer();
+    m.sync([TILE_A, TILE_B, TILE_C], CFG);
+
+    const SAMPLE_CFG: TrackSampleConfig = {
+      defaultLength: 4,
+      defaultWidth: 2,
+      defaultHeight: 1.6,
+      fadeInDuration: 0,
+      fadeOutDuration: 0,
+    };
+    const modes: MotionMode[] = ['linear', 'velocity', 'great-circle'];
+    const drive = (tracks: Map<string, Track>) => {
+      for (const track of tracks.values()) {
+        for (const mode of modes) {
+          for (let now = -500; now <= 8000; now += 97) {
+            sampleTrack(track, now, {
+              ...SAMPLE_CFG,
+              motion: { mode, maxExtrapolationMs: 2000 },
+            });
+          }
+        }
+      }
+    };
+
+    drive(m.sync([TILE_A, TILE_B, TILE_C], CFG).tracks);
+    const incremental = m.sync([TILE_B, TILE_C, TILE_D], CFG);
+    drive(incremental.tracks);
+
+    expectTrackMapsEqual(
+      incremental.tracks,
+      buildTrackIndex([TILE_B, TILE_C, TILE_D], CFG).tracks,
+    );
+    expect(incremental.totalSnapshots).toBe(
+      buildTrackIndex([TILE_B, TILE_C, TILE_D], CFG).totalSnapshots,
+    );
   });
 
   it('re-syncing the identical tile set re-sorts nothing (pure no-op)', () => {

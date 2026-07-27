@@ -5,10 +5,10 @@
 /**
  * react-three-fiber binding for the STT Three engine — `@poopdeck.gl/three/r3f`.
  *
- * A DECLARATIVE layer API: `<SttCanvas>` owns the `WebGPURenderer`, a Z-up camera,
+ * A DECLARATIVE layer API: `<STTCanvas>` owns the `WebGPURenderer`, a Z-up camera,
  * `OrbitControls`, the ground, and a follow-ego rig; inside it you compose layer
- * components (`<SttSurfelLayer>`, `<SttPointCloudLayer>`, `<SttBoundingBoxLayer>`,
- * `<SttMapPolygonLayer>`, `<SttMapLineLayer>`, `<SttEgoLayer>`). r3f's reconciler
+ * components (`<STTSurfelLayer>`, `<STTPointCloudLayer>`, `<STTBoundingBoxLayer>`,
+ * `<STTMapPolygonLayer>`, `<STTMapLineLayer>`, `<STTEgoLayer>`). r3f's reconciler
  * does the lifecycle: mounting a layer adds its object to the scene, unmounting
  * removes + disposes it, and React Strict Mode's double-invoke is handled
  * natively (no manual dispose dance). Tile loading is coordinated by React
@@ -40,11 +40,11 @@ import type { Tile } from '@poopdeck.gl/core';
 import { type GeoAnchor, type Projection } from '../projection/local-enu.js';
 import {
   pickBoxes,
-  type SttPickable,
-  type SttPickInfo,
-  type SttBoxPickInfo,
+  type STTPickable,
+  type STTPickInfo,
+  type STTBoxPickInfo,
 } from '../lib/box-pick.js';
-import { isIdPickable, type SttIdPickable } from '../lib/id-pick.js';
+import { isIdPickable, type STTIdPickable } from '../lib/id-pick.js';
 import {
   GpuPicker,
   type PickRenderer,
@@ -52,28 +52,28 @@ import {
 } from '../lib/gpu-pick.js';
 import {
   createCompleteBufferSource,
-  type SttSourceRegistry,
+  type STTSourceRegistry,
 } from '../lib/source-registry.js';
 import {
   createHighLimitDevice,
   resolveBackend,
 } from '../renderer/webgpu-renderer.js';
 import {
-  createSttAtmosphere,
+  createSTTAtmosphere,
   type AtmosphereOptions,
-  type SttAtmosphere,
+  type STTAtmosphere as AtmosphereHandle,
 } from '../scene/atmosphere.js';
 import {
-  createStt3DTiles,
-  type Stt3DTiles,
-  type Stt3DTilesOptions,
-  type Stt3DTilesSource,
+  createSTT3DTiles,
+  type STT3DTiles,
+  type STT3DTilesOptions,
+  type STT3DTilesSource,
 } from '../scene/tiles-3d.js';
 import {
-  createSttGlobeControls,
-  type SttGlobeControls,
+  createSTTGlobeControls,
+  type STTGlobeControls,
 } from '../scene/globe-controls.js';
-import { SttTileSource } from '../scene/tile-source.js';
+import { STTTileSource } from '../scene/tile-source.js';
 import {
   StreamingTileSource,
   cameraToViewport,
@@ -88,71 +88,81 @@ import {
   isGlobeProjection,
   resolveCanvasProjection,
   globeControlLimits,
+  groundControlLimits,
 } from '../scene/projection-rig.js';
-import type { SttLayer } from '../layers/layer.js';
+import type { STTLayer } from '../layers/layer.js';
 import {
-  STTSurfelLayer,
+  STTSurfelLayer as SurfelLayerEngine,
   type STTSurfelLayerOptions,
 } from '../layers/surfel-layer.js';
 import {
-  STTPointCloudLayer,
+  STTPointCloudLayer as PointCloudLayerEngine,
   type STTPointCloudLayerOptions,
 } from '../layers/point-cloud-layer.js';
 import {
-  STTBoundingBoxLayer,
+  STTBoundingBoxLayer as BoundingBoxLayerEngine,
   type STTBoundingBoxLayerOptions,
 } from '../layers/bounding-box-layer.js';
 import {
-  STTStaticPathLayer,
+  STTStaticPathLayer as StaticPathLayerEngine,
   type STTStaticPathLayerOptions,
 } from '../layers/path-layer.js';
 import {
-  STTStaticPolygonLayer,
+  STTStaticPolygonLayer as StaticPolygonLayerEngine,
   type STTStaticPolygonLayerOptions,
-  STTPolygonLayer,
+  STTPolygonLayer as PolygonLayerEngine,
   type STTPolygonLayerOptions,
 } from '../layers/polygon-layer.js';
-import { STTEgoLayer, type STTEgoLayerOptions } from '../layers/ego-layer.js';
-import { STTIsoLayer, type STTIsoLayerOptions } from '../layers/iso-layer.js';
 import {
-  STTTripsLayer,
+  STTEgoLayer as EgoLayerEngine,
+  type STTEgoLayerOptions,
+} from '../layers/ego-layer.js';
+import {
+  STTIsoLayer as IsoLayerEngine,
+  type STTIsoLayerOptions,
+} from '../layers/iso-layer.js';
+import {
+  STTTripsLayer as TripsLayerEngine,
   type STTTripsLayerOptions,
 } from '../layers/trips-layer.js';
 import {
-  STTPathGeoLayer,
+  STTPathGeoLayer as PathGeoLayerEngine,
   type STTPathGeoLayerOptions,
 } from '../layers/path-geo-layer.js';
 import {
-  STTOdLineLayer,
+  STTOdLineLayer as OdLineLayerEngine,
   type STTOdLineLayerOptions,
 } from '../layers/od-line-layer.js';
-import { STTArcLayer, type STTArcLayerOptions } from '../layers/arc-layer.js';
 import {
-  STTIconLayer,
+  STTArcLayer as ArcLayerEngine,
+  type STTArcLayerOptions,
+} from '../layers/arc-layer.js';
+import {
+  STTIconLayer as IconLayerEngine,
   type STTIconLayerOptions,
 } from '../layers/icon-layer.js';
 import {
-  STTColumnLayer,
+  STTColumnLayer as ColumnLayerEngine,
   type STTColumnLayerOptions,
 } from '../layers/column-layer.js';
 import {
-  STTTripHeadsLayer,
+  STTTripHeadsLayer as TripHeadsLayerEngine,
   type STTTripHeadsLayerOptions,
 } from '../layers/trip-heads-layer.js';
 import {
-  STTQuadbinSummaryLayer,
+  STTQuadbinSummaryLayer as QuadbinSummaryLayerEngine,
   type STTQuadbinSummaryLayerOptions,
 } from '../layers/quadbin-summary-layer.js';
 import {
-  STTH3SummaryLayer,
+  STTH3SummaryLayer as H3SummaryLayerEngine,
   type STTH3SummaryLayerOptions,
 } from '../layers/h3-summary-layer.js';
 import {
-  STTFlowmapLayer,
+  STTFlowmapLayer as FlowmapLayerEngine,
   type STTFlowmapLayerOptions,
 } from '../layers/flowmap-layer.js';
 import {
-  STTFlowCorridorLayer,
+  STTFlowCorridorLayer as FlowCorridorLayerEngine,
   type STTFlowCorridorLayerOptions,
 } from '../layers/flow-corridor-layer.js';
 import {
@@ -163,13 +173,13 @@ import { GlobeProjection } from '../projection/globe.js';
 
 // ─── Context ──────────────────────────────────────────────────────────────────
 
-interface SttSceneCtx {
+interface STTSceneCtx {
   projection: Projection;
   timeOrigin: number;
   getTime: () => number;
-  egoRef: React.MutableRefObject<STTEgoLayer | null>;
+  egoRef: React.MutableRefObject<EgoLayerEngine | null>;
   /** Layers contributing pickable boxes (objects + ego) for click-to-inspect. */
-  pickables: React.MutableRefObject<Set<SttPickable>>;
+  pickables: React.MutableRefObject<Set<STTPickable>>;
   /**
    * Instanced layers (points, columns, arcs, …) answering a GPU id-buffer pick —
    * consulted when a CPU box pick misses (hover + click). Separate from
@@ -177,11 +187,11 @@ interface SttSceneCtx {
    * ray-OBB). Any {@link isIdPickable} layer auto-registers here on mount, so a
    * new kind needs no wiring in this file.
    */
-  idPickables: React.MutableRefObject<Set<SttIdPickable>>;
+  idPickables: React.MutableRefObject<Set<STTIdPickable>>;
   /** All mounted layers — CameraRig frames to the union of their world AABBs. */
-  layers: React.MutableRefObject<Set<SttLayer>>;
+  layers: React.MutableRefObject<Set<STTLayer>>;
   /** Playback governor source registry (so the clock gates on buffer readiness). */
-  registry?: SttSourceRegistry;
+  registry?: STTSourceRegistry;
   /** Scene time range (epoch-ms) reported as the buffered span to the governor. */
   timeRange?: { start: number; end: number };
   /**
@@ -191,12 +201,12 @@ interface SttSceneCtx {
    */
   streaming?: boolean | StreamingLayerOptions;
 }
-const Ctx = React.createContext<SttSceneCtx | null>(null);
+const Ctx = React.createContext<STTSceneCtx | null>(null);
 
-function useSttScene(): SttSceneCtx {
+function useSTTScene(): STTSceneCtx {
   const c = React.useContext(Ctx);
   if (!c)
-    throw new Error('STT layer components must be rendered inside <SttCanvas>');
+    throw new Error('STT layer components must be rendered inside <STTCanvas>');
   return c;
 }
 
@@ -232,7 +242,7 @@ function renderWindowFromOpts(opts: object): number | undefined {
 function useResolvedStreaming(
   prop: boolean | StreamingLayerOptions | undefined,
 ): false | { opts: StreamingLayerOptions } {
-  const { streaming: canvasDefault } = useSttScene();
+  const { streaming: canvasDefault } = useSTTScene();
   const chosen = prop ?? canvasDefault;
   if (!chosen) return false;
   return { opts: chosen === true ? {} : chosen };
@@ -245,7 +255,7 @@ interface CacheEntry {
   promise: Promise<void>;
   tiles?: Tile[];
   error?: unknown;
-  source: SttTileSource;
+  source: STTTileSource;
   /** Mounted layers holding this archive; an entry is evictable only at 0. */
   refCount: number;
   /** Monotonic access stamp for LRU ordering. */
@@ -302,11 +312,11 @@ function warnOnce(key: string, ...args: unknown[]): void {
 }
 
 /** Load (and cache) every tile for an archive URL, suspending until ready. */
-export function useSttTiles(url: string, lodMode?: 'additive'): Tile[] {
+export function useSTTTiles(url: string, lodMode?: 'additive'): Tile[] {
   const key = tileCacheKey(url, lodMode);
   let entry = tileCache.get(key);
   if (!entry) {
-    const source = new SttTileSource({ url, lodMode });
+    const source = new STTTileSource({ url, lodMode });
     const e: CacheEntry = {
       status: 'pending',
       promise: Promise.resolve(),
@@ -332,7 +342,7 @@ export function useSttTiles(url: string, lodMode?: 'additive'): Tile[] {
   if (entry.status === 'pending') throw entry.promise;
   // A load/decode failure (e.g. a transient tile-decoder worker crash) must NOT
   // blank the whole canvas via the error boundary — render this archive empty
-  // (logged once). `invalidateSttTiles(url)` or a reload retries.
+  // (logged once). `invalidateSTTTiles(url)` or a reload retries.
   if (entry.status === 'error') {
     warnOnce(
       `tiles:${key}`,
@@ -345,7 +355,7 @@ export function useSttTiles(url: string, lodMode?: 'additive'): Tile[] {
 }
 
 /** Drop a cached archive so it reloads next mount (rarely needed). */
-export function invalidateSttTiles(url: string, lodMode?: 'additive'): void {
+export function invalidateSTTTiles(url: string, lodMode?: 'additive'): void {
   const key = tileCacheKey(url, lodMode);
   const e = tileCache.get(key);
   if (e) e.source.dispose();
@@ -364,7 +374,7 @@ interface LayerGovernance {
 }
 
 /** Build geometry from suspended tiles, drive the clock, govern, dispose on unmount. */
-function useEngineLayer<L extends SttLayer>(
+function useEngineLayer<L extends STTLayer>(
   make: () => L,
   tiles: Tile[],
   deps: React.DependencyList,
@@ -378,7 +388,7 @@ function useEngineLayer<L extends SttLayer>(
     idPickables,
     registry,
     timeRange,
-  } = useSttScene();
+  } = useSTTScene();
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -427,9 +437,10 @@ function useEngineLayer<L extends SttLayer>(
   }, [layer, layers]);
 
   // GPU id-buffer pick auto-registration: any layer that structurally satisfies
-  // SttIdPickable (has a `pick()` method — points, columns, arcs, and every
-  // fanout kind) joins the id-pick set with NO per-kind wiring here. Box pickables
-  // (getPickBoxes) use the separate `pickables` registry via each layer's `extra`.
+  // STTIdPickable (has a `pick()` method — points, columns, arcs, and every
+  // other id-pickable kind) joins the id-pick set with NO per-kind wiring here.
+  // Box pickables (getPickBoxes) use the separate `pickables` registry via each
+  // layer's `extra`.
   React.useEffect(() => {
     if (!isIdPickable(layer)) return;
     const set = idPickables.current;
@@ -477,7 +488,7 @@ function useEngineLayer<L extends SttLayer>(
  * the REAL {@link TilesetBufferSource} so the buffered bar reflects honest
  * coverage (vs the eager path's always-complete source).
  */
-function useStreamingEngineLayer<L extends SttLayer>(
+function useStreamingEngineLayer<L extends STTLayer>(
   make: () => L,
   source: StreamingTileSource,
   deps: React.DependencyList,
@@ -501,7 +512,7 @@ function useStreamingEngineLayer<L extends SttLayer>(
     idPickables,
     registry,
     timeRange,
-  } = useSttScene();
+  } = useSTTScene();
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera) as PerspectiveCamera;
   const size = useThree((s) => s.size);
@@ -545,16 +556,24 @@ function useStreamingEngineLayer<L extends SttLayer>(
           { width: size.width, height: size.height },
           md ? { minZoom: md.minZoom, maxZoom: md.maxZoom } : {},
         );
-        // Couple selection to the layer's render window: pass it as the
-        // viewport's `timeWindow` so tile selection never under-covers what the
-        // render pass draws. `undefined` falls back to the tileset default
-        // (streaming `timeWindowMs` → archive `temporalBucketMs`).
-        source.update({
-          bounds: vp.bounds,
-          zoom: vp.zoom,
-          time: t,
-          timeWindow: gov.renderTimeWindowMs,
-        });
+        // A `null` viewport means the camera produced no usable lon/lat box —
+        // reliably the case for the first frames after mount, when `size` is
+        // still 0×0 and every unprojection is NaN. KEEP THE PREVIOUS VIEWPORT by
+        // simply not pumping: the tileset holds its last one, where feeding it a
+        // NaN box would make `boundsToTiles` enumerate nothing while every
+        // readiness signal still reported "settled and fully buffered".
+        if (vp) {
+          // Couple selection to the layer's render window: pass it as the
+          // viewport's `timeWindow` so tile selection never under-covers what the
+          // render pass draws. `undefined` falls back to the tileset default
+          // (streaming `timeWindowMs` → archive `temporalBucketMs`).
+          source.update({
+            bounds: vp.bounds,
+            zoom: vp.zoom,
+            time: t,
+            timeWindow: gov.renderTimeWindowMs,
+          });
+        }
       }
       // Without a governor, keep prefetch alive via a play/pause heuristic (time
       // advancing ⇒ animating). With one, the governor drives animation state
@@ -598,7 +617,7 @@ function useStreamingEngineLayer<L extends SttLayer>(
   }, [layer, layers]);
 
   // GPU id-buffer pick auto-registration (mirrors the eager path): any
-  // SttIdPickable layer joins the id-pick set with no per-kind wiring here.
+  // STTIdPickable layer joins the id-pick set with no per-kind wiring here.
   React.useEffect(() => {
     if (!isIdPickable(layer)) return;
     const set = idPickables.current;
@@ -633,11 +652,11 @@ function useStreamingEngineLayer<L extends SttLayer>(
 }
 
 /**
- * Generic EAGER layer mount — the shared body every `Stt*Layer` renders when it
+ * Generic EAGER layer mount — the shared body every `STT*Layer` renders when it
  * is NOT streaming (the backward-compatible default). Suspends on the full
  * archive load, then builds + governs the layer via {@link useEngineLayer}.
  */
-function EagerLayerMount<L extends SttLayer>(props: {
+function EagerLayerMount<L extends STTLayer>(props: {
   make: () => L;
   url: string;
   lodMode?: 'additive';
@@ -648,7 +667,7 @@ function EagerLayerMount<L extends SttLayer>(props: {
   /** Optional extra registration hook (pickables / ego). Stable per mount site. */
   extra?: (layer: L) => void;
 }): React.ReactElement {
-  const tiles = useSttTiles(props.url, props.lodMode);
+  const tiles = useSTTTiles(props.url, props.lodMode);
   const layer = useEngineLayer(props.make, tiles, [props.url, props.lodMode], {
     sourceId: props.sourceId,
     cacheKey: tileCacheKey(props.url, props.lodMode),
@@ -661,11 +680,11 @@ function EagerLayerMount<L extends SttLayer>(props: {
 }
 
 /**
- * Generic STREAMING layer mount — the shared body every `Stt*Layer` renders when
+ * Generic STREAMING layer mount — the shared body every `STT*Layer` renders when
  * opted into streaming. Builds a {@link StreamingTileSource} (rebuilt only on
  * url/lodMode change) and drives it via {@link useStreamingEngineLayer}.
  */
-function StreamingLayerMount<L extends SttLayer>(props: {
+function StreamingLayerMount<L extends STTLayer>(props: {
   make: () => L;
   url: string;
   lodMode?: 'additive';
@@ -705,7 +724,7 @@ function StreamingLayerMount<L extends SttLayer>(props: {
 
 interface UrlProp {
   url: string;
-  /** Additive-octree LOD: load the UNION of all zoom levels (see SttTileSource). */
+  /** Additive-octree LOD: load the UNION of all zoom levels (see STTTileSource). */
   lodMode?: 'additive';
   /**
    * Whether this layer gates the playback clock as a REQUIRED governor source.
@@ -716,18 +735,18 @@ interface UrlProp {
    * Back this layer with the viewport-driven {@link StreamingTileSource} (real
    * LOD selection + prefetch + eviction) instead of the eager load-everything
    * Suspense path. `true` streams with the archive defaults; an options object
-   * passes tileset knobs. Omit to inherit the `<SttCanvas streaming>` default.
+   * passes tileset knobs. Omit to inherit the `<STTCanvas streaming>` default.
    * Eager is the backward-compatible default.
    */
   streaming?: boolean | StreamingLayerOptions;
 }
 
-export function SttSurfelLayer(
+export function STTSurfelLayer(
   props: STTSurfelLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTSurfelLayer => new STTSurfelLayer(opts);
+  const make = (): SurfelLayerEngine => new SurfelLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -749,14 +768,14 @@ export function SttSurfelLayer(
   );
 }
 
-export function SttPointCloudLayer(
+export function STTPointCloudLayer(
   props: STTPointCloudLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTPointCloudLayer => new STTPointCloudLayer(opts);
+  const make = (): PointCloudLayerEngine => new PointCloudLayerEngine(opts);
   // GPU id-buffer picking is auto-registered by the shared layer mount for ANY
-  // SttIdPickable layer (see useEngineLayer / useStreamingEngineLayer) — no
+  // STTIdPickable layer (see useEngineLayer / useStreamingEngineLayer) — no
   // per-kind `extra` here. The controller runs the GPU pass only when a box pick
   // misses and an `onPick`/`onHover` consumer is present.
   return resolved ? (
@@ -780,15 +799,15 @@ export function SttPointCloudLayer(
   );
 }
 
-export function SttBoundingBoxLayer(
+export function STTBoundingBoxLayer(
   props: STTBoundingBoxLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const { pickables } = useSttScene();
-  const make = (): STTBoundingBoxLayer => new STTBoundingBoxLayer(opts);
+  const { pickables } = useSTTScene();
+  const make = (): BoundingBoxLayerEngine => new BoundingBoxLayerEngine(opts);
   // Register the layer's boxes for click-to-inspect (both modes).
-  const extra = (layer: STTBoundingBoxLayer): void => {
+  const extra = (layer: BoundingBoxLayerEngine): void => {
     React.useEffect(() => {
       const set = pickables.current;
       set.add(layer);
@@ -820,12 +839,13 @@ export function SttBoundingBoxLayer(
   );
 }
 
-export function SttMapPolygonLayer(
+export function STTMapPolygonLayer(
   props: STTStaticPolygonLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTStaticPolygonLayer => new STTStaticPolygonLayer(opts);
+  const make = (): StaticPolygonLayerEngine =>
+    new StaticPolygonLayerEngine(opts);
   // Map overlays load coordinated but never gate the clock (HD-map idiom).
   return resolved ? (
     <StreamingLayerMount
@@ -850,12 +870,12 @@ export function SttMapPolygonLayer(
   );
 }
 
-export function SttMapLineLayer(
+export function STTMapLineLayer(
   props: STTStaticPathLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTStaticPathLayer => new STTStaticPathLayer(opts);
+  const make = (): StaticPathLayerEngine => new StaticPathLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -879,12 +899,12 @@ export function SttMapLineLayer(
   );
 }
 
-export function SttIsoLayer(
+export function STTIsoLayer(
   props: STTIsoLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTIsoLayer => new STTIsoLayer(opts);
+  const make = (): IsoLayerEngine => new IsoLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -906,12 +926,12 @@ export function SttIsoLayer(
   );
 }
 
-export function SttTripsLayer(
+export function STTTripsLayer(
   props: STTTripsLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTTripsLayer => new STTTripsLayer(opts);
+  const make = (): TripsLayerEngine => new TripsLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -933,12 +953,12 @@ export function SttTripsLayer(
   );
 }
 
-export function SttPathLayer(
+export function STTPathLayer(
   props: STTPathGeoLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTPathGeoLayer => new STTPathGeoLayer(opts);
+  const make = (): PathGeoLayerEngine => new PathGeoLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -960,12 +980,12 @@ export function SttPathLayer(
   );
 }
 
-export function SttOdLineLayer(
+export function STTOdLineLayer(
   props: STTOdLineLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTOdLineLayer => new STTOdLineLayer(opts);
+  const make = (): OdLineLayerEngine => new OdLineLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -987,12 +1007,12 @@ export function SttOdLineLayer(
   );
 }
 
-export function SttArcLayer(
+export function STTArcLayer(
   props: STTArcLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTArcLayer => new STTArcLayer(opts);
+  const make = (): ArcLayerEngine => new ArcLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1014,12 +1034,12 @@ export function SttArcLayer(
   );
 }
 
-export function SttIconLayer(
+export function STTIconLayer(
   props: STTIconLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTIconLayer => new STTIconLayer(opts);
+  const make = (): IconLayerEngine => new IconLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1041,12 +1061,12 @@ export function SttIconLayer(
   );
 }
 
-export function SttColumnLayer(
+export function STTColumnLayer(
   props: STTColumnLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTColumnLayer => new STTColumnLayer(opts);
+  const make = (): ColumnLayerEngine => new ColumnLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1068,12 +1088,12 @@ export function SttColumnLayer(
   );
 }
 
-export function SttPolygonLayer(
+export function STTPolygonLayer(
   props: STTPolygonLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTPolygonLayer => new STTPolygonLayer(opts);
+  const make = (): PolygonLayerEngine => new PolygonLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1095,12 +1115,12 @@ export function SttPolygonLayer(
   );
 }
 
-export function SttTripHeadsLayer(
+export function STTTripHeadsLayer(
   props: STTTripHeadsLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTTripHeadsLayer => new STTTripHeadsLayer(opts);
+  const make = (): TripHeadsLayerEngine => new TripHeadsLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1122,12 +1142,13 @@ export function SttTripHeadsLayer(
   );
 }
 
-export function SttQuadbinLayer(
+export function STTQuadbinLayer(
   props: STTQuadbinSummaryLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTQuadbinSummaryLayer => new STTQuadbinSummaryLayer(opts);
+  const make = (): QuadbinSummaryLayerEngine =>
+    new QuadbinSummaryLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1149,12 +1170,12 @@ export function SttQuadbinLayer(
   );
 }
 
-export function SttH3Layer(
+export function STTH3Layer(
   props: STTH3SummaryLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTH3SummaryLayer => new STTH3SummaryLayer(opts);
+  const make = (): H3SummaryLayerEngine => new H3SummaryLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1176,12 +1197,12 @@ export function SttH3Layer(
   );
 }
 
-export function SttFlowmapLayer(
+export function STTFlowmapLayer(
   props: STTFlowmapLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTFlowmapLayer => new STTFlowmapLayer(opts);
+  const make = (): FlowmapLayerEngine => new FlowmapLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1203,12 +1224,12 @@ export function SttFlowmapLayer(
   );
 }
 
-export function SttFlowCorridorLayer(
+export function STTFlowCorridorLayer(
   props: STTFlowCorridorLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const make = (): STTFlowCorridorLayer => new STTFlowCorridorLayer(opts);
+  const make = (): FlowCorridorLayerEngine => new FlowCorridorLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -1230,15 +1251,15 @@ export function SttFlowCorridorLayer(
   );
 }
 
-export function SttEgoLayer(
+export function STTEgoLayer(
   props: STTEgoLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
-  const { egoRef, pickables } = useSttScene();
-  const make = (): STTEgoLayer => new STTEgoLayer(opts);
+  const { egoRef, pickables } = useSTTScene();
+  const make = (): EgoLayerEngine => new EgoLayerEngine(opts);
   // Publish the ego layer + its pickable box (both modes).
-  const extra = (layer: STTEgoLayer): void => {
+  const extra = (layer: EgoLayerEngine): void => {
     React.useEffect(() => {
       egoRef.current = layer;
       const set = pickables.current;
@@ -1277,17 +1298,17 @@ export function SttEgoLayer(
  * the scene's `GlobeProjection` when present; on a planar scene pass an explicit
  * `globe` prop. Not a tile-backed layer — a single static `Mesh`.
  */
-export function SttGlobeBasemap(
+export function STTGlobeBasemap(
   props: GlobeBasemapOptions & { globe?: GlobeProjection },
 ): React.ReactElement {
   const { globe: globeProp, ...opts } = props;
-  const { projection } = useSttScene();
+  const { projection } = useSTTScene();
   const globe =
     globeProp ??
     (projection instanceof GlobeProjection ? projection : undefined);
   if (!globe) {
     throw new Error(
-      'SttGlobeBasemap needs a GlobeProjection: render inside a globe scene or pass `globe`.',
+      'STTGlobeBasemap needs a GlobeProjection: render inside a globe scene or pass `globe`.',
     );
   }
   const mesh = React.useMemo(
@@ -1310,8 +1331,8 @@ function CameraRig(props: {
   headingDeg?: number;
   /** Explicit initial geographic view (geo demos); overrides the bounds-fit below. */
   initialViewState?: ViewState;
-  egoRef: React.MutableRefObject<STTEgoLayer | null>;
-  layers: React.MutableRefObject<Set<SttLayer>>;
+  egoRef: React.MutableRefObject<EgoLayerEngine | null>;
+  layers: React.MutableRefObject<Set<STTLayer>>;
   getTime: () => number;
   reducedMotion: boolean;
 }): null {
@@ -1376,7 +1397,7 @@ function CameraRig(props: {
       }
 
       // Globe: park a whole-earth overview above the anchor once, then hand off to
-      // OrbitControls (or, if `<SttTiles3D globeControls>` is mounted, its ellipsoid
+      // OrbitControls (or, if `<STTTiles3D globeControls>` is mounted, its ellipsoid
       // GlobeControls). No ground-plane ego-follow / AABB fit applies on the sphere.
       if (globe) {
         if (!framed.current) {
@@ -1505,7 +1526,7 @@ function RenderPump(): null {
 // ─── Atmosphere (opt-in physically-based sky / sun / day-night) ─────────────────
 
 /**
- * Takes over the render loop while a live {@link SttAtmosphere} exists: a
+ * Takes over the render loop while a live {@link AtmosphereHandle} exists: a
  * render-priority (`> 0`) `useFrame` disables r3f's automatic render, so we drive
  * the atmosphere's `pass → MRT → aerialPerspective` pipeline instead — after the
  * priority-0 layer `setTime` and the camera rig have run for this frame. The sun
@@ -1513,7 +1534,7 @@ function RenderPump(): null {
  * once) so a transient node hiccup can't strand the canvas.
  */
 function AtmosphereRenderLoop(props: {
-  atmosphere: SttAtmosphere;
+  atmosphere: AtmosphereHandle;
   getTime: () => number;
 }): null {
   const { atmosphere, getTime } = props;
@@ -1540,11 +1561,11 @@ function AtmosphereController(props: {
   options: boolean | AtmosphereOptions;
   forceWebGL: boolean;
 }): React.ReactElement | null {
-  const { projection, getTime } = useSttScene();
+  const { projection, getTime } = useSTTScene();
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const camera = useThree((s) => s.camera);
-  const [atmosphere, setAtmosphere] = React.useState<SttAtmosphere | null>(
+  const [atmosphere, setAtmosphere] = React.useState<AtmosphereHandle | null>(
     null,
   );
   // Options are effectively static per scene (mirrors the `ground` build-once
@@ -1560,9 +1581,9 @@ function AtmosphereController(props: {
     if (backend !== 'webgpu') return; // graceful WebGL2 degrade — leave r3f rendering
     const opts = optionsRef.current;
     const atmoOpts = opts === true ? {} : opts;
-    let handle: SttAtmosphere | null = null;
+    let handle: AtmosphereHandle | null = null;
     let cancelled = false;
-    void createSttAtmosphere({
+    void createSTTAtmosphere({
       ...atmoOpts,
       renderer: gl as unknown as import('three/webgpu').WebGPURenderer,
       scene,
@@ -1599,11 +1620,11 @@ function AtmosphereController(props: {
 }
 
 /**
- * Declarative atmosphere child — render `<SttAtmosphere />` inside an `<SttCanvas>`
+ * Declarative atmosphere child — render `<STTAtmosphere />` inside an `<STTCanvas>`
  * as an alternative to the `atmosphere` prop (use ONE of the two, not both). Opt-in,
  * WebGPU-only, default-off elsewhere.
  */
-export function SttAtmosphere(
+export function STTAtmosphere(
   props: AtmosphereOptions & { forceWebGL?: boolean },
 ): React.ReactElement {
   const { forceWebGL = false, ...options } = props;
@@ -1613,17 +1634,17 @@ export function SttAtmosphere(
 // ─── OGC 3D Tiles (opt-in: real terrain / Google Photorealistic / Cesium Ion) ────
 
 /** Stable dependency key so the tileset rebuilds only on a real source change. */
-function tilesSourceKey(s: Stt3DTilesSource): string {
+function tilesSourceKey(s: STT3DTilesSource): string {
   if ('google' in s) return `google:${s.google.apiToken}`;
   if ('ion' in s) return `ion:${s.ion.apiToken}:${s.ion.assetId}`;
   return `url:${s.url}`;
 }
 
-/** Props for {@link SttTiles3D}. */
-export interface SttTiles3DProps extends Stt3DTilesOptions {
+/** Props for {@link STTTiles3D}. */
+export interface STTTiles3DProps extends STT3DTilesOptions {
   /**
    * Use ellipsoid-aware `GlobeControls` while mounted (horizon-aware,
-   * zoom-to-cursor, auto earth-scale near/far), disabling the `<SttCanvas>` default
+   * zoom-to-cursor, auto earth-scale near/far), disabling the `<STTCanvas>` default
    * `MapControls` until unmount. @default false
    */
   globeControls?: boolean;
@@ -1632,30 +1653,30 @@ export interface SttTiles3DProps extends Stt3DTilesOptions {
 }
 
 /**
- * Declarative OGC 3D Tiles child for an `<SttCanvas>` — mounts a tileset (real
+ * Declarative OGC 3D Tiles child for an `<STTCanvas>` — mounts a tileset (real
  * terrain, Google Photorealistic Tiles, or a Cesium Ion asset) into the canvas
  * scene and drives its LOD from the existing per-frame `RenderPump` path.
  *
- * It wires the VANILLA `3d-tiles-renderer/three` `TilesRenderer` into the SttCanvas
+ * It wires the VANILLA `3d-tiles-renderer/three` `TilesRenderer` into the STTCanvas
  * scene (NOT `3d-tiles-renderer/r3f`, which would manage its own camera/controls
- * and fight SttCanvas). Because the group is added to the same scene, it **composes
+ * and fight STTCanvas). Because the group is added to the same scene, it **composes
  * with the atmosphere feature**: when the atmosphere is on it renders the tiles
  * through the same `pass → aerialPerspective` pipeline (tiles pump at frame
  * priority 0, the atmosphere draws at priority 1, so tiles are current before the
  * draw); when it is off, r3f's default render draws the tiles.
  *
  * **Opt-in, default-OFF.** Live tiles need network + a GPU + (google/ion) a token,
- * so this is browser-verified. Note: `<SttCanvas>` uses a local-ENU projection, so
+ * so this is browser-verified. Note: `<STTCanvas>` uses a local-ENU projection, so
  * tiles co-register around the canvas anchor; a full-earth globe view is best set
  * up with a globe host + `globeControls`.
  */
-export function SttTiles3D(props: SttTiles3DProps): null {
+export function STTTiles3D(props: STTTiles3DProps): null {
   const {
     globeControls = false,
     forceWebGL: _forceWebGL,
     ...tilesOpts
   } = props;
-  const { projection } = useSttScene();
+  const { projection } = useSTTScene();
   const gl = useThree((s) => s.gl);
   const scene = useThree((s) => s.scene);
   const camera = useThree((s) => s.camera);
@@ -1663,8 +1684,8 @@ export function SttTiles3D(props: SttTiles3DProps): null {
   const defaultControls = useThree((s) => s.controls) as {
     enabled: boolean;
   } | null;
-  const [handle, setHandle] = React.useState<Stt3DTiles | null>(null);
-  const [globe, setGlobe] = React.useState<SttGlobeControls | null>(null);
+  const [handle, setHandle] = React.useState<STT3DTiles | null>(null);
+  const [globe, setGlobe] = React.useState<STTGlobeControls | null>(null);
 
   // Options are effectively static per source (build-once idiom, like `ground` /
   // the atmosphere); read from a ref so an inline-object prop doesn't churn setup.
@@ -1673,12 +1694,12 @@ export function SttTiles3D(props: SttTiles3DProps): null {
   const sourceKey = tilesSourceKey(tilesOpts.source);
 
   React.useEffect(() => {
-    let h: Stt3DTiles | null = null;
-    let g: SttGlobeControls | null = null;
+    let h: STT3DTiles | null = null;
+    let g: STTGlobeControls | null = null;
     let cancelled = false;
     const renderer = gl as unknown as import('three/webgpu').WebGPURenderer;
     void (async () => {
-      const t = await createStt3DTiles({
+      const t = await createSTT3DTiles({
         ...optsRef.current,
         renderer,
         scene,
@@ -1692,7 +1713,7 @@ export function SttTiles3D(props: SttTiles3DProps): null {
       h = t;
       setHandle(t);
       if (globeControls) {
-        const gc = await createSttGlobeControls({
+        const gc = await createSTTGlobeControls({
           scene,
           camera,
           domElement: gl.domElement,
@@ -1725,7 +1746,7 @@ export function SttTiles3D(props: SttTiles3DProps): null {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gl, scene, camera, projection, sourceKey, globeControls]);
 
-  // While GlobeControls owns navigation, disable the SttCanvas default MapControls
+  // While GlobeControls owns navigation, disable the STTCanvas default MapControls
   // (they fight over the same pointer); restore it when this unmounts.
   React.useEffect(() => {
     if (!globe || !defaultControls) return;
@@ -1781,10 +1802,10 @@ export function SttTiles3D(props: SttTiles3DProps): null {
  * fall-through is purely additive.
  */
 function PickController(props: {
-  onPick?: (info: SttPickInfo | null) => void;
-  onHover?: (info: SttPickInfo | null) => void;
-  pickables: React.MutableRefObject<Set<SttPickable>>;
-  idPickables: React.MutableRefObject<Set<SttIdPickable>>;
+  onPick?: (info: STTPickInfo | null) => void;
+  onHover?: (info: STTPickInfo | null) => void;
+  pickables: React.MutableRefObject<Set<STTPickable>>;
+  idPickables: React.MutableRefObject<Set<STTIdPickable>>;
 }): null {
   const camera = useThree((s) => s.camera);
   const raycaster = useThree((s) => s.raycaster);
@@ -1835,7 +1856,7 @@ function PickController(props: {
     const boxPickAt = (
       clientX: number,
       clientY: number,
-    ): SttBoxPickInfo | null => {
+    ): STTBoxPickInfo | null => {
       const p = project(clientX, clientY);
       if (!p) return null;
       raycaster.setFromCamera(p.ndc, camera);
@@ -1849,11 +1870,11 @@ function PickController(props: {
 
     // (2) Async GPU id-buffer pick — first hit across the registered id-pickable
     // layers (points, columns, arcs, …). Each returns a fully kind-tagged
-    // SttIdPickInfo, so there is no per-kind mapping here.
+    // STTIdPickInfo, so there is no per-kind mapping here.
     const idPickAt = async (
       clientX: number,
       clientY: number,
-    ): Promise<SttPickInfo | null> => {
+    ): Promise<STTPickInfo | null> => {
       const layers = idPickables.current;
       if (layers.size === 0) return null;
       const p = project(clientX, clientY);
@@ -2018,14 +2039,14 @@ interface BoundaryState {
 /** Catches render-time errors in the Canvas subtree (WebGPU context loss, a tile
  *  decode/error thrown past Suspense) and shows the fallback instead of a blank
  *  or crashed viewport. */
-class SttCanvasBoundary extends React.Component<BoundaryProps, BoundaryState> {
+class STTCanvasBoundary extends React.Component<BoundaryProps, BoundaryState> {
   state: BoundaryState = { failed: false };
   static getDerivedStateFromError(): BoundaryState {
     return { failed: true };
   }
   componentDidCatch(error: unknown): void {
     // eslint-disable-next-line no-console
-    console.error('[SttCanvas] render error', error);
+    console.error('[STTCanvas] render error', error);
   }
   render(): React.ReactNode {
     return this.state.failed ? this.props.fallback : this.props.children;
@@ -2054,7 +2075,7 @@ const DEFAULT_GPU_FALLBACK = (
 
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 
-export interface SttCanvasProps {
+export interface STTCanvasProps {
   /**
    * lon/lat anchor mapped to the world origin (usually the scene view centre).
    * Used to build the default ENU projection, and as the camera-framing / basemap
@@ -2067,18 +2088,18 @@ export interface SttCanvasProps {
    * (metric ENU — the AV / local-scene frame every existing demo uses). Pass a
    * `MercatorProjection` for a flat web-map frame, or a `GlobeProjection` for a 3D
    * globe (which also switches the camera rig to an earth-orbit + enables the
-   * atmosphere / 3D-tiles / `<SttGlobeBasemap>` globe path). Build it with the
+   * atmosphere / 3D-tiles / `<STTGlobeBasemap>` globe path). Build it with the
    * exported projection classes; it is read once per scene (a change remounts the
    * scene graph like a dataset switch).
    *
    * @example
    * // Flat web-map (Mercator):
-   * <SttCanvas anchor={c} projection={new MercatorProjection(c)} …/>
+   * <STTCanvas anchor={c} projection={new MercatorProjection(c)} …/>
    * @example
    * // 3D globe (WGS84 datum co-registers 3D-tiles / atmosphere):
-   * <SttCanvas anchor={c} projection={new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })} …>
-   *   <SttGlobeBasemap />
-   * </SttCanvas>
+   * <STTCanvas anchor={c} projection={new GlobeProjection(c, EARTH_RADIUS, { datum: 'wgs84' })} …>
+   *   <STTGlobeBasemap />
+   * </STTCanvas>
    */
   projection?: Projection;
   /** Common time base (epoch-ms) — usually `timeRange.start`. */
@@ -2091,7 +2112,7 @@ export interface SttCanvasProps {
    * passes immediately and the cockpit transport (buffered bar / Auto-speed /
    * ETA) reflects the Three scene. Omit for an un-governed standalone canvas.
    */
-  registry?: SttSourceRegistry;
+  registry?: STTSourceRegistry;
   /** Scene time range (epoch-ms) reported as the buffered span to the governor. */
   timeRange?: { start: number; end: number };
   /**
@@ -2127,7 +2148,7 @@ export interface SttCanvasProps {
    * fallback keeps r3f's default render, so it degrades gracefully). `true` uses
    * defaults; an options object tunes it (see {@link AtmosphereOptions}). Omit /
    * `false` (default) leaves the current render path untouched. When on, the sun
-   * tracks the playhead time each frame. Prefer this OR a `<SttAtmosphere>` child,
+   * tracks the playhead time each frame. Prefer this OR a `<STTAtmosphere>` child,
    * not both.
    */
   atmosphere?: boolean | AtmosphereOptions;
@@ -2142,14 +2163,14 @@ export interface SttCanvasProps {
    * every box), or `null` when clicking empty space. Omit to disable click
    * picking (pointer events pass straight through to the controls).
    */
-  onPick?: (info: SttPickInfo | null) => void;
+  onPick?: (info: STTPickInfo | null) => void;
   /**
    * Hover callback. Fires on pointer-move (throttled to one pick per animation
    * frame) with the hovered hit — a box or a GPU-picked point-cloud feature — or
    * `null` when hovering empty space / on leaving the canvas. Suppressed while a
    * button is held (an orbit/pan drag). Omit to disable hover.
    */
-  onHover?: (info: SttPickInfo | null) => void;
+  onHover?: (info: STTPickInfo | null) => void;
   /**
    * Shown when WebGPU/WebGL2 is unavailable or the Canvas subtree errors.
    * @default a built-in "needs WebGPU or WebGL2" message
@@ -2158,7 +2179,7 @@ export interface SttCanvasProps {
   children?: React.ReactNode;
 }
 
-export function SttCanvas(props: SttCanvasProps): React.ReactElement {
+export function STTCanvas(props: STTCanvasProps): React.ReactElement {
   const {
     anchor,
     projection: projectionProp,
@@ -2203,10 +2224,10 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
   );
   // Globe scenes swap the flat MapControls for an earth-orbit OrbitControls.
   const globe = isGlobeProjection(projection) ? projection : null;
-  const egoRef = React.useRef<STTEgoLayer | null>(null);
-  const pickables = React.useRef<Set<SttPickable>>(new Set());
-  const idPickables = React.useRef<Set<SttIdPickable>>(new Set());
-  const layers = React.useRef<Set<SttLayer>>(new Set());
+  const egoRef = React.useRef<EgoLayerEngine | null>(null);
+  const pickables = React.useRef<Set<STTPickable>>(new Set());
+  const idPickables = React.useRef<Set<STTIdPickable>>(new Set());
+  const layers = React.useRef<Set<STTLayer>>(new Set());
   // Stabilise the time range by value so the governor-registration effect doesn't
   // re-register every render on a fresh object identity.
   const trStart = timeRange?.start;
@@ -2218,7 +2239,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
         : undefined,
     [trStart, trEnd],
   );
-  const ctx = React.useMemo<SttSceneCtx>(
+  const ctx = React.useMemo<STTSceneCtx>(
     () => ({
       projection,
       timeOrigin,
@@ -2243,7 +2264,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
   if (!gpuOk) return <>{renderFallback}</>;
 
   return (
-    <SttCanvasBoundary fallback={renderFallback}>
+    <STTCanvasBoundary fallback={renderFallback}>
       <Canvas
         className={className}
         style={{ background, width: '100%', height: '100%', ...style }}
@@ -2275,7 +2296,7 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
             /* Globe: OrbitControls about the earth centre — left-drag rotates the
                planet, wheel zooms, with earth-scale distance clamps. Panning is off
                so the orbit target stays pinned to the centre. Both this and the flat
-               MapControls set `makeDefault`, so `<SttTiles3D globeControls>` finds
+               MapControls set `makeDefault`, so `<STTTiles3D globeControls>` finds
                and disables whichever is active while its ellipsoid GlobeControls own
                navigation (no double-instantiate / fight). */
             <OrbitControls
@@ -2294,6 +2315,11 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
               makeDefault
               enableDamping={!reducedMotion}
               dampingFactor={0.12}
+              /* Without this the default `maxPolarAngle` is π and a right-drag
+                 swings the camera THROUGH the ground and out the other side —
+                 at which point no camera ray reaches the surface at all and tile
+                 selection has nothing to select against. */
+              {...groundControlLimits()}
             />
           )}
           <RenderPump />
@@ -2313,6 +2339,67 @@ export function SttCanvas(props: SttCanvasProps): React.ReactElement {
           <React.Suspense fallback={fallback}>{children}</React.Suspense>
         </Ctx.Provider>
       </Canvas>
-    </SttCanvasBoundary>
+    </STTCanvasBoundary>
   );
 }
+
+// ─── Deprecated spelling aliases (`Stt*` → `STT*`) ─────────────────────────────
+// Same rename as the root barrel: the acronym is spelled `STT` everywhere in
+// this package now. The `Stt*` component/hook names stay exported so published
+// consumers keep compiling; they will be removed in a future major.
+export {
+  /** @deprecated Use {@link useSTTTiles}. */
+  useSTTTiles as useSttTiles,
+  /** @deprecated Use {@link invalidateSTTTiles}. */
+  invalidateSTTTiles as invalidateSttTiles,
+  /** @deprecated Use {@link STTCanvas}. */
+  STTCanvas as SttCanvas,
+  /** @deprecated Use {@link STTCanvasProps}. */
+  type STTCanvasProps as SttCanvasProps,
+  /** @deprecated Use {@link STTAtmosphere}. */
+  STTAtmosphere as SttAtmosphere,
+  /** @deprecated Use {@link STTGlobeBasemap}. */
+  STTGlobeBasemap as SttGlobeBasemap,
+  /** @deprecated Use {@link STTTiles3D}. */
+  STTTiles3D as SttTiles3D,
+  /** @deprecated Use {@link STTTiles3DProps}. */
+  type STTTiles3DProps as SttTiles3DProps,
+  /** @deprecated Use {@link STTSurfelLayer}. */
+  STTSurfelLayer as SttSurfelLayer,
+  /** @deprecated Use {@link STTPointCloudLayer}. */
+  STTPointCloudLayer as SttPointCloudLayer,
+  /** @deprecated Use {@link STTBoundingBoxLayer}. */
+  STTBoundingBoxLayer as SttBoundingBoxLayer,
+  /** @deprecated Use {@link STTMapPolygonLayer}. */
+  STTMapPolygonLayer as SttMapPolygonLayer,
+  /** @deprecated Use {@link STTMapLineLayer}. */
+  STTMapLineLayer as SttMapLineLayer,
+  /** @deprecated Use {@link STTIsoLayer}. */
+  STTIsoLayer as SttIsoLayer,
+  /** @deprecated Use {@link STTTripsLayer}. */
+  STTTripsLayer as SttTripsLayer,
+  /** @deprecated Use {@link STTPathLayer}. */
+  STTPathLayer as SttPathLayer,
+  /** @deprecated Use {@link STTOdLineLayer}. */
+  STTOdLineLayer as SttOdLineLayer,
+  /** @deprecated Use {@link STTArcLayer}. */
+  STTArcLayer as SttArcLayer,
+  /** @deprecated Use {@link STTIconLayer}. */
+  STTIconLayer as SttIconLayer,
+  /** @deprecated Use {@link STTColumnLayer}. */
+  STTColumnLayer as SttColumnLayer,
+  /** @deprecated Use {@link STTPolygonLayer}. */
+  STTPolygonLayer as SttPolygonLayer,
+  /** @deprecated Use {@link STTTripHeadsLayer}. */
+  STTTripHeadsLayer as SttTripHeadsLayer,
+  /** @deprecated Use {@link STTQuadbinLayer}. */
+  STTQuadbinLayer as SttQuadbinLayer,
+  /** @deprecated Use {@link STTH3Layer}. */
+  STTH3Layer as SttH3Layer,
+  /** @deprecated Use {@link STTFlowmapLayer}. */
+  STTFlowmapLayer as SttFlowmapLayer,
+  /** @deprecated Use {@link STTFlowCorridorLayer}. */
+  STTFlowCorridorLayer as SttFlowCorridorLayer,
+  /** @deprecated Use {@link STTEgoLayer}. */
+  STTEgoLayer as SttEgoLayer,
+};

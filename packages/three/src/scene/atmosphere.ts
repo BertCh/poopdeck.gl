@@ -14,13 +14,13 @@
  *   2. Sun/moon light    — `AtmosphereLight` registered + added to the scene
  *   3. Environment IBL   — `scene.environmentNode = skyEnvironment()`
  *   4. Aerial perspective — a `pass → MRT → aerialPerspective` post pipeline that
- *      the caller renders THROUGH via {@link SttAtmosphere.render} instead of
+ *      the caller renders THROUGH via {@link STTAtmosphere.render} instead of
  *      `renderer.render(scene, camera)`. Falls back to a plain render when aerial
  *      perspective is off or the atmosphere is disabled — so `render()` is always
  *      safe to call as the scene's single draw entry point.
  *
  * The sun position is driven by a `Date`, so wiring the playhead time through
- * {@link SttAtmosphere.update} makes the sky track the data's clock (dawn → dusk).
+ * {@link STTAtmosphere.update} makes the sky track the data's clock (dawn → dusk).
  *
  * ── ECEF FRAME ALIGNMENT (correctness-critical) ──────────────────────────────
  * Takram reads a `matrixWorldToECEF` uniform to relate the render world to the
@@ -195,8 +195,8 @@ export function resolveAtmosphereOptions(
 
 // ─── Live GPU atmosphere (browser-verify; dynamic-imports takram + three/webgpu) ─
 
-/** Options for {@link createSttAtmosphere}. */
-export interface CreateSttAtmosphereOptions extends AtmosphereOptions {
+/** Options for {@link createSTTAtmosphere}. */
+export interface CreateSTTAtmosphereOptions extends AtmosphereOptions {
   renderer: WebGPURenderer;
   scene: Scene;
   camera: Camera;
@@ -209,7 +209,7 @@ export interface CreateSttAtmosphereOptions extends AtmosphereOptions {
  * playhead time; `setEnabled(false)` detaches everything and falls back to a
  * plain render; `dispose()` tears it down and restores the renderer/scene.
  */
-export interface SttAtmosphere {
+export interface STTAtmosphere {
   /** True while the atmosphere is attached (sky/light/env active + aerial in `render`). */
   readonly enabled: boolean;
   /** Position the sun/moon for a `Date`, a playhead epoch-ms, or "now" (no arg). */
@@ -232,9 +232,9 @@ export interface SttAtmosphere {
  * Must run on a `WebGPURenderer` whose `init()` has resolved. On WebGL2 the caller
  * should skip this entirely and render normally.
  */
-export async function createSttAtmosphere(
-  opts: CreateSttAtmosphereOptions,
-): Promise<SttAtmosphere> {
+export async function createSTTAtmosphere(
+  opts: CreateSTTAtmosphereOptions,
+): Promise<STTAtmosphere> {
   const { renderer, scene, camera, projection } = opts;
   // `opts` is always an object here, so this never resolves to null.
   const cfg = resolveAtmosphereOptions(opts) as ResolvedAtmosphereOptions;

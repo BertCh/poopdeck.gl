@@ -5,7 +5,7 @@ The `FlowmapLayer` renders a **flowmap.gl-style animated origin→destination fl
 It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and fuses two STT mechanisms with a flowmap.gl-faithful arrow primitive, so it needs **no special tile type**:
 
 - **Tapered arrows** — each tile feature is a **2-vertex LineString**; the layer derives instanced `getSourcePosition`/`getTargetPosition` from the first/last vertex and draws them through [`FlowLinesLayer`](./flow-lines-layer.md), a port of flowmap.gl's `FlowLinesLayer`. Each flow is a straight shaft that tapers into a triangular arrowhead at the destination; the two directions of a pair are offset side-by-side, and the ends are inset to the node-circle edges.
-- **Animate-from-a-matrix** — like [`FlowCorridorLayer`](./flow-corridor-layer.md), each feature carries a **`[2 × numBuckets]` per-bucket count matrix** ([`vertexValueMatrix`](./binary-features.md)). The layer reads the active bucket (linearly blended across a sub-step) as the per-flow value → arrow width, and sums that flow at each endpoint → node radius. Geometry stays resident; only the width buffer re-expands when the playhead crosses a sub-step (~5 Hz), so the tile **loads once and never re-fetches**.
+- **Animate-from-a-matrix** — like [`FlowCorridorLayer`](./flow-corridor-layer.md), each feature carries a **`[2 × numBuckets]` per-bucket count matrix** ([`vertexValueMatrix`](./binary-features.md)). The layer reads the active bucket (linearly blended across a sub-step) as the per-flow value → arrow width, and sums that flow at each endpoint → node radius. Geometry stays resident; only the width buffer re-expands when the playhead crosses a sub-step (~5 Hz), so the tile **loads once and never re-fetches**. An archive built without the matrix falls back to a per-feature magnitude column and renders a **static** flowmap — see [`flowProperty`](#static-archives-without-a-bucket-matrix).
 
 There is no time-window filter — an arrow with ~0 current flow simply gets width 0 (invisible), which **is** the animation.
 
@@ -63,16 +63,42 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### General
 
-| Prop      | Type     | Default | Description                                                                                           |
-| --------- | -------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `minFlow` | `number` | `0.25`  | Hide arrows and nodes whose current flow is below this many trips (squelches sub-bucket blend noise). |
+| Prop           | Type             | Default | Description                                                                                                                                                                                 |
+| -------------- | ---------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minFlow`      | `number`         | `0.25`  | Hide arrows and nodes whose current flow is below this many trips (squelches sub-bucket blend noise).                                                                                       |
+| `flowProperty` | `string \| null` | `null`  | Per-feature numeric column carrying the flow magnitude, for archives built **without** the per-bucket `vertexValueMatrix`. See [Static archives](#static-archives-without-a-bucket-matrix). |
+
+### Static archives (without a bucket matrix)
+
+The per-bucket `vertexValueMatrix` is the animated source of truth, and
+`flowProperty` is **ignored** whenever a tile carries one. An archive built
+without the matrix used to render every corridor at width 0 — a blank map
+indistinguishable from a load failure. It now falls back to a per-feature
+magnitude column and renders a **static** flowmap (every corridor keeps one
+constant width):
+
+- `flowProperty` unset (the default) auto-detects the first column present out
+  of `flow`, `count`, `volume`, `trips`, `value`, `weight`.
+- Setting `flowProperty` overrides the probe entirely.
+- With neither a matrix nor a usable magnitude column, the layer warns once,
+  naming the candidate columns, and every corridor renders at width 0.
 
 ## Sublayers
 
-`renderLayers()` runs in two passes — pass 1 accumulates per-node incident flow across all visible tiles, pass 2 builds the arrows feeding each one its endpoints' node radii — and returns one [`FlowLinesLayer`](./flow-lines-layer.md) per tile plus a single `ScatterplotLayer` node overlay. Override either via `_subLayerProps`:
+`renderLayers()` runs in three passes — pass 1 resolves per-tile geometry, pass 2 decodes widths and accumulates per-node incident flow across all visible tiles, pass 3 builds the arrows feeding each one its endpoints' node radii — and returns one [`FlowLinesLayer`](./flow-lines-layer.md) per tile plus a single `ScatterplotLayer` node overlay. Station identity (the coordinate interning) is hoisted out of the per-sub-step path into a node table rebuilt only when the visible tile _set_ changes. Override either sublayer via `_subLayerProps`:
 
 - **`flows`** — the per-tile arrow sublayer.
 - **`nodes`** — the node-circle overlay.
+
+### `extensions` are stripped
+
+deck extensions cannot reach this family's shaders. [`FlowLinesLayer`](./flow-lines-layer.md)
+is a custom-`Model` layer that declares no `DECKGL_FILTER_*` hooks, so deck would
+merge the extension's module, allocate its attributes, and then drop every
+injection — silently, because `disableWarnings` is inherited. This layer
+therefore **strips a forwarded `extensions` list and warns once**, naming the
+extensions it dropped, rather than passing along a list that looks live and
+isn't.
 
 ## Data shape
 

@@ -46,7 +46,7 @@ export interface BufferedRunway {
 
 /**
  * Structural readiness/cost oracle the governor consumes. `@poopdeck.gl/core`'s
- * `SpatiotemporalTileset` satisfies this interface; defining it here keeps the
+ * `SpatioTemporalTileset` satisfies this interface; defining it here keeps the
  * governor decoupled from core (it never imports tileset types) and lets tests
  * drive it with a plain object.
  */

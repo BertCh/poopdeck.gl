@@ -93,9 +93,10 @@ const RustPanel: React.FC = () => (
     title="Build time — the Rust crates"
     foot={
       <>
-        Also in the workspace: <span className="font-mono">stt-generate</span>,
-        the demo-dataset generator behind every showcase demo — it fetches real
-        data, writes GeoParquet and shells out to{' '}
+        Alongside them: <span className="font-mono">stt-wasm</span>, the
+        WebAssembly decoder, and <span className="font-mono">stt-generate</span>
+        , the demo-dataset generator behind every showcase demo — it fetches
+        real data, writes GeoParquet and shells out to{' '}
         <span className="font-mono">stt-build</span>.
       </>
     }
@@ -103,7 +104,7 @@ const RustPanel: React.FC = () => (
     <FigureSvg
       viewBox="0 0 440 250"
       className="w-full min-w-[400px]"
-      aria-label="Diagram: the spatiotemporal-tiles facade crate ships four CLI binaries and sits on the stt-build and stt-optimize libraries, which both sit on stt-core, the format implementation."
+      aria-label="Diagram: the spatiotemporal-tiles facade crate ships five CLI binaries and sits on the stt-build and stt-optimize libraries, which both sit on stt-core, the format implementation."
     >
       <defs>
         <marker
@@ -125,18 +126,18 @@ const RustPanel: React.FC = () => (
         w={400}
         h={70}
         title="spatiotemporal-tiles"
-        sub="crates.io · one install, four CLIs"
+        sub="crates.io · one install, five CLIs"
         accent
       />
       <text
         x="220"
         y="74"
-        fontSize="9.5"
+        fontSize="9"
         fontFamily={MONO}
         textAnchor="middle"
         fill="var(--accent)"
       >
-        stt-build · stt-optimize · stt-validate · stt-serve
+        stt-build · stt-optimize · stt-validate · stt-bundle · stt-serve
       </text>
 
       <line
@@ -224,7 +225,7 @@ const TS_TOP: {
 const TsPanel: React.FC = () => (
   <Card
     title="Runtime — the npm packages (@poopdeck.gl)"
-    foot="One decoder, one clock: every renderer consumes the same decoded tiles from core. layers, three and react import the playback engine directly; MapLibre and Cesium take no dependency on it and drive from any clock through a small structural interface."
+    foot="One decoder, one clock: every renderer consumes the same decoded tiles from core. layers, three and react import the playback engine directly; MapLibre and Cesium take no dependency on it and drive from any clock through a small structural interface. An eighth package, /mcp, exposes the dataset catalog and docs to AI agents and depends on neither."
   >
     <FigureSvg
       viewBox="0 0 440 262"
@@ -325,8 +326,8 @@ const LAYER_MATRIX: MatrixRow[] = [
   { kind: 'point', cells: ['y', 'y', 'y', 'y'] },
   { kind: 'path', cells: ['y', 'y', '-', 'y'] },
   { kind: 'polygon', cells: ['y', 'y', 'y', '-'] },
-  { kind: 'line', cells: ['y', 'y', 'y', 'y'] },
   { kind: 'arc', cells: ['y', 'y', 'y', 'y'] },
+  { kind: 'line', cells: ['y', 'y', 'y', 'y'] },
   { kind: 'icon', cells: ['y', 'y', 'y', '-'] },
   { kind: 'column', cells: ['y', 'y', 'y', '-'] },
   { kind: 'trips', cells: ['y', 'y', 'y', 'y'] },
@@ -341,6 +342,10 @@ const LAYER_MATRIX: MatrixRow[] = [
   { kind: 'flowStroke', cells: ['y', '↳ flowCorridor', 'y', '↳ line'] },
   { kind: 'isoLines', cells: ['↳ path', 'y', '-', '↳ path'] },
   { kind: 'ego', cells: ['-', 'y', '-', '-'] },
+  { kind: 'text', cells: ['y', '↳ icon', '↳ icon', '↳ icon'] },
+  { kind: 'mesh', cells: ['y', '↳ boundingBox', '-', '↳ boundingBox'] },
+  { kind: 'pointCloud', cells: ['y', '↳ point', '↳ point', '↳ point'] },
+  { kind: 'hexbin', cells: ['y', '↳ h3Summary', 'y', '↳ h3Summary'] },
 ];
 
 const MODE_MATRIX: MatrixRow[] = [
@@ -453,11 +458,11 @@ const CapabilityMatrix: React.FC = () => (
           className="mt-3 text-[10.5px] leading-relaxed"
           style={{ color: 'var(--ink-400)' }}
         >
-          deck.gl is the reference backend; Three (WebGPU/TSL) tracks it closest
-          and adds the ego/cockpit kinds; MapLibre now renders nearly the whole
-          catalog as native custom layers — points through summary tiers and
-          flow families — on the basemap; Cesium focuses on the movement catalog
-          on a WGS84 globe.
+          deck.gl is the reference backend and the only one with no gaps; Three
+          (WebGPU/TSL) tracks it closest and adds the ego/cockpit kinds;
+          MapLibre renders most of the catalog as native custom layers on the
+          basemap; Cesium takes the movement kinds natively on a WGS84 globe and
+          degrades the rest to a simpler kind rather than dropping them.
         </p>
       </div>
     </div>

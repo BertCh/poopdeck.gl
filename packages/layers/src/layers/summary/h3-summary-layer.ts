@@ -27,6 +27,30 @@
  * no custom color-callback prop — restyle via `colorRange`/`colorDomain`/
  * `weightProperty`.
  *
+ * TIME INSIDE A TILE — sub-buckets. A summary tile is one OUTER temporal
+ * bucket, so residency alone gives a map that jumps at bucket boundaries and
+ * does nothing while the play head scrubs INSIDE one. `stt-build --summary-tier
+ * … --summary-sub-buckets N` therefore bakes `bucket_0..bucket_<N-1>` count
+ * columns per cell (`crates/stt-build/src/summary.rs`), and
+ * `SummaryTier.subBuckets` declares N. When N > 1 this layer selects the column
+ * the play head is inside — `floor((t − tile.id.t) / (temporalBucketMs / N))`,
+ * the exact inverse of the builder's binning — drives the ramp from it, and
+ * drops cells with no activity in that slice. With N == 1 (the default) there is
+ * no baked intra-bucket signal, the play head changes nothing inside a tile, and
+ * the layer costs exactly what it did before — `--summary-sub-buckets` is how an
+ * archive opts into intra-bucket animation.
+ *
+ * NOT USED (deliberate): each cell also carries its own `[startTimes,
+ * endTimes]` — the min/max feature time observed in that cell within the bucket
+ * (`summary.rs` `agg.time_start`/`time_end`). Gating cells on that extent
+ * overlapping the play head would animate EVERY summary archive, but it makes
+ * the visible row set a function of the continuous play head rather than of a
+ * baked column: the prepared-row arrays would have to be rebuilt for every
+ * visible tile on every tick, with no bound like the sub-bucket crossing gives,
+ * and the result would change what existing archives draw depending on how
+ * `timeWindow` compares to `temporalBucketMs`. The extents still reach the app
+ * through picking (`start_time` / `end_time` on `info.object`).
+ *
  * ARCHITECTURE: extends {@link SpatioTemporalLayer} and reuses ALL of its
  * archive/tileset plumbing (init + supersession race guards, rAF-coalesced
  * tile-load updates, throttled animation ticks, byte-budgeted cache,
@@ -35,7 +59,8 @@
  * hooks — {@link onMetadataLoaded} (onMetadataLoad callback + no-tier
  * warning) and {@link getTilesetOptionOverrides} (summary tier dispatch,
  * tier zoom range, 'no-overlap' refinement) — plus a {@link getZoomLevel}
- * override that clamps to the tier's zoom band. Historically this class
+ * override that clamps to the tier's zoom band and a {@link _handleTimeUpdate}
+ * override that re-renders on a sub-bucket crossing. Historically this class
  * duplicated ~270 lines of that plumbing and had already drifted (missing
  * rAF coalescing and `maxCacheByteSize`).
  */
@@ -52,12 +77,14 @@ import type {
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import {
   getFeatureProperties,
+  tileKey,
   DEFAULT_SUMMARY_COLOR_RANGE,
 } from '@poopdeck.gl/core';
 import type {
   ArchiveMetadata,
   BinaryFeatures,
-  SpatiotemporalTilesetOptions,
+  SpatioTemporalTilesetOptions,
+  SummaryTier,
   Tile,
 } from '@poopdeck.gl/core';
 import { splitLongToH3Index } from 'h3-js';
@@ -70,6 +97,7 @@ import {
 import {
   colorListDigest,
   inheritedPropsDigest,
+  structuralDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
@@ -79,8 +107,6 @@ import type {
 } from '../../lib/accessor-alias.js';
 import { warnOnce } from '../../lib/log.js';
 
-const DEBUG = false;
-
 /** Props added by {@link H3SummaryLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link H3SummaryLayerProps}). */
 export interface _H3SummaryLayerProps {
@@ -89,6 +115,13 @@ export interface _H3SummaryLayerProps {
    * Defaults to `'count'` (the implicit cell-count column). Any aggregated
    * column from the summary tier is also valid (`'mean_magnitude'`,
    * `'sum_value'`, ...).
+   *
+   * SUB-BUCKETS: on an archive built with `--summary-sub-buckets N`, the
+   * default `'count'` is replaced per frame by the `bucket_<k>` column the play
+   * head is inside, so the ramp tracks activity WITHIN the tile's time bucket.
+   * A non-`'count'` column keeps its own (bucket-wide) aggregate value — no
+   * per-sub-bucket aggregates are baked for it — but its cells are still
+   * shown/hidden by the active sub-bucket's activity.
    */
   weightProperty?: string;
 
@@ -105,15 +138,28 @@ export interface _H3SummaryLayerProps {
    */
   colorDomain?: [number, number] | null;
 
-  /** Extrusion enabled? Defaults to false (flat hexagons). */
+  /**
+   * Extrusion enabled?
+   *
+   * DELIBERATE DEFAULT DRIFT: `false` here vs deck's `H3HexagonLayer` default
+   * of `true`. The summary tier's job is a legible planet-scale CHOROPLETH at
+   * z0–5, where extruding every cell occludes the cells behind it and the
+   * height carries no information the colour doesn't. Pass `extruded: true` for
+   * deck parity (and for the 3-D look at higher summary zooms).
+   * @default false
+   */
   extruded?: boolean;
 
   /** Extrusion scale (meters per weight unit). Only used when `extruded`. */
   elevationScale?: number;
 
   /**
-   * Coverage of each hex in its cell (0..1). Lower values leave a gap
-   * between adjacent hexes — useful for a heatmap-style look at low zooms.
+   * Coverage of each hex in its cell (0..1), inset toward the cell centroid.
+   * Lower values leave a gap between adjacent hexes — the heatmap-style look at
+   * low zooms. Forwarded to `H3HexagonLayer.coverage`, which really does honour
+   * it (`_getForwardProps` forwards it, and both the hi-fi polygon and the
+   * ColumnLayer path scale by it).
+   * @default 0.92
    */
   coverage?: number;
 
@@ -210,12 +256,38 @@ export interface _H3SummaryLayerProps {
   material?: Material | boolean;
 
   /**
-   * High-precision hexagon rendering. `'auto'` picks per-cell fidelity
-   * (irregular low-res cells + pentagons render hi-fi); `true`/`false` force
-   * it. H3HexagonLayer pass-through.
+   * High-precision hexagon rendering. `true` renders every cell as a real
+   * (hi-fi) polygon; `false` uses deck's instanced-column fast path.
+   *
+   * `'auto'` (the default) is resolved HERE rather than forwarded, because
+   * upstream's own 'auto' costs an O(cells) WASM scan per tile:
+   * `H3HexagonLayer._calculateH3DataProps` breaks early only when
+   * `!this.props.highPrecision`, and the string `'auto'` is truthy — so it
+   * calls `getResolution()` AND `isPentagon()` for every row, breaking only on
+   * a multi-resolution set or a pentagon. A summary tier has exactly one
+   * resolution per zoom (`SummaryTier.cellResolutionPerZoom`) and there are 12
+   * pentagons on the planet, so that scan runs to completion on nearly every
+   * tile (zooming `earthquakes-summary` ≈ 100 tiles × 3k cells = ~600k
+   * emscripten calls in one frame burst). This layer instead reads the tier's
+   * resolution for the tile's zoom and forwards a CONCRETE boolean, which makes
+   * upstream skip the scan in both directions. The rule mirrors
+   * `_shouldUseHighPrecision`: hi-fi on a non-Mercator (globe) viewport or at
+   * resolution ≤ 5. DIVERGENCE: the per-cell pentagon check is dropped — the 12
+   * pentagon cells render as ordinary hexagons on the column path. Pass an
+   * explicit `true` if you need them exact.
    * @default 'auto'
    */
   highPrecision?: boolean | 'auto';
+
+  /**
+   * Hexagon whose projected shape is reused for every instanced column on the
+   * `highPrecision: false` path. Defaults to the cell nearest the viewport
+   * centre; pin it when the set has a stable centre of mass and you want the
+   * geometry to stop being re-derived as the camera moves. Ignored on the
+   * hi-fi path (real per-cell polygons). H3HexagonLayer pass-through.
+   * @default null
+   */
+  centerHexagon?: string | null;
 
   /** Fired once per archive init with the decoded metadata. */
   onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
@@ -225,7 +297,7 @@ export interface _H3SummaryLayerProps {
 export type H3SummaryLayerProps = _H3SummaryLayerProps &
   SpatioTemporalLayerProps;
 
-// Shared with QuadbinSummaryLayer via @poopdeck.gl/core (audit F2) so the two
+// Shared with QuadbinSummaryLayer via @poopdeck.gl/core so the two
 // summary-tier ramps can't drift apart.
 const DEFAULT_COLOR_RANGE = DEFAULT_SUMMARY_COLOR_RANGE as Color[];
 
@@ -258,9 +330,41 @@ interface PreparedTile {
   features: BinaryFeatures;
 }
 
+/**
+ * The tile's canonical identity, from core's single producer — which folds the
+ * temporal-LOD tier in, so a scrub-preview tile and the base tile sharing its
+ * `z/x/y/t` occupy separate cache slots instead of overwriting each other.
+ */
 function makeTileKey(tile: Tile): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}`;
+  return tileKey(tile.id);
+}
+
+/**
+ * Cache key for one prepared tile. The weight column and the active sub-bucket
+ * both change the rows, so both ride the key — and the prune walk in
+ * {@link H3SummaryLayer.renderLayers} must build the live set with this same
+ * function or it evicts nothing.
+ */
+function prepareKey(
+  tile: Tile,
+  weightProp: string,
+  subBucket: number | null,
+): string {
+  const base = `${makeTileKey(tile)}:${weightProp}`;
+  return subBucket === null ? base : `${base}:b${subBucket}`;
+}
+
+/**
+ * TS port of `SummaryTier::resolution_for_zoom` (crates/stt-core/src/
+ * metadata.rs): the table is indexed by `zoom - minZoom` and clamped to the
+ * tier's band. Returns null when the archive baked no table.
+ */
+function tierResolutionForZoom(tier: SummaryTier, zoom: number): number | null {
+  const table = tier.cellResolutionPerZoom;
+  if (!table || table.length === 0) return null;
+  if (zoom <= tier.minZoom) return table[0];
+  if (zoom >= tier.maxZoom) return table[table.length - 1];
+  return table[zoom - tier.minZoom] ?? table[table.length - 1];
 }
 
 /**
@@ -293,10 +397,10 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
   colorRange: { type: 'array', value: DEFAULT_COLOR_RANGE, compare: true },
   colorDomain: { type: 'array', value: null, compare: true, optional: true },
   extruded: false,
-  elevationScale: 1,
+  elevationScale: { type: 'number', value: 1, min: 0 },
   coverage: { type: 'number', value: 0.92, min: 0, max: 1 },
   // Outline / stroke family — deck's H3HexagonLayer (→ PolygonLayer) defaults,
-  // preserving the previously-implicit black hex border while making it
+  // matching the black hex border deck draws implicitly while making it
   // recolorable / disablable.
   stroked: true,
   filled: true,
@@ -315,8 +419,13 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
     value: Number.MAX_SAFE_INTEGER,
     min: 0,
   },
-  material: true,
+  // Permissive descriptor (the one every other layer in the package uses): a
+  // bare `true` parses as `{type: 'boolean'}`, whose comparator is
+  // `Boolean(a) === Boolean(b)`, so swapping one material SPEC OBJECT for
+  // another diffs as unchanged and lighting never updates on a paused map.
+  material: { type: 'object', value: true, compare: true },
   highPrecision: 'auto',
+  centerHexagon: { type: 'object', value: null, optional: true },
   onMetadataLoad: { type: 'function', value: null, optional: true },
 };
 
@@ -363,12 +472,80 @@ export class H3SummaryLayer<
   >();
   private lastTilesRef: Tile[] | null = null;
 
+  /**
+   * Weight column + active sub-bucket at the last prune. Both are baked into
+   * the cache keys but neither changes `state.tiles`' identity, so gating the
+   * prune on the tile reference alone leaked one cache generation per distinct
+   * value — bounded only by `#tiles × #weight-columns-ever-used`, which defeats
+   * the byte budget under a column-cycling UI.
+   */
+  private lastPruneKey: string | null = null;
+
+  /**
+   * Global sub-bucket index at the last tick that forced a re-render. Only
+   * meaningful when the tier declares sub-buckets; `null` otherwise.
+   */
+  private lastSubBucketTick: number | null = null;
+
   finalizeState(context: LayerContext): void {
     // Base handles controller unsubscribe, the pending tile-load rAF, and
     // tileset/archive teardown.
     super.finalizeState(context);
     this.preparedTileCache.clear();
     this.sublayerCache.clear();
+  }
+
+  /**
+   * Sub-bucket width in ms, or null when this archive carries none (the common
+   * case — `subBuckets` defaults to 1). Integer-divided and floored at 1, byte
+   * for byte the builder's `(bucket_ms / sub_buckets).max(1)`.
+   */
+  protected subBucketMs(): number | null {
+    const metadata = this.state.metadata as ArchiveMetadata | undefined;
+    const tier = metadata?.summaryTier;
+    const n = tier?.subBuckets ?? 1;
+    if (!tier || !(n > 1)) return null;
+    const bucketMs = metadata?.temporalBucketMs;
+    if (!bucketMs || !(bucketMs > 0)) return null;
+    return Math.max(1, Math.floor(bucketMs / n));
+  }
+
+  /**
+   * Index of the `bucket_<k>` column the play head is inside for `tile`, or
+   * null when the archive has no sub-buckets. `tile.id.t` IS the builder's
+   * `bucket_start`, so this inverts `summary.rs`'s
+   * `(timestamp - bucket_start) / sub_bucket_ms` exactly; out-of-range play
+   * heads clamp to the tile's first/last slice (a tile only stays resident
+   * while it overlaps the window, so the clamp is the tile's own edge).
+   */
+  protected activeSubBucket(tile: Tile, subMs: number | null): number | null {
+    if (subMs === null) return null;
+    const n =
+      (this.state.metadata as ArchiveMetadata | undefined)?.summaryTier
+        ?.subBuckets ?? 1;
+    const time = this.getCurrentTime();
+    if (!Number.isFinite(time)) return 0;
+    const idx = Math.floor((time - tile.id.t) / subMs);
+    return Math.max(0, Math.min(n - 1, idx));
+  }
+
+  /**
+   * Base tick handler + a re-render on every sub-bucket CROSSING. The base only
+   * calls `setNeedsRedraw()` for time-only ticks, which never re-runs
+   * `renderLayers()` — so without this the selected `bucket_<k>` column would be
+   * frozen at whatever it was when the tile set last changed. Gated on the
+   * index actually changing (not on wall-clock), so a 30-sub-bucket archive
+   * re-renders 30× per outer bucket and a non-sub-bucketed one never pays
+   * anything at all.
+   */
+  protected _handleTimeUpdate(time: number): void {
+    super._handleTimeUpdate(time);
+    const subMs = this.subBucketMs();
+    if (subMs === null) return;
+    const tick = Math.floor(time / subMs);
+    if (tick === this.lastSubBucketTick) return;
+    this.lastSubBucketTick = tick;
+    this.setState({ frameNumber: (this.state.frameNumber || 0) + 1 });
   }
 
   /**
@@ -397,7 +574,7 @@ export class H3SummaryLayer<
    */
   protected getTilesetOptionOverrides(
     metadata: ArchiveMetadata,
-  ): Partial<SpatiotemporalTilesetOptions> {
+  ): Partial<SpatioTemporalTilesetOptions> {
     const tier = metadata.summaryTier;
     return {
       tier: 'summary',
@@ -420,9 +597,20 @@ export class H3SummaryLayer<
   /**
    * Build (or fetch from cache) the per-tile data array consumed by
    * H3HexagonLayer. One entry per cell: { hex, weight }.
+   *
+   * Every `return null` here means a blank map, so each one names itself once
+   * on the console. The failure modes are all silent otherwise: a typo'd
+   * `weightProperty`, an archive whose `id` column decoded as UInt32 (so every
+   * `h3IndexFromTile` returns null), or a `summaryTier.layerName` that doesn't
+   * match the tile — none of which fire the archive-level "no summary tier"
+   * warning, because the tier IS present.
    */
-  private prepareTile(tile: Tile, weightProp: string): PreparedTile | null {
-    const tileKey = `${makeTileKey(tile)}:${weightProp}`;
+  private prepareTile(
+    tile: Tile,
+    weightProp: string,
+    subBucket: number | null,
+  ): PreparedTile | null {
+    const tileKey = prepareKey(tile, weightProp, subBucket);
     const cached = this.preparedTileCache.get(tileKey);
     if (cached) return cached;
 
@@ -432,7 +620,16 @@ export class H3SummaryLayer<
     const summaryLayerName =
       this.state.metadata?.summaryTier?.layerName ?? 'summary';
     const layer = tile.layers.find((l) => l.name === summaryLayerName);
-    if (!layer) return null;
+    if (!layer) {
+      warnOnce(
+        `H3SummaryLayer:noSummaryLayer:${this.props.id}:${summaryLayerName}`,
+        `[H3SummaryLayer] tile ${makeTileKey(tile)} carries no layer named ` +
+          `'${summaryLayerName}' (has: ${tile.layers.map((l) => l.name).join(', ') || 'none'}). ` +
+          "A one-off is a zoom-race artefact; a blank map means the tier's " +
+          '`layer_name` and the tile contents disagree.',
+      );
+      return null;
+    }
     const binary = layer.features;
     const n = binary.featureCount;
     if (n === 0) return null;
@@ -442,15 +639,45 @@ export class H3SummaryLayer<
     // the full u64. The 32-bit `featureIds` is still populated but only
     // carries the low half — we deliberately do NOT use it here.
     const featureIds64 = binary.featureIds64;
+    if (!featureIds64) {
+      warnOnce(
+        `H3SummaryLayer:noFeatureIds64:${this.props.id}`,
+        `[H3SummaryLayer] summary tile ${makeTileKey(tile)} has no ` +
+          '`featureIds64` — the H3 cell index IS the 64-bit `id` column, so ' +
+          'there is nothing to render. Usually means the archive wrote `id` as ' +
+          'UInt32 (or omitted it); rebuild the summary tier with a current ' +
+          '`stt-build`.',
+      );
+      return null;
+    }
 
     const weights = binary.numericProps[weightProp];
     if (!weights) {
-      if (DEBUG) {
-        console.warn(
-          `[H3SummaryLayer] tile missing weight property '${weightProp}'`,
+      warnOnce(
+        `H3SummaryLayer:missingWeight:${this.props.id}:${weightProp}`,
+        `[H3SummaryLayer] summary tiles carry no numeric column ` +
+          `'${weightProp}' (weightProperty). Available: ` +
+          `${Object.keys(binary.numericProps).join(', ') || 'none'}. ` +
+          'Nothing will render until it names one of those.',
+      );
+      return null;
+    }
+
+    // Sub-bucket column for the play head's slice, when the tier bakes them.
+    let subWeights: Float32Array | undefined;
+    if (subBucket !== null) {
+      subWeights = binary.numericProps[`bucket_${subBucket}`] as
+        | Float32Array
+        | undefined;
+      if (!subWeights) {
+        warnOnce(
+          `H3SummaryLayer:missingSubBucket:${this.props.id}`,
+          `[H3SummaryLayer] summaryTier.subBuckets declares sub-buckets but ` +
+            `tile ${makeTileKey(tile)} has no 'bucket_${subBucket}' column. ` +
+            'Falling back to the whole-bucket aggregate (the map will jump at ' +
+            'outer-bucket boundaries instead of animating within them).',
         );
       }
-      return null;
     }
 
     const rows: PreparedHexRow[] = [];
@@ -459,12 +686,33 @@ export class H3SummaryLayer<
     for (let i = 0; i < n; i++) {
       const hex = h3IndexFromTile(featureIds64, i);
       if (!hex) continue;
-      const w = weights[i];
+      // A cell with no activity in the active slice is not drawn at all —
+      // that (not a colour change) is what makes the summary tier animate
+      // INSIDE a temporal tile instead of only at bucket boundaries.
+      if (subWeights && !(subWeights[i] > 0)) continue;
+      // `count` is the sub-bucketed quantity; any other aggregate keeps its
+      // bucket-wide value (the builder bakes no per-sub-bucket aggregates).
+      const w =
+        subWeights && weightProp === 'count' ? subWeights[i] : weights[i];
       rows.push({ hex, weight: w, sourceIndex: i });
       if (w < weightMin) weightMin = w;
       if (w > weightMax) weightMax = w;
     }
-    if (rows.length === 0) return null;
+    if (rows.length === 0) {
+      // Empty because the slice is empty is normal; empty because NO cell id
+      // decoded is a bug worth naming.
+      if (!subWeights) {
+        warnOnce(
+          `H3SummaryLayer:noDecodableCells:${this.props.id}`,
+          `[H3SummaryLayer] none of tile ${makeTileKey(tile)}'s ${n} cells ` +
+            `yielded an H3 index (featureIds64 holds ${featureIds64.length} ` +
+            'entries). The `id` column must carry the H3 cell index verbatim, ' +
+            'one per feature — check that the archive was built with ' +
+            '`--summary-tier h3` (a quadbin tier needs QuadbinSummaryLayer).',
+        );
+      }
+      return null;
+    }
 
     const prepared: PreparedTile = {
       tileKey,
@@ -479,7 +727,32 @@ export class H3SummaryLayer<
   }
 
   /**
-   * Accessor-alias resolution (audit B1): the upstream-named `getLineColor`
+   * Resolve `highPrecision: 'auto'` to a concrete boolean for a tile at
+   * `tileZoom` — see the {@link _H3SummaryLayerProps.highPrecision} doc for why
+   * forwarding `'auto'` is the expensive option. Returns `'auto'` unchanged only
+   * when the archive baked no `cellResolutionPerZoom` table to decide with.
+   */
+  private resolveHighPrecision(tileZoom: number): boolean | 'auto' {
+    const configured = this.props.highPrecision;
+    if (configured !== 'auto') return configured;
+    const tier = this.state.metadata?.summaryTier;
+    const resolution = tier ? tierResolutionForZoom(tier, tileZoom) : null;
+    if (resolution === null) return 'auto';
+    // Same two clauses as H3HexagonLayer._shouldUseHighPrecision that we can
+    // evaluate without touching the rows: a non-Mercator viewport (globe) sets
+    // `viewport.resolution`, and coarse cells are too irregular for the shared
+    // instanced column.
+    if (this.isNonMercatorViewport()) return true;
+    return resolution <= 5;
+  }
+
+  /** True on a globe / non-Mercator viewport (deck sets `viewport.resolution`). */
+  private isNonMercatorViewport(): boolean {
+    return Boolean((this.context as any)?.viewport?.resolution);
+  }
+
+  /**
+   * Accessor-alias resolution: the upstream-named `getLineColor`
    * alias wins when set to a constant Color; a function-valued alias (or a
    * column-name string, which a summary outline can't source per-cell) warns
    * once / is ignored and falls back to the `lineColor` constant.
@@ -537,13 +810,28 @@ export class H3SummaryLayer<
     if (!tiles || tiles.length === 0) return [];
 
     const weightProp = this.props.weightProperty ?? 'count';
+    // Active sub-bucket column, per tile (each tile has its own bucket start).
+    const subMs = this.subBucketMs();
+    const subBucketOf = (tile: Tile) => this.activeSubBucket(tile, subMs);
 
-    // Skip the O(cacheSize) prune walk when the tile list reference is
-    // unchanged from the last render — the live set and cached set are
-    // necessarily identical.
-    if (this.lastTilesRef !== tiles) {
+    // Skip the O(cacheSize) prune walk when NOTHING that keys the caches has
+    // changed. The tile-list reference alone is not enough: `weightProperty`
+    // and the active sub-bucket are both baked into the cache keys but neither
+    // touches `state.tiles`, so gating on the reference alone retained one full
+    // cache generation per value ever used.
+    //
+    // The sub-bucket half of the signature is the GLOBAL slice tick, not a
+    // per-tile index: every tile shares `subMs`, so it advances exactly when any
+    // tile's column selection can change — and unlike a per-tile index it can't
+    // sit clamped at a band edge while its neighbours move.
+    const pruneKey = `${weightProp}|${
+      subMs === null ? '' : Math.floor(this.getCurrentTime() / subMs)
+    }`;
+    if (this.lastTilesRef !== tiles || this.lastPruneKey !== pruneKey) {
       const live = new Set<string>();
-      for (const tile of tiles) live.add(`${makeTileKey(tile)}:${weightProp}`);
+      for (const tile of tiles) {
+        live.add(prepareKey(tile, weightProp, subBucketOf(tile)));
+      }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
       }
@@ -551,6 +839,7 @@ export class H3SummaryLayer<
         if (!live.has(key)) this.sublayerCache.delete(key);
       }
       this.lastTilesRef = tiles;
+      this.lastPruneKey = pruneKey;
     }
 
     // Resolve the color domain ONCE per render. When the caller pins it via
@@ -564,7 +853,7 @@ export class H3SummaryLayer<
       let lo = Infinity;
       let hi = -Infinity;
       for (const tile of tiles) {
-        const prepared = this.prepareTile(tile, weightProp);
+        const prepared = this.prepareTile(tile, weightProp, subBucketOf(tile));
         if (!prepared) continue;
         if (prepared.weightMin < lo) lo = prepared.weightMin;
         if (prepared.weightMax > hi) hi = prepared.weightMax;
@@ -577,13 +866,6 @@ export class H3SummaryLayer<
     // props see the same accessor-alias-resolved value.
     const lineColor = this.lineColorValue();
     const lineWidth = this.lineWidthValue();
-    const material = this.props.material;
-    const materialKey =
-      material === true
-        ? 't'
-        : material === false
-          ? 'f'
-          : JSON.stringify(material);
 
     // Layer-level style digest — when ANY of these change every cached
     // H3HexagonLayer is stale and we rebuild. The domain is included so a
@@ -604,13 +886,21 @@ export class H3SummaryLayer<
       `|lc${Array.isArray(lineColor) ? lineColor.join(',') : ''}|lw${lineWidth}` +
       `|lwu${this.props.lineWidthUnits}|lws${this.props.lineWidthScale}` +
       `|lwmin${this.props.lineWidthMinPixels}|lwmax${this.props.lineWidthMaxPixels}` +
-      `|mat${materialKey}|hp${this.props.highPrecision}` +
+      // structuralDigest, not the hand-rolled true/false/JSON.stringify key it
+      // replaces — the permissive `material` descriptor now diffs spec objects
+      // properly, and this keeps the cache key honest about nested values.
+      `|mat${structuralDigest(this.props.material)}` +
+      // `highPrecision` resolves PER TILE (it reads the tier resolution for the
+      // tile's zoom), so only the inputs to that resolution belong here: the
+      // configured prop and whether the viewport is a globe.
+      `|hp${this.props.highPrecision}|gl${this.isNonMercatorViewport() ? 1 : 0}` +
+      `|ch${this.props.centerHexagon ?? ''}` +
       `|${inheritedPropsDigest(this.props)}` +
       `|${updateTriggersDigest(this.props.updateTriggers)}`;
 
     const out: Layer[] = [];
     for (const tile of tiles) {
-      const prepared = this.prepareTile(tile, weightProp);
+      const prepared = this.prepareTile(tile, weightProp, subBucketOf(tile));
       if (!prepared) continue;
       const cached = this.sublayerCache.get(prepared.tileKey);
       if (
@@ -656,7 +946,9 @@ export class H3SummaryLayer<
         lineWidthMinPixels: this.props.lineWidthMinPixels,
         lineWidthMaxPixels: this.props.lineWidthMaxPixels,
         material: this.props.material,
-        highPrecision: this.props.highPrecision,
+        // Concrete boolean, not `'auto'` — see resolveHighPrecision().
+        highPrecision: this.resolveHighPrecision(tile.id.z),
+        centerHexagon: this.props.centerHexagon ?? null,
         // updateTriggers ensures deck.gl rebuilds the fill-color and elevation
         // buffers when the props they read from change. The constant outline
         // color/width ride triggers too so a restyle re-evaluates them even if
@@ -666,7 +958,12 @@ export class H3SummaryLayer<
           getFillColor: [
             domain[0],
             domain[1],
-            this.props.colorRange,
+            // CONTENT digest, not the array itself: trigger elements are
+            // strict-compared, but `colorRange` is `{type:'array',
+            // compare:true}` — so the ordinary React idiom of a fresh-but-equal
+            // array literal flipped this trigger every render and rebuilt the
+            // fill-colour attribute for every cell in every tile.
+            colorListDigest(this.props.colorRange ?? DEFAULT_COLOR_RANGE),
             weightProp,
             this.props.updateTriggers?.getFillColor,
           ],
@@ -707,6 +1004,13 @@ export class H3SummaryLayer<
    * for the cell's FULL aggregated columns (decoded via `row.sourceIndex` —
    * the rows array skips undecodable cells, so its index is not the feature
    * index), keeping `hex`/`weight` keys for continuity.
+   *
+   * `id` is DECIMAL-STRINGIFIED. `getFeatureProperties` reads it from
+   * `featureIds64`, which summary tiles always carry, so `info.object.id` was
+   * always a `bigint` — and the first `JSON.stringify(info.object)` in a
+   * `getTooltip` or a devtools panel threw `TypeError: Do not know how to
+   * serialize a BigInt`. A string keeps all 64 bits (a Number would not) and
+   * the canonical `cell` / `hex` keys carry the human-readable H3 index.
    */
   getPickingInfo({
     info,
@@ -722,7 +1026,13 @@ export class H3SummaryLayer<
       if (row && typeof row.sourceIndex === 'number' && sprops?.sttFeatures) {
         const props = getFeatureProperties(sprops.sttFeatures, row.sourceIndex);
         if (props) {
-          out.object = { ...props, hex: row.hex, weight: row.weight };
+          out.object = {
+            ...props,
+            id: typeof props.id === 'bigint' ? props.id.toString() : props.id,
+            cell: row.hex,
+            hex: row.hex,
+            weight: row.weight,
+          };
         }
       }
     }

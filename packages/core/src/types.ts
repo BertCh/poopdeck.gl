@@ -20,11 +20,14 @@ export interface TileId {
    * Temporal-LOD bucket width (ms) this id addresses, for archives that
    * carry a temporal-LOD pyramid. Set by
    * `STTArchive.getTileIdsInBoundsForTemporalLod` on the ids it returns;
-   * absent = the base tier. Load-bearing for identity: a LOD tile shares
-   * `z/x/y/t` with the base tile whose bucket starts at the same instant,
-   * so every key derived from a TileId (archive directory/byte-cache/OPFS
-   * lookups, tileset cache/needed/priority registries) folds `bucketMs` in
-   * to keep the two tiers distinct.
+   * absent = the base tier.
+   *
+   * Load-bearing for identity: a LOD tile shares `z/x/y/t` with the base
+   * tile whose bucket starts at the same instant but holds different bytes,
+   * so a key that drops `bucketMs` merges the two tiers. Derive every such
+   * key with `tileKey()` (`tile-key.ts`), which is the only producer of the
+   * format and folds the tier in — hand-assembling one re-opens the
+   * collision.
    */
   bucketMs?: number;
 }
@@ -45,13 +48,24 @@ export interface TimeRange {
   end: number;
 }
 
-/** Compression method for tiles */
+/**
+ * Codec tag for a tile payload, package-local.
+ *
+ * These numbers are NOT a wire contract. No live STT format stores a
+ * compression byte: a packed archive names its codec as a string in
+ * `manifest.json` (`"zstd"` | `"none"`), and that enum in
+ * `docs/spec/manifest.schema.json` is the real contract. `STTArchive` maps the
+ * manifest string onto these values at open; from there they travel no further
+ * than the postMessage handing a blob to the decoder worker. The Rust
+ * `Compression` enum carries no discriminants at all, so the two languages
+ * agree on codec *names* and never on numbers.
+ *
+ * `1` is skipped rather than assigned — it was gzip's tag in the single-file
+ * `.stt` archive, and leaving it unassigned keeps a salvaged legacy byte from
+ * decoding as a live codec. See `compression.ts` for the full account.
+ */
 export enum Compression {
   None = 0,
-  // Byte 1 = gzip, a retired codec that only ever existed in the legacy
-  // single-file `.stt` format. It is permanently reserved (never reuse it):
-  // no writer emits it, it is absent from the packed `manifest.schema.json`
-  // compression enum, and both the Rust and TS readers reject it.
   Zstd = 2,
 }
 
@@ -305,6 +319,35 @@ export interface BinaryFeatures {
   ringIndices?: Uint32Array;
 
   /**
+   * Start index for each PART's positions, for Polygon geometries only — the
+   * MultiPolygon boundaries the wire geometry cannot express.
+   *
+   * Same units and convention as {@link ringIndices}: GLOBAL vertex
+   * (coordinate-pair) indices rebased to the layer's first vertex, length =
+   * totalPartCount + 1 (the last value is the total position count), so part
+   * `p` spans `[partIndices[p], partIndices[p + 1])`. Every feature boundary in
+   * {@link startIndices} also appears here (a feature's part 0 starts at its
+   * first ring), and every part boundary is also a ring boundary in
+   * {@link ringIndices} — the three are nested, coarsest to finest:
+   * feature ⊇ part ⊇ ring.
+   *
+   * Why it exists: `geoarrow.polygon` is `List<List<FixedSizeList>>`, i.e. ONE
+   * flat ring list per feature (exterior first, then holes). The builder
+   * flattens a MultiPolygon's parts into that same list, after which
+   * part-vs-hole is unrecoverable — ring 2 of a two-part feature is that
+   * part's EXTERIOR, but every conformant GeoArrow consumer reads it as a hole
+   * of part 1. Consumers that care about the distinction (winding-order fixes,
+   * per-part fills, hole subtraction, GeoJSON/GeoParquet round-trips) need
+   * this array.
+   *
+   * ABSENT means every feature in the layer is single-part — the encoder omits
+   * the underlying `part_offsets` column entirely in that case, so absence is
+   * information, not a gap. It is also absent for non-polygon geometries and
+   * for polygon tiles decoded by readers predating this column.
+   */
+  partIndices?: Uint32Array;
+
+  /**
    * Coordinate-quantization step `[sx, sy]` in DEGREES, when the source layer
    * stored fixed-point grid indices (`stt:quant`) rather than Float64 lon/lat.
    * Positions are always dequantized to real lon/lat before they reach here;
@@ -315,20 +358,47 @@ export interface BinaryFeatures {
    */
   coordQuantStep?: [number, number];
 
-  /** Feature IDs (per feature) */
+  /**
+   * Per-feature IDs, narrowed to 32 bits as `id & 0xffffffff`.
+   *
+   * ⚠️ This is a MASKED LOW HALF, not an identity. It is a valid identifier
+   * only for archives whose ids all fit in 32 bits. For anything wider — H3 cell
+   * indices at resolution ≥ 7, every Quadbin id — distinct cells collide here,
+   * and {@link featureIds64} is the only correct source. Do not use this as a
+   * dedupe key, a picking-map key, or a cross-tile identity without first
+   * establishing that the archive's id domain is 32-bit.
+   *
+   * (Before the masking fix this field was computed as `Number(bigint)`, which
+   * rounds through f64 BEFORE the `Uint32Array` store — so above 2⁵³ the stored
+   * bits were not even a truncation, they were garbage: Quadbin
+   * `0x4CFFFFFFFFFFFFFF` landed on `0` rather than `4294967295`. Any code or
+   * comment predating that fix which describes this field as a faithful low-half
+   * mirror was wrong twice over.)
+   *
+   * Materialized LAZILY — see `materializeFeatureIds` in `tile.ts` for the
+   * contract. A consumer that only ever reads {@link featureIds64} never pays
+   * for it.
+   */
   featureIds: Uint32Array;
 
   /**
-   * Optional full-precision 64-bit feature IDs, preserved verbatim from the
-   * archive's Arrow UInt64 `id` column. Present only when the archive needs
-   * full-width IDs (e.g. H3 cell indices at resolution ≥ 7 don't fit in
-   * 32 bits). Most consumers should keep using `featureIds`.
+   * Full-precision 64-bit feature IDs, verbatim from the archive's Arrow UInt64
+   * `id` column — the authoritative identity whenever it is present.
+   *
+   * Present for EVERY tile whose `id` column decoded as UInt64, which in
+   * practice is nearly all of them; it is not reserved for archives that
+   * "need" the width. Mandatory for H3 resolution ≥ 7 and for all Quadbin
+   * schemes, where {@link featureIds} collides.
    */
   featureIds64?: BigUint64Array;
 
   /**
    * Global feature IDs for cross-tile feature identification.
-   * Optional - if not provided, featureIds are used.
+   *
+   * ⚠️ Currently vestigial: no writer in this repo emits it and no reader
+   * consumes it, so it is always `undefined` in practice. Cross-tile identity
+   * today rides {@link featureIds64}. Kept because the wire format reserves the
+   * concept; treat a non-undefined value as authoritative if one ever appears.
    */
   globalFeatureIds?: Uint32Array;
 
@@ -468,14 +538,36 @@ export interface BinaryFeatures {
  * sorted, no whitespace; unknown keys MUST be ignored (spec §5.2.2).
  */
 export interface TileMetaJson {
+  /**
+   * Compact `end_time` encoding — the `time-delta` capability. `'dur32'`: the
+   * column is a non-null `UInt32` DURATION against each feature's own start.
+   * `'zero'`: the column is OMITTED entirely (`end === start` for every
+   * feature). Absent ⇒ the historical absolute `Int64` column.
+   */
+  et?: 'dur32' | 'zero';
   /** Attribute-quant affines, `column → [o, s]` (v1 `stt:qa`). */
   qa?: Record<string, [number, number]>;
   /** Rows are stable-sorted by `start_time` (spec §5.2.3). */
   sorted?: boolean;
+  /**
+   * Compact `start_time` encoding — the `time-delta` capability. `'u32'`: the
+   * column is a non-null `UInt32` MILLISECOND OFFSET from {@link t0} (which is
+   * therefore mandatory, not an optimization). Absent ⇒ absolute `Int64`.
+   */
+  st?: 'u32';
   /** Minimum feature start-time (v1 `stt:time_offset_ms`). */
   t0?: number;
   /** Vertex-value matrix bucket count (v1 `stt:vertex_value_buckets`). */
   vb?: number;
+  /**
+   * Per-vertex value quantization affines, `column → [o, s]`
+   * (`value = o + q*s`) — the `vertex-value-quant` capability. Keys are a
+   * subset of `{'vertex_value', 'vertex_value_matrix'}`: whichever of the two
+   * ships its list leaf as `UInt16` indices rather than `Float32` on this
+   * tile. The reserved index `0xFFFF` decodes to `NaN` (the format's "this
+   * vertex has no value" marker). Absent ⇒ raw `Float32` leaves.
+   */
+  vq?: Record<string, [number, number]>;
   /** `[origin_ms, step_ms]` (v1 `stt:vertex_time_origin_ms`/`_step_ms`). */
   vt?: [number, number];
 }
@@ -815,7 +907,8 @@ export interface TileRequestOptions {
    * Current play-head time (sim-ms, in the same time domain as a tile's
    * `timeStart`) for the process-shared scheduler's cross-source
    * earliest-deadline-first (EDF) priority (multi-source coordination,
-   * Phase 2 §2.8). When set, each coalesced range-group is prioritized by its
+   * docs/roadmap/playback-and-loading.md §5). When set, each coalesced
+   * range-group is prioritized by its
    * members' minimum distance-to-playhead — comparable ACROSS archives because
    * they share one playhead — so the most-imminent data loads first globally,
    * not just within one source. Omit it and the scheduler falls back to a

@@ -44,7 +44,7 @@ import type {
   TimeController,
 } from '@poopdeck.gl/playback';
 import { tileLoadingProps } from '../../types';
-import type { Dataset } from '../../types';
+import type { WorldsDataset } from '../../types';
 import type { DemoSourceRegistry } from '../demo/buildDemoLayers';
 import {
   resolveWorldAsset,
@@ -97,7 +97,7 @@ export const WORLD_LAYER_IDS = {
 };
 
 export interface BuildWorldsLayersArgs {
-  dataset: Dataset;
+  dataset: WorldsDataset;
   worlds: WorldsIndex | null;
   timeController: TimeController;
   registry: DemoSourceRegistry;

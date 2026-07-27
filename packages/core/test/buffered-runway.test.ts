@@ -1,7 +1,7 @@
 /**
  * Tests for the player-buffering readiness API (WS-A):
  * `getBufferedRunway` / `getBufferedRanges` / `estimateCost` /
- * `estimateTimeToReadyMs` / `onBufferChange` on SpatiotemporalTileset.
+ * `estimateTimeToReadyMs` / `onBufferChange` on SpatioTemporalTileset.
  *
  * Harness: a synthetic single-cell archive (one tile per 1 s temporal bucket
  * at the requested zoom, byte length `100 × (bucketIndex + 1)`), driven with
@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { SpatiotemporalTileset } from '../src/spatiotemporal-tileset';
+import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { BufferedRunway } from '../src/spatiotemporal-tileset';
 import type { TileId, Tile } from '../src/types';
 import {
@@ -44,7 +44,7 @@ interface HarnessOptions {
 
 function makeHarness(opts: HarnessOptions = {}) {
   const pending: Array<{ ids: TileId[]; resolve: () => void }> = [];
-  const tileset = new SpatiotemporalTileset({
+  const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
     enablePrefetch: false,
@@ -84,7 +84,7 @@ function makeHarness(opts: HarnessOptions = {}) {
 }
 
 /** Enable buffer tracking and wait for the async coverage index build. */
-async function primeCoverage(tileset: SpatiotemporalTileset): Promise<void> {
+async function primeCoverage(tileset: SpatioTemporalTileset): Promise<void> {
   // First call flips the lazy tracking flag and kicks the (async) directory
   // slice; before the index lands the runway is conservatively empty.
   const before = tileset.getBufferedRunway(0, 1);
@@ -93,7 +93,7 @@ async function primeCoverage(tileset: SpatiotemporalTileset): Promise<void> {
   await settle();
 }
 
-describe('SpatiotemporalTileset.getBufferedRunway', () => {
+describe('SpatioTemporalTileset.getBufferedRunway', () => {
   it('grows as tiles load and stops at the first missing bucket', async () => {
     const { tileset, loadBucket } = makeHarness();
 
@@ -191,7 +191,7 @@ describe('SpatiotemporalTileset.getBufferedRunway', () => {
   });
 });
 
-describe('SpatiotemporalTileset.estimateCost', () => {
+describe('SpatioTemporalTileset.estimateCost', () => {
   it('sums directory lengths of NOT-loaded tiles intersecting the range', async () => {
     const { tileset, loadBucket } = makeHarness();
     await loadBucket(0);
@@ -234,7 +234,7 @@ describe('SpatiotemporalTileset.estimateCost', () => {
   });
 });
 
-describe('SpatiotemporalTileset.estimateTimeToReadyMs', () => {
+describe('SpatioTemporalTileset.estimateTimeToReadyMs', () => {
   it('divides pending bytes by measured throughput, null without a signal', async () => {
     let bytesPerMs: number | null = null;
     const { tileset, loadBucket } = makeHarness({
@@ -267,7 +267,7 @@ describe('SpatiotemporalTileset.estimateTimeToReadyMs', () => {
   });
 });
 
-describe('SpatiotemporalTileset.getBufferedRanges', () => {
+describe('SpatioTemporalTileset.getBufferedRanges', () => {
   it('merges contiguous loaded buckets and caps the range count', async () => {
     const { tileset, loadBucket } = makeHarness();
     for (const i of [0, 1, 2, 5, 6, 9]) await loadBucket(i);
@@ -289,7 +289,7 @@ describe('SpatiotemporalTileset.getBufferedRanges', () => {
   });
 });
 
-describe('SpatiotemporalTileset onBufferChange', () => {
+describe('SpatioTemporalTileset onBufferChange', () => {
   it('fires on tile load with a fresh runway, throttled to ≤10 Hz', async () => {
     const reports: BufferedRunway[] = [];
     const spy = vi.fn((r: BufferedRunway) => reports.push(r));

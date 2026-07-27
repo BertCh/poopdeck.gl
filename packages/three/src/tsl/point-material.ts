@@ -232,7 +232,7 @@ export function updatePointUniforms(
   if (v.viewport) bundle.point.viewport.value.set(v.viewport[0], v.viewport[1]);
 }
 
-// ── GPU id-buffer pick material (§5.3 merged-buffer picking) ─────────────────────
+// ── GPU id-buffer pick material (merged-buffer picking) ─────────────────────────
 //
 // BROWSER-VERIFY ONLY (needs a live WebGPU device). Renders each point's flat
 // per-instance id colour (`sttIdColor`, from `buildIdColors(mergedCount)`) into an

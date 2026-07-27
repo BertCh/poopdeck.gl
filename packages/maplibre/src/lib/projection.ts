@@ -11,7 +11,7 @@
  * `log(tan(...))` work in the vertex shader and keeps precision sound at
  * city-scale zooms where Float64 lon/lat math matters.
  *
- * The second half of the module is the metres↔mercator scale (campaign D10):
+ * The second half of the module is the metres↔mercator scale:
  * mercator distances are latitude-dependent, so anything expressed in real
  * metres — extrusion heights, metric point radii / line widths — must divide by
  * `EARTH_CIRCUMFERENCE_M · cos(lat)` rather than by a flat constant.
@@ -96,7 +96,7 @@ export function tileCenterLatitude(z: number, y: number): number {
   return latFromMercatorY((y + 0.5) / Math.pow(2, z));
 }
 
-// ── metres ↔ mercator (campaign D10: elevation reconciliation) ───────────────
+// ── metres ↔ mercator ────────────────────────────────────────────────────────
 
 /**
  * Mean earth radius (m). This is the radius MapLibre and Mapbox build their
@@ -125,10 +125,10 @@ export const EARTH_RADIUS_M = 6371008.8;
  * Deliberately NOT `@poopdeck.gl/core`'s `WORLD_CIRCUMFERENCE`
  * (`2π · 6 378 137` = 40 075 016.686, the WGS84 equatorial value the
  * three/globe kernel uses): the two differ by 0.11%, and the tie-break is
- * "agree with whoever owns the camera". Wave M2 removed the polygon layer's
- * `MERCATOR_Z_TO_METERS_MIDLAT` stopgap — extrusion now resolves the factor per
- * tile from {@link mercatorZFromAltitude} at that tile's own latitude, so this
- * constant is the single anchor for every metre in the backend.
+ * "agree with whoever owns the camera". Extrusion resolves the factor per tile
+ * from {@link mercatorZFromAltitude} at that tile's own latitude — there is no
+ * mid-latitude constant anywhere — so this constant is the single anchor for
+ * every metre in the backend.
  */
 export const EARTH_CIRCUMFERENCE_M = 2 * Math.PI * EARTH_RADIUS_M;
 
@@ -153,12 +153,11 @@ export function metersPerMercatorUnit(latDeg: number): number {
  * x/y/z mercator lengths renders as a cube, because the same
  * `1/(circumference·cos lat)` factor scales all three axes.
  *
- * **Intentional visual change (campaign D10).** This REPLACES the historical
- * `DEFAULT_ALTITUDE_SCALE = 1e-7` flat factor, which is 4.003× larger than the
- * correct equatorial value (the pre-D10 flat `1e-7` factor) — extrusions
- * built on it stood ~4× too tall. Extruded polygons/columns therefore become
- * ~4× SHORTER, i.e. correct, once a layer switches to this function. Reviewers:
- * that shrink is the fix, not a regression.
+ * **A flat altitude scale is ~4× wrong.** The `1e-7` constant a naive
+ * metres→mercator-z conversion reaches for is 4.003× the correct EQUATORIAL
+ * value, so extrusions built on it stand ~4× too tall — and taller still away
+ * from the equator, where the true factor shrinks with `cos(lat)`. Never
+ * substitute a constant for this function.
  *
  * **Per-tile latitude is the practical granularity.** `altitudeScale` reaches
  * the shader as a uniform, so a layer converts once per draw with the tile's

@@ -59,7 +59,7 @@ governor.on('progress', (runway) =>
 
 ## The BufferSource contract
 
-The governor never imports `@poopdeck.gl/core` — it consumes a structural readiness/cost oracle. `SpatiotemporalTileset` satisfies it (see the [buffer model](./spatiotemporal-tileset.md#buffer-model-player-buffering)); tests drive it with a plain object.
+The governor never imports `@poopdeck.gl/core` — it consumes a structural readiness/cost oracle. `SpatioTemporalTileset` satisfies it (see the [buffer model](./spatiotemporal-tileset.md#buffer-model-player-buffering)); tests drive it with a plain object.
 
 ```typescript
 interface BufferSource {
@@ -264,7 +264,7 @@ before.
 
 ## Shared request scheduler
 
-By default each `SpatiotemporalTileset`'s archive opens up to its own concurrency cap
+By default each `SpatioTemporalTileset`'s archive opens up to its own concurrency cap
 (24), and N composited archives fight for bandwidth with no shared budget. The
 process-shared **`SharedRequestScheduler`** (in `@poopdeck.gl/core`) is one global
 authority all archives draw from: a global `maxRequests` budget, priority-ordered by

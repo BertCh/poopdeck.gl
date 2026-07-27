@@ -23,7 +23,7 @@ import { usePlayback } from '@poopdeck.gl/react';
 import { datasets, getDatasetById } from '../datasets';
 import { useReducedMotion } from '../lib/reducedMotion';
 import { useIsMobile } from '../lib/useMediaQuery';
-import type { Dataset, ColorRGBA } from '../types';
+import type { AvDataset, ColorRGBA } from '../types';
 import AvDeck from '../components/av/AvDeck';
 import AvThreeViewer from '../components/av/AvThreeViewer';
 import AvMobileChrome from '../components/av/AvMobileChrome';
@@ -103,11 +103,19 @@ const RENDER_MODE_LABELS: Record<LidarRenderMode, string> = {
   lod: 'Zoom LOD',
 };
 
+/**
+ * The AV scene bundle registered under `id`. The cockpit only ever mounts `av`
+ * datasets, so an id that resolves to another family is not a cockpit route.
+ */
+function getAvSceneById(id: string): AvDataset | undefined {
+  const d = getDatasetById(id);
+  return d?.type === 'av' ? d : undefined;
+}
+
 /** Base url of a dataset's data dir (strip the trailing manifest filename). */
-function sceneBaseUrl(dataset: Dataset): string {
-  // dataset.avSceneUrl is the resolved scene.json url; its dir is the bundle root.
-  const u = dataset.avSceneUrl ?? dataset.url;
-  return u.replace(/\/[^/]*$/, '');
+function sceneBaseUrl(dataset: AvDataset): string {
+  // avSceneUrl is the resolved scene.json url; its dir is the bundle root.
+  return dataset.avSceneUrl.replace(/\/[^/]*$/, '');
 }
 
 const AvCockpit: React.FC = () => {
@@ -122,7 +130,7 @@ const AvCockpit: React.FC = () => {
   const avScenes = useMemo(
     () =>
       datasets.filter(
-        (d) =>
+        (d): d is AvDataset =>
           d.type === 'av' &&
           !/-(?:splat|surfel|iso3d|iso|world|stage|scan|lod)$/.test(d.id),
       ),
@@ -141,12 +149,12 @@ const AvCockpit: React.FC = () => {
     const m = routeId.match(
       /^(.*)-(splat|surfel|iso3d|iso|world|stage|scan|lod)$/,
     );
-    if (m && getDatasetById(m[1])) {
+    if (m && getAvSceneById(m[1])) {
       return { baseId: m[1], routeMode: m[2] as LidarRenderMode };
     }
     return { baseId: routeId, routeMode: 'raw' as LidarRenderMode };
   }, [routeId]);
-  const baseDataset = useMemo(() => getDatasetById(baseId), [baseId]);
+  const baseDataset = useMemo(() => getAvSceneById(baseId), [baseId]);
 
   // ── URL query params hold every cockpit control selection ─────────────────
   // The controls below (render mode, stream visibility, follow / view / perf /
@@ -178,18 +186,18 @@ const AvCockpit: React.FC = () => {
     // their own baked bundle (orientation columns / density-contour lines), so
     // they're only offered when that `<id>-surfel` / `<id>-iso` bundle exists.
     const modes: LidarRenderMode[] = ['raw', 'splat'];
-    if (getDatasetById(`${baseDataset.id}-surfel`)) modes.push('surfel');
+    if (getAvSceneById(`${baseDataset.id}-surfel`)) modes.push('surfel');
     // Flat "Iso-lines" (`-iso`) and TRUE-3D "Iso 3D" (`-iso3d`) are each their
     // own baked bundle (the 3D one contours density per height layer).
-    if (getDatasetById(`${baseDataset.id}-iso`)) modes.push('iso');
-    if (getDatasetById(`${baseDataset.id}-iso3d`)) modes.push('iso3d');
+    if (getAvSceneById(`${baseDataset.id}-iso`)) modes.push('iso');
+    if (getAvSceneById(`${baseDataset.id}-iso3d`)) modes.push('iso3d');
     // Worldbuild needs its own `<id>-world` bundle (surfels + is_dynamic /
     // world_class columns + first-seen times).
-    if (getDatasetById(`${baseDataset.id}-world`)) modes.push('world');
+    if (getAvSceneById(`${baseDataset.id}-world`)) modes.push('world');
     // Scene-split "Stage" needs its own `<id>-stage` bundle (a STATIC stage
     // archive + a DYNAMIC actors archive). HELD BACK in datasets.ts until the look
     // is verified, so this auto-gates off until that bundle is un-held + built.
-    if (getDatasetById(`${baseDataset.id}-stage`)) modes.push('stage');
+    if (getAvSceneById(`${baseDataset.id}-stage`)) modes.push('stage');
     // Spacetime (cube) is HELD BACK from the shipped cockpit (see the held-back
     // note in datasets.ts). The render-only logic below stays dormant (the toggle
     // is not pushed and the `-cube` deep-link suffix is unmatched, so
@@ -201,11 +209,11 @@ const AvCockpit: React.FC = () => {
     // to ship it).
     // Sweep needs its own `<id>-scan` bundle (raw returns + true scan-time +
     // phase ramp) — only AV2 builds it, so this auto-gates scan to AV2 scenes.
-    if (getDatasetById(`${baseDataset.id}-scan`)) modes.push('scan');
+    if (getAvSceneById(`${baseDataset.id}-scan`)) modes.push('scan');
     // Additive-octree zoom LOD needs its own `<id>-lod` bundle (one archive
     // where each return is materialized at a single home zoom). The client loads
     // the union of zoom levels and zooming in streams only the residual detail.
-    if (getDatasetById(`${baseDataset.id}-lod`)) modes.push('lod');
+    if (getAvSceneById(`${baseDataset.id}-lod`)) modes.push('lod');
     return modes;
   }, [baseDataset]);
 
@@ -235,28 +243,28 @@ const AvCockpit: React.FC = () => {
     // Surfel / iso / world / scan: each a fully separate baked bundle (no in-place
     // fallback — fall back to the base if the bundle is missing).
     if (lidarRenderMode === 'surfel')
-      return getDatasetById(`${baseDataset.id}-surfel`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-surfel`) ?? baseDataset;
     if (lidarRenderMode === 'iso')
-      return getDatasetById(`${baseDataset.id}-iso`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-iso`) ?? baseDataset;
     if (lidarRenderMode === 'iso3d')
-      return getDatasetById(`${baseDataset.id}-iso3d`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-iso3d`) ?? baseDataset;
     if (lidarRenderMode === 'world')
-      return getDatasetById(`${baseDataset.id}-world`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-world`) ?? baseDataset;
     if (lidarRenderMode === 'stage')
-      return getDatasetById(`${baseDataset.id}-stage`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-stage`) ?? baseDataset;
     if (lidarRenderMode === 'scan')
-      return getDatasetById(`${baseDataset.id}-scan`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-scan`) ?? baseDataset;
     // Additive zoom LOD: swap to the `-lod` bundle (lidarLod → lodMode:'additive'
     // on the point layer; the engine loads + renders the union of zoom levels).
     if (lidarRenderMode === 'lod')
-      return getDatasetById(`${baseDataset.id}-lod`) ?? baseDataset;
+      return getAvSceneById(`${baseDataset.id}-lod`) ?? baseDataset;
     // Spacetime cube: a RENDER-ONLY clone of the BASE bundle with `avCube` set —
     // no bundle swap. buildDemoLayers reads the base + its `tracks/` archive and
     // lifts the trajectories into the time-as-height cube.
     if (lidarRenderMode === 'cube') return { ...baseDataset, avCube: true };
     if (lidarRenderMode === 'splat') {
       // Prefer the camera-colored `-splat` bundle when it exists (best look)…
-      const variant = getDatasetById(`${baseDataset.id}-splat`);
+      const variant = getAvSceneById(`${baseDataset.id}-splat`);
       if (variant) return variant;
       // …otherwise splat THIS scene's existing cloud in place — render-only, no
       // bundle swap (height-band colors instead of camera color). Match the
@@ -291,7 +299,7 @@ const AvCockpit: React.FC = () => {
   }, [dataset]);
 
   useEffect(() => {
-    if (!dataset || dataset.type !== 'av') return;
+    if (!dataset) return;
     let cancelled = false;
     setScene(null);
     setTelemetry(null);
@@ -563,7 +571,7 @@ const AvCockpit: React.FC = () => {
   // Deck reads a density-swapped copy of the dataset (only avLidarUrl differs); a
   // fresh object identity re-runs the layer memo → reloads the lidar archive →
   // re-registers it with the governor under the same source id (dataset.id).
-  const datasetForDeck = useMemo<Dataset | undefined>(() => {
+  const datasetForDeck = useMemo<AvDataset | undefined>(() => {
     if (!dataset) return dataset;
     const tier = lidarDensityId
       ? lidarDensities.find((d) => d.id === lidarDensityId)
@@ -586,7 +594,7 @@ const AvCockpit: React.FC = () => {
     };
   }, [dataset, lidarDensityId, lidarDensities]);
 
-  if (!dataset || dataset.type !== 'av') {
+  if (!dataset) {
     return (
       <div className="fixed inset-0 bg-slate-950 text-slate-300 flex flex-col items-center justify-center gap-3">
         <div className="text-lg font-medium">Unknown AV scene</div>

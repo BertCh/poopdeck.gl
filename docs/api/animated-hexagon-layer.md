@@ -140,8 +140,12 @@ warns once and falls back). One weight column drives both colour and elevation.
   unset (`null`), the canonical layer auto-ranges against the current window's
   aggregated weights, so the mapping shifts as the window slides; pin a domain
   to keep it stable.
-- **Picking**: the sublayer is `pickable` (discrete cells have feature identity
-  to pick, unlike the heatmap's density pixels).
+- **Picking**: `pickable` is **inherited**, like every sibling STT layer — pass
+  `pickable: true` to pick cells. Discrete cells do have feature identity to
+  pick (unlike the heatmap's density pixels, which are forced non-pickable), but
+  the sublayer no longer hardcodes it: forcing it beat the caller's own value,
+  so `pickable: false` still allocated picking colours, ran the picking pass on
+  every hover and fired `onHover` on a 2M-point tile set.
 - The sublayer short id for `_subLayerProps` overrides is **`hexbin`**:
   `_subLayerProps: { hexbin: { type: MyLayer, ... } }` swaps the sublayer class
   or overrides sublayer props.
