@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, NavLink } from 'react-router';
+import { ATLAS_AVAILABLE } from '../datasets';
 
 export const GITHUB_URL = 'https://github.com/BertCh/spatiotemporal-tiles';
 
@@ -23,6 +24,9 @@ const NAV_ITEMS: { label: string; to: string }[] = [
   { label: 'Demos', to: '/demos' },
   { label: 'Drive', to: '/drive' },
   { label: 'Worlds', to: '/worlds' },
+  // `/atlas` is the same kind of destination and is offered only where its
+  // archives resolve — see ATLAS_AVAILABLE.
+  ...(ATLAS_AVAILABLE ? [{ label: 'Atlas', to: '/atlas' }] : []),
   { label: 'How it works', to: '/how-it-works' },
   { label: 'Docs', to: '/docs' },
   { label: 'Story', to: '/story/drifters' },

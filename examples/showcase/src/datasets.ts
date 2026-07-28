@@ -180,7 +180,13 @@ const DATA_BASE_URL: string = (
   .toString()
   .replace(/\/$/, '');
 
-function resolveDataUrl(url: string): string {
+/**
+ * `/data/…` → the configured origin. Exported because the bespoke fullscreen
+ * surfaces (`/atlas`) author their archive URLs directly rather than through a
+ * `Dataset` record, and an unresolved path there would load the primary from R2
+ * and 404 every sibling archive.
+ */
+export function resolveDataUrl(url: string): string {
   return DATA_BASE_URL && url.startsWith('/data/')
     ? `${DATA_BASE_URL}${url}`
     : url;
@@ -3530,6 +3536,12 @@ const rawDatasets: Dataset[] = [
     // the tops into readable relief at the national framing (honored by the
     // storm4d volume layer via selectedDataset.elevationScale).
     elevationScale: 15,
+    // …and the same 15× has to reach tile SELECTION, not just the shader: the
+    // MRMS column tops out at 19 km, so the rendered scene is 285 km tall and
+    // a pitched camera sees echo tops belonging to tiles well outside its
+    // ground-plane box. Greenfield's default (15 km × 4) would under-state
+    // this scene by a factor of five, hence the explicit override.
+    zRange: [0, 19000 * 15],
     // Reflectivity coloring (same NWS ramp + band contract as Greenfield); the
     // GPU dBZ threshold composes with the time window (a live slider is the
     // follow-up — the detail-over-space/time control).
@@ -5276,6 +5288,19 @@ const LOCAL_ONLY_DATASETS = new Set<string>([
   'rain-flood-2019',
   'gtfs-ch',
 ]);
+
+/**
+ * The Neural-State Atlas (`/atlas`) is a bespoke fullscreen surface, not a
+ * `Dataset`, so the LOCAL_ONLY_DATASETS gate above cannot reach it — but its
+ * four archives are equally un-synced, and a nav link to a 404 is the same
+ * defect. Flip this to `false` in the same pass that lands
+ * `scripts/r2-sync.sh` for the `neural-atlas-*` stems and verifies each
+ * manifest 200 on tiles.poopdeck.gl.
+ */
+const ATLAS_ARCHIVES_SYNCED = false;
+
+/** Should the `/atlas` destination be offered on THIS deploy? */
+export const ATLAS_AVAILABLE = !DATA_IS_REMOTE || ATLAS_ARCHIVES_SYNCED;
 
 /**
  * Would this id be filtered out of the registry on the PUBLIC (R2) deploy?
