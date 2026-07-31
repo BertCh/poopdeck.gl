@@ -131,7 +131,6 @@ export interface BuildAtlasLayersArgs {
   selectionPosition: [number, number] | null;
 }
 
-
 export const CONCEPT_COLORS: Record<string, [number, number, number, number]> =
   {
     digits: [255, 214, 102, 255],
@@ -163,9 +162,9 @@ export function buildAtlasLayers({
   const focused = !!selectionPosition;
   const archiveCount =
     (showAnatomy ? 1 : 0) +
-    (showTrace ? 1 : 0) +
-    (showDensity ? 1 : 0) +
-    (showManifolds ? 1 : 0) || 1;
+      (showTrace ? 1 : 0) +
+      (showDensity ? 1 : 0) +
+      (showManifolds ? 1 : 0) || 1;
 
   const sourceProps = (layerId: string, required: boolean) => ({
     onTilesetReady: (tileset: BufferSource) =>
@@ -179,7 +178,11 @@ export function buildAtlasLayers({
   // change of the exaggeration.
   const elevation =
     depth > 0
-      ? { use3D: true, elevationProperty: elevationColumn, elevationScale: depth }
+      ? {
+          use3D: true,
+          elevationProperty: elevationColumn,
+          elevationScale: depth,
+        }
       : {};
 
   const baseProps = {
@@ -335,7 +338,12 @@ export function buildAtlasLayers({
         radiusMaxPixels: 17,
         filled: false,
         stroked: true,
-        getLineColor: [...SELECTION_HALO, 90] as [number, number, number, number],
+        getLineColor: [...SELECTION_HALO, 90] as [
+          number,
+          number,
+          number,
+          number,
+        ],
         getLineWidth: 6,
         lineWidthUnits: 'pixels',
         pickable: false,
@@ -413,7 +421,8 @@ export function metricDomainFor(
     // Attribution is long-tailed and signed (max |x| is ~90× the 99.5th
     // percentile), so the ramp is set at p99.5 and the tail saturates rather
     // than flattening everything else to grey.
-    const top = domains?.attribution?.abs_p995 ?? domains?.attribution?.abs_p99 ?? 1;
+    const top =
+      domains?.attribution?.abs_p995 ?? domains?.attribution?.abs_p99 ?? 1;
     return [-top, top];
   }
   const top = domains?.activation?.p99 ?? domains?.activation?.max ?? 1;

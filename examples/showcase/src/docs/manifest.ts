@@ -204,6 +204,12 @@ export const docSections: DocSection[] = [
         group: 'Core',
       },
       {
+        slug: 'api/animated-scenegraph-layer',
+        file: 'api/animated-scenegraph-layer.md',
+        title: 'AnimatedScenegraphLayer',
+        group: 'Core',
+      },
+      {
         slug: 'api/animated-point-cloud-layer',
         file: 'api/animated-point-cloud-layer.md',
         title: 'AnimatedPointCloudLayer',

@@ -43,6 +43,7 @@
     "**/src/**/*.js.map",
     "target/**",
     "data/**",
+    "**/.venv*/**",
     "packages/mcp/docs/**",
     "examples/showcase/public/**"
   ],

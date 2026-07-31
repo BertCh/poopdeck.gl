@@ -140,6 +140,29 @@ const WEATHER_FRONT_FADE_MS = 2700000; // 45 sim-min
 const STORM4D_ELEVATION_SCALE = 4;
 
 /**
+ * Top of the storm4d scene in RENDERED metres above the ellipsoid — the
+ * `zRange` every layer in the composite selects tiles against.
+ *
+ * WHY IT IS NEEDED. Tile zoom and the tile box both come from the camera's
+ * footprint on the GROUND PLANE, and this scene's subject is not on the ground:
+ * the gate volume, the anvil canopy, the wind field and the warning cages all
+ * draw at altitude. Under pitch, geometry lifted off z = 0 projects into the
+ * frame from tiles whose ground footprint is BEHIND or BELOW the visible
+ * ground box, so those tiles are never requested and the near edge of the
+ * frame loses a row of storm — anvil and echo tops first, since they are
+ * highest. `zRange` unions the frustum's footprint on the ground plane with
+ * its footprint on the plane at the top of the content, which is exactly the
+ * box that owns everything on screen.
+ *
+ * RENDERED, not raw: the value is fed to `viewport.getBounds({z})` in
+ * common-space metres, so it is the archive's ~15 km echo-top ceiling AFTER
+ * the shared exaggeration, not before. Measured cost at the shipped camera
+ * (z8 / pitch 55): 36 → 42 cells, well inside the 256-cell viewport budget,
+ * and 0% at pitch 0 where there is no near edge to lose.
+ */
+const STORM4D_SCENE_TOP_M = 15000 * STORM4D_ELEVATION_SCALE;
+
+/**
  * Height-graded alpha range for the CAPPI iso-line stack
  * (`stormVolumeMode: 'isolines'`), in RAW metres MSL — the archive's CAPPI
  * levels run 1 → 15 km. Ground sheets keep their band alpha; the anvil-level
@@ -190,15 +213,22 @@ const STORM4D_ISO_TILE_WINDOW_MS = 1200000;
 const STORM4D_WARNING_HEIGHT_M = 12000;
 
 /**
- * Warning prism fills by VTEC `phenom` — translucent walls under a constant
- * wireframe. TO red / SV amber / FF green (§9.2).
+ * Warning prism EDGE colors by VTEC `phenom` — TO red / SV amber / FF green
+ * (§9.2). The prisms render `filled: false, wireframe: true`, so this palette
+ * lands on the 12 km edge cage rather than on wall fills: CategoryColorExtension
+ * filters colour in the FRAGMENT shader, which deck's wireframe model runs
+ * through unchanged. Near-opaque on purpose — the previous alphas (46/36/36)
+ * were sized for four stacked sheets of translucent glass and disappear
+ * entirely when the same colour has to carry a one-pixel line.
  */
-const STORM4D_WARNING_COLORS: Record<string, [number, number, number, number]> =
-  {
-    TO: [255, 70, 70, 46],
-    SV: [255, 190, 60, 36],
-    FF: [80, 220, 120, 36],
-  };
+const STORM4D_WARNING_EDGE_COLORS: Record<
+  string,
+  [number, number, number, number]
+> = {
+  TO: [255, 80, 80, 215],
+  SV: [255, 190, 60, 190],
+  FF: [80, 220, 120, 190],
+};
 
 /**
  * Cloud-top "anvil canopy" fills by `bt_band` (§9.1 labels, 10 K isobands of
@@ -876,6 +906,44 @@ export function buildDemoLayers({
               selectedDataset.overlayGatesPlayback ?? true,
             ),
             data: selectedDataset.headsOverlayUrl,
+            // The overlay archive's temporal bucket is independent of the
+            // primary's, and `timeWindow` was authored for the primary. Since
+            // the heads layer never RENDERS by timeWindow (a dot appears iff its
+            // trip is active at the playhead), the overlay's window is pure
+            // residency — and an over-wide one both loads buckets that can never
+            // draw and inflates the governor's `4 × timeWindow` runway horizon
+            // past what the tile cache can hold, which turns the loader into a
+            // permanent evict-and-refetch loop. See `headsOverlayTimeWindow`.
+            // The PREFETCH horizon narrows with it, and is handed over as the
+            // plain WINDOW rather than baseProps' `max(window, speed × 5 s)`.
+            // PrefetchPolicy already speed-scales on its own — its horizon is
+            // `max(prefetchAhead × prefetchSteps, speed × 8 real s)` — so a
+            // speed-scaled `prefetchAhead` gets multiplied by prefetchSteps (4)
+            // and double-counts speed into a 20-real-second lookahead. On this
+            // 1-minute-bucket overlay that planned 53 buckets ≈ 740 tiles of
+            // speculative load; passing the window lets the policy's own
+            // 8-real-second lookahead win, as it was designed to.
+            ...(selectedDataset.headsOverlayTimeWindow
+              ? {
+                  timeWindow: selectedDataset.headsOverlayTimeWindow,
+                  prefetchAhead: selectedDataset.headsOverlayTimeWindow,
+                }
+              : null),
+            // Exact zoom only. `best-available` (the default) also fetches up to
+            // PARENT_FALLBACK_LEVELS = 4 coarser levels as placeholders to show
+            // while the primary zoom streams in — and a moving DOT has no use
+            // for a coarse placeholder: a parent tile carries the same trip at a
+            // SIMPLIFIED position, so the fallback is not a lower-detail version
+            // of the answer, it's a wrong one. It is also the most expensive
+            // thing the overlay does: the placeholders are discarded the moment
+            // the primary tile lands, but on a 1-minute-bucket archive at ~159×
+            // real time the playhead enters a new bucket every ~0.4 s, so they
+            // are re-fetched and re-discarded continuously — and coarse tiles
+            // are BIGGER (z10 averages 61 KB here against z12's 16 KB).
+            // Measured on nyc-flow-and-riders: z10 + z11 were 1764 of 2186 tile
+            // decodes during 8 s of playback — 81% of all decode work on two
+            // zoom levels that never drew a pixel.
+            refinementStrategy: 'no-overlap' as const,
             // Overlays never pin the storyboard preview tier (the primary does).
             overviewPreload: false,
             onOverviewPreload: undefined,
@@ -1580,8 +1648,22 @@ export function buildDemoLayers({
       // to 4 extra complete copies of the visible data per bucket for zero
       // information gain. Measured at 4 fps / 2.7 s main-thread stalls before;
       // exact-zoom loading is what THIS data shape wants.
+      //
+      // `zRange` rides EVERY layer in the composite, the volume included: the
+      // scene's subject is in the air and tile selection is a ground-plane
+      // operation, so without it the near edge of a pitched frame drops the
+      // tiles that own the highest geometry. See STORM4D_SCENE_TOP_M. One
+      // shared value for the same reason there is one shared exaggeration —
+      // layers disagreeing about how tall the scene is would select against
+      // different boxes and tear at the frame edge. A dataset that overrides it
+      // (`storm-3d-conus`: a 19 km column at 15×) overrides it for the WHOLE
+      // composite, not just the volume.
+      const scene3d = {
+        zRange: selectedDataset.zRange ?? ([0, STORM4D_SCENE_TOP_M] as const),
+      };
       const overlayBase = {
         ...baseProps,
+        ...scene3d,
         refinementStrategy: 'no-overlap' as const,
         onOverviewPreload: undefined,
         overviewPreload: false,
@@ -1589,18 +1671,31 @@ export function buildDemoLayers({
       const gates = selectedDataset.overlayGatesPlayback ?? true;
       const layers: any[] = [];
 
-      // 1. County power outages — flat, EMPHASIZED map regions (EAGLE-I 15-min
-      // rollups on county geometry). Was dark-red prisms extruded by
-      // `customers_out`, but the tall walls OCCLUDED the atmospheric layers
-      // above them; the damage wake reads better as lit-up counties on the
-      // ground. Drawn as a GROUND DECAL (GROUND_DECAL_PARAMETERS: no depth
-      // write, always-pass depth) so the filled counties lie flat UNDER the 3D
-      // volume / canopy / winds without z-fighting the basemap or occluding
-      // anything drawn after them. The wake signal is now the spreading EXTENT
-      // — counties light up behind the storm as the outage footprint grows
-      // (the archive carries only numeric `customers_out`, and the polygon fill
-      // is categorical/constant, so there is no per-county magnitude ramp); a
-      // bright outline makes each affected county pop.
+      // 1. County power outages — an OUTLINE-ONLY county wash on the ground
+      // (EAGLE-I 15-min rollups on county geometry). Two reductions, in order:
+      // it was dark-red prisms extruded by `customers_out`, but the tall walls
+      // OCCLUDED the atmospheric layers above them; then it was a translucent
+      // red FILL, but a solid red wash under a translucent 3D volume tints
+      // every gate drawn over it and the damage wake competed with the storm
+      // for the eye. It is context, not subject: `filled: false` leaves a thin
+      // red county boundary and nothing else, and the wake still reads as the
+      // spreading EXTENT — counties outline behind the storm as the outage
+      // footprint grows. (The archive carries only numeric `customers_out` and
+      // the polygon style is constant, so there is no per-county magnitude
+      // ramp either way; the signal was always the extent.)
+      //
+      // Still a GROUND DECAL (GROUND_DECAL_PARAMETERS: no depth write,
+      // always-pass depth) so the outlines lie flat UNDER the 3D volume /
+      // canopy / winds without z-fighting the basemap or occluding anything
+      // drawn after them.
+      //
+      // `seamWalls` is left at its default `false`, which is what keeps the
+      // outline off the TILE GRID: `stt-build` clips county coverage to each
+      // tile rect, so a county spanning a boundary arrives as two pieces that
+      // each gained a synthetic ring edge along the seam. A filled county hid
+      // those (the fills abut watertight); stroking them drew the tile lattice
+      // straight across the map. AnimatedPolygonLayer now splits the outline
+      // at tile-cut edges — see its buildOutlineSublayer / computeOutlineRuns.
       if (selectedDataset.outagesUrl) {
         layers.push(
           new AnimatedPolygonLayer({
@@ -1608,14 +1703,14 @@ export function buildDemoLayers({
             id: `${selectedDataset.id}-outages`,
             ...sourceProps(`${selectedDataset.id}-outages`, gates),
             data: selectedDataset.outagesUrl,
-            filled: true,
-            fillColor: [205, 50, 50, 100],
+            filled: false,
             extruded: false,
             stroked: true,
-            getLineColor: [255, 100, 85, 215],
-            getLineWidth: 2,
+            getLineColor: [232, 74, 66, 150],
+            getLineWidth: 1,
             lineWidthUnits: 'pixels',
-            lineWidthMinPixels: 1.2,
+            lineWidthMinPixels: 0.8,
+            lineWidthMaxPixels: 1.6,
             parameters: GROUND_DECAL_PARAMETERS,
           }),
         );
@@ -1715,6 +1810,7 @@ export function buildDemoLayers({
         layers.push(
           new AnimatedPathLayer({
             ...baseProps,
+            ...scene3d,
             // `storm4d-isolines` IS a full-duplication pyramid — the shipped
             // directory carries exactly 100,129 features at z5, z6 AND z7, the
             // same contour sheets re-clipped — so a parent tile is a byte-for-
@@ -1767,6 +1863,10 @@ export function buildDemoLayers({
         layers.push(
           new AnimatedPointLayer({
             ...baseProps,
+            // The layer this matters most for: a point cloud with NO ground
+            // footprint of its own — every gate is drawn `alt_m × 4` above the
+            // tile that owns it. See STORM4D_SCENE_TOP_M.
+            ...scene3d,
             // NO `refinementStrategy: 'no-overlap'` here, unlike every other
             // storm4d tileset. The two archives this branch renders are the only
             // ones in the family built with `--min-zoom-field` (see
@@ -1827,9 +1927,35 @@ export function buildDemoLayers({
         );
       }
 
-      // 5. VTEC warning polygons — translucent prisms with wireframe edges,
-      // extruded 12 km so the walls enclose the volume. One feature per SBW
-      // phase (issue → SVS shrink → expire), colored by `phenom`.
+      // 5. VTEC warning polygons — WIREFRAME-ONLY prisms, extruded 12 km so the
+      // cage encloses the volume. One feature per SBW phase (issue → SVS shrink
+      // → expire), colored by `phenom`.
+      //
+      // `filled: false` is the whole point: deck's SolidPolygonLayer draws its
+      // top and SIDE models only under `filled` and its wireframe model only
+      // under `wireframe` (solid-polygon-layer.ts `_drawLayer`), so dropping
+      // the fill leaves the 12 km edge cage and removes the translucent walls.
+      // Those walls were four stacked sheets of tinted glass between the camera
+      // and the storm — every gate seen through a warning polygon picked up its
+      // colour, and overlapping TO/SV/FF phases compounded it. The cage states
+      // the same footprint and height while the volume reads clean through it.
+      //
+      // KEEPING THE PER-PHENOM COLOUR ON THE EDGES takes an explicit
+      // `getLineColor: 'phenom'`, and getting there is the subtle part. The
+      // wireframe model reads `instanceLineColors`, a DIFFERENT attribute from
+      // the fill's `instanceFillColors` — so the categorical fill colour does
+      // not reach it however it is computed. Nor does the GPU
+      // CategoryColorExtension, whose `fs:DECKGL_FILTER_COLOR` hook WOULD have
+      // caught the wireframe's fragments: the extruded path deliberately does
+      // not use it (it would overwrite phong lighting), expanding the palette
+      // into a per-vertex fill buffer instead. Left to itself `getLineColor`
+      // falls back to deck's black, and the cages render as unlit black wire.
+      // So the column is named here and AnimatedPolygonLayer bakes a matching
+      // per-vertex `instanceLineColors` from the same `colorMapping`.
+      //
+      // Hence the separate near-opaque STORM4D_WARNING_EDGE_COLORS: one
+      // mapping feeds both, and the wall alphas (46/36/36) were tuned for
+      // stacked glass and vanish when the same colour carries a 1 px line.
       if (selectedDataset.warningsUrl) {
         layers.push(
           new AnimatedPolygonLayer({
@@ -1837,17 +1963,15 @@ export function buildDemoLayers({
             id: `${selectedDataset.id}-warnings`,
             ...sourceProps(`${selectedDataset.id}-warnings`, gates),
             data: selectedDataset.warningsUrl,
-            filled: true,
+            filled: false,
             fillColor: 'phenom',
-            colorMapping: STORM4D_WARNING_COLORS,
-            colorMappingDefault: [200, 200, 210, 30],
+            getLineColor: 'phenom',
+            colorMapping: STORM4D_WARNING_EDGE_COLORS,
+            colorMappingDefault: [200, 200, 210, 150],
             extruded: true,
             elevation: STORM4D_WARNING_HEIGHT_M,
             elevationScale: STORM4D_ELEVATION_SCALE,
             wireframe: true,
-            // Constant wireframe-edge color (SolidPolygonLayer.getLineColor
-            // pass-through) over the translucent phenom-colored walls.
-            getLineColor: [255, 255, 255, 170],
           }),
         );
       }

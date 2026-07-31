@@ -44,7 +44,7 @@ Two positions:
   this repository's format exists for, and every published atlas-of-embeddings
   tool (§2.5) reimplements a worse version of the tiling half.
 - **The genre has no time axis.** Nomic Atlas, latent-scope and Neuronpedia all
-  render a *static* map of features. None of them plays a **trace** — the
+  render a _static_ map of features. None of them plays a **trace** — the
   token-by-token traversal of that map during inference. That is the gap, it is
   the one thing this stack is uniquely equipped for, and it is what makes this a
   poopdeck demo rather than a re-skin of latent-scope.
@@ -65,7 +65,7 @@ those latents span stay consistent across seeds. Its practitioner recommendation
 is explicit — analyse at the subspace level, not the individual-feature level.
 
 **What this changes.** The input plan makes the individual feature the base unit
-and clusters an aggregation over it. Invert the *stability contract*: L0 and L1
+and clusters an aggregation over it. Invert the _stability contract_: L0 and L1
 coordinates are the durable geography and are the thing a user is allowed to form
 a mental map of; L2 feature positions are derived, and are marked unstable in the
 UI and in the manifest. This is not a caveat — it is a build rule, because it
@@ -88,7 +88,7 @@ house rule.
   saturation and lightness. They show a slant-rhyme manifold that an SAE
   fragments into 30+ scattered latents, "each capturing only local properties
   rather than the unified phonological structure". They fit low-dimensional
-  manifolds to activations and steer *along* them rather than along a linear
+  manifolds to activations and steer _along_ them rather than along a linear
   direction.
 - _Understanding sparse autoencoder scaling in the presence of feature manifolds_
   ([arXiv:2509.02565](https://arxiv.org/abs/2509.02565)): scaling SAE width in
@@ -166,19 +166,19 @@ constructive reading and is the one this project should adopt as its thesis
 sentence: SAEs are a **discovery** instrument, not an actuator.
 
 **What this changes.** Nothing structural, and that is the point — this project
-builds an *exploration surface*, which is the use these papers endorse. But it
+builds an _exploration surface_, which is the use these papers endorse. But it
 sets the claim ceiling in §3, and it kills one thing outright: no steering, no
 "edit the feature and see the model change" interaction. That claim is exactly the
 one the literature says does not hold up, and it is counted out in §11.
 
 ### 2.5 Prior art — what exists, and what it does not do
 
-| Tool                                                                                  | Does                                                                                                                     | Does not                                                                             |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| [Nomic Atlas](https://docs.nomic.ai/atlas/datasets/data-maps/how-atlas-works/1-key_terms) | 2-D projection of embeddings, interactive to tens of millions of points; proprietary large-scale layout above 50k points | no time axis; no model internals; the layout algorithm is closed                      |
-| [latent-scope](https://github.com/enjalot/latent-scope)                                | embed → UMAP → HDBSCAN → LLM cluster labels, open source, LanceDB-backed; SAE feature support in progress                 | static map of a *dataset*; no inference trace; no layer axis                          |
-| [Neuronpedia](https://www.neuronpedia.org/)                                            | per-feature pages, explanations, top-activating examples, hosted attribution graphs; public API and S3 bulk exports       | list/graph UI, not a map; no persistent geography; no playback                        |
-| Goodfire neural geometry                                                               | manifold discovery and manifold-following steering; the strongest current result on *structure*                           | research artefact, not a general instrument                                           |
+| Tool                                                                                      | Does                                                                                                                     | Does not                                                         |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| [Nomic Atlas](https://docs.nomic.ai/atlas/datasets/data-maps/how-atlas-works/1-key_terms) | 2-D projection of embeddings, interactive to tens of millions of points; proprietary large-scale layout above 50k points | no time axis; no model internals; the layout algorithm is closed |
+| [latent-scope](https://github.com/enjalot/latent-scope)                                   | embed → UMAP → HDBSCAN → LLM cluster labels, open source, LanceDB-backed; SAE feature support in progress                | static map of a _dataset_; no inference trace; no layer axis     |
+| [Neuronpedia](https://www.neuronpedia.org/)                                               | per-feature pages, explanations, top-activating examples, hosted attribution graphs; public API and S3 bulk exports      | list/graph UI, not a map; no persistent geography; no playback   |
+| Goodfire neural geometry                                                                  | manifold discovery and manifold-following steering; the strongest current result on _structure_                          | research artefact, not a general instrument                      |
 
 The uncontested gap is **playback over a persistent geography**. Everything above
 renders a still. Nothing plays the traversal.
@@ -231,16 +231,16 @@ should not ship a demo whose headline format contributes nothing.
 **So the plan commits to the scale at which the format is load-bearing, and states
 the small case honestly:**
 
-| Product                     | Configuration                                              | Members (arithmetic)               | Comparable shipped archive                       |
-| --------------------------- | ---------------------------------------------------------- | ---------------------------------- | ------------------------------------------------ |
-| Vertical slice (Milestone 1) | 1 layer, 1 prompt, top-32                                  | ~10⁴ events                        | **none — ship as a plain fetch, not an archive** |
-| Atlas anatomy               | 26 layers × 16 k residual latents                          | 416 k nodes                        | `earthquakes-v2` (~522 k features)               |
-| Atlas anatomy (wide)        | selected layers at 2¹⁶–2²⁰ width                           | 10⁶–10⁷ nodes                      | `flights` (~40 M features)                       |
-| Flagship trace              | 1 document × 8–16 k tokens × 26 layers × top-32            | 6.6–13 M events                    | `adsb-paths` (~4.1 M) → `ais-all-us` (~19 M)     |
+| Product                      | Configuration                                   | Members (arithmetic) | Comparable shipped archive                       |
+| ---------------------------- | ----------------------------------------------- | -------------------- | ------------------------------------------------ |
+| Vertical slice (Milestone 1) | 1 layer, 1 prompt, top-32                       | ~10⁴ events          | **none — ship as a plain fetch, not an archive** |
+| Atlas anatomy                | 26 layers × 16 k residual latents               | 416 k nodes          | `earthquakes-v2` (~522 k features)               |
+| Atlas anatomy (wide)         | selected layers at 2¹⁶–2²⁰ width                | 10⁶–10⁷ nodes        | `flights` (~40 M features)                       |
+| Flagship trace               | 1 document × 8–16 k tokens × 26 layers × top-32 | 6.6–13 M events      | `adsb-paths` (~4.1 M) → `ais-all-us` (~19 M)     |
 
 Comparables are the MCP catalog's registered feature counts. At the flagship
 configuration, temporal bucketing, prefetch, eviction and the paged directory are
-all doing real work, and the demo is a *streaming* demo. At the vertical-slice
+all doing real work, and the demo is a _streaming_ demo. At the vertical-slice
 configuration none of them are, and pretending otherwise is the thing to avoid.
 
 **The rule:** Milestone 1 does not produce an archive. The first `.stt` is cut at
@@ -254,12 +254,12 @@ lays 266 driving scenarios on a synthetic lat/lon grid via
 `av_common.local_to_lonlat` about a mid-Atlantic origin, with `hideBasemap` set
 (`scripts/data-generation/cosmos_drive_dreams.py:541`, `:1254-1260`).
 
-| Atlas axis                     | STT carrier                                       | Mechanism                                                                       |
-| ------------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------- |
-| X/Y — semantic geography       | lon/lat                                           | normalise the frozen layout into a fixed box via `local_to_lonlat`               |
-| Z — transformer layer          | point altitude                                    | `stt-build --point-elevation-column layer_z`; folds into `FixedSizeList<_,3>`    |
-| T — token index                | Unix ms                                           | synthetic epoch + `tokenIndex × 1000 ms`; one token = one bucket                 |
-| hierarchy — region/family/feature | zoom band                                      | `--min-zoom-field` / `--max-zoom-field` + `lodMode: 'additive'` (§4.3)           |
+| Atlas axis                        | STT carrier    | Mechanism                                                                     |
+| --------------------------------- | -------------- | ----------------------------------------------------------------------------- |
+| X/Y — semantic geography          | lon/lat        | normalise the frozen layout into a fixed box via `local_to_lonlat`            |
+| Z — transformer layer             | point altitude | `stt-build --point-elevation-column layer_z`; folds into `FixedSizeList<_,3>` |
+| T — token index                   | Unix ms        | synthetic epoch + `tokenIndex × 1000 ms`; one token = one bucket              |
+| hierarchy — region/family/feature | zoom band      | `--min-zoom-field` / `--max-zoom-field` + `lodMode: 'additive'` (§4.3)        |
 
 **Design rule: keep the atlas inside roughly ±20° of the equator.** The
 equirectangular mapping is isotropic only where `cos(lat) ≈ 1`; further out, equal
@@ -317,12 +317,12 @@ largest thing to reject.
 
 The shape that matches this tree:
 
-| Input plan                   | Here                                                                                                           |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `examples/neural-atlas/`     | `route('atlas/:sequenceId?', 'pages/NeuralAtlas.tsx')` — a chrome-free fullscreen surface next to `/drive` and `/worlds`, with the `X.tsx` + `XImpl.tsx` client-only split both already use |
-| `packages/neural-atlas-layers/` | nothing new — see below                                                                                     |
-| `packages/neural-atlas-schema/` | the generator's contract section in this record, plus `examples/showcase/src/types.ts` for the frontend half |
-| `python/neural_atlas/`       | `scripts/data-generation/neural_atlas.py`, sibling to `cosmos_drive_dreams.py` and `nexrad_volume.py`          |
+| Input plan                      | Here                                                                                                                                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `examples/neural-atlas/`        | `route('atlas/:sequenceId?', 'pages/NeuralAtlas.tsx')` — a chrome-free fullscreen surface next to `/drive` and `/worlds`, with the `X.tsx` + `XImpl.tsx` client-only split both already use |
+| `packages/neural-atlas-layers/` | nothing new — see below                                                                                                                                                                     |
+| `packages/neural-atlas-schema/` | the generator's contract section in this record, plus `examples/showcase/src/types.ts` for the frontend half                                                                                |
+| `python/neural_atlas/`          | `scripts/data-generation/neural_atlas.py`, sibling to `cosmos_drive_dreams.py` and `nexrad_volume.py`                                                                                       |
 
 Promote to a package when a **second** consumer appears, not before.
 
@@ -330,14 +330,14 @@ Promote to a package when a **second** consumer appears, not before.
 
 All six proposed layers are existing layers with props:
 
-| Proposed              | Existing                                                        |
-| --------------------- | ----------------------------------------------------------------- |
-| `LatentRegionLayer`   | `AnimatedPolygonLayer` (cluster hulls, extruded by attribution)    |
-| `LatentFeatureLayer`  | `AnimatedPointLayer`, or `AnimatedPointCloudLayer` with z = layer  |
-| `LayerStackLayer`     | the same, with `--point-elevation-column` and a pitched camera     |
-| `ConceptLabelLayer`   | `AnimatedTextLayer` + `CollisionFilterExtension`                   |
-| `LatentFlowLayer`     | `AnimatedArcLayer`, or `FlowCorridorLayer` for weighted bundles    |
-| `ActivationTrailLayer`| `AnimatedTripsLayer` in trail mode — this is the `fadeTrail` path  |
+| Proposed               | Existing                                                          |
+| ---------------------- | ----------------------------------------------------------------- |
+| `LatentRegionLayer`    | `AnimatedPolygonLayer` (cluster hulls, extruded by attribution)   |
+| `LatentFeatureLayer`   | `AnimatedPointLayer`, or `AnimatedPointCloudLayer` with z = layer |
+| `LayerStackLayer`      | the same, with `--point-elevation-column` and a pitched camera    |
+| `ConceptLabelLayer`    | `AnimatedTextLayer` + `CollisionFilterExtension`                  |
+| `LatentFlowLayer`      | `AnimatedArcLayer`, or `FlowCorridorLayer` for weighted bundles   |
+| `ActivationTrailLayer` | `AnimatedTripsLayer` in trail mode — this is the `fadeTrail` path |
 
 If a genuinely new layer is needed later it earns its place in `packages/layers`
 with the rest, under that package's existing review and conformance rules. Note
@@ -349,7 +349,7 @@ trips, so a trail layer carrying many per-vertex channels will hit it.
 - **`neural-atlas-anatomy`** — static, no time variation, spatial locality is what
   matters. `--blob-ordering spatial`.
 - **`neural-atlas-trace-<slug>`** — a playback demo. **`--blob-ordering
-  time-major`**, non-negotiable; `auto` on a multi-cell playback dataset is the
+time-major`**, non-negotiable; `auto` on a multi-cell playback dataset is the
   known stall.
 
 The trace archive references atlas nodes by integer `nodeId` and does **not**
@@ -390,7 +390,7 @@ one:
 
 1. L0 macro-cluster centroids, laid out on the high-dimensional graph.
 2. L0 regions packed to non-overlapping bounds. **Frozen.**
-3. L1 family centroids laid out *inside* their parent's bounds. **Frozen.**
+3. L1 family centroids laid out _inside_ their parent's bounds. **Frozen.**
 4. L2 features laid out locally, clipped to the parent family's bounds.
 5. Manifolds (when §2.2 work lands) replace step 4 for their members with a
    continuous locus inside the same bounds.
@@ -413,16 +413,16 @@ removes the input plan's `label` stage entirely for v1 and most of
 
 **Built:**
 
-| Stage                | Why it can't be bought                                                              |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| `collect-corpus`     | co-activation similarity needs *our* joint activations, which nobody publishes         |
-| `extract-activations`| same                                                                                   |
-| `encode-sae`         | same                                                                                   |
-| `build-graph`        | the multiplex affinity (§11 of the input plan) is the novel part                        |
-| `cluster`            | Leiden on the multiplex graph                                                          |
-| `layout`             | §6.3 — the frozen hierarchical layout is the product                                    |
-| `trace-prompts`      | the traces are the demo                                                                |
-| `pack-stt`           | this repository's job                                                                  |
+| Stage                 | Why it can't be bought                                                         |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `collect-corpus`      | co-activation similarity needs _our_ joint activations, which nobody publishes |
+| `extract-activations` | same                                                                           |
+| `encode-sae`          | same                                                                           |
+| `build-graph`         | the multiplex affinity (§11 of the input plan) is the novel part               |
+| `cluster`             | Leiden on the multiplex graph                                                  |
+| `layout`              | §6.3 — the frozen hierarchical layout is the product                           |
+| `trace-prompts`       | the traces are the demo                                                        |
+| `pack-stt`            | this repository's job                                                          |
 
 **The corpus shrinks by roughly an order of magnitude.** The input plan sizes it at
 5–20 M tokens, which is right if you must estimate per-feature statistics from
@@ -453,7 +453,7 @@ after):
   statistics and examples redistribute with attribution.
 - **Gemma model weights: Gemma Terms of Use**, not an OSI licence. The relevant
   distinction ([ai.google.dev/gemma/terms](https://ai.google.dev/gemma/terms),
-  checked 2026-07-27): *outputs* are the user's content and Google claims no rights
+  checked 2026-07-27): _outputs_ are the user's content and Google claims no rights
   in them; the Terms attach to weights and to **Model Derivatives**. Activation
   traces are outputs, so publishing them is permitted — but ship the required
   Notice text and attribution anyway, because this register's standing rule is to
@@ -515,7 +515,7 @@ tokens — the token axis is the demo.
 ## 11. Counted out, with revival triggers
 
 - **Steering / intervention as an interactive feature.** §2.4: the literature
-  reports simple baselines outperforming SAEs at steering. Offline *ablation*
+  reports simple baselines outperforming SAEs at steering. Offline _ablation_
   results on a curated few, stored as their own metric, are in scope — live "edit a
   feature and watch the model change" is not. Trigger: a published result showing
   SAE-basis steering beating linear-probe baselines on a task we can reproduce.
@@ -540,15 +540,15 @@ tokens — the token axis is the demo.
 
 Renumbered from the input plan where §4.1 and §5 moved work, otherwise adopted.
 
-| #   | Deliverable                                                                                                     | Accept                                                                                                |
-| --- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 1   | Vertical slice: pinned model + SAE, 1 prompt, 1 layer, top-K, fixed positions, token playback. **No archive.**   | A user scrubs tokens and stable features change intensity. Plain fetch; the format is not involved yet. |
+| #   | Deliverable                                                                                                        | Accept                                                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| 1   | Vertical slice: pinned model + SAE, 1 prompt, 1 layer, top-K, fixed positions, token playback. **No archive.**     | A user scrubs tokens and stable features change intensity. Plain fetch; the format is not involved yet. |
 | 2   | Real atlas: 1–2 M-token corpus, multiplex graph, Leiden hierarchy, frozen layout (§6.3), 416 k nodes, first `.stt` | Zoom moves region → family → feature without the anatomy changing. Reseed drift measured and published. |
-| 3   | Interpretation: Neuronpedia labels, confidence, examples, inspection panel, §3 status gating                     | Every visible labelled region links to evidence and to its uncertainty.                                 |
-| 4   | Flagship trace (§4.1): long document, 26 layers, 6–13 M events, tiled, streamed                                  | Multiple sequences load without bundling their activations into the app.                                |
-| 5   | Attribution: circuit-tracer graphs as the edge overlay, target-token selection, selected ablations               | Activation and attribution are selectable as separate metrics and never share a legend. **G2 closed.**  |
-| 6   | Multi-layer: layer bands, aligned stacked planes, sweep, logit lens (labelled as such unless a tuned lens exists) | A user inspects one token's representation through depth.                                               |
-| 7   | Manifold groups (§2.2): intrinsic-dimension diagnostics, local coordinates, `curve`/`surface` nodes               | Several validated groups show continuous or cyclic internal movement, with the diagnostics shown.       |
+| 3   | Interpretation: Neuronpedia labels, confidence, examples, inspection panel, §3 status gating                       | Every visible labelled region links to evidence and to its uncertainty.                                 |
+| 4   | Flagship trace (§4.1): long document, 26 layers, 6–13 M events, tiled, streamed                                    | Multiple sequences load without bundling their activations into the app.                                |
+| 5   | Attribution: circuit-tracer graphs as the edge overlay, target-token selection, selected ablations                 | Activation and attribution are selectable as separate metrics and never share a legend. **G2 closed.**  |
+| 6   | Multi-layer: layer bands, aligned stacked planes, sweep, logit lens (labelled as such unless a tuned lens exists)  | A user inspects one token's representation through depth.                                               |
+| 7   | Manifold groups (§2.2): intrinsic-dimension diagnostics, local coordinates, `curve`/`surface` nodes                | Several validated groups show continuous or cyclic internal movement, with the diagnostics shown.       |
 
 ## 13. What this borrows back into STT proper
 
@@ -574,13 +574,13 @@ record once acted on:
 
 ### 14.1 What shipped
 
-| Piece | Where |
-| ----- | ----- |
-| Generator, nine cached stages | `scripts/data-generation/neural_atlas.py` (+ `requirements-atlas.txt`) |
-| Frontend surface | `examples/showcase/src/pages/NeuralAtlas{,Impl}.tsx`, route `atlas/:metric?` |
-| Framing contract as types (§3) | `examples/showcase/src/components/atlas/atlasTypes.ts` |
-| Layer tree, zero new layer classes (§5.1) | `examples/showcase/src/components/atlas/buildAtlasLayers.ts` |
-| Archives | `neural-atlas-anatomy`, `-regions`, `-manifolds`, `-trace-wikitext` + `neural-atlas.json` sidecar |
+| Piece                                     | Where                                                                                             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Generator, nine cached stages             | `scripts/data-generation/neural_atlas.py` (+ `requirements-atlas.txt`)                            |
+| Frontend surface                          | `examples/showcase/src/pages/NeuralAtlas{,Impl}.tsx`, route `atlas/:metric?`                      |
+| Framing contract as types (§3)            | `examples/showcase/src/components/atlas/atlasTypes.ts`                                            |
+| Layer tree, zero new layer classes (§5.1) | `examples/showcase/src/components/atlas/buildAtlasLayers.ts`                                      |
+| Archives                                  | `neural-atlas-anatomy`, `-regions`, `-manifolds`, `-trace-wikitext` + `neural-atlas.json` sidecar |
 
 Milestones 1–5 of §12 are done. Milestone 6 (layer bands, sweep, logit lens) and
 Milestone 7 (discovered manifolds) are not: the `geometryRole` field and the
@@ -595,12 +595,12 @@ against 42 GB free on a tree whose showcase data directory is already 64 GB; and
 there is no CUDA (§10 G3). The build ships on the nearest **ungated** intersection
 of the same four artefacts:
 
-| Artefact | Plan | As built |
-| -------- | ---- | -------- |
-| model | `google/gemma-2-2b` (Gemma Terms, gated) | `openai-community/gpt2` (MIT) |
-| SAEs | Gemma Scope 16 k residual, 26 layers | `jbloom/GPT2-Small-SAEs-Reformatted` (MIT), 12 × `resid_pre`, d_sae 24576 |
-| labels | Neuronpedia Gemma Scope | Neuronpedia `gpt2-small/{0..11}-res-jb` S3 bulk export |
-| corpus | "a permissive mixture" | `Salesforce/wikitext`, wikitext-103-raw-v1 (CC-BY-SA-3.0 + GFDL) |
+| Artefact | Plan                                     | As built                                                                  |
+| -------- | ---------------------------------------- | ------------------------------------------------------------------------- |
+| model    | `google/gemma-2-2b` (Gemma Terms, gated) | `openai-community/gpt2` (MIT)                                             |
+| SAEs     | Gemma Scope 16 k residual, 26 layers     | `jbloom/GPT2-Small-SAEs-Reformatted` (MIT), 12 × `resid_pre`, d_sae 24576 |
+| labels   | Neuronpedia Gemma Scope                  | Neuronpedia `gpt2-small/{0..11}-res-jb` S3 bulk export                    |
+| corpus   | "a permissive mixture"                   | `Salesforce/wikitext`, wikitext-103-raw-v1 (CC-BY-SA-3.0 + GFDL)          |
 
 294,912 nodes against §4.1's 416 k anatomy row — 0.7×, and the same order as the
 shipped `earthquakes-v2` (~522 k). **The scale gate is cleared**, which was the
@@ -624,7 +624,7 @@ SAE latents: one backward pass per window on the logit of the model's own top
 prediction at that window's final position, giving
 `d(logit)/d(resid) · W_dec[f] · act[f]`, in logits, in its own column.
 
-**This closes G2 rather than deferring it.** The basis seam existed *because* the
+**This closes G2 rather than deferring it.** The basis seam existed _because_ the
 geography would be SAE latents and the edges transcoder latents; building the
 attribution on the same dictionary means there is one node set, not two
 co-registered ones. The seam returns the moment the pin moves to Gemma.
@@ -636,12 +636,12 @@ requirement was that adding a geometry kind later must not re-cut the point
 archive and churn every content address — satisfied, because the curve and
 surface kinds have their own archives from day one:
 
-| Archive | Geometry | Ordering | Why |
-| ------- | -------- | -------- | --- |
-| `neural-atlas-anatomy` | POINT, 3D | `spatial` | The geography. Z folded into the geometry by `--point-elevation-column layer_z`; zoom band is the cluster tree via `--min-zoom-field`. |
-| `neural-atlas-regions` | POLYGON | `spatial` | L0/L1 hulls, `--min-zoom-field`+`--max-zoom-field` so regions hand off to families with no client logic. |
-| `neural-atlas-manifolds` | PATH | `spatial` | §2.2 drawn — see §14.7. |
-| `neural-atlas-trace-wikitext` | POINT, 3D | **`time-major`** | The playback demo. Non-negotiable per §5.2. |
+| Archive                       | Geometry  | Ordering         | Why                                                                                                                                    |
+| ----------------------------- | --------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `neural-atlas-anatomy`        | POINT, 3D | `spatial`        | The geography. Z folded into the geometry by `--point-elevation-column layer_z`; zoom band is the cluster tree via `--min-zoom-field`. |
+| `neural-atlas-regions`        | POLYGON   | `spatial`        | L0/L1 hulls, `--min-zoom-field`+`--max-zoom-field` so regions hand off to families with no client logic.                               |
+| `neural-atlas-manifolds`      | PATH      | `spatial`        | §2.2 drawn — see §14.7.                                                                                                                |
+| `neural-atlas-trace-wikitext` | POINT, 3D | **`time-major`** | The playback demo. Non-negotiable per §5.2.                                                                                            |
 
 ### 14.5 Deviation 4 — G1, and where the archives are
 
@@ -658,10 +658,10 @@ Not in the literature pass, and it would have silently poisoned the whole
 geography. These SAEs were trained at `context_size: 128`. Measured here over the
 same wikitext tokens, centred basis, BOS position excluded:
 
-| window | layer 0 | layer 6 | layer 11 |
-| ------ | ------- | ------- | -------- |
-| 128 | L0 15.0, FVU 0.034 | L0 56.2, FVU 0.159 | L0 62.8, FVU 0.238 |
-| 512 | L0 639.4, FVU 7.27 | L0 179.1, FVU 3.94 | L0 140.3, FVU 1.91 |
+| window | layer 0            | layer 6            | layer 11           |
+| ------ | ------------------ | ------------------ | ------------------ |
+| 128    | L0 15.0, FVU 0.034 | L0 56.2, FVU 0.159 | L0 62.8, FVU 0.238 |
+| 512    | L0 639.4, FVU 7.27 | L0 179.1, FVU 3.94 | L0 140.3, FVU 1.91 |
 
 At 512 the reconstruction is several times **worse than predicting the mean** and
 the dictionary fires ~40× as many latents: a co-activation graph built there
@@ -697,7 +697,7 @@ The fix is two stages, and neither of them clusters the projection (§6.3's rule
 sub-24-member communities are absorbed into their nearest survivor by decoder
 cosine, then **one** Ward dendrogram over the surviving centroids is cut twice —
 at 28 for regions and 700 for families. Cutting one linkage at two heights makes
-the tree nested *by construction*, so a family can never straddle two regions.
+the tree nested _by construction_, so a family can never straddle two regions.
 Resulting family sizes: min 26, median 285, max 8,383. Unbalanced, and honestly
 so: the dictionary is unbalanced.
 
@@ -725,17 +725,17 @@ happened stops being able to say what was expected.
 
 Measured on the shipped archive and its `layout.npz`:
 
-| | shipped 2026-07-27 | after |
-| --- | --- | --- |
-| Plane occupancy (512² grid ≈ 1 cell/screen px) | **0.39%** (1,021 cells) | **23.09%** (60,530) |
-| Sum of family disc area, as % of plane | **0.030%** | n/a — clusters are no longer discs |
-| Median family radius | **0.0059° (0.7 km)** | — |
-| Family aspect, vertical : horizontal | **1,246 : 1** | **1.5 : 1** (whole atlas, isotropic) |
+|                                                | shipped 2026-07-27      | after                                |
+| ---------------------------------------------- | ----------------------- | ------------------------------------ |
+| Plane occupancy (512² grid ≈ 1 cell/screen px) | **0.39%** (1,021 cells) | **23.09%** (60,530)                  |
+| Sum of family disc area, as % of plane         | **0.030%**              | n/a — clusters are no longer discs   |
+| Median family radius                           | **0.0059° (0.7 km)**    | —                                    |
+| Family aspect, vertical : horizontal           | **1,246 : 1**           | **1.5 : 1** (whole atlas, isotropic) |
 
 Two independent causes, and the second is the one that mattered.
 
 **Arithmetic.** `_pack_circles` initialised its relaxation at a half-extent of
-`1.4 × Σradii`, so *n* circles of radius *r* were scattered over 1.4·n·r and the
+`1.4 × Σradii`, so _n_ circles of radius _r_ were scattered over 1.4·n·r and the
 relaxation never had an overlap left to resolve. Occupancy is then π/(7.84·n) =
 0.40/n per level — predicted 1.43% for 28 regions, **measured 1.80%**; applied
 again for ~25 families per region, and 0.029% predicted against **0.030%
@@ -750,8 +750,8 @@ a slightly eccentric circle. Fixing only the arithmetic would have produced 700
 well-spaced circles instead of 700 needles.
 
 **Z.** Layer index was folded into altitude at 150 km a layer. The reasoning in
-§4.2 ("1,650 km against a 3,562 km plane") was sound *if the data filled the
-plane*; against families 0.7 km wide it was a 1,250:1 needle, at every zoom,
+§4.2 ("1,650 km against a 3,562 km plane") was sound _if the data filled the
+plane_; against families 0.7 km wide it was a 1,250:1 needle, at every zoom,
 because both scale together.
 
 **The LOD ladder never delivered the atlas.** `min_zoom` was `{0: 28, 5: 672,
@@ -779,20 +779,20 @@ clamp. There was **no camera position from which this was a map.**
 - **Depth became a chart.** A 12 × 8,128 layer × token activation grid ships in
   the sidecar at ~390 kB. It is more legible than altitude ever was and commits
   the geometry to nothing.
-- **LOD is a cumulative budget ladder** ranked *within family*, so the shape of
+- **LOD is a cumulative budget ladder** ranked _within family_, so the shape of
   the whole map is present at z0 and only densifies: 1,855 → 3,339 → 6,336 →
   12,342 → 24,356 → 48,357 → 96,356 → 294,912.
 
 ### 15.3 Finding — attribution was identically zero, and why nothing caught it
 
 `hidden_states` were re-created by `h - h.mean(-1)` before `retain_grad()`, which
-makes them *consumers* of the residual rather than producers of the logit.
+makes them _consumers_ of the residual rather than producers of the logit.
 `backward()` never reaches such a tensor, `.grad` stays `None`, and the code
 substituted `torch.zeros_like`. Every attribution in the shipped archive was
 `0.00000` — min, p50, p99 and max alike — so half the §3 metric enum drew a blank
 map under a diverging legend.
 
-The centring itself was right (§14.6); it was the *gradient path* that was
+The centring itself was right (§14.6); it was the _gradient path_ that was
 wrong. The fix retains grad on the raw residuals and projects with
 `g − g.mean(-1)`, since centring is the symmetric projection `C = I − 11ᵀ/d` and
 one unit of `act[f]` perturbs the raw residual by `C·W_dec[f]`. Now: 100%
@@ -868,18 +868,18 @@ off by default. Turning it on showed why that was too gentle: the 28 region
 hulls covered each other and the map read as a single pile of overlapping
 polygons. Four measurements, all against the shipped embedding:
 
-| | result |
-| --- | --- |
-| Leiden community 80%-radius in the embedding (32° plane) | multiplex **3.58°**, cosine-only **2.98°** |
-| Same, with a clumpier embedding (`n_neighbors` 12, `min_dist` 0) | **5.81° — worse** |
-| HDBSCAN on the embedding itself (60 k sample) | **2–3 clusters**, 10–18% noise |
-| Hull pairs whose discs overlap | region **87.8%**, family (700) **54.5%** |
+|                                                                  | result                                     |
+| ---------------------------------------------------------------- | ------------------------------------------ |
+| Leiden community 80%-radius in the embedding (32° plane)         | multiplex **3.58°**, cosine-only **2.98°** |
+| Same, with a clumpier embedding (`n_neighbors` 12, `min_dist` 0) | **5.81° — worse**                          |
+| HDBSCAN on the embedding itself (60 k sample)                    | **2–3 clusters**, 10–18% noise             |
+| Hull pairs whose discs overlap                                   | region **87.8%**, family (700) **54.5%**   |
 
 The third row is the one that closes it: it is not that the 768-d partition
 fails to project, it is that **the projection has no island structure either**.
 The cause is upstream of both — an SAE decoder dictionary is close to isotropic
 in the residual basis (random-pair cosine 0.0099, PCA-256 captures 62% of the
-variance), so it carries real *local* neighbourhood structure and no
+variance), so it carries real _local_ neighbourhood structure and no
 macro-cluster structure at all.
 
 Two smaller things fell out. The shipped hull level was the **worst** available:
@@ -910,11 +910,12 @@ carried per latent for inspection and filtering, which is what it actually is.
   §14.7 shipped, and it is degenerate: measured spans of 0.001–0.030° for
   digits, weekdays and colours (sub-pixel), and a `months` locus whose 13
   vertices are 11 copies of one point plus 2 of another — it draws as a single
-  straight line and says nothing. Replacing it with a per-concept *local*
+  straight line and says nothing. Replacing it with a per-concept _local_
   re-embedding coloured by an ordinal ramp needs per-member-token affinities
   (which digit does this latent prefer), and `feature_stats.npz` only carries
   probe sums aggregated over all member tokens. That is a new generator stage
   plus a partial forward pass, not a frontend change.
 - r2-sync and `ATLAS_ARCHIVES_SYNCED`, unchanged and still behind B2.
 </content>
+
 </invoke>

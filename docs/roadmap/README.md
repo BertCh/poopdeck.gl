@@ -53,6 +53,28 @@ Two house rules:
 - [**ai-suite.md**](./ai-suite.md) — the MCP-vs-Skills complementarity verdict
   that shaped the product, the security model, and the as-built tool/skill
   inventory.
+- [**openusd-integration-2026-07.md**](./openusd-integration-2026-07.md) — the
+  STT↔OpenUSD isomorphism (spatial tile → payload, temporal bucket → value clip,
+  directory → clip manifest), why tiling makes USD's float32-only geometry a
+  non-issue, the case for `.stt` as a **native USD layer** rather than an export
+  target, the scene-description-vs-streaming-path seam, the five tracks, the
+  `nanousd` assessment (§8.6 — what it changes for ingest and the browser, and why
+  it does nothing for the plugin track), and the cross-origin-isolation and
+  2026-standardisation-window gates. **Plan only — nothing built.**
+- [**neural-atlas-2026-07.md**](./neural-atlas-2026-07.md) — a transformer's
+  internal state as an atlas: the four 2026 interpretability findings that move
+  the design (seed-unstable features vs reproducible subspaces, manifold
+  shattering, the transcoder/circuit-tracer convergence, the SAE downstream
+  negatives), the **scale gate** that decides whether the format is load-bearing
+  at all, the abstract-plane→lon/lat mapping, the zero-new-packages and
+  zero-new-layers verdict, the `gemma-2-2b` pin and its three licence positions,
+  and the framing contract as a typed enum rather than a disclaimer.
+  **Built 2026-07-27** (§14): Milestones 1–5 on a substituted ungated pin
+  (`gpt2-small` + the res-jb SAEs — the `gemma-2-2b` pin is Hub-gated and 15.7 GB
+  of SAE weights), four archives at 294,912 nodes and ~3.1 M trace events, plus
+  the two measured findings that came out of the build — the SAE
+  **context-length cliff** and why Leiden alone cannot carry the cluster tree.
+  Archives are LOCAL-ONLY pending B2.
 
 ### Measurements
 
@@ -66,19 +88,26 @@ Two house rules:
 ## The backlog
 
 The single source of open work. Every item below was re-verified against the
-tree, the registries and the live deployment on **2026-07-26**, carries the
-check that proves it, and states the condition that closes it. Ordered by what
-blocks what, not by size.
+tree, the registries and the live deployment on **2026-07-26** and again on
+**2026-07-31**, carries the check that proves it, and states the condition that
+closes it. Ordered by what blocks what, not by size.
 
-**Where this actually stands.** The code is not the bottleneck. Both suites are
-green except two Rust targets (B1); the layer catalog, the four backends, the
-format and the playback stack all have their open questions written down as
-counted-out entries with triggers. What is _not_ done is landing, publishing and
-verifying the last three waves of work: a 229-file byte break sits uncommitted,
-the crate registry is a release behind the tree, **24 of the 59 reachable
-archives on the CDN are in a format the current reader no longer opens**, and the
-browser-verify queue has been accumulating since 2026-07-22. B1 → B2 → B3 is one
-causal chain, and almost everything else waits behind it.
+**Where this actually stands.** The code is still not the bottleneck, but the
+2026-07-26 reading of "green" was too narrow. Running _every_ CI job by hand on
+2026-07-31 — not just `cargo test --workspace` — found four red, all of them
+invisible to the default-feature suite this register had been quoting; see T2,
+which now carries the finding and the lesson. They are fixed, and the honest
+statement of green is: **34 Rust test targets at `--all-features` (680 tests),
+the six feature lanes, the curated clippy set, `cargo fmt --check`, oxlint,
+`oxfmt --check`, the roadmap-citation gate, 1,456 package tests and 639
+showcase tests.**
+
+What is _not_ done is unchanged and remains the whole story: landing,
+publishing and verifying the accumulated waves. The crate registry is two
+releases behind the tree, **24 of the reachable archives on the CDN are in a
+format the current reader no longer opens** (plus nine that 404), and the
+browser-verify queue has been accumulating since 2026-07-22. B1 → B2 → B3 is
+one causal chain, and almost everything else waits behind it.
 
 ### B — Blocking: the tree is mid-flight
 
@@ -96,6 +125,15 @@ integration test — the documentation gate working as designed on a flag added 
 this batch. **Accept:** the flag is documented, `cargo test --workspace` is
 green, and the batch is committed as one change (it is one churn event; splitting
 it re-churns content addresses twice).
+
+_Closed 2026-07-28._ **Landed as `a7b57dc`** (`feat!: the 2026-07-26 payload byte
+break, 3D tile selection, and the layer-catalog review`) — one commit, as the
+accept condition required. `--compact-times` is documented in the `stt-serve`
+section of [`cli-reference.md`](../api/cli-reference.md), and `cargo fmt`, the
+curated clippy deny set and `cargo test --workspace` are all green, as are the
+16 TypeScript suites. What B1 no longer covers but B3 still needs: HEAD is **13
+commits ahead of `origin/main`** (`c74f394`), so nothing here has been pushed and
+the deployed site still runs the pre-break reader against the pre-break fleet.
 
 **B2. Republish the whole fleet, then re-measure.** Not optional and not a
 follow-up — a correctness gate on the reader that B1 ships. `refactor!: expunge
@@ -115,6 +153,41 @@ showcase; then re-run the cold-start capture
 ([measurements-2026-07.md](./measurements-2026-07.md)) — measuring before the flip
 would only measure the old layout. Needs R2 credentials, so it is maintainer-only.
 
+_Amended 2026-07-28._ **What B2 uploads for the AV fleet changed.** A local
+v1→v2 migration sweep on 2026-07-27 re-encoded the whole `public/data` tree
+through a `reoptimize` example whose point-geometry reader walked coordinates at
+a hardcoded 2-wide stride. Archives built with `--point-elevation-column` carry a
+**3-wide `xyz`** leaf, so 106 of them — the argoverse and waymo base / `-lod` /
+`-scan` / `-splat` bundles — lost their elevation _and_ had roughly two of every
+three points thrown to ±180/±90. Every variant that shipped elevation as a
+numeric COLUMN (`-surfel`, `-world`, `-stage`, `-iso`, `-iso3d`, all nuScenes,
+all Cosmos) came through the same sweep untouched, which is the measured case for
+the "depth is a renderer prop over a column, never baked into geometry" rule. The
+`reoptimize` example is deleted, the six generator call sites no longer fold, and
+the affected bundles are being rebuilt from raw — so B2 uploads the REBUILT AV
+archives, not the local tree as the sweep left it. **The live CDN fleet was never
+affected** (it still serves the pre-sweep archives; only the local tree was
+rewritten). Two scenes registered in `datasets.ts` turned out never to have been
+built at all — `argoverse-02a00399-scan` and `waymo-sf-day-world` — hidden for as
+long as `HELD_BACK_AV_MODES` filtered their modes out of the registry outright;
+both are in the rebuild. Verify a re-encode with `stt-optimize export`'s bbox
+against `metadata.bounds`, **not** `stt-validate`, which passes on scrambled
+coordinates because it never checks coords-in-tile.
+
+_Amended 2026-07-31._ **The AV rebuild is done and spot-verified; what B2 has
+left is purely the upload.** 37 of the 82 argoverse/waymo bundles carry rebuild
+timestamps of 2026-07-28/29 and the other 45 are the variants the sweep never
+damaged — the split the amendment above predicts. Six were checked directly with
+`stt-optimize inspect`, covering all three damaged variants (`-lod`, `-splat`,
+`-scan`), an undamaged control (`-surfel`), and both scenes that had never been
+built at all (`argoverse-02a00399-scan`, `waymo-sf-day-world` — both now
+present). **A cheaper check than the bbox export, and a sharper one:** in every
+archive the z14 entry count exactly equals its temporal-bucket count, i.e. one
+z14 tile for the whole scene. Scrambled coordinates cannot produce that — points
+thrown to ±180/±90 scatter z14 tiles across the planet, so a single coarse tile
+is positive proof of spatial coherence and needs only the directory, not a
+decode (`--sample 0`).
+
 **B3. Cut 0.6.0 across both registries.** crates.io `spatiotemporal-tiles`
 max_version is **0.4.0** (it has 0.1.0, 0.1.1, 0.3.0, 0.4.0 — never a 0.2.0 or
 0.5.0); all eight `@poopdeck.gl` packages are at **0.5.0**; the workspace is
@@ -123,7 +196,10 @@ push, so the prebuilt binaries and shell installer that
 `crates/spatiotemporal-tiles/README.md` sends users to **do not exist for 0.5.0**
 — an advertised install path that dead-ends. Two breaking changes are queued as
 changesets (`drop-packed-format-v1`, `stt-layer-name-prefix`), and B1 adds the
-payload break, so the next number is **0.6.0**, not 0.5.1. Budget for the
+payload break, so the next number is **0.6.0**, not 0.5.1. _(2026-07-31: there
+are now **four** changesets — `payload-byte-break` was written up, and
+`animated-scenegraph-layer` adds a `minor` on `@poopdeck.gl/layers` for a new
+layer. The number is unchanged; a minor rides along inside a major.)_ Budget for the
 operational constraint recorded in [shipping.md](./shipping.md): `cargo publish`
 stalls on HTTP/2 upload from the author's network — publish from a different one.
 **Accept:** `v0.6.0` tagged and pushed, crates.io and npm both showing 0.6.0, and
@@ -161,6 +237,40 @@ inside an otherwise-live demo. **Accept:** either the two stems are r2-synced
 archives — `storm-4d-isolines`, `rain-flood-2019`, `gtfs-ch` — are correctly
 held back and are not a defect; they are B2's tail.
 
+_Amended 2026-07-31._ **The class recurred, and the un-synced tail grew from 5
+stems to 9.** Re-probing all **68** registered manifest URLs (up from 64) on
+2026-07-31 returns **35 v2 / 24 v1 / 9 × 404** — the v2-vs-v1 split is unchanged
+and its membership matches B2 exactly, but four new 404s appeared:
+`mrms-storm3d-{cloudtop,outages,warnings,reports}`, the context overlays of
+`storm-3d-conus`. That demo's PRIMARY (`mrms-storm3d-volume`) is 200, which is
+the worst shape of this failure: the demo mounts, the governor starts, and then
+playback stalls behind overlays that never arrive. Unlike `wpc-fronts` the id is
+a demo id, so the gate can reach it — `storm-3d-conus` is now in
+`LOCAL_ONLY_DATASETS`, and `storm-4d-greenfield`'s prose link to it was removed
+(the demo-meta contract test fails a prose link into a gated demo, and caught
+this). All nine 404 stems exist locally at `formatVersion: 2`, ~1.5 GB total, so
+every one of them is a sync gap and not a build gap — they are B2's tail, not
+new work. **`wpc-fronts` / `wpc-fronts-pips` remain the open half of L1**: they
+are overlay stems of the un-gated `severe-weather-2024`, so only the sync
+closes them.
+
+**L1b. The storm-4d radar LOD pyramid on R2 has no time axis.** `lod_min_zoom`
+thinned the gate cloud on a 3D **space** grid over the whole 9.5-hour window, so
+one gate claimed its cell for every scan and the coarse tiers hold a temporally
+incoherent scatter rather than a thinned copy of each scan. The renderer draws
+one temporal bucket at a time, so the tier that matters — z8, the demo's own
+`initialViewState.zoom` — showed a **median 13% of the visible bucket's gates,
+and 0% in the worst buckets**, with the full 18.3 M only at z9. That is the
+"you have to zoom in too far to get high resolution" report. Fixed in both
+generators (the cell is now 4D, keyed on `--temporal-bucket`; cells re-sized to
+screen resolution) and **rebuilt locally** — z8 now shows a median 65% — but
+`tiles.poopdeck.gl` still serves the old pyramid. Measurements and the new
+ladder are in
+[storm-4d-greenfield-2026-07.md §11.4](./storm-4d-greenfield-2026-07.md).
+**Accept:** the rebuilt `storm4d-volume` (~360 MB, up from 217 MB) is r2-synced
+— fold into **B2**. `mrms-storm3d-volume` carries the same defect and its cells
+still need re-tuning on its next rebuild.
+
 **L2. The browser-verify queue now spans three campaigns.** Browser verification is a
 **mandatory manual gate** in this project (renderer-architecture §2.9: tiers 1–4
 cannot prove compiled-shader pixels), and the queue has grown across three
@@ -174,6 +284,9 @@ identity; the flights comet-wake → glide-dots change); first live drive-throug
 `AnimatedMeshLayer` / `AnimatedHexagonLayer` / `AnimatedTextLayer`; the re-linked
 `/drive` and `/worlds` routes; `storm-4d-isolines` aesthetics (sheet density,
 whether the cloud-top canopy fights the thin lines, fade timing at 288×); the
+**storm-4d style + LOD pass** (outline-only outage counties, wireframe-only
+warning cages, and whether z8 now reads as the storm rather than a sample —
+[storm-4d-greenfield-2026-07.md §11.5](./storm-4d-greenfield-2026-07.md)); the
 multi-source composite gating drill from
 [playback-and-loading.md §8](./playback-and-loading.md); and the three geo viewer.
 **Accept:** each line seen and either signed off or turned into a defect.
@@ -196,11 +309,35 @@ bot commits across the repo's history, no release PR, and no `crates/*/CHANGELOG
 despite release-plz having claimed to write them (that config is now deleted —
 see the discharge list). The workflows were repaired in the hardening waves (the
 `showcase-probe` job could not pass as written) and a roadmap-citation gate was
-added, but none of it has executed. This is the reason `cargo fmt --check` and
-`clippy -D warnings` are deliberately absent: gates on a CI that does not run are
-theater. Add them in the same pass that confirms Actions is alive — formatting
-itself is already clean (`81eea7c`). _(Not re-verified 2026-07-26: no `gh` CLI in
-this environment. Last verified 2026-07-24.)_
+added, but none of it has executed. _(Not re-verified 2026-07-26 or 2026-07-31:
+no `gh` CLI in this environment. Last verified 2026-07-24.)_
+
+_Amended 2026-07-31._ **The gates are no longer absent, and running them by hand
+found four red jobs.** `ci.yml` now carries `cargo fmt --check`, the curated
+clippy deny set, `oxlint` and `oxfmt --check` — so this entry's old claim that
+they were "deliberately absent" no longer describes the file. Running every job
+locally against the pre-commit tree, four were red, and each had been invisible
+to `cargo test --workspace`, the gate the rest of this register quotes:
+
+- **`rust-feature-lanes` (3 of 6 lanes) and `rust-all-features`.** The columnar
+  property refactor ported `postgres_input.rs` to `FeatureProperties` and never
+  touched its DuckDB twin, which still called `props.keys()` and passed the old
+  `shared_properties` shape. DuckDB is not a default feature, so the default
+  test suite compiled and passed around it. The `cli` lane is the full-CLI build,
+  so `cargo install --features cli` could not have compiled — a 0.6.0 blocker.
+- **`rust-lint`** on two files from the same batch, and **`ts-lint`** on eleven,
+  six of them the atlas components.
+
+Fixing the lanes then exposed a real behavioural divergence that no default-
+feature run could reach: `source_parity::duckdb_matches_file_parsed_features`.
+`FeatureProperties::to_map()` cloned the owned map verbatim while every other
+accessor (`get`, `iter`, `len`) treats a null as absent, so a feature read
+through the DB path compared unequal to the identical feature read columnar —
+the exact comparison `to_map` exists to make. The DB readers really do produce
+them, mapping a non-finite float to `Value::Null` via `json_number_or_null`.
+`to_map` now drops nulls in both arms. **The durable lesson: this workspace has
+two DB input adaptors behind non-default features, and the default suite will
+never tell you when a shared type changes under one of them.**
 
 ### K — Known defects with a named fix
 
@@ -214,6 +351,14 @@ decoder ships in this repo. Either add the channel or document the lockstep
 assumption; `docs/spec/stt-serve-protocol.md` still describes v1 behavior either
 way. ([format §10.4](./stt-packed-format-decisions.md))
 
+_Closed 2026-07-31._ **The channel was added and this entry outlived it.**
+`/metadata.json` carries a `capabilities` array derived from the same
+`EncoderSettings::required_capabilities()` the offline build declares with, and
+`docs/spec/stt-serve-protocol.md` documents it — including the detail that
+earns the design: it is **always present**, empty when the server encodes the
+capability-free shape, so its ABSENCE unambiguously means "server predates this
+key" rather than "declares nothing".
+
 **K2. `stt-validate` reports structural drift on correct archives.** The
 per-tile exact-integer quantizer refuses a column on outlier-inflated inputs,
 which changes the column _set_ tile to tile; `part_offsets` adds
@@ -221,6 +366,44 @@ which changes the column _set_ tile to tile; `part_offsets` adds
 the report is a false positive. The proper fix is the dataset-global
 attribute-range pin, which shares the two-pass-build prerequisite with the
 dictionary hoist. ([format §10.3–§10.4](./stt-packed-format-decisions.md))
+
+_Amended 2026-07-29._ **Not every drift report is this false positive — six were
+real.** Validating all 64 local archives at `--sample 300` found drift in
+`wildfires` (163), `ais-all-us` (82), `animals` (66), `flights` (13),
+`drifters` (3) and `osm-nyc-changesets` (2): property columns present in some
+tiles and absent in others, plus `animals.organism` typed
+`Dictionary(UInt16,Utf8)` in some tiles and `UInt16` in others. All six predate
+the property-kind fixes (`2c020da`, `c13970a`). Rebuilding each with the current
+builder cleared the report while reproducing the archive — `ais-all-us` came back
+byte-for-byte identical in shape (559,809 tiles / 19,347,885 features) from a
+fresh NOAA fetch, and `animals` to within 77 features. What survives a rebuild is
+the benign `adaptive encoding width varies by tile` **warning**, which is what
+K2's "expected" case actually looks like. So: treat a drift **error** as real
+until a rebuild says otherwise; K2 covers the warning, not the error.
+
+Five of the six are rebuilt and installed (old copies kept as
+`examples/showcase/public/data/.<name>.bak-drift`). `wildfires` is NOT — see K9.
+
+**K9. Two dataset recipes no longer reproduce their archives.**
+
+- **`stt-generate` drove `stt-build` 0.1.0.** `find_stt_build_binary()` probed
+  for a sibling of its own exe — impossible, since `tools/stt-generate` is its
+  own workspace — then fell through to a bare `"stt-build"` PATH lookup that hit
+  the released `~/.cargo/bin` binary while the tree was at 0.5.0. The archives it
+  produced carry no `schemas`, no `capabilities` and `tile_count: 0`: plausible
+  on disk, broken at read time. Fixed 2026-07-29 (`STT_BUILD_BIN` → sibling →
+  workspace `target/release` → PATH, and it now prints the resolved binary and
+  warns on version mismatch) — silence was the defect, not the fallback.
+- **`wildfires` cannot be regenerated: the upstream data is gone.** The shipped
+  archive holds ~460 fires. The NIFC service on 2026-07-29 returns 98,168 records
+  overall but only 297 for 2020–2023, of which **10** clear `--min-acres 1000` as
+  wildfires. Two real query bugs were fixed in the same pass (`FIRE_YEAR` is an
+  `esriFieldTypeString`, so the year range was a string comparison — the typed
+  field is `FIRE_YEAR_INT`; and `FEATURE_CA = 'Wildfire'` matched one of five
+  values, dropping `Wildfire Final Fire Perimeter` and `Wildfire for Resource
+Benefit`), which took the match count 1 → 10 and confirms the filter was also
+  wrong — but the data is not there to recover. The archive keeps its 163-error
+  drift because regenerating would destroy it. Re-source before touching it.
 
 **K3. Cesium declares three fallbacks it cannot render.** `mesh → boundingBox`,
 `text → icon` and `hexbin → h3Summary` were copied from the three descriptor, so
@@ -264,6 +447,12 @@ sections, and `animated-bounding-box-layer.ts` still cites `av-cockpit.md §3c`
 and `§2c`, neither of which exists in that document (its §2 is fidelity
 refinement, §3 is LiDAR compression). Fix the anchors and extend the gate to
 check them — this drift class has now recurred twice.
+
+_Closed 2026-07-31._ **Both halves landed.** The gate parses numbered headings
+per document and validates the `§` anchor, not just the filename:
+**270 citations checked, 105 of them anchored, all resolve** (up from 94
+filename-only). The two stranded citations in `animated-bounding-box-layer.ts`
+now read `§1.3` and `§2`, both of which exist.
 
 **K8. AI-suite tail.** No evals exist for any skill (the intended bar was ≥3 per
 skill, without-skill baseline vs with-skill); remote hosting still wants an OAuth

@@ -359,6 +359,26 @@ interface BaseDataset {
   /** Scale factor for elevation values (e.g., for unit conversion) */
   elevationScale?: number;
 
+  /**
+   * Vertical extent of the RENDERED scene, `[minMetres, maxMetres]` above the
+   * ellipsoid — forwarded to the layer's `zRange`, which unions the camera's
+   * ground-plane footprint with its footprint at the top of the content when
+   * selecting tiles.
+   *
+   * Only volumetric demos need it, and only because tile selection is a
+   * ground-plane operation: geometry drawn at altitude projects into a pitched
+   * frame from tiles whose ground footprint is outside the visible box, so
+   * without it the near edge of the frame silently loses its highest data.
+   * Post-`elevationScale` metres (the value goes to `viewport.getBounds({z})`
+   * in common space), so a 19 km column at `elevationScale: 15` is 285000.
+   *
+   * Unset ⇒ the composite's own default for that demo family, or the ground
+   * plane alone. NOT derived automatically: an over-large slab reports a
+   * near-global box and selects accordingly, so a wrong guess is not
+   * conservative (see the layer prop's docs).
+   */
+  zRange?: [number, number];
+
   /** Property name for categorical coloring (passed to layers as colorProperty) */
   colorProperty?: string;
 
@@ -745,6 +765,36 @@ export interface TripsDataset
    * is set false. Styled by the `head*` fields.
    */
   headsOverlayUrl?: string;
+  /**
+   * Loader window (ms) for the {@link headsOverlayUrl} archive, overriding the
+   * primary's `timeWindow` on the overlay tileset ONLY.
+   *
+   * It exists because the two archives in a composite can have wildly different
+   * temporal bucket sizes, and `timeWindow` is authored for the PRIMARY. The
+   * overlay's window has no visual meaning — AnimatedTripHeadsLayer draws a dot
+   * for every trip active at the playhead and never consults `timeWindow` — so
+   * it is purely a residency knob, and an over-wide one is expensive twice over:
+   *
+   *   • residency = (window / overlayBucketMs) × viewport tiles, and only the
+   *     playhead's own bucket can ever draw (stt-build slices every clipped
+   *     trajectory segment to lie inside ONE bucket, so a bucket is
+   *     self-contained — see clip.rs "Slice a clipped segment at temporal
+   *     bucket boundaries");
+   *   • the governor's buffered-runway horizon is `4 × timeWindow`, and every
+   *     tile inside it must be RESIDENT for the runway to complete. Past the
+   *     tile-cache cap that is unsatisfiable, so the tileset evicts tiles it
+   *     still needs and re-fetches them forever.
+   *
+   * On nyc-flow-and-riders (1-hour primary window over a 1-MINUTE overlay
+   * bucket) that combination measured 854 resident overlay tiles to draw 14
+   * tiles' worth of dots, 5.7k tile + 3.3k pack-blob evictions per 8 s, and
+   * 43 MB/s of re-fetch. Size this at a few overlay buckets: enough to cover
+   * the bucket the playhead is in plus the 100 ms tileset-refresh throttle
+   * (`speed × 100 ms` of sim-time), no more.
+   *
+   * @default unset (follow the primary `timeWindow`)
+   */
+  headsOverlayTimeWindow?: number;
   /**
    * Render with {@link FlowCorridorLayer} instead of {@link AnimatedTripsLayer}.
    * Use for static-geometry *overview* archives (flow corridors) whose tiles

@@ -66,9 +66,17 @@ Every adapter emits the SAME bundle layout (lidar / ego / objects / map_poly / m
 packed STT archives + telemetry.json + cameras.json + scene.json); streams are optional —
 the cockpit shows only those present. Column schemas, sidecar JSON shapes, and the
 manifest are formalized in [`../spec/sidecar-assets.md`](../spec/sidecar-assets.md), the
-source of truth. One convention worth restating: `height_band` ships as a **string** label
-(e.g. `"0-2"`) — a bare numeric string would be promoted to Numeric and the categorical
-color map would no-op.
+source of truth. Two conventions worth restating:
+
+- `height_band` ships as a **string** label (e.g. `"0-2"`) — a bare numeric string would be
+  promoted to Numeric and the categorical color map would no-op.
+- Elevation ships as the numeric **`z` column** the spec table names, and the client lifts
+  it into the position through the layer's `elevationProperty` / `elevationScale`. It is
+  NOT folded into the geometry's 3rd coordinate. Between 2026-06 and 2026-07-27 the
+  extractors passed `--point-elevation-column z`, which CONSUMES the column — so those
+  bundles shipped with no `z` at all, silently off-spec, and a re-encoder that assumed the
+  2-wide `xy` leaf destroyed 106 of them (see §3). Nothing enforces this at build time yet;
+  the guard is the block comment in `av_common.run_stt_build`.
 
 ### 1.3 Frontend + layer
 
@@ -161,10 +169,11 @@ default (`common.rs::run_stt_build_with_full_options`): coord quantization
 
 - sequential ids, ON for every dataset; `STT_GEN_NO_QUANTIZE=1` opts out wholesale. Measured
   −28% on an OD-line double-build; win is dataset-shaped (large on geometry/numeric, modest on
-  text-heavy). The slower fallback for the ~50 GB of already-built archives was the
-  `reoptimize` pass (`crates/stt-core/examples/reoptimize.rs`) (decode → re-encode through the production encoder →
-  re-pack); transcoding has since been removed wholesale, so re-optimizing now means a
-  from-source rebuild.
+  text-heavy). The slower fallback for the ~50 GB of already-built archives used to be a
+  `reoptimize` example (decode → re-encode through the production encoder → re-pack). That
+  example was DELETED on 2026-07-28: it walked point coordinates at a hardcoded 2-wide stride,
+  so a 3D-folded `xyz` leaf was read at the wrong offset — it flattened and scrambled 106 AV
+  archives before anyone noticed. Re-optimizing now means a from-source rebuild, full stop.
 
 **Deferred levers (measured, declined — revisit only on a concrete trigger):**
 

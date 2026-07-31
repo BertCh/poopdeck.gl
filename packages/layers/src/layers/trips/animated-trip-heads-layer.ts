@@ -730,7 +730,34 @@ export class AnimatedTripHeadsLayer<
     const elevScale = this.props.elevationScale ?? 1;
 
     const sublayers: Layer[] = [];
+    // Diagnostics for the probe: how much of the resident set is doing work.
+    let skippedTiles = 0;
+    let dots = 0;
+    let maxLagMs = 0;
+    let maxLeadMs = 0;
+    // Dots split by the ZOOM they came from. A `best-available` tileset also
+    // hands back coarse PARENT tiles, whose trips carry simplified geometry —
+    // so a split across zooms says whether the frame is drawing one dot per
+    // trip or stacking a parent's stand-in on top of its own children.
+    const dotsByZoom: Record<number, number> = {};
     for (const tile of tiles) {
+      // A tile can only hold a dot if the playhead lies inside the tile's own
+      // [timeStart, timeEnd]. That range is a build-time COVERING bound — the
+      // bucket edge below, the max feature `end_timestamp` above (stt-build
+      // tiler.rs), so it is a sound superset of every feature's span in the
+      // tile — which makes this skip exactly lossless, not a heuristic.
+      //
+      // It matters because the RESIDENT set is sized by the loader's time
+      // window while only the playhead's bucket ever draws. On a 1-minute-
+      // bucket archive under a 1-hour window that is ~60 dead tiles for every
+      // live one, and without this we ran the full `computeHeads` scan over
+      // every feature of all of them, every frame (measured 3.2 ms/frame at
+      // 854 resident tiles on nyc-flow-and-riders).
+      const tr = tile.timeRange;
+      if (tr && (absTime < tr.start || absTime > tr.end)) {
+        skippedTiles++;
+        continue;
+      }
       for (const tileLayer of tile.layers) {
         const prepared = this.prepareTile(tile, tileLayer, archiveKey);
         if (!prepared) continue;
@@ -743,6 +770,21 @@ export class AnimatedTripHeadsLayer<
           elevScale,
         );
         if (count === 0) continue;
+        if (probe) {
+          dots += count;
+          const z = tile.id.z;
+          dotsByZoom[z] = (dotsByZoom[z] ?? 0) + count;
+          // Where, relative to the playhead, do the tiles that actually DRAW
+          // sit? `lag` is how far the playhead has run past a drawing tile's
+          // bucket edge — the empirical lower bound on the loader's trailing
+          // window, since a trip is bucketed by its START and may run long.
+          // `lead` is the forward equivalent. Together they say how narrow the
+          // window can safely go on a given archive.
+          if (tr) {
+            maxLagMs = Math.max(maxLagMs, absTime - tr.start);
+            maxLeadMs = Math.max(maxLeadMs, tr.start - absTime);
+          }
+        }
 
         // A per-dot gradient color buffer when this tile carries the channel;
         // otherwise the dots use the constant `headColor` below. Re-expanded
@@ -824,7 +866,12 @@ export class AnimatedTripHeadsLayer<
       emit('renderLayers', {
         layer: 'AnimatedTripHeadsLayer',
         tiles: tiles.length,
+        skippedTiles,
         sublayers: sublayers.length,
+        dots,
+        dotsByZoom,
+        maxLagMs,
+        maxLeadMs,
         ms: performance.now() - t0,
       });
     }

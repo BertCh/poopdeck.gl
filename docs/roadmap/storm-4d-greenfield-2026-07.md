@@ -469,3 +469,148 @@ between `dbz_level` and `alt_band` in place.
   meaningless), which the in-place render-mode mechanism cannot express.
   Revival trigger: a categorical GPU filter (today's `filterProperty` is
   numeric-only), which would let one archive carry both moments.
+
+---
+
+## 11. Style + LOD pass (2026-07-28)
+
+Four user-reported defects on the shipped `storm-4d-greenfield` /
+`storm-4d-isolines` demos. Three were real bugs with a shared shape — a piece
+of machinery that was correct on the ground plane and wrong for a scene whose
+subject is in the air — and one was art direction.
+
+### 11.1 Context layers were competing with the subject (art direction)
+
+- **Outage counties** were a translucent red FILL under the volume. A solid
+  wash below a translucent 3D cloud tints every gate drawn over it, so the
+  damage wake read as loudly as the storm. Now `filled: false` with a thin
+  ~150-alpha red boundary: the wake signal was always the spreading EXTENT
+  (the archive carries no per-county magnitude ramp), and the extent survives
+  an outline intact.
+- **VTEC warning prisms** were translucent walls extruded to 12 km. Four
+  stacked sheets of tinted glass sat between the camera and the storm, and
+  overlapping TO/SV/FF phases compounded. Now `filled: false, wireframe: true`
+  — deck's `SolidPolygonLayer` draws its top and side models only under
+  `filled` and its wireframe model only under `wireframe`, so this leaves the
+  12 km edge cage and nothing that occludes. The cage states the same
+  footprint and height.
+  - **The edges keep their per-`phenom` colour, and that took a layer change.**
+    Two independent reasons the fill's palette cannot reach them: the wireframe
+    model reads `instanceLineColors`, a DIFFERENT attribute from
+    `instanceFillColors`; and CategoryColorExtension's
+    `fs:DECKGL_FILTER_COLOR` hook — which would otherwise have caught the
+    wireframe's fragments, since it runs in the fragment shader — is not used
+    on the extruded path at all (it would overwrite phong lighting, so
+    prepareTile expands the palette into a per-vertex fill buffer instead).
+    Left alone, `getLineColor` falls back to deck's black and every cage
+    renders as unlit black wire. So `AnimatedPolygonLayer.getLineColor` now
+    accepts a categorical property COLUMN, resolved through the same
+    `colorMapping` as the fill and baked into a matching per-vertex
+    `instanceLineColors`; the demo passes `getLineColor: 'phenom'`. New palette
+    `STORM4D_WARNING_EDGE_COLORS` — the wall alphas (46/36/36) were sized for
+    stacked glass and vanish on a one-pixel line.
+
+### 11.2 The counties were drawing the tile grid (bug)
+
+Reported as "the counties seem like they are showing tile boundaries", and
+they were. `stt-build` clips polygon coverage to each tile rect exactly, so a
+county crossing a boundary is stored as two pieces that each gained a
+SYNTHETIC ring edge down the seam. Fills hide those (the pieces abut
+watertight) — which is why this only surfaced once the fill came off — but a
+STROKE draws them, and the map wore its own tile lattice.
+
+Same defect the extruded side walls had in §9.3, and it is now fixed from the
+same `computePolygonWallMask` edge mask: `buildOutlineSublayer` turns the mask
+into PathLayer `startIndices` breaks, splitting each ring into the arcs that
+are genuinely part of the polygon. Costs no copies — deck's binary
+PathTesselator treats each run as open (n vertices → n−1 segments, last vertex
+INVALID), so "don't draw edge i → i+1" is just "start a new run at i+1"; the
+vertices never move and every per-vertex buffer the outline shares with the
+fill stays valid. Tiles with nothing on a boundary keep the decoder's own
+`ringIndices` array, allocation-free. `seamWalls: true` opts back out, and now
+governs the stroke as well as the walls — one flag should not suppress the
+lattice in one render mode and leave it inked in the other.
+
+### 11.3 Tile selection ignored that the cloud is above the ground (bug)
+
+Tile zoom AND the tile box both come from the camera's footprint on the ground
+plane, and nothing in this scene is on the ground. Under pitch, geometry drawn
+at altitude projects into the frame from tiles whose ground footprint is
+outside the visible box, so the near edge of the frame silently lost its
+highest data — anvil and echo tops first.
+
+`zRange` (shipped in the tile-loading-3D campaign, never set by a demo) is
+exactly this fix, and every layer in the composite now carries the same one:
+`STORM4D_SCENE_TOP_M = 15000 × STORM4D_ELEVATION_SCALE`. RENDERED metres, not
+raw — the value reaches `viewport.getBounds({z})` in common space. Measured
+cost at the shipped camera (z8 / pitch 55): 36 → 42 cells, well inside the
+256-cell viewport budget; 0% at pitch 0, where there is no near edge to lose.
+`storm-3d-conus` overrides it (`Dataset.zRange`) because its column is 19 km
+at `elevationScale: 15` — a 285 km scene that Greenfield's default would
+under-state fivefold.
+
+### 11.4 The LOD pyramid had no time axis (bug) — REBUILD REQUIRED
+
+Reported as "not granular enough zoom LoD … you have to zoom in too far to get
+high resolution". `lod_min_zoom` thinned on a 3D SPACE grid only, over the
+concatenated 9.5-hour gate set. The renderer draws ONE temporal bucket at a
+time, so what matters is how much of a BUCKET survives — and with no time term
+a single gate claimed its cell for the entire window. The storm sweeps the
+same ground repeatedly, the strongest pass won, every other pass through that
+cell was demoted to `max_zoom`, and the coarse tiers ended up holding a
+temporally incoherent scatter: the union of ~100 scans' peak echoes, of which
+any one bucket owns a handful.
+
+Measured on the shipped archive (18,343,623 gates, 116 buckets):
+
+| tier | dataset-wide | % of all | **median share of ONE bucket** | worst bucket |
+| ---- | -----------: | -------: | -----------------------------: | -----------: |
+| z4   |       43,245 |    0.24% |                      **0.10%** |         0.0% |
+| z5   |      243,083 |    1.33% |                      **0.67%** |         0.0% |
+| z6   |      876,650 |    4.78% |                      **2.78%** |         0.0% |
+| z7   |    1,869,963 |   10.19% |                      **8.03%** |         0.0% |
+| z8   |    2,753,218 |   15.01% |                     **13.34%** |         0.0% |
+| z9   |   18,343,623 |     100% |                           100% |         100% |
+
+z8 is the demo's own framing zoom (`initialViewState.zoom: 8`), and it was
+showing a median 13% of the visible scan — with some buckets showing nothing
+at all until z9. That is the whole complaint, and the dataset-wide column is
+why it was invisible: 15% at z8 looks like a reasonable tier until you ask
+what a single bucket sees.
+
+The thinning cell is now 4D, keyed on the archive's `--temporal-bucket` (5 m),
+so each scan thins against itself. Cell sizes were then free to be set against
+SCREEN resolution rather than to fight the incoherence: a z8 pixel is ~460 m of
+ground at this latitude ≈ 0.005° of latitude, so `--lod-cell-deg 0.005`
+(was 0.0015) keeps ~one gate per pixel at z8 and halves the linear density per
+zoom out; `--lod-cell-alt 400` (was 250) matches. Resulting ladder:
+
+| tier | dataset-wide | median share of ONE bucket | worst bucket |
+| ---- | -----------: | -------------------------: | -----------: |
+| z4   |       99,318 |                      0.66% |         0.3% |
+| z5   |      447,176 |                      2.65% |         1.3% |
+| z6   |    2,002,681 |                     10.29% |         5.3% |
+| z7   |    6,289,228 |                     32.47% |        19.0% |
+| z8   |   12,764,868 |                 **64.96%** |        41.4% |
+| z9   |   18,343,623 |                       100% |         100% |
+
+A smooth ~3× per level with no cliff, every bucket represented at every tier,
+and a framing zoom that reads as the full cloud. Cost: 24.1 M → 39.9 M stored
+gates, archive 217 MB → ~360 MB.
+
+Both generators carry the fix (`nexrad_volume.py`, `mrms_volume.py`) and both
+now print the per-bucket share next to the dataset-wide count, because the
+dataset-wide number alone hid this for a whole campaign. **`mrms_volume.py`'s
+cells are still the pre-fix values** — they were chosen tight to stop a
+space-only key thinning the coarse tiers to nothing, so they will come out
+denser than intended on the next `storm-3d-conus` rebuild; re-read the
+per-bucket column then and coarsen if it overshoots.
+
+### 11.5 Open
+
+- `storm4d-volume` was rebuilt LOCALLY with the new ladder. R2 republish rides
+  the fleet republish (**B2** in the [roadmap README](./README.md)) — the
+  archive on R2 still carries the old, temporally incoherent pyramid.
+- Browser verify (aesthetics): county outline weight against the basemap,
+  whether the wireframe cages read as structure or as clutter at 288×
+  playback, and whether z8 now looks like the storm rather than a sample.

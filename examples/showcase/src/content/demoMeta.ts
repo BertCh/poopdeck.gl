@@ -224,6 +224,19 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'waymo-phx-day-lod',
   'waymo-phx-night-lod',
   'waymo-phx-dusk-rain-lod',
+  // Sweep (`--scan`) and Worldbuild (`--worldbuild`) render-mode variants. Until
+  // 2026-07-28 `HELD_BACK_AV_MODES` dropped these from the registry outright, so
+  // they never reached this contract; that gate is now remote-only (dev serves
+  // public/data and renders them), which makes them ordinary render-mode
+  // variants — reached via the cockpit toggle, never a catalog card.
+  'argoverse-02678d04-scan', // Pittsburgh
+  'argoverse-02a00399-scan', // Miami
+  'argoverse-0b5142c1-scan', // Washington DC
+  'argoverse-0bae3b5e-scan', // Detroit
+  'argoverse-25e5c600-scan', // Palo Alto
+  'argoverse-92b900b1-scan', // Austin
+  'argoverse-02678d04-world', // Pittsburgh
+  'waymo-sf-day-world',
 
   // ── The 2026-07 cut from 48 cards to 12 ───────────────────────────────────
   // None of these lost their data or their route: every one still streams at
@@ -239,9 +252,10 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
   'mrms-precip',
   'hrrr-wind',
   'storm-radar',
-  // The other two cuts of the Greenfield/CONUS radar volume. storm-3d-conus is
-  // linked from storm-4d-greenfield's prose; storm-4d-isolines is deliberately
-  // NOT linked while its archive is gated (LOCAL_ONLY_DATASETS).
+  // The other two cuts of the Greenfield/CONUS radar volume. As of 2026-07-31
+  // NEITHER is linked from storm-4d-greenfield's prose: both are gated
+  // (LOCAL_ONLY_DATASETS) until r2-sync lands their archives, and the
+  // demo-meta contract test fails a prose link into a gated demo.
   'storm-3d-conus',
   'storm-4d-isolines',
   // Same USGS catalog as earthquake-activity, rendered as time-as-height
@@ -500,7 +514,12 @@ export const DEMO_META: Record<string, DemoMeta> = {
       'Where the severe-weather suite shows the whole continent for 72 hours, this demo goes deep on one storm: the supercell that produced the Greenfield, Iowa EF4 of 21 May 2024. Instead of flattening the radar to a 2D mosaic, every NEXRAD Level II gate from the Des Moines radar (KDMX, 78 km away) is kept as a 3D point — placed at the altitude the 4/3-earth beam model says the beam sampled — so the storm becomes a time-animated volumetric cloud you can orbit and dive through. A render-mode toggle switches the volume between NWS reflectivity bands and dealiased radial velocity, where the mesocyclone reads as bright inbound green pixels beside bright outbound red — the couplet.',
       'The timeline is the story: the SPC particularly-dangerous-situation tornado watch at 18:10 UTC, touchdown near Villisca at 19:57, and the crossing of Greenfield around 20:26–20:32. Rated EF4 at 185 mph from the damage survey, the tornado was also sampled by a Doppler-on-Wheels mobile radar, which measured 263–271 mph winds at 44 m above ground — analyzed to roughly 309–318 mph instantaneous near the surface, making it only the third tornado ever radar-measured above 300 mph. Five people died. NOAA’s experimental Warn-on-Forecast system (WoFS) had highlighted the Greenfield area with roughly 75 minutes of lead time; the NWS Des Moines warnings rise here as translucent wireframe prisms the moment they were issued, shrinking with each SVS update and vanishing on expiry.',
       'Around the volume, the context arrives in painter order: county power outages grow as dark-red columns behind the storm, the GOES-16 C13 cloud-top "anvil canopy" floats at its brightness-temperature height, multi-level HRRR winds thread the scene at four pressure levels, one-minute ASOS stations gust beneath it, local storm reports strike the ground trailing the radar, GLM lightning flickers additively, and the 18Z Omaha radiosonde climbs through the whole scene as a tiny bright trail. All ten archives ride one playhead behind the playback governor, and every altitude-bearing layer shares a single 4× vertical exaggeration so the scene never lies about relative heights.',
-      'A wider cut of the same idea streams from the fullscreen viewer: [the continental MRMS volume](/demo/storm-3d-conus) trades this one radar’s gate detail for every storm in CONUS at once.',
+      // (2026-07-31) The closing paragraph linked the continental cut, which is
+      // now gated (four of its overlays 404 on R2 — see LOCAL_ONLY_DATASETS).
+      // Restore VERBATIM in the pass that un-gates `storm-3d-conus`:
+      //   'A wider cut of the same idea streams from the fullscreen viewer:
+      //   [the continental MRMS volume](/demo/storm-3d-conus) trades this one
+      //   radar’s gate detail for every storm in CONUS at once.'
     ],
     dataSources: [
       {
@@ -898,6 +917,32 @@ export function getRelated(id: string): CatalogEntry[] {
   return meta.related
     .map((rid) => getCatalogEntry(rid))
     .filter((e): e is CatalogEntry => Boolean(e));
+}
+
+/**
+ * Every registry dataset WITHOUT a catalog card, grouped by `Dataset['type']`.
+ *
+ * The curation above is an editorial judgement about the public site — one card
+ * per idea. It is not a judgement that the other ~140 registry entries stopped
+ * working, and on a local checkout (where `public/data` holds every archive)
+ * having no way to reach them but hand-typed URLs was just a missing surface.
+ * `DemosCatalog` renders this under the cards when `DEV_FULL_INDEX` is set.
+ *
+ * Grouped by `type` rather than `DemoCategory` for the obvious reason: category
+ * lives in DEMO_META, and by definition nothing here has one. `type` is on the
+ * `Dataset` itself, and it keeps the ~110 AV render-variants (`type: 'av'`) in
+ * one block instead of interleaving them with the dozen genuinely distinct
+ * demos someone is actually looking for here.
+ */
+export function getUncataloguedByType(): Map<Dataset['type'], Dataset[]> {
+  const grouped = new Map<Dataset['type'], Dataset[]>();
+  for (const dataset of datasets) {
+    if (DEMO_META[dataset.id]) continue;
+    const bucket = grouped.get(dataset.type);
+    if (bucket) bucket.push(dataset);
+    else grouped.set(dataset.type, [dataset]);
+  }
+  return grouped;
 }
 
 // Re-exported so the contract test can assert the curated set stays covered.

@@ -202,7 +202,7 @@ findings settled it:
   id-hash (**40 %**) and raw-f64 `z` (**38 %**) dominated — the win was seq-ids +
   `--quantize-attr` on `z`. And lightweight column encodings measured NO-GO (§4). A
   heuristic advisor would have recommended exactly the work measurement killed.
-- **Wins are dataset-shaped, 1.07×–21×.** The `reoptimize` pass
+- **Wins are dataset-shaped, 1.07×–21×.** A since-deleted `reoptimize` example
   measured 21 datasets at 20.4 → 13.2 GB: **1.07–1.99×** typical, up to **21×**
   where a zoom floor was wrong. No formula predicts which lever pays for a given
   dataset; a 30-second sample-encode does.
@@ -794,3 +794,87 @@ build-global, so there is a place to hang it.
 - **`partIndices` is published by the TS reader but consumed by no renderer
   yet** — `layers`, `three` and `maplibre` still treat every polygon feature
   as single-part. Relevant to the A3 seam-wall work.
+
+---
+
+## 11. Decision record — 2026-07-28 columnar property ingest
+
+The build's ceiling was never the format or the tiler's algorithms. It was the
+**shape of one loaded row**, and it stopped national-scale point clouds from
+being buildable at all: a 106 M-point MRMS volume was SIGKILLed on a 36 GB
+machine both in-memory and under `--streaming` (see
+[storm-4d-greenfield-2026-07.md](./storm-4d-greenfield-2026-07.md)).
+
+### 11.1 What the row actually cost
+
+`input::parse_batch` materialised one `serde_json::Map` per row. Three
+compounding costs, none of them proportional to the data:
+
+1. **A `BTreeMap` allocates a full leaf node — ~630 B for `(String, Value)` —
+   whether it holds one key or eleven.** This is the dominant term and it is
+   _fixed_: measured marginal cost of the 2nd–4th property was only ~26 B per
+   property per row, because the node was already paid for at the first.
+2. **Every key name was `clone()`d onto every row** — one `String` allocation
+   per property per row, for a name the schema already owns.
+3. **An `Arc` per row** to carry the map.
+
+### 11.2 The change
+
+New `crates/stt-build/src/props.rs`: `PropertyTable` holds one typed column per
+record batch (`F64`/`I64`/`U64`/`Bool`/`Str`-pool/`Json`) with a validity mask,
+and a feature carries a 16-byte `FeatureProperties::Row { table, row }` handle.
+Names are interned once per batch. The DB readers and synthesised features keep
+`FeatureProperties::Owned(Arc<Map>)`, so only the GeoParquet path changed shape.
+
+Two decisions are load-bearing:
+
+- **The Arrow → JSON type mapping is not re-derived.** Values enter the builder
+  as the `serde_json::Value` that `extract_property_value` already produced, so
+  that contract keeps exactly one definition; the transient `Value` is dropped
+  instead of retained, which is the whole trick.
+- **Number variants are preserved, not collapsed to `f64`.** The categorical
+  column path stringifies numbers, and `serde_json` prints an integer-backed
+  `5` as `"5"` but a float-backed `5.0` as `"5.0"`. Collapsing them would have
+  silently rewritten values in every categorical numeric column.
+
+`load_features` also now reserves from the Parquet footer's row count instead of
+growing by doubling — at 328 B per `ParsedFeature`, the final doubling alone
+transiently holds both copies.
+
+### 11.3 Measured (M3 Pro, 36 GB; 4 M MRMS gate rows, 4 properties)
+
+Peak RSS, `/usr/bin/time -l`, same flags, back-to-back runs of both binaries:
+
+| build                              |    peak RSS | per feature |
+| ---------------------------------- | ----------: | ----------: |
+| per-row `serde_json::Map` (before) |    11.63 GB |     2,908 B |
+| columnar `PropertyTable`           |     9.03 GB |     2,258 B |
+| + footer-sized preallocation       | **6.71 GB** | **1,678 B** |
+
+**Output is byte-for-byte identical** at every step — verified by `diff -r` of
+the whole archive against one built by the pre-change binary (1 pack,
+20,640,414 pack bytes, same SHA over every file). That is the acceptance test
+for this change: content addresses must not move.
+
+At real scale the per-feature figure is much lower — the 26.5 M-row
+`mrms-storm3d-volume` parquet builds in **11.08 GB / 98 s** (418 B/feature),
+because the 4 M bench is one dense temporal bucket and is dominated by fixed
+overhead. Note macOS reports a "peak memory footprint" of 54.6 GB for that same
+run: that counter is cumulative allocation churn, not live set, and the gap
+between the two is itself the evidence that this path was allocation-bound.
+
+### 11.4 What is still in the way (the next lever, not done here)
+
+Peak is now dominated by the loaded vector itself, not by tiling — proved by
+building a single zoom producing **4 tiles** from 4 M features and still seeing
+8.39 GB. `generate_tiles_streaming` takes `&[ParsedFeature]`, so the whole input
+is resident for the entire build regardless of `--streaming`.
+
+`ParsedFeature` measures **328 B** inline, of which `geojson::Feature` is
+**200 B** (61%) — a struct that, on the point path, carries nothing but an
+`Option<Geometry>` wrapping a two-element `Vec<f64>` (one more heap allocation
+per point). Replacing it with a compact point variant is the next structural
+win and would roughly halve the residency again; the `.geojson` field has only
+~22 non-test read sites, all in `tiler.rs`, `columnar.rs` and `style_hints.rs`.
+Beyond that, true disk-boundedness needs the tiler to consume batches rather
+than a slice, which is a different and larger change.

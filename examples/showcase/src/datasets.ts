@@ -1392,9 +1392,9 @@ const rawDatasets: Dataset[] = [
     // so the busiest hubs aren't all flattened to one size: it's the clamp, not
     // the √, that kills variation among the largest — a log scale would compress
     // the top end further and make them MORE alike.
-    flowNodeRadiusScale: 60,
+    flowNodeRadiusScale: 50,
     flowNodeRadiusUnits: 'meters',
-    flowNodeRadiusMaxPixels: 36,
+    flowNodeRadiusMaxPixels: 15,
     flowMinFlow: 0.05, // ~0 → keep low-traffic corridors visible as thin lines
     // P must match the baked control-point count (`--bundle-points`, default 24)
     // so the renderer samples each baked vertex exactly.
@@ -2492,10 +2492,27 @@ const rawDatasets: Dataset[] = [
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
       end: 1420213500000, // 2015-01-02 13:45:00 UTC — last 15-min bin end
     },
-    // 1-h window comfortably covers the current 15-min flow bucket AND the tiles of
-    // active trips the heads overlay interpolates (heads only draw a dot for trips
-    // live at the playhead, so a wide loader window never over-draws them).
+    // 1-h window comfortably covers the current 15-min flow bucket. It is the
+    // PRIMARY (corridor) window only — see headsOverlayTimeWindow below.
     timeWindow: 3600000,
+    // ── The overlay's own loader window. The riders archive buckets at ONE
+    //    MINUTE, so inheriting the primary's 1 h made the overlay tileset hold
+    //    ~61 buckets — 854 resident tiles at this framing — when only the
+    //    playhead's own bucket can ever draw a dot (stt-build slices each
+    //    clipped trajectory segment to lie inside a single bucket; measured
+    //    in-browser: every drawing tile sat < 1 bucket behind the playhead,
+    //    none ahead). Worse, the governor's runway horizon is 4 × timeWindow =
+    //    240 buckets ≈ 3.4k tiles that must all be RESIDENT to read "complete",
+    //    against a 1000-tile cache cap — an unsatisfiable demand that kept the
+    //    loader evicting and re-fetching the same tiles: 5.7k tile evictions,
+    //    3.3k pack-blob evictions and 43 MB/s of re-fetch per 8 s of playback,
+    //    for 14 tiles of visible dots.
+    //    4 min = 4 buckets: one for the playhead's bucket, the rest margin for
+    //    the tileset's 100 ms refresh throttle (at ~159× real time the playhead
+    //    covers ~16 s of sim between refreshes). Purely a residency knob — the
+    //    heads layer draws by per-trip [start, end] vs the playhead and never
+    //    reads timeWindow, so the dots are byte-identical.
+    headsOverlayTimeWindow: 240000,
     // ~40 h in ~15 min (≈160× real time): quick enough to feel the pulse, slow
     // enough that individual cab dots stay legible as they cross the grid.
     targetPlaybackSeconds: 900,
@@ -3499,25 +3516,61 @@ const rawDatasets: Dataset[] = [
     id: 'storm-3d-conus',
     name: 'Storm as a 4D Object — Continental (MRMS)',
     description:
-      'The entire United States as a single time-animated 3D radar object: the 21 May 2024 severe-weather outbreak rendered from the NOAA MRMS 3D reflectivity mosaic — 33 vertical levels from 0.5 to 19 km stacked into a continental volumetric cloud. Orbit the whole country at once, then dive into any storm to read its vertical structure gate by gate; a GPU reflectivity threshold peels the cloud down to the cores. A stratified level-of-detail pyramid streams a sparse continental skeleton at the national framing and resolves to the full 1 km grid as you zoom in. GLM lightning flickers beneath. Source: NOAA MRMS / GOES-16 GLM.',
+      'The entire United States as a single time-animated 3D radar object: nine and a half hours of the 21 May 2024 severe-weather outbreak rendered from the NOAA MRMS 3D reflectivity mosaic — 33 vertical levels from 0.5 to 19 km stacked into a continental volumetric cloud, 44 million convective cells on a 2 km grid. Orbit the whole country at once and watch the squall lines organise and sweep east, then dive into any storm to read its vertical structure cell by cell; a GPU reflectivity threshold peels the cloud down to the cores. A stratified level-of-detail pyramid keeps the national framing to roughly one cell per pixel and resolves to the full grid as you zoom in. GLM lightning flickers beneath. Source: NOAA MRMS / GOES-16 GLM.',
     // Primary `url` = the national MRMS 3D volume (REQUIRED governor). Reuses
     // the existing continental GLM archive, subset by the demo clock.
     url: '/data/mrms-storm3d-volume/manifest.json',
+    // National cuts of the Greenfield context stack — SAME generators, only the
+    // `--bbox` changed, so the schemas and band labels are byte-identical to
+    // the storm4d-* stems and the FE's colorMapping keys still match. Separate
+    // stems (`mrms-storm3d-*`) because these cover CONUS, not the DMX county
+    // warning area, and must not clobber the single-storm archives.
+    // Deliberately absent: `coupletUrl` and the velocity toggle (MRMS is
+    // reflectivity-only), `stationsUrl` and `wind3dUrl` (not yet built
+    // nationally), `soundingUrl` (one balloon is a single-storm device).
+    cloudTopUrl: '/data/mrms-storm3d-cloudtop/manifest.json',
+    outagesUrl: '/data/mrms-storm3d-outages/manifest.json',
+    warningsUrl: '/data/mrms-storm3d-warnings/manifest.json',
+    reportsUrl: '/data/mrms-storm3d-reports/manifest.json',
     lightningUrl: '/data/goes-glm-lightning/manifest.json',
     type: 'storm4d',
     sources: ['noaa'],
-    // The Greenfield tornado's ~35-min mature phase, continent-wide. MUST match
-    // the built archive's time_range (mrms_volume 20:00→20:35Z, 5-min frames).
+    // The FULL Greenfield window, continent-wide — the same 17:30→03:00Z clock
+    // the two single-radar cuts run on, so all three demos are the same nine
+    // and a half hours seen at three scales. MUST match the built archive's
+    // time_range (115 frames at 5-min cadence).
     timeRange: {
-      start: Date.UTC(2024, 4, 21, 20, 0, 0),
-      end: Date.UTC(2024, 4, 21, 20, 35, 0),
+      start: Date.UTC(2024, 4, 21, 17, 30, 0),
+      end: Date.UTC(2024, 4, 22, 3, 0, 0),
     },
-    // ~one 5-min MRMS frame visible at a time; fades cross-dissolve frames.
-    timeWindow: 300000,
-    fadeInDuration: 120000,
-    fadeOutDuration: 120000,
-    // 35 min over ~35 s: the outbreak breathes in near real-ish time.
-    targetPlaybackSeconds: 35,
+    // ⚠ THE CROSS-DISSOLVE CONDITION IS `timeWindow - fade = frame cadence`.
+    // Every MRMS level in a frame carries the SAME instant (unlike the
+    // Greenfield gate volume, whose per-sweep timestamps spread through each
+    // volume and hide this), so the frames are 300 s apart with nothing in
+    // between and the window alone decides whether they overlap.
+    //
+    // `timeWindow` is FULL width — the extension halves it (`windowHalf =
+    // timeWindow / 2`, time-filter-extension.ts). At 300000 each frame lived
+    // over T±150 s, so consecutive frames MET at a single instant where both
+    // ramps were exactly 0: total alpha hit zero every frame, which at ~285×
+    // playback is a blackout roughly once a second.
+    //
+    // With H = timeWindow/2 and fade F, frame N's trailing ramp runs
+    // a ∈ [H-F, H] and frame N+1's leading ramp runs a ∈ [C-H, C-H+F]; they
+    // coincide iff 2H - F = C, and then the alphas sum to (2H-C)/F = 1 exactly
+    // — constant brightness through the handoff. 450000 - 150000 = 300000. ✓
+    // Leaves a 150 s plateau at full opacity and a 150 s dissolve.
+    timeWindow: 450000,
+    fadeInDuration: 150000,
+    fadeOutDuration: 150000,
+    // The render window now spans two buckets, so tile SELECTION has to reach
+    // at least as far or the incoming frame's tiles arrive after it should
+    // already be fading in — the same failure the iso-lines cut documents in
+    // storm-4d-greenfield-2026-07.md §10.3.
+    tileLoadTimeWindow: 600000,
+    // 9.5 h over ~120 s (~285×), matching both Greenfield cuts so switching
+    // between the three reads as the same event at the same speed.
+    targetPlaybackSeconds: 120,
     // Continental framing, pitched — the whole CONUS echo field at once.
     // 70° ceiling: past 71.57° the viewport box the tile loader selects
     // against inverts (docs/roadmap/tile-loading-3d-2026-07.md §1/§4), and a
@@ -3549,11 +3602,19 @@ const rawDatasets: Dataset[] = [
     colorMapping: STORM4D_DBZ_COLORS,
     colorMappingDefault: [120, 120, 130, 60],
     filterProperty: 'dbz',
-    filterRange: [10, 95],
-    // National gate dots: ~1 km grid, so a small world-space billboard with a
-    // pixel floor reads as a continental cloud at z4 and resolves to gates on
-    // the dive.
-    radius: 700,
+    // Floor is 30 dBZ, not Greenfield's 10: a national 9.5 h window at every
+    // detectable echo is 411 M points, which no machine here can tile (see
+    // stt-packed-format-decisions.md §11). 30 dBZ is the convective-core
+    // threshold — it keeps every thunderstorm in the country and drops the
+    // light-rain shield, which at a continental framing was a flat grey haze
+    // over the structure anyway. Re-flooring is a 5-minute rebuild from the
+    // cached master parquet (mrms_refloor.py), NOT a re-decode.
+    filterRange: [30, 95],
+    // National cells: 2 km grid, so a small world-space billboard with a pixel
+    // floor reads as a continental cloud at z4 and resolves to cells on the
+    // dive. `radius` is sized to the grid step — it is the knob to turn if the
+    // continental view reads too sparse or too solid.
+    radius: 1000,
     radiusUnits: 'meters',
     radiusScale: 1,
     radiusMinPixels: 1,
@@ -3562,15 +3623,17 @@ const rawDatasets: Dataset[] = [
     legend: {
       title: 'Continental storm — 4D object',
       items: [
-        { color: '#02fd02', label: 'echo 20–35 dBZ' },
+        { color: '#02fd02', label: 'core 30–35 dBZ' },
         { color: '#fd9500', label: 'heavy 45–55' },
         { color: '#f800fd', label: 'extreme 65+' },
         { color: '#deecff', label: 'lightning flash' },
       ],
+      // Starts at 30 dBZ — the archive's floor (see `filterRange`), so the
+      // ramp shows what is actually in the data rather than Greenfield's band.
       ramps: [
         {
-          label: 'reflectivity 10 → 70+ dBZ (NWS)',
-          colors: ['#40b45a', '#02fd02', '#fdf802', '#fd0000', '#f800fd'],
+          label: 'reflectivity 30 → 70+ dBZ (NWS)',
+          colors: ['#02fd02', '#fdf802', '#fd9500', '#fd0000', '#f800fd'],
         },
       ],
     },
@@ -5201,11 +5264,14 @@ const stageVariants: AvDataset[] = rawDatasets
   .filter((d): d is AvDataset => d.type === 'av' && STAGE_BASE_IDS.has(d.id))
   .map(makeStageVariant);
 
-// Experimental AV cockpit render-modes held back from the shipped product (their
-// tiles aren't deployed to R2, so a registered scene would 404 the toggle). The
-// scene factories + registration blocks stay in source (so dev can build/iterate
-// and a future ship just removes a suffix here), but they're filtered out of the
-// runtime registry — `getDatasetById` won't resolve them, so the cockpit shows no
+// AV cockpit render-modes whose tiles are not on R2 yet, so a registered scene
+// would 404 the toggle on the public deploy. (2026-07-28) This used to filter
+// them out of the runtime registry UNCONDITIONALLY, which also hid them from
+// local dev — where `public/data` is served directly and they render fine. It is
+// now a REMOTE-ONLY gate, like WAYMO_LOCAL_ONLY and LOCAL_ONLY_DATASETS below:
+// dev sees every mode, the public site still never links a dataless one. Drop a
+// group from this pattern once its tiles are R2-synced. The scene factories +
+// registration blocks stay in source either way — so the cockpit shows no
 // Sweep (`-scan`) / Worldbuild (`-world`) toggle. SHIPPED: flat Iso-lines
 // (`-iso`) and Iso 3D (`-iso3d`) — both intentionally NOT matched here. Drop a
 // group from this pattern to ship that mode (after uploading its tiles +
@@ -5281,12 +5347,29 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 //                                              so only the rain field is missing
 //                                              — and the primary is the governor)
 //   /data/gtfs-ch/manifest.json        → 404
+//
+// (2026-07-31) storm-3d-conus: DEV-ONLY for now. Its PRIMARY
+// (`mrms-storm3d-volume`) is 200 on R2, so nothing about the demo's entry URL
+// looks wrong — but four of its context overlays 404, re-probed on 2026-07-31:
+//   /data/mrms-storm3d-cloudtop/manifest.json   → 404
+//   /data/mrms-storm3d-outages/manifest.json    → 404
+//   /data/mrms-storm3d-warnings/manifest.json   → 404
+//   /data/mrms-storm3d-reports/manifest.json    → 404
+// A live primary plus dead overlays is the WORST shape of this failure: the
+// demo mounts, the governor starts, and then playback stalls behind overlays
+// that will never arrive (overlays gate playback by default). This is the same
+// class as the wpc-fronts defect — the archives exist locally at
+// formatVersion 2 (~395 MB), only the sync is missing — but unlike wpc-fronts
+// the id IS a demo id, so this set can reach it. Un-gate when r2-sync lands
+// all four stems.
+//
 // Delete an id from this set the moment `scripts/r2-sync.sh` lands its stem and
 // the manifest verifies 200 — the gate is the stopgap, the sync is the fix.
 const LOCAL_ONLY_DATASETS = new Set<string>([
   'storm-4d-isolines',
   'rain-flood-2019',
   'gtfs-ch',
+  'storm-3d-conus',
 ]);
 
 /**
@@ -5305,15 +5388,23 @@ export const ATLAS_AVAILABLE = !DATA_IS_REMOTE || ATLAS_ARCHIVES_SYNCED;
 /**
  * Would this id be filtered out of the registry on the PUBLIC (R2) deploy?
  *
- * Exported because the two gates above are invisible to anything that authors a
+ * Exported because the gates above are invisible to anything that authors a
  * link by hand: the editorial prose in `content/demoMeta.ts` can point at
  * `/demo/<id>`, and under `npm run dev` (local `public/data`) that link works
  * even when the dataset's archives 404 on tiles.poopdeck.gl. The contract test
  * uses this to refuse a prose link into a gated demo, which is otherwise a dead
  * link nobody sees until it is live.
+ *
+ * Must list EVERY remote-only filter applied to `datasets` below, or a prose
+ * link into a mode that only exists in dev passes the contract test and 404s in
+ * production.
  */
 export function isRemoteGated(id: string): boolean {
-  return WAYMO_LOCAL_ONLY.test(id) || LOCAL_ONLY_DATASETS.has(id);
+  return (
+    HELD_BACK_AV_MODES.test(id) ||
+    WAYMO_LOCAL_ONLY.test(id) ||
+    LOCAL_ONLY_DATASETS.has(id)
+  );
 }
 
 export const datasets: Dataset[] = [
@@ -5321,7 +5412,7 @@ export const datasets: Dataset[] = [
   ...coloredSplatVariants,
   ...stageVariants,
 ]
-  .filter((d) => !HELD_BACK_AV_MODES.test(d.id))
+  .filter((d) => !(DATA_IS_REMOTE && HELD_BACK_AV_MODES.test(d.id)))
   .filter((d) => !(DATA_IS_REMOTE && WAYMO_LOCAL_ONLY.test(d.id)))
   .filter((d) => !(DATA_IS_REMOTE && LOCAL_ONLY_DATASETS.has(d.id)))
   .map(resolveDatasetUrls);
@@ -5332,9 +5423,17 @@ export function getDatasetById(id: string): Dataset | undefined {
 
 /**
  * The curated set shipped on `npm run build`, in navigation order. The full
- * `datasets` array above stays intact so dev (`npm run dev`) keeps every demo;
- * only the navigation surface is trimmed in production. Routing still resolves
- * any id via `getDatasetById`, so old deep-links keep working in dev.
+ * `datasets` array above stays intact, so routing resolves any id via
+ * `getDatasetById` and every deep-link keeps working — in dev AND in prod.
+ *
+ * What the curation trims is DISCOVERY, and until 2026-07-29 it trimmed it
+ * everywhere: this comment claimed "dev (`npm run dev`) keeps every demo", but
+ * `navDatasets` below was assigned `shippedDatasets` unconditionally and the
+ * `/demos` catalog only cards ids carrying a DEMO_META entry, so a local
+ * checkout with all 159 archives in `public/data` surfaced exactly twelve of
+ * them and the other ~50 were reachable only by typing the URL. The claim is
+ * now true: `DEV_FULL_INDEX` below re-opens the full registry on non-public
+ * builds. Production is unchanged — twelve cards, same order.
  *
  * This list IS the `/demos` catalog (2026-07): the contract test requires every
  * id here to carry a DEMO_META entry, so keeping two curated sets that disagree
@@ -5370,3 +5469,18 @@ export const shippedDatasets: Dataset[] = SHIPPED_DATASET_IDS.map((id) =>
  * to the non-emphasized demos keep working.
  */
 export const navDatasets: Dataset[] = shippedDatasets;
+
+/**
+ * Should THIS build surface the whole registry, not just the curated twelve?
+ *
+ * True on a local/dev build, false on the public deploy — the same
+ * `VITE_DATA_BASE_URL` signal `ATLAS_AVAILABLE` and `routes.ts`'
+ * `EXPERIMENTAL_IN_BUILD` already use, deliberately reused so there is ONE
+ * definition of "this is the public site" rather than three that can drift.
+ *
+ * Consequence worth knowing: `npm run build` WITHOUT `VITE_DATA_BASE_URL`
+ * (a local production build against `public/data`) counts as dev and shows the
+ * full index. That is the existing convention for the atlas route and the
+ * experimental surfaces, not a new exception.
+ */
+export const DEV_FULL_INDEX = !DATA_IS_REMOTE;

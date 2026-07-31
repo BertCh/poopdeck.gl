@@ -158,7 +158,9 @@ const AtlasPanel: React.FC<AtlasPanelProps> = ({
   // STRING is derived from the sidecar rather than repeated on 2.6 M events.
   const isTraceEvent = typeof selection?.token_index === 'number';
   const selectedToken =
-    isTraceEvent && selection ? sidecar.trace.tokens[selection.token_index!] : undefined;
+    isTraceEvent && selection
+      ? sidecar.trace.tokens[selection.token_index!]
+      : undefined;
 
   return (
     <aside
@@ -171,8 +173,8 @@ const AtlasPanel: React.FC<AtlasPanelProps> = ({
         {sidecar.pin.model}. X, Y and Z are one isotropic manifold embedding of
         the decoder directions — <em>not</em> axes of the model, and in
         particular Z is not the transformer layer. T is the token being read.
-        This renders activations and estimated contributions. The
-        model&rsquo;s weights are never in the picture.
+        This renders activations and estimated contributions. The model&rsquo;s
+        weights are never in the picture.
       </p>
 
       {/* ── metric ─────────────────────────────────────────────────────── */}
@@ -267,7 +269,9 @@ const AtlasPanel: React.FC<AtlasPanelProps> = ({
         </button>
       </div>
       <p style={{ ...css.dim, fontSize: 11.5, marginTop: 8 }}>
-        <strong style={{ color: '#c3cde3' }}>There are no cluster outlines</strong>
+        <strong style={{ color: '#c3cde3' }}>
+          There are no cluster outlines
+        </strong>
         , and that is a result rather than an omission. This dictionary has no
         macro-cluster structure to outline: graph communities span ~3° of a 32°
         plane, a clumpier embedding made that worse, HDBSCAN on the embedding
@@ -420,8 +424,8 @@ const AtlasPanel: React.FC<AtlasPanelProps> = ({
               </div>
               {isTraceEvent && !selection.label && (
                 <div style={{ ...css.dim, fontSize: 11.5, marginBottom: 6 }}>
-                  Trace events carry the latent&rsquo;s identity, not its label —
-                  the explanation lives once per latent in the anatomy archive
+                  Trace events carry the latent&rsquo;s identity, not its label
+                  — the explanation lives once per latent in the anatomy archive
                   rather than 2.6 M times over. Click the same point with the
                   trace hidden, or follow the evidence link.
                 </div>

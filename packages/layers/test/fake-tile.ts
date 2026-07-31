@@ -136,6 +136,19 @@ export interface FakePathTileOptions {
   endTimes: number[];
   timeOffset: number;
   tileId?: { z: number; x: number; y: number; t: number };
+  /**
+   * ABSOLUTE tile time bounds, overriding the covering range derived from
+   * `startTimes`/`endTimes` + `timeOffset`.
+   *
+   * The real directory entry records the bucket edge as `start` and the MAX
+   * feature `end_timestamp` as `end` (stt-build `tiler.rs`), so the range always
+   * COVERS every feature in the tile. AnimatedTripHeadsLayer relies on exactly
+   * that to skip tiles the playhead cannot be inside, so this fixture derives
+   * the same invariant instead of stubbing `{0, 0}` — which reads as "holds
+   * nothing after t = 0" and would make every mid-trip render a no-op. Set it
+   * explicitly to model a tile the playhead has already left.
+   */
+  timeRange?: { start: number; end: number };
 }
 
 export function makePathTile(opts: FakePathTileOptions): Tile {
@@ -173,7 +186,13 @@ export function makePathTile(opts: FakePathTileOptions): Tile {
 
   return {
     id: (opts.tileId ?? { z: 0, x: 0, y: 0, t: 0 }) as any,
-    timeRange: { start: 0, end: 0 } as any,
+    timeRange: (opts.timeRange ??
+      (featureCount > 0
+        ? {
+            start: opts.timeOffset + Math.min(...opts.startTimes),
+            end: opts.timeOffset + Math.max(...opts.endTimes),
+          }
+        : { start: opts.timeOffset, end: opts.timeOffset })) as any,
     layers: [
       {
         name: 'layer0',

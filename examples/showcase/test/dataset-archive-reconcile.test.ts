@@ -477,6 +477,119 @@ describe('dataset ↔ archive reconciliation', () => {
   });
 });
 
+/**
+ * Registered-but-never-built detection.
+ *
+ * Every other case here reconciles a dataset AGAINST an archive, so a dataset
+ * with no archive at all is invisible to them — it lands in the "skipped, no
+ * local fixture" bucket, indistinguishable from a CI run where the whole
+ * git-ignored `public/data` tree is absent. Two scenes lived in the registry
+ * that way for months (`argoverse-02678d04-scan`'s Miami sibling and
+ * `waymo-sf-day-world`): both would 404 the moment their render-mode toggle was
+ * shown, and nothing failed.
+ *
+ * The discriminator is the tree itself. When enough archives resolve to prove
+ * we are in a populated dev checkout, EVERY registered dataset must resolve;
+ * when almost none do (CI), the case reports and passes. `PRESENT_FLOOR` is
+ * deliberately well above the handful a broken url→path mapping could still
+ * hit by accident, and well below the ~600 a real tree carries.
+ */
+const PRESENT_FLOOR = 25;
+
+/**
+ * Archive urls a registered dataset declares that are KNOWN not to be built,
+ * each with the reason it is acceptable. Same contract as
+ * `CATALOG_EXCLUDED_IDS`: the list must be both exhaustive (anything absent and
+ * unlisted FAILS) and non-stale (anything listed that now resolves also FAILS,
+ * so a fixed gap cannot rot here unnoticed).
+ *
+ * The nuScenes adapter never emitted the `tracks/` archive the Hägerstrand
+ * space-time cube reads. That is invisible today only because the cockpit holds
+ * the Spacetime toggle back (`AvCockpitImpl`: "the toggle is not offered"), so
+ * `avTracksUrl` is never dereferenced — it becomes a 404 the moment cube mode
+ * ships. Argoverse and Waymo bundles do carry `tracks/`; only these do not.
+ *
+ * Closing it is NOT a rebuild: no nuScenes dataroot survives under
+ * `scripts/data-generation/`, and re-fetching one needs a nuscenes.org account
+ * (see the licence register in docs/roadmap/demos-and-datasets.md). So this is
+ * blocked on source data, not on effort — which is exactly the kind of thing
+ * that should be written down rather than rediscovered.
+ */
+const CUBE_TRACKS_UNBUILT =
+  'nuScenes adapter never emitted tracks/; unreachable while Spacetime (cube) is held back; rebuild blocked — no local dataroot, re-fetch needs a nuscenes.org account';
+const KNOWN_UNBUILT = new Map<string, string>([
+  ['/data/nuscenes-0061/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-0103/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-0553/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-0655/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-0757/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-0796/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-0916/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-1077/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-1094/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  ['/data/nuscenes-1100/tracks/manifest.json', CUBE_TRACKS_UNBUILT],
+  [
+    '/data/waymo-sf-day-surfel-adaptive/tracks/manifest.json',
+    CUBE_TRACKS_UNBUILT,
+  ],
+]);
+
+const archivePresence = datasets.flatMap((d) =>
+  archiveUrls(d).map(({ field, url }) => ({
+    id: d.id,
+    field,
+    url,
+    present: existsSync(publicPath(url)),
+  })),
+);
+
+describe('registered datasets resolve to built archives', () => {
+  it('every registered dataset has its archives on disk (populated tree only)', () => {
+    const present = archivePresence.filter((a) => a.present);
+    const missing = archivePresence.filter((a) => !a.present);
+    const populated = present.length >= PRESENT_FLOOR;
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[archives] ${present.length}/${archivePresence.length} archive urls resolve on disk` +
+        (populated
+          ? ` — tree is populated, missing archives are FAILURES`
+          : ` — below the ${PRESENT_FLOOR} floor, treating this as CI (no local data tree); reporting only`),
+    );
+    if (missing.length) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[archives] ${missing.length} unresolved:\n` +
+          missing
+            .map((m) => `    ⊘ ${m.id} · ${m.field} → ${m.url}`)
+            .join('\n'),
+      );
+    }
+    if (!populated) return;
+
+    // A registered scene with no tiles 404s the moment its route or its
+    // render-mode toggle becomes reachable. Fix by building the bundle,
+    // unregistering the scene, or adding the url to KNOWN_UNBUILT with a reason.
+    const unbuiltButRegistered = missing
+      .filter((m) => !KNOWN_UNBUILT.has(m.url))
+      .map((m) => `${m.id} · ${m.field} → ${m.url}`);
+
+    // Non-staleness: a KNOWN_UNBUILT entry that now resolves means the gap was
+    // closed and the acknowledgement outlived it. Same rule the catalog
+    // exclusions carry — a stale entry fails rather than rots.
+    const acknowledgedButPresent = present
+      .filter((p) => KNOWN_UNBUILT.has(p.url))
+      .map((p) => `${p.id} · ${p.url} (delete the KNOWN_UNBUILT entry)`);
+
+    // Asserted as one labelled object so a failure names WHICH rule broke, and
+    // the diff lists the offending urls instead of a bare length mismatch.
+    expect({ unbuiltButRegistered, acknowledgedButPresent }).toEqual({
+      unbuiltButRegistered: [],
+      acknowledgedButPresent: [],
+    });
+  });
+});
+
 // Filled during the camera/ordering runs; read by that describe's summary case.
 const cameraNotes: string[] = [];
 const cameraProblems: string[] = [];

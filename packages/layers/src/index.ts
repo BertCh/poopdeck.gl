@@ -104,6 +104,11 @@ export { AnimatedTextLayer } from './layers/core/animated-text-layer.js';
 // instance per active track over the AV objects/ point archive; static mesh (or
 // per-category meshMapping) is a per-layer prop, motion/color ride the tracks.
 export { AnimatedMeshLayer } from './layers/core/animated-mesh-layer.js';
+// Animated glTF SCENEGRAPHS (also kind 'mesh') — the ScenegraphLayer engine
+// behind the same track machinery, mirroring deck's own SimpleMeshLayer /
+// ScenegraphLayer split. Node hierarchy + PBR materials + per-node animation,
+// for AUTHORED assets (e.g. an OpenUSD/Omniverse export) rather than primitives.
+export { AnimatedScenegraphLayer } from './layers/core/animated-scenegraph-layer.js';
 // Time-windowed 3D point clouds (kind 'pointCloud') — zero-copy binary
 // getPosition/getNormal/getColor over deck PointCloudLayer + TimeFilterExtension
 // window mode; the scan/overview primitive (no cumulative-slab reveal path).
@@ -276,7 +281,16 @@ export type {
   AnimatedMeshLayerProps,
   // What `mesh` / `meshMapping` accept (URL, parsed geometry, or a promise).
   MeshSource,
+  // The engine-class seam the scenegraph sibling overrides.
+  EngineClass,
 } from './layers/core/animated-mesh-layer.js';
+export type {
+  AnimatedScenegraphLayerProps,
+  // What `scenegraph` / `scenegraphMapping` accept (glTF URL, parsed glTF,
+  // ScenegraphNode, or a promise) + the `_animations` entry shape.
+  ScenegraphSource,
+  ScenegraphAnimationConfig,
+} from './layers/core/animated-scenegraph-layer.js';
 export type { AnimatedPointCloudLayerProps } from './layers/core/animated-point-cloud-layer.js';
 export type {
   TimeFilterExtensionProps,

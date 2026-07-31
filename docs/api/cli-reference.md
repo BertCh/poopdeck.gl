@@ -999,6 +999,6 @@ binaries. The one you're most likely to need:
     <in_dir/manifest.json> <out_dir> [pack_size_mb=64] [ordering=auto]
   ```
 
-Others (`packed-stats`, `reoptimize`, `point_column_stats`,
+Others (`packed-stats`, `point_column_stats`,
 `encoding-experiment`, …) are analysis/benchmark aids — see
 `crates/stt-core/examples/README.md`.

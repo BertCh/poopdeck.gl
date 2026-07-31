@@ -30,7 +30,10 @@ import { useReducedMotion } from '../../lib/reducedMotion';
  * gallery belongs at `/worlds`. Hardcoding `/demo/${id}` here was the only
  * link into either, so both cockpit and gallery were unreachable by clicking.
  */
-function fullscreenRoute(dataset: Dataset): { to: string; label: string } {
+export function fullscreenRoute(dataset: Dataset): {
+  to: string;
+  label: string;
+} {
   if (dataset.type === 'av')
     return { to: `/drive/${dataset.id}`, label: 'Open cockpit' };
   // One `worlds` dataset (cosmos-drive-dreams) and the route selects a scenario,

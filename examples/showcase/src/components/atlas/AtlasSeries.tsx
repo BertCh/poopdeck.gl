@@ -105,15 +105,24 @@ const AtlasSeries: React.FC<AtlasSeriesProps> = ({
 
     // ── layer × token ────────────────────────────────────────────────────
     if (grid && grid.max > 0) {
-      const img = ctx.createImageData(Math.floor(w * dpr), Math.floor(GRID_H * dpr));
+      const img = ctx.createImageData(
+        Math.floor(w * dpr),
+        Math.floor(GRID_H * dpr),
+      );
       const rowH = (GRID_H * dpr) / grid.rows;
       for (let py = 0; py < GRID_H * dpr; py += 1) {
         // Row 0 is layer 0; draw it at the BOTTOM so depth increases upward,
         // which is the one thing the old altitude encoding got right.
-        const row = Math.min(grid.rows - 1, grid.rows - 1 - Math.floor(py / rowH));
+        const row = Math.min(
+          grid.rows - 1,
+          grid.rows - 1 - Math.floor(py / rowH),
+        );
         for (let px = 0; px < w * dpr; px += 1) {
           const c0 = Math.floor((px / (w * dpr)) * grid.cols);
-          const c1 = Math.max(c0 + 1, Math.floor(((px + 1) / (w * dpr)) * grid.cols));
+          const c1 = Math.max(
+            c0 + 1,
+            Math.floor(((px + 1) / (w * dpr)) * grid.cols),
+          );
           let v = 0;
           for (let c = c0; c < c1 && c < grid.cols; c += 1) {
             const x = grid.values[row * grid.cols + c];
@@ -139,7 +148,10 @@ const AtlasSeries: React.FC<AtlasSeriesProps> = ({
       const base = GRID_H + WAVE_H;
       for (let px = 0; px < w; px += 1) {
         const c0 = Math.floor((px / w) * activity.length);
-        const c1 = Math.max(c0 + 1, Math.floor(((px + 1) / w) * activity.length));
+        const c1 = Math.max(
+          c0 + 1,
+          Math.floor(((px + 1) / w) * activity.length),
+        );
         let v = 0;
         for (let c = c0; c < c1 && c < activity.length; c += 1)
           if (activity[c] > v) v = activity[c];
@@ -163,7 +175,10 @@ const AtlasSeries: React.FC<AtlasSeriesProps> = ({
       ctx.stroke();
       for (let px = 0; px < w; px += 1) {
         const c0 = Math.floor((px / w) * selValues.length);
-        const c1 = Math.max(c0 + 1, Math.floor(((px + 1) / w) * selValues.length));
+        const c1 = Math.max(
+          c0 + 1,
+          Math.floor(((px + 1) / w) * selValues.length),
+        );
         let v = 0;
         for (let c = c0; c < c1 && c < selValues.length; c += 1) {
           if (Math.abs(selValues[c]) > Math.abs(v)) v = selValues[c];
@@ -211,7 +226,10 @@ const AtlasSeries: React.FC<AtlasSeriesProps> = ({
           if (!d) return;
           e.preventDefault();
           onSeekToken(
-            Math.min(cols - 1, Math.max(0, tokenIndex + d * (e.shiftKey ? 10 : 1))),
+            Math.min(
+              cols - 1,
+              Math.max(0, tokenIndex + d * (e.shiftKey ? 10 : 1)),
+            ),
           );
         }}
       >

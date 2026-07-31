@@ -49,7 +49,11 @@ const RATES: { label: string; rate: number; hint: string }[] = [
   { label: 'Study', rate: 0.5, hint: '2 s per token' },
   { label: 'Read', rate: 1, hint: '1 token/s — one projection at a time' },
   { label: 'Scan', rate: 8, hint: '8 tokens/s' },
-  { label: 'Sweep', rate: 60, hint: '60 tokens/s — the whole session in ~2 min' },
+  {
+    label: 'Sweep',
+    rate: 60,
+    hint: '60 tokens/s — the whole session in ~2 min',
+  },
 ];
 
 const AtlasReadingStrip: React.FC<AtlasReadingStripProps> = ({
@@ -91,7 +95,8 @@ const AtlasReadingStrip: React.FC<AtlasReadingStripProps> = ({
   }, [tokenIndex, slice]);
 
   const step = useCallback(
-    (delta: number) => onSeekToken(Math.min(total - 1, Math.max(0, tokenIndex + delta))),
+    (delta: number) =>
+      onSeekToken(Math.min(total - 1, Math.max(0, tokenIndex + delta))),
     [onSeekToken, tokenIndex, total],
   );
 
@@ -122,7 +127,10 @@ const AtlasReadingStrip: React.FC<AtlasReadingStripProps> = ({
           {isPlaying ? '❚❚' : '▶'}
         </button>
         <span style={css.count}>
-          token <strong style={{ color: '#e6ebf5' }}>{tokenIndex.toLocaleString()}</strong>{' '}
+          token{' '}
+          <strong style={{ color: '#e6ebf5' }}>
+            {tokenIndex.toLocaleString()}
+          </strong>{' '}
           / {total.toLocaleString()}
         </span>
         <span style={css.rates}>

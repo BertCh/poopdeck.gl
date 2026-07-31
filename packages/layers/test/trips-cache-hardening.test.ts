@@ -873,3 +873,85 @@ describe('geometry guard', () => {
     expect(layer.renderLayers()).toHaveLength(1);
   });
 });
+
+describe('AnimatedTripHeadsLayer resident-tile culling', () => {
+  const HEADS = { data: 'a.stt', headRadiusPixels: 4, sizeUnits: 'pixels' };
+
+  /**
+   * One tile whose covering range is `[start, end]` (absolute) holding a single
+   * trip alive across the whole range — the shape the real archive produces,
+   * where `timeRange` is the bucket edge below and the max feature end above.
+   */
+  function bucketTile(
+    start: number,
+    end: number,
+    tileId = { z: 12, x: 1, y: 1, t: start },
+  ): Tile {
+    return makePathTile({
+      paths: [
+        [
+          [0, 0],
+          [0.1, 0.1],
+        ],
+      ],
+      startTimes: [0],
+      endTimes: [end - start],
+      timeOffset: start,
+      tileId,
+      timeRange: { start, end },
+    });
+  }
+
+  it('draws only the tiles whose covering range contains the playhead', () => {
+    // Five 60 s buckets resident (what a 4-minute loader window holds on a
+    // 1-minute-bucket archive); the playhead sits inside the third.
+    const tiles = [0, 1, 2, 3, 4].map((i) =>
+      bucketTile(i * 60_000, (i + 1) * 60_000, {
+        z: 12,
+        x: 1,
+        y: 1,
+        t: i * 60_000,
+      }),
+    );
+    const layer = makeLayer(AnimatedTripHeadsLayer, HEADS, 150_000);
+    layer.state = { ...layer.state, tiles };
+
+    // 1 of 5 — the other four cannot hold an active trip, so scanning their
+    // features (and emitting a zero-dot sublayer) is pure waste. At the
+    // showcase's 1-hour window over 1-minute buckets that ratio was 1-in-61.
+    expect(layer.renderLayers()).toHaveLength(1);
+  });
+
+  it('never prepares a culled tile (the per-tile scan is skipped, not just the draw)', () => {
+    const inside = bucketTile(0, 60_000, { z: 12, x: 1, y: 1, t: 0 });
+    const outside = bucketTile(600_000, 660_000, {
+      z: 12,
+      x: 2,
+      y: 2,
+      t: 600_000,
+    });
+    const layer = makeLayer(AnimatedTripHeadsLayer, HEADS, 30_000);
+    layer.state = { ...layer.state, tiles: [inside, outside] };
+
+    layer.renderLayers();
+    expect(layer.preparedTileCache.size).toBe(1);
+  });
+
+  it('keeps a tile whose features run PAST its bucket edge (covering, not bucket, bounds)', () => {
+    // stt-build records `time_end` as the max feature end_timestamp, which can
+    // exceed the bucket edge when trajectory clipping is off. The cull has to
+    // read that covering bound or it would drop live trips.
+    const tile = bucketTile(0, 300_000, { z: 12, x: 1, y: 1, t: 0 });
+    const layer = makeLayer(AnimatedTripHeadsLayer, HEADS, 250_000);
+    layer.state = { ...layer.state, tiles: [tile] };
+    expect(layer.renderLayers()).toHaveLength(1);
+  });
+
+  it('falls back to drawing when a tile carries no timeRange at all', () => {
+    const tile = bucketTile(0, 60_000);
+    delete (tile as any).timeRange;
+    const layer = makeLayer(AnimatedTripHeadsLayer, HEADS, 30_000);
+    layer.state = { ...layer.state, tiles: [tile] };
+    expect(layer.renderLayers()).toHaveLength(1);
+  });
+});

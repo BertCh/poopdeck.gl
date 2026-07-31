@@ -39,15 +39,25 @@
  *
  * TILE SEAMS: `stt-build` clips polygon coverage to each tile rect exactly
  * (`polygon_buffer_degrees: 0`), so a polygon spanning a boundary arrives as
- * two pieces whose FILLS abut watertight — flat fills show no seam. What did
- * show was extrusion: SolidPolygonLayer grows a side wall on every ring edge,
- * including the synthetic edges the clipper laid along the tile boundary, so
- * an extruded fill drew a full-height curtain along every tile edge its shape
- * crossed and the tile grid read straight through the surface. prepareTile now
- * supplies `instanceVertexValid` itself (see {@link computePolygonWallMask}),
- * masking walls on tile-cut edges and on ring closures — the latter also kills
- * the wall deck otherwise stitched from the end of a polygon's exterior to the
- * start of its first hole. `seamWalls: true` restores deck's raw behaviour.
+ * two pieces whose FILLS abut watertight — flat fills show no seam. Two render
+ * modes DO show it, and both are fixed from the same edge mask
+ * ({@link computePolygonWallMask}), which zeroes tile-cut edges and ring
+ * closures:
+ *
+ * - EXTRUSION. SolidPolygonLayer grows a side wall on every ring edge,
+ *   including the synthetic ones the clipper laid along the tile boundary, so
+ *   an extruded fill drew a full-height curtain along every tile edge its
+ *   shape crossed and the tile grid read straight through the surface.
+ *   prepareTile supplies `instanceVertexValid` itself — which also kills the
+ *   wall deck otherwise stitches from the end of a polygon's exterior to the
+ *   start of its first hole.
+ * - STROKE. The same synthetic edges are real ring vertices, so the `stroked`
+ *   outline ruled a line down every seam and the map wore its own tile
+ *   lattice. buildOutlineSublayer turns the mask into path breaks instead
+ *   ({@link computeOutlineRuns}), splitting each ring into the arcs that are
+ *   actually part of the polygon. No positions are copied to do it.
+ *
+ * `seamWalls: true` restores deck's raw behaviour for both.
  *
  * EXTRUSION FLOOR: the same shader line that walls seams (`pos.z += elevations
  * * elevationScale`) also anchors every extrusion to the ground, because STT
@@ -257,7 +267,14 @@ export interface _AnimatedPolygonLayerProps {
    * only on real polygon edges; the abutting tile's piece continues the surface
    * across the seam. Set `true` for deck's raw `SolidPolygonLayer` behaviour —
    * e.g. a dataset whose polygons are genuinely tile-aligned cells and want
-   * their boundary walls. Only takes effect when `extruded` is true.
+   * their boundary walls.
+   *
+   * Governs the `stroked` OUTLINE the same way, for the same reason: a seam
+   * edge that raises a spurious wall under `extruded` draws a spurious LINE
+   * under `stroked`, and one flag should not suppress the tile lattice in one
+   * render mode while leaving it inked in the other. So this takes effect
+   * whenever `extruded` OR `stroked` is on; a layer with neither builds no
+   * geometry that could show a seam.
    * @default false
    */
   seamWalls?: boolean;
@@ -300,21 +317,40 @@ export interface _AnimatedPolygonLayerProps {
    * upstream's extruded ordering, drawn BEFORE the fill so translucent slabs
    * blend the way deck's do).
    *
-   * NOTE (tile-seam overdraw): like the fill, an outline whose polygon spans a
-   * tile boundary double-draws along the seam (the ring is split across
-   * sublayers). Accepted — same limitation documented for the fill.
+   * TILE SEAMS: an outline whose polygon spans a tile boundary is stroked
+   * along the polygon's REAL boundary only — the synthetic ring edges the
+   * tiler laid down the seam get no segment (see `buildOutlineSublayer` and
+   * {@link computeOutlineRuns}), so a stroked archive does not draw its own
+   * tile lattice. `seamWalls: true` restores deck's raw behaviour here too.
    * @default false
    */
   stroked?: boolean;
 
   /**
-   * Outline / wireframe color — a constant {@link Color}. Feeds BOTH the
-   * `stroked` outline PathLayer AND the `wireframe:true` extruded-edge color
+   * Outline / wireframe color — a constant {@link Color}, or a categorical
+   * property-column NAME for a per-feature color. Feeds BOTH the `stroked`
+   * outline PathLayer AND the `wireframe:true` extruded-edge color
    * (`SolidPolygonLayer.getLineColor`), which otherwise stays locked at black.
-   * Accepts a constant Color (the accessor-alias convention: a function warns
-   * once and falls back to the deck default). @default [0, 0, 0, 255]
+   * A function accessor warns once and falls back to the deck default.
+   *
+   * A column name resolves through the SAME {@link colorMapping} /
+   * {@link colorMappingDefault} the fill uses — the layer carries one
+   * categorical palette, not two — and is expanded on the CPU into a
+   * per-vertex `instanceLineColors` buffer during tile prep.
+   *
+   * WHY A COLUMN IS WORTH IT HERE. `filled: false, extruded: true,
+   * wireframe: true` is the "cage, not glass" render: deck draws its top and
+   * side models only under `filled` and its wireframe model only under
+   * `wireframe`, so dropping the fill leaves the extruded EDGES and nothing
+   * that occludes what is behind them. Without a column the whole cage is one
+   * constant color, because the categorical fill path cannot supply it —
+   * `instanceLineColors` is a different attribute from `instanceFillColors`,
+   * and the GPU CategoryColorExtension is off in the extruded case anyway (it
+   * would overwrite phong lighting; see prepareTile). So a wireframe-only
+   * layer would silently lose the category encoding its legend advertises.
+   * @default [0, 0, 0, 255]
    */
-  getLineColor?: ColorAccessorValue | null;
+  getLineColor?: ColorAccessorValue | string | null;
 
   /**
    * Outline width — a constant number, or a property-column NAME for
@@ -561,7 +597,9 @@ const POLYGON_PROP_EFFECTS: PropEffects<_AnimatedPolygonLayerProps> = {
   baseElevation: 'sublayer',
   elevationThickness: 'sublayer',
   wireframe: 'sublayer',
-  // Only prepareTile reads it: the side-wall mask is a baked attribute.
+  // Covered by `styleKey` (wallSig): the side-wall mask is a baked attribute,
+  // and the outline's seam split is memoized on the prepared tile — so a flip
+  // re-prepares, which replaces the object identity the sublayer cache checks.
   seamWalls: 'prepare',
   material: 'sublayer',
   stroked: 'sublayer',
@@ -646,9 +684,99 @@ interface PreparedTile {
    * exactly like the fill's time / elevation attributes — see expandPerVertex.
    */
   outlineWidths: Float32Array | null;
+  /**
+   * Per-vertex "the edge leaving this vertex is REAL" mask from
+   * {@link computePolygonWallMask} — 0 on tile-cut edges and ring closures.
+   * Baked here rather than at each consumer because the extruded side walls
+   * and the `stroked` outline want the same answer about the same edges, and
+   * the walk is O(vertices).
+   *
+   * Populated only when the EXTRUDED consumer needs it (`extruded &&
+   * !seamWalls`), because that one has to have the answer inside
+   * `data.attributes` before the fill sublayer is constructed. The outline
+   * consumer computes its own on demand — see {@link outlineRuns} — so a flat,
+   * unstroked polygon tile pays nothing. Null under `seamWalls: true` (deck's
+   * raw behaviour, seams and all) or when the tile has no `startIndices`.
+   */
+  seamMask: Uint16Array | null;
+  /**
+   * Lazily-derived outline path breaks: {@link seamMask} turned into a
+   * `startIndices` array that splits every ring at its tile-cut edges, so the
+   * `stroked` outline draws the polygon's REAL boundary and not the tile
+   * lattice. `undefined` until the first `stroked` render of this tile, then
+   * memoized; `null` once computed and found unusable (no mask, no rings).
+   *
+   * Built lazily and NOT keyed into `styleKey` on purpose: it is a pure
+   * function of the tile's geometry and the tile's own id, both fixed for the
+   * life of a PreparedTile, and `seamWalls` — the one prop that changes the
+   * answer — already invalidates the whole prepared tile through `wallSig`.
+   * Tiles that are never stroked never pay for it.
+   */
+  outlineRuns?: Uint32Array | null;
   /** Source tile + decoded columns — picking enrichment context (references, not copies). */
   tile: Tile;
   features: BinaryFeatures;
+}
+
+/**
+ * Turn a {@link computePolygonWallMask} edge mask into PathLayer
+ * `startIndices` that break every ring at its TILE-CUT edges.
+ *
+ * WHY. `stt-build` clips polygon coverage to each tile rect exactly, so a
+ * county (or any polygon) crossing a tile boundary is stored as two pieces
+ * that each gained a SYNTHETIC ring edge running along the shared seam. A
+ * FILL hides those — the two pieces abut watertight — but a STROKE draws
+ * them, and the result is the tile grid inked across the map on top of the
+ * real boundaries. Same defect the extruded side walls had, same mask fixes
+ * it; only the consumer differs.
+ *
+ * HOW, and why it costs nothing. deck's PathTesselator in binary mode treats
+ * each `startIndices` run as an OPEN path of `n` vertices → `n - 1` segments,
+ * with the run's LAST vertex marked INVALID (no segment leaves it). So
+ * "don't draw edge i → i+1" is expressed by starting a new run at `i + 1`:
+ * the vertices never move, no positions are copied, and the total vertex
+ * count — which is what sizes the instanced draw — is unchanged. Every
+ * per-vertex buffer the outline shares with the fill (times, widths, filter
+ * value, colors) therefore stays valid verbatim.
+ *
+ * Runs of consecutive cut edges (a polygon clipped around a tile CORNER hits
+ * two boundary lines in a row) leave single-vertex runs. Those are harmless:
+ * a 1-vertex run emits no segment, and the one out-of-range write deck makes
+ * for it (`segmentTypes[vertexStart - 1] += END_CAP`) lands on the previous
+ * run's already-INVALID terminator, whose `instanceTypes` stays above the
+ * shader's `step(instanceTypes, 3.5)` validity cut either way.
+ *
+ * Returns null when there is nothing to split — no mask, no geometry, or (the
+ * common case) a tile whose polygons nowhere touch a boundary. The caller then
+ * feeds `ringIndices` straight through, which keeps the whole-ring path
+ * allocation-free and reference-stable.
+ */
+function computeOutlineRuns(
+  mask: Uint16Array | null,
+  ringStarts: Uint32Array,
+  vertexCount: number,
+): Uint32Array | null {
+  if (!mask || vertexCount <= 0 || mask.length < vertexCount) return null;
+  // One break after every vertex whose outgoing edge is masked off. The mask
+  // already zeroes each ring's final slot, so ring boundaries fall out of the
+  // same walk and need no separate merge with `ringIndices`.
+  let breaks = 1; // the leading 0
+  for (let i = 0; i < vertexCount; i++) if (mask[i] === 0) breaks++;
+  // Every break the walk found is a ring terminator the caller already has ⇒
+  // no tile-cut edge in this tile. The mask's zeros are a SUPERSET of the ring
+  // boundaries (it zeroes each ring's final slot unconditionally), so matching
+  // counts is matching arrays and the length test is the whole comparison.
+  // `breaks === 1` lands here too: no terminators at all means the mask is not
+  // describing this geometry, and falling back beats emitting one run spanning
+  // every ring.
+  if (breaks <= ringStarts.length) return null;
+  const runs = new Uint32Array(breaks);
+  let w = 1;
+  for (let i = 0; i < vertexCount; i++) if (mask[i] === 0) runs[w++] = i + 1;
+  // The final break is the vertex count itself (the last vertex of the last
+  // ring always terminates), so `runs` already ends on the sentinel deck's
+  // tessellator reads as `startIndices[length]`.
+  return runs;
 }
 
 /**
@@ -927,17 +1055,30 @@ export class AnimatedPolygonLayer<
   }
 
   /**
-   * Resolve the constant outline / wireframe color. Constant-only (accessor
-   * alias): a function warns once and falls back to deck's black edge default.
-   * Used by both the `wireframe:true` fill edges and the `stroked` outline.
+   * Resolve the outline / wireframe color — a constant {@link Color} OR a
+   * categorical property-column NAME. A function warns once and falls back to
+   * deck's black edge default. Used by both the `wireframe:true` fill edges
+   * and the `stroked` outline.
    */
-  private lineColorValue(): Color {
-    return resolveAccessorAlias(
+  private lineColorValue(): Color | string {
+    return resolveAccessorAlias<Color | string>(
       'AnimatedPolygonLayer',
       'getLineColor',
-      this.props.getLineColor as Color | undefined,
+      this.props.getLineColor as Color | string | undefined,
       [0, 0, 0, 255] as Color,
     );
+  }
+
+  /**
+   * The constant half of {@link lineColorValue} — deck's black default stands
+   * in while a column-driven color rides the per-vertex `instanceLineColors` /
+   * `getColor` buffer instead. Kept as the sublayer prop either way so tiles
+   * that simply lack the named column still draw a visible edge rather than
+   * inheriting whatever deck last bound.
+   */
+  private constLineColorValue(): Color {
+    const value = this.lineColorValue();
+    return typeof value === 'string' ? ([0, 0, 0, 255] as Color) : value;
   }
 
   /**
@@ -1146,6 +1287,10 @@ export class AnimatedPolygonLayer<
     // Property-column name for a per-feature outline width (else '').
     const lineWidthProp =
       typeof lineWidthValue === 'string' ? lineWidthValue : '';
+    // Property-column name for a per-feature outline/wireframe color (else '').
+    const lineColorValue = this.lineColorValue();
+    const lineColorProp =
+      typeof lineColorValue === 'string' ? lineColorValue : '';
     // Property-column name for the STTDataFilterExtension range filter (else '').
     const filterProp = this.filterPropertyValue() ?? '';
     // Palette keyed by CONTENT (memoized digest), not length — matches the
@@ -1183,8 +1328,12 @@ export class AnimatedPolygonLayer<
         `s${this.props.elevationScale}` +
         `e${typeof elevationValue === 'number' ? elevationValue : ''}`
       : '';
-    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${filterSig}|${wallSig}${normSig}|${floorSig}|${
-      fillColorProp
+    // `lineColorProp` joins the key for the same reason `fillColorProp` does:
+    // a column-driven edge color is BAKED into the tile's attributes (a
+    // per-vertex `getLineColor` buffer), so the prepared tile is only reusable
+    // while the column — and the palette resolved through it — hold still.
+    const styleKey = `${fillColorProp}|${elevationProp}|${lineWidthProp}|${lineColorProp}|${filterSig}|${wallSig}${normSig}|${floorSig}|${
+      fillColorProp || lineColorProp
         ? this.props.colorMapping
           ? `m${colorMappingDigest(this.props.colorMapping)}`
           : colorListDigest(this.props.colorPalette ?? DEFAULT_PALETTE)
@@ -1308,6 +1457,61 @@ export class AnimatedPolygonLayer<
           };
           gpuPalette = palette;
         }
+      }
+    }
+
+    // Per-vertex OUTLINE / WIREFRAME colors, when `getLineColor` names a
+    // categorical column. Always the CPU expansion — the GPU category path is
+    // a single fragment-shader substitution and there is only one of it, so it
+    // could not paint the fill and the edges different colors even where it is
+    // live (flat, unextruded). One buffer serves both consumers: bound as
+    // `instanceLineColors` on the SolidPolygonLayer wireframe model, and reused
+    // verbatim as the outline PathLayer's `instanceColors` (both are per-vertex
+    // in binary mode, and no vertices move between them).
+    //
+    // Shares the fill's `colorMapping` deliberately: the layer carries ONE
+    // categorical palette. A caller who wants edges and fills to read
+    // differently varies the alpha in that mapping and turns one of the two
+    // off, which is exactly the wireframe-only "cage, not glass" case.
+    if (lineColorProp) {
+      const cat = binary.categoricalProps[lineColorProp];
+      if (cat) {
+        const mapping = this.props.colorMapping;
+        const basePalette = mapping
+          ? cat.categories.map(
+              (c) =>
+                mapping[c] ??
+                this.props.colorMappingDefault ??
+                ([0, 0, 0, 0] as Color),
+            )
+          : (this.props.colorPalette ?? DEFAULT_PALETTE);
+        const slots = categoryIndicesToFloat32(
+          cat.indices,
+          featureCount,
+          basePalette.length,
+          'AnimatedPolygonLayer',
+        );
+        attributes.getLineColor = {
+          value: expandCategoryColorsPerVertex(
+            slots,
+            appendNullCategorySlot(
+              basePalette,
+              this.props.colorMappingDefault as Color | undefined,
+            ),
+            startIndices,
+            featureCount,
+            vertexCount,
+          ),
+          size: 4,
+          normalized: true,
+        };
+      } else if (binary.numericProps[lineColorProp]) {
+        warnOnce(
+          `APL:line-color-numeric:${this.props.id}:${lineColorProp}`,
+          `[AnimatedPolygonLayer] ${this.props.id}: getLineColor column ` +
+            `"${lineColorProp}" is NUMERIC; only categorical columns map to ` +
+            'colors. Edges fall back to the constant default.',
+        );
       }
     }
 
@@ -1448,19 +1652,30 @@ export class AnimatedPolygonLayer<
       }
     }
 
-    // Side-wall mask. deck's own `instanceVertexValid` updater only knows
+    // Seam-edge mask. deck's own `instanceVertexValid` updater only knows
     // FEATURE boundaries here (the binary path has no hole indices), and knows
     // nothing about which edges the tiler synthesised when it clipped a polygon
     // to this tile's rect — so it walls the tile seams and bridges every hole.
     // Supplying the attribute by name short-circuits that updater with a mask
-    // computed from the tile's own geometry (see the module docstring). Only
-    // the extruded path consumes it: the top model excludes the attribute, and
-    // without `extruded` deck builds no side/wireframe model at all.
-    if (this.props.extruded && !this.props.seamWalls) {
-      const wallMask = computePolygonWallMask(binary, tile.id);
-      if (wallMask) {
-        attributes.instanceVertexValid = { value: wallMask, size: 1 };
-      }
+    // computed from the tile's own geometry (see the module docstring).
+    //
+    // TWO consumers, one walk when both are live. The extruded path binds it
+    // verbatim as `instanceVertexValid` (the top model excludes the attribute,
+    // and without `extruded` deck builds no side/wireframe model at all). The
+    // `stroked` outline turns the same mask into path breaks — see
+    // computeOutlineRuns — so a stroked county stops inking the tile lattice.
+    //
+    // Computed EAGERLY only for the extruded consumer, which is the one whose
+    // result has to be in `attributes` before the sublayer is built. A flat,
+    // unstroked polygon tile — the common case — must not pay an extra O(V)
+    // walk for a mask nobody reads, so the outline consumer computes it on
+    // demand instead (PreparedTile.outlineRuns).
+    const seamMask =
+      this.props.extruded && !this.props.seamWalls
+        ? computePolygonWallMask(binary, tile.id)
+        : null;
+    if (seamMask) {
+      attributes.instanceVertexValid = { value: seamMask, size: 1 };
     }
 
     // MLT-style pre-baked triangle indices. When the tile carries a
@@ -1546,6 +1761,7 @@ export class AnimatedPolygonLayer<
       gpuPalette,
       hasPreBakedTriangles,
       outlineWidths,
+      seamMask,
       tile,
       features: binary,
     };
@@ -1635,7 +1851,10 @@ export class AnimatedPolygonLayer<
       // Wireframe edge color (SolidPolygonLayer draws the extruded outline with
       // this). Without it the edges lock at deck's black default — surfacing
       // getLineColor here makes `wireframe:true` colorable even without stroked.
-      getLineColor: this.lineColorValue(),
+      // Constant fallback only: when `getLineColor` names a column, prepareTile
+      // has already bound the per-vertex `getLineColor` buffer in `attributes`
+      // and deck's accessor never runs.
+      getLineColor: this.constLineColorValue(),
       // Constant elevation resolved during prepare — the floating path rewrites
       // it to the slab THICKNESS above the synthesised floor (see PreparedTile).
       ...(this.props.extruded && prepared.elevationConstant !== null
@@ -1716,14 +1935,23 @@ export class AnimatedPolygonLayer<
    * themselves were never outlined. Upstream `PolygonLayer` promises hole
    * outlines, and with the ring breaks it can be kept.
    *
-   * The per-vertex time / width / filter buffers need no change: ring breaks
-   * fall INSIDE feature vertex runs, so those buffers still line up 1:1 with
-   * vertices. deck sets `normalize: !props._pathType` and this passes
-   * `_pathType: 'loop'`, so its tesselator adopts `data.startIndices` verbatim
-   * as `vertexStarts` and sizes the instanced draw from `startIndices[length]`
-   * — hence `length` must be the RING count here, not the feature count.
-   * Archives predating the `ringIndices` column fall back to `startIndices`
-   * (the old one-loop-per-feature behaviour).
+   * TILE SEAMS: the ring breaks are then split FURTHER, at every edge the
+   * tiler synthesised when it clipped the polygon to this tile's rect (see
+   * {@link computeOutlineRuns}). Without that split a stroked archive draws
+   * the tile lattice — the fills of two clipped halves abut invisibly, but
+   * their strokes run down the shared seam and every boundary crossing gets a
+   * straight ruled line the source geometry never had. `seamWalls: true` opts
+   * back out to deck's raw behaviour, seams included.
+   *
+   * The per-vertex time / width / filter / color buffers need no change: every
+   * break falls INSIDE a feature's vertex run and moves no vertices, so those
+   * buffers still line up 1:1 with vertices. deck sets
+   * `normalize: !props._pathType` and this passes `_pathType: 'loop'`, so its
+   * tesselator adopts `data.startIndices` verbatim as `vertexStarts` and sizes
+   * the instanced draw from `startIndices[length]` — hence `length` must be
+   * the RUN count here, not the feature count. Archives predating the
+   * `ringIndices` column fall back to `startIndices` (the old
+   * one-loop-per-feature behaviour).
    *
    * Non-pickable (the fill owns picking) → routes through `NoPickingPathLayer`
    * to stay inside WebGL2's 16-vertex-attribute budget (PathLayer's picking
@@ -1739,10 +1967,31 @@ export class AnimatedPolygonLayer<
     // collapse back to features.
     const ringStarts =
       prepared.features.ringIndices ?? prepared.data.startIndices;
-    const ringCount = ringStarts.length - 1;
+    if (ringStarts.length <= 1) return null;
+
+    // …then one path per ring ARC, where the tiler cut this tile's copy of a
+    // polygon out of a larger one. `computeOutlineRuns` re-derives the ring
+    // breaks from the seam mask, so when it fires it REPLACES `ringStarts`
+    // rather than merging with it — and it returns null (keeping the
+    // reference-stable whole-ring array) for the common tile with nothing on a
+    // boundary. Memoized on the prepared tile: pure in the tile's geometry and
+    // id, and `seamWalls` — the one prop that changes it — already invalidates
+    // the whole prepared tile.
+    if (prepared.outlineRuns === undefined) {
+      prepared.outlineRuns = this.props.seamWalls
+        ? null
+        : computeOutlineRuns(
+            prepared.seamMask ??
+              computePolygonWallMask(prepared.features, prepared.tile.id),
+            ringStarts,
+            (positions.value.length / prepared.dims) | 0,
+          );
+    }
+    const outlineStarts = prepared.outlineRuns ?? ringStarts;
+    const ringCount = outlineStarts.length - 1;
     if (ringCount <= 0) return null;
 
-    const lineColorValue = this.lineColorValue();
+    const constLineColor = this.constLineColorValue();
     const lineWidthValue = this.lineWidthValue();
     const constLineWidth =
       typeof lineWidthValue === 'number' ? lineWidthValue : 1;
@@ -1757,6 +2006,13 @@ export class AnimatedPolygonLayer<
     if (prepared.outlineWidths) {
       attributes.getWidth = { value: prepared.outlineWidths, size: 1 };
     }
+    // Column-driven edge color: the SAME per-vertex RGBA buffer the fill's
+    // wireframe model binds as `instanceLineColors` (PathLayer calls its
+    // per-vertex color attribute `getColor`; both are per-vertex in binary
+    // mode and no vertices moved). Absent ⇒ the constant rides the prop.
+    if (prepared.data.attributes.getLineColor) {
+      attributes.getColor = prepared.data.attributes.getLineColor;
+    }
     // Reuse the fill's per-vertex `filterValue` buffer so a range-filtered
     // polygon hides its outline in lock-step with its fill. Attribute budget:
     // NoPickingPathLayer (12) + TimeFilterExtension (3) + this (1) = 16, right
@@ -1770,19 +2026,27 @@ export class AnimatedPolygonLayer<
 
     const outlineData = {
       length: ringCount,
-      startIndices: ringStarts,
+      startIndices: outlineStarts,
       attributes,
     };
 
     const props = this.composeSubLayerProps('outline', prepared.tileKey, {
       data: outlineData as any,
       dataComparator: (a: any, b: any) => a === b,
-      // Each RING is a closed loop; 'loop' adds the closing segment (a no-op
-      // degenerate segment for the closed rings the builder stores).
+      // Any non-null `_pathType` is what turns deck's normalization OFF
+      // (`normalize: !props._pathType`), which is the whole reason the tile's
+      // `startIndices` can be adopted verbatim. The 'loop' VALUE is inert on
+      // this path — PathTesselator only consults `opts.loop` when it has a
+      // JS path object to inspect, and in binary mode it has none, so every
+      // run is tessellated open: n vertices → n − 1 segments, last vertex
+      // INVALID. That is exactly right for both shapes fed through here — the
+      // seam-split ARCS, which must not close, and the whole-ring fallback,
+      // whose rings the builder already stores closed (last vertex repeats the
+      // first, so the closing segment is present in the geometry).
       _pathType: 'loop',
       positionFormat: prepared.dims === 3 ? 'XYZ' : 'XY',
 
-      getColor: lineColorValue,
+      getColor: constLineColor,
       getWidth: constLineWidth,
       widthUnits: this.props.lineWidthUnits,
       widthScale: this.props.lineWidthScale ?? 1,

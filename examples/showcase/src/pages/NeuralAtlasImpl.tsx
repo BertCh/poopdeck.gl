@@ -296,7 +296,10 @@ const NeuralAtlas: React.FC = () => {
   const allLayers = useMemo(() => {
     const places = sidecar?.places ?? [];
     if (!showPlaces || !places.length) return layers;
-    return [...layers, buildPlacesLayer(places, { dimmed: !!selectionPosition })];
+    return [
+      ...layers,
+      buildPlacesLayer(places, { dimmed: !!selectionPosition }),
+    ];
   }, [layers, sidecar, showPlaces, selectionPosition]);
 
   const onToggleLayer = useCallback(

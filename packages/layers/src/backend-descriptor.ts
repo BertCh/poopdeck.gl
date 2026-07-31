@@ -57,7 +57,9 @@ const layerKinds = {
     reason: 'no dedicated ego layer; AV cockpit composes point/icon layers',
   },
   text: { supported: true }, // AnimatedTextLayer
-  mesh: { supported: true }, // AnimatedMeshLayer
+  // Two engines, one kind — AnimatedMeshLayer (SimpleMeshLayer) and
+  // AnimatedScenegraphLayer (ScenegraphLayer), mirroring deck's own split.
+  mesh: { supported: true },
   pointCloud: { supported: true }, // AnimatedPointCloudLayer
   hexbin: { supported: true }, // AnimatedHexagonLayer
 } satisfies Record<LayerKind, LayerKindSupport>;

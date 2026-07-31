@@ -72,6 +72,27 @@ nothing about license (nuScenes is the counterexample).
 
 ---
 
+### 1.4 Neural-State Atlas (`/atlas`) — cleared 2026-07-27
+
+Four upstream artefacts, all verified before `collect-corpus` ran (the record's
+G4 rule is "cleared before, not after"):
+
+| Artefact                                 | Verdict                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`openai-community/gpt2`**              | **MIT**, ungated. Outputs and derived activations redistribute freely.                                                                                                                                                                                                                                                    |
+| **`jbloom/GPT2-Small-SAEs-Reformatted`** | **MIT**, ungated. The decoder directions ARE the atlas geometry, so this is a redistribution question, not a use question.                                                                                                                                                                                                |
+| **Neuronpedia `gpt2-small/*-res-jb`**    | Public S3 bulk export. Labels are shown in the UI and attributed on every archive. (The `/api/explanation/export` endpoint was retired and now 400s with a pointer to the S3 prefix — build against `neuronpedia-datasets.s3.us-east-1.amazonaws.com/v1/`.)                                                               |
+| **`Salesforce/wikitext`, 103-raw-v1**    | **CC-BY-SA-3.0 + GFDL**, © Wikipedia contributors. This is the one that mattered: the corpus is redistributed _in effect_ because top-activating spans and the trace's token strings are shown, so a permissive corpus was chosen deliberately rather than defaulting to whatever the SAEs were trained on (OpenWebText). |
+
+**`google/gemma-2-2b` was the planned pin and is BLOCKED here** — `gated: manual`
+on the Hub with no token on this machine, so the weights are unfetchable
+regardless of the Gemma Terms verdict. Not a licence blocker; an access one. See
+[neural-atlas-2026-07.md](./neural-atlas-2026-07.md) §14.2.
+
+Gate status: the four `neural-atlas-*` stems are **LOCAL-ONLY** pending B2, held
+off the public deploy by `ATLAS_AVAILABLE` in `datasets.ts` — the surface is not a
+`Dataset`, so `LOCAL_ONLY_DATASETS` cannot reach it and needed its own flag.
+
 ## 2. AV cockpit (`/drive`)
 
 **Sources + license.** Synthetic bootstrap; nuScenes v1.0-mini (10 scenes) and Argoverse 2

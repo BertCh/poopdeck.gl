@@ -77,6 +77,17 @@
  * (`track_id`/`category`/`heading`/dims/`speed`), the same AV-inspector shape
  * the bounding-box layer emits.
  *
+ * ── SIBLING: AnimatedScenegraphLayer ────────────────────────────────────────
+ * deck splits flat-mesh and full-glTF-scenegraph rendering into two layers
+ * (`SimpleMeshLayer` / `ScenegraphLayer`), and so does this catalog:
+ * {@link ../core/animated-scenegraph-layer.js} subclasses THIS layer, inherits
+ * every line of the pooling / interpolation / buffer / picking machinery, and
+ * overrides only the four "engine seams" grouped together below
+ * ({@link AnimatedMeshLayer.resolveAssets}, {@link AnimatedMeshLayer.missingAssetWarning},
+ * {@link AnimatedMeshLayer.warnEngineCaveats}, {@link AnimatedMeshLayer.engineProps}
+ * + its id/class pair). Anything engine-specific added below belongs in that
+ * group, or the two layers drift.
+ *
  * Sublayer short id for `_subLayerProps` overrides: **`mesh`**.
  */
 
@@ -133,6 +144,14 @@ const DEFAULT_COLOR: Color = [255, 255, 255, 255];
  * internal `Mesh` union is not exported and we only forward the value.
  */
 export type MeshSource = string | object | Promise<unknown> | null;
+
+/**
+ * A deck layer class this composite may instantiate as its render engine —
+ * `SimpleMeshLayer` here, `ScenegraphLayer` in {@link AnimatedScenegraphLayer}.
+ * Structural (rather than `typeof SimpleMeshLayer`) so a subclass can return a
+ * different engine without widening every call site.
+ */
+export type EngineClass = new (props: any) => Layer;
 
 /** Props added by {@link AnimatedMeshLayer} (own props only — compose with
  * {@link SpatioTemporalLayerProps} via {@link AnimatedMeshLayerProps}). */
@@ -1114,6 +1133,90 @@ export class AnimatedMeshLayer<
     return out;
   }
 
+  // -------------------------------------------------------------------------
+  // Engine seams — the four places the render engine (deck's SimpleMeshLayer
+  // here, ScenegraphLayer in AnimatedScenegraphLayer) shows through. Everything
+  // else in this class — pooling, interpolation, the instance buffers, picking —
+  // is engine-agnostic and is inherited verbatim. Keep this the WHOLE surface: a
+  // fifth engine-specific branch anywhere below is a seam that belongs here.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The STATIC asset source + per-category map this engine instances. Split out
+   * so {@link AnimatedScenegraphLayer} can read its own `scenegraph` /
+   * `scenegraphMapping` props first and still fall back to `mesh` /
+   * `meshMapping`, which is what makes one dataset config drive either engine.
+   */
+  protected resolveAssets(): {
+    asset: MeshSource;
+    mapping: Record<string, MeshSource> | null;
+  } {
+    return {
+      asset: (this.props.mesh ?? null) as MeshSource,
+      mapping: this.props.meshMapping ?? null,
+    };
+  }
+
+  /** `warnOnce` key + message when neither an asset nor a mapping is set. */
+  protected missingAssetWarning(): [string, string] {
+    return [
+      'AnimatedMeshLayer:noMesh',
+      '[AnimatedMeshLayer] no `mesh` (and no `meshMapping`) — nothing to ' +
+        'render. Provide a glTF/OBJ model via the `mesh` prop (a static ' +
+        "per-layer prop, like IconLayer's iconAtlas).",
+    ];
+  }
+
+  /** One-time warnings for props this engine silently ignores. */
+  protected warnEngineCaveats(): void {
+    // Finding: a `texture` makes deck's SimpleMeshLayer ignore getColor entirely
+    // (texture wins), so the per-instance appear/disappear fade folded into
+    // getColor's alpha has NO effect — textured models pop in/out regardless of
+    // fadeInDuration/fadeOutDuration. Warn once instead of silently dropping it.
+    // (ScenegraphLayer MULTIPLIES getColor into the material instead, so its
+    // override drops this warning rather than inheriting it.)
+    if (
+      this.props.texture &&
+      ((this.props.fadeInDuration ?? 0) > 0 ||
+        (this.props.fadeOutDuration ?? 0) > 0)
+    ) {
+      warnOnce(
+        'AnimatedMeshLayer:textureFade',
+        '[AnimatedMeshLayer] `texture` is set, so SimpleMeshLayer ignores ' +
+          '`getColor` — the per-instance fadeInDuration/fadeOutDuration alpha has ' +
+          'no effect and textured models pop in/out. Use an untextured / ' +
+          'vertex-colored mesh (fade rides getColor) for appear/disappear fades.',
+      );
+    }
+  }
+
+  /**
+   * The `_subLayerProps` / `getSubLayerClass` short id, the default engine
+   * class, and the engine-specific props carrying `asset`. The pose, color,
+   * `sizeScale`, `getTranslation`, extensions and picking rows are added by
+   * {@link buildMeshSublayer} around this and are NOT repeated here.
+   */
+  protected engineSubLayerId(): string {
+    return 'mesh';
+  }
+
+  protected engineClass(): EngineClass {
+    return SimpleMeshLayer as unknown as EngineClass;
+  }
+
+  protected engineProps(asset: MeshSource): Record<string, unknown> {
+    return {
+      mesh: asset,
+      // texture / textureParameters ride through only when set (SimpleMeshLayer
+      // defaults are undefined; passing null is harmless but keep it explicit).
+      texture: this.props.texture ?? undefined,
+      textureParameters: this.props.textureParameters ?? undefined,
+      material: this.props.material,
+      wireframe: this.props.wireframe,
+      _instanced: this.props._instanced,
+    };
+  }
+
   /**
    * Interpolate one track's pose at absolute `now` via the shared
    * {@link kernelSampleTrack}, feeding this layer's geometric defaults + fades.
@@ -1144,35 +1247,14 @@ export class AnimatedMeshLayer<
     const tiles = this.resolvePointTiles(rawTiles);
     if (tiles.length === 0) return [];
 
-    const baseMesh = (this.props.mesh ?? null) as MeshSource;
-    const meshMapping = this.props.meshMapping ?? null;
+    const { asset: baseMesh, mapping: meshMapping } = this.resolveAssets();
     if (!baseMesh && !meshMapping) {
-      warnOnce(
-        'AnimatedMeshLayer:noMesh',
-        '[AnimatedMeshLayer] no `mesh` (and no `meshMapping`) — nothing to ' +
-          'render. Provide a glTF/OBJ model via the `mesh` prop (a static ' +
-          "per-layer prop, like IconLayer's iconAtlas).",
-      );
+      const [key, message] = this.missingAssetWarning();
+      warnOnce(key, message);
       return [];
     }
 
-    // Finding: a `texture` makes deck's SimpleMeshLayer ignore getColor entirely
-    // (texture wins), so the per-instance appear/disappear fade folded into
-    // getColor's alpha has NO effect — textured models pop in/out regardless of
-    // fadeInDuration/fadeOutDuration. Warn once instead of silently dropping it.
-    if (
-      this.props.texture &&
-      ((this.props.fadeInDuration ?? 0) > 0 ||
-        (this.props.fadeOutDuration ?? 0) > 0)
-    ) {
-      warnOnce(
-        'AnimatedMeshLayer:textureFade',
-        '[AnimatedMeshLayer] `texture` is set, so SimpleMeshLayer ignores ' +
-          '`getColor` — the per-instance fadeInDuration/fadeOutDuration alpha has ' +
-          'no effect and textured models pop in/out. Use an untextured / ' +
-          'vertex-colored mesh (fade rides getColor) for appear/disappear fades.',
-      );
-    }
+    this.warnEngineCaveats();
 
     // Re-sync the pooled index only when the visible tile SET changes or a
     // feeding style prop changes; otherwise re-interpolate the cached index.
@@ -1278,13 +1360,13 @@ export class AnimatedMeshLayer<
     return buf;
   }
 
-  /** Build one SimpleMeshLayer over `samples`, instancing `mesh` at each pose. */
-  private buildMeshSublayer(
+  /** Build one engine sublayer over `samples`, instancing `mesh` at each pose. */
+  protected buildMeshSublayer(
     samples: Sample[],
     mesh: MeshSource,
     instanceKey: string,
     now: number,
-  ): SimpleMeshLayer {
+  ): Layer {
     const n = samples.length;
     const scaleDims = this.props.scaleToDimensions ?? true;
     const offset = this.props.orientationOffset ?? [0, 0, 0];
@@ -1366,9 +1448,10 @@ export class AnimatedMeshLayer<
     const userMatrix = this.props.getTransformMatrix ?? null;
 
     const extensions = this.composeExtensions([]);
-    const props = this.composeSubLayerProps('mesh', instanceKey, {
+    const shortId = this.engineSubLayerId();
+    const props = this.composeSubLayerProps(shortId, instanceKey, {
       data: data as any,
-      mesh,
+      ...this.engineProps(mesh),
       // Per-instance pose accessors (see the note above) — read the interpolated
       // orientation/scale buffers by instance index.
       getOrientation: userOrientation ?? buf.getOrientation,
@@ -1383,16 +1466,9 @@ export class AnimatedMeshLayer<
         getOrientation: buf.revision,
         getScale: buf.revision,
       },
-      // texture / textureParameters ride through only when set (SimpleMeshLayer
-      // defaults are undefined; passing null is harmless but keep it explicit).
-      texture: this.props.texture ?? undefined,
-      textureParameters: this.props.textureParameters ?? undefined,
       sizeScale: this.props.sizeScale,
       // Constant anchor offset (same for every instance) — a plain accessor.
       getTranslation: this.props.getTranslation ?? [0, 0, 0],
-      material: this.props.material,
-      wireframe: this.props.wireframe,
-      _instanced: this.props._instanced,
       extensions,
       // NOTE: no `pickable` here — it inherits from the composite through
       // getSubLayerProps. Hardcoding it beat the inherited value, so
@@ -1405,7 +1481,7 @@ export class AnimatedMeshLayer<
       sttPickSamples: samples,
       sttPickStride: 1,
     });
-    const SubLayerClass = this.getSubLayerClass('mesh', SimpleMeshLayer);
+    const SubLayerClass = this.getSubLayerClass(shortId, this.engineClass());
     return new SubLayerClass(props as any);
   }
 

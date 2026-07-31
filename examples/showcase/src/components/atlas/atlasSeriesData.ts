@@ -51,12 +51,20 @@ export function decodeGrid(spec: AtlasQuantized | undefined): AtlasGrid | null {
   if (!spec?.data) return null;
   const values = expand(decodeBase64(spec.data), spec.scale);
   let max = 0;
-  for (let i = 0; i < values.length; i += 1) if (values[i] > max) max = values[i];
-  return { rows: spec.rows ?? 1, cols: spec.cols ?? values.length, values, max };
+  for (let i = 0; i < values.length; i += 1)
+    if (values[i] > max) max = values[i];
+  return {
+    rows: spec.rows ?? 1,
+    cols: spec.cols ?? values.length,
+    values,
+    max,
+  };
 }
 
 /** Sidecar `series.activity` → one series. */
-export function decodeSeries(spec: AtlasQuantized | undefined): Float32Array | null {
+export function decodeSeries(
+  spec: AtlasQuantized | undefined,
+): Float32Array | null {
   if (!spec?.data) return null;
   return expand(decodeBase64(spec.data), spec.scale);
 }
@@ -76,7 +84,10 @@ export interface NodeSeries {
  */
 let offsetsPromise: Promise<Uint32Array> | null = null;
 
-function loadOffsets(spec: AtlasNodeSeriesSpec, resolve: (p: string) => string) {
+function loadOffsets(
+  spec: AtlasNodeSeriesSpec,
+  resolve: (p: string) => string,
+) {
   offsetsPromise ??= fetch(resolve(spec.index_url))
     .then((r) => {
       if (!r.ok) throw new Error(`node index ${r.status}`);
@@ -138,8 +149,10 @@ export async function fetchNodeSeries(
     for (let i = 0; i < count; i += 1) {
       const o = i * rec;
       tokens[i] = view.getUint16(o, true);
-      activation[i] = (view.getUint16(o + 2, true) / 65535) * spec.activation_scale;
-      attribution[i] = (view.getInt16(o + 4, true) / 32767) * spec.attribution_scale;
+      activation[i] =
+        (view.getUint16(o + 2, true) / 65535) * spec.activation_scale;
+      attribution[i] =
+        (view.getInt16(o + 4, true) / 32767) * spec.attribution_scale;
     }
     return { nodeId, tokens, activation, attribution };
   } catch (err) {
