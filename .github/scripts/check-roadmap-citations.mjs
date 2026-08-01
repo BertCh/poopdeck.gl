@@ -83,6 +83,13 @@ for (const dir of KNOWN_DIRS) {
  * Every ancestor is registered too, so citing `§9` resolves against a doc whose
  * only numbered heading is `§9.1` — citing the parent of a real section is a
  * legitimate reference to the whole section, not drift.
+ *
+ * A LETTERED leaf (`#### 8.5a Foo`) registers both itself and its numeric
+ * parent, so `§8.5a` and `§8.5` both resolve. This half was missing while the
+ * citation regex already captured `[a-z]?`: the asymmetry was deliberate back
+ * when every lettered anchor in the tree was drift (the old `av-cockpit §3c`),
+ * and it silently became wrong the moment a doc grew real `8.5a` / `8.5b`
+ * subsections — a correct citation was reported as missing.
  */
 const sectionCache = new Map();
 function sectionIds(relPath) {
@@ -90,11 +97,12 @@ function sectionIds(relPath) {
   if (ids) return ids;
   ids = new Set();
   for (const line of readFileSync(join(ROOT, relPath), 'utf8').split('\n')) {
-    const m = /^#{1,6}[ \t]+(\d+(?:\.\d+)*)/.exec(line);
+    const m = /^#{1,6}[ \t]+(\d+(?:\.\d+)*)([a-z]?)(?![0-9A-Za-z])/.exec(line);
     if (!m) continue;
     const parts = m[1].split('.');
     for (let i = 1; i <= parts.length; i++)
       ids.add(parts.slice(0, i).join('.'));
+    if (m[2]) ids.add(m[1] + m[2]);
   }
   sectionCache.set(relPath, ids);
   return ids;

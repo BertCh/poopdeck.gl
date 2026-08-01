@@ -174,6 +174,41 @@ both are in the rebuild. Verify a re-encode with `stt-optimize export`'s bbox
 against `metadata.bounds`, **not** `stt-validate`, which passes on scrambled
 coordinates because it never checks coords-in-tile.
 
+_Closed 2026-07-31._ **The fleet is republished and verified.** 29.3 GiB of
+content-addressed packs and index objects (1,324 of them) went up first, then
+the manifests flipped. Re-probing all 68 registered manifest URLs afterwards
+returns **68/68 at `formatVersion: 2`** — from 35 v2 / 24 v1 / 9 × 404 that
+morning. Seventeen archives were additionally decoded end-to-end through the
+current reader: features return and every timestamp lands inside the archive's
+declared range. The remote went 3,123 → 4,447 objects, 35.3 → 64.6 GiB, exactly
+the dry run's prediction. `--no-prune`, so the previous generation is still
+resident and rollback is re-uploading the previous manifests; a later default
+sync GCs once the retention window passes.
+
+**The ordering is the part worth keeping.** Both naive orders break the live
+site, because the two halves are versioned against each other:
+
+- Push the frontend first and the new reader meets the 24 v1 manifests →
+  `unsupported formatVersion 1`.
+- Flip the manifests first and the DEPLOYED pre-break reader meets manifests
+  declaring `time-delta` → `requires capabilities this reader does not
+implement`. Measured: **424 of 474** local manifests declare a post-break
+  capability, so this order is far the worse of the two.
+
+The resolution is that packs are content-addressed, so the immutable pass
+writes them under names nothing references yet and is invisible to the live
+site. Only `manifest.json` is the switch. Uploading packs first, then pushing,
+then flipping manifests the moment the Pages deploy went live, put the whole
+exposure inside the manifest pass: **15 seconds**, affecting only the 24 v1
+archives. Do it in that order next time.
+
+⚠️ **Do not probe a URL before uploading it.** Probing the not-yet-uploaded
+atlas `.bin` sidecars cached a negative response at the edge with
+`cache-control: max-age=14400` — a **4-hour** 404 on an object that is present
+and correct in the bucket. `HEAD` bypasses it and returns 200, which makes the
+symptom look inconsistent; `cf-cache-status: HIT` on the GET is the tell.
+Neither token in `.env` carries the Cache Purge permission.
+
 _Amended 2026-07-31._ **The AV rebuild is done and spot-verified; what B2 has
 left is purely the upload.** 37 of the 82 argoverse/waymo bundles carry rebuild
 timestamps of 2026-07-28/29 and the other 45 are the variants the sweep never
@@ -253,6 +288,25 @@ every one of them is a sync gap and not a build gap — they are B2's tail, not
 new work. **`wpc-fronts` / `wpc-fronts-pips` remain the open half of L1**: they
 are overlay stems of the un-gated `severe-weather-2024`, so only the sync
 closes them.
+
+_Closed 2026-07-31._ **The sync closed all of it.** `wpc-fronts` and
+`wpc-fronts-pips` both return 200 and decode (172 features on the first fronts
+tile, times in range), so `severe-weather-2024`'s overlay no longer 404-stalls.
+L1b's rebuilt LOD pyramid is up. `LOCAL_ONLY_DATASETS` is now **empty** —
+`storm-4d-isolines`, `rain-flood-2019`, `gtfs-ch` and `storm-3d-conus` are all
+un-gated and verified, and `storm-4d-greenfield`'s prose link to the
+continental cut is restored. The gate mechanism stays for the next pre-sync
+dataset.
+
+**Still gated: the Neural-State Atlas** (`ATLAS_ARCHIVES_SYNCED = false`). Its
+three archives are live, but the two root-level `.bin` sidecars exposed a real
+hole in `r2-sync.sh` — no pass matched `*.bin` / `*.meta.json` at the data
+root, because they sit outside `packs/`, `index/` and every bundle directory,
+so each filter list rejected them at its trailing `- **`. A `[sidecar]` pass
+now covers them and the files are uploaded, but the 4-hour negative cache above
+is still serving 404 for the two `.bin` URLs. Un-gate once that expires or a
+purge lands, and re-verify with a plain GET (**not** `HEAD` — it bypasses the
+cache and will lie to you).
 
 **L1b. The storm-4d radar LOD pyramid on R2 has no time axis.** `lod_min_zoom`
 thinned the gate cloud on a 3D **space** grid over the whole 9.5-hour window, so
@@ -453,6 +507,19 @@ per document and validates the `§` anchor, not just the filename:
 **270 citations checked, 105 of them anchored, all resolve** (up from 94
 filename-only). The two stranded citations in `animated-bounding-box-layer.ts`
 now read `§1.3` and `§2`, both of which exist.
+
+_Amended 2026-07-31._ **The gate had a false-positive half nobody had hit yet.**
+Its citation regex captured a lettered anchor (`[a-z]?`) but its HEADING parser
+did not, so a real `#### 8.5a` registered only as `8.5` and a correct `§8.5a`
+was reported as missing. Harmless while every lettered anchor in the tree was
+drift — which is what the asymmetry was built for — and wrong the moment
+`openusd-integration-2026-07.md` grew genuine `8.5a` / `8.5b` subsections. The
+heading parser now registers a lettered leaf as itself AND its numeric parent.
+Worth noting how it surfaced: both the doc and its citing file were UNTRACKED,
+and the gate walks `git grep`, so the drift was invisible until they were
+committed. **A gate over `git grep` cannot see untracked work** — the first
+commit of a new doc is exactly when to re-run it. Now 273 citations, 107
+anchored.
 
 **K8. AI-suite tail.** No evals exist for any skill (the intended bar was ≥3 per
 skill, without-skill baseline vs with-skill); remote hosting still wants an OAuth

@@ -5365,12 +5365,17 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 //
 // Delete an id from this set the moment `scripts/r2-sync.sh` lands its stem and
 // the manifest verifies 200 — the gate is the stopgap, the sync is the fix.
-const LOCAL_ONLY_DATASETS = new Set<string>([
-  'storm-4d-isolines',
-  'rain-flood-2019',
-  'gtfs-ch',
-  'storm-3d-conus',
-]);
+//
+// (2026-07-31) THE SET IS EMPTY: the fleet republish landed every stem these
+// four were waiting on, and all 68 registered manifest URLs were re-probed
+// against tiles.poopdeck.gl afterwards — 68/68 return `formatVersion: 2` (from
+// 35 v2 / 24 v1 / 9 × 404 before it). Seventeen were additionally decoded
+// end-to-end through the current reader, `storm4d-isolines`, `rainfall-2019`,
+// `gtfs-ch` and the four `mrms-storm3d-*` overlays among them: features come
+// back and every timestamp lands inside the archive's declared range. So
+// `storm-4d-isolines`, `rain-flood-2019`, `gtfs-ch` and `storm-3d-conus` are
+// un-gated. The gate mechanism stays for the next pre-sync dataset.
+const LOCAL_ONLY_DATASETS = new Set<string>([]);
 
 /**
  * The Neural-State Atlas (`/atlas`) is a bespoke fullscreen surface, not a
