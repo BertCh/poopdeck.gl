@@ -9,7 +9,7 @@ description: >-
   the cause.
 license: MIT
 metadata:
-  version: '0.5.0'
+  version: '0.6.0'
 ---
 
 # Debugging a blank STT render

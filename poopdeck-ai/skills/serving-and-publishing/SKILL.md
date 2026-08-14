@@ -10,7 +10,7 @@ description: >-
   immutable-packs / mutable-manifest split and the copy-never-delete deploy rule.
 license: MIT
 metadata:
-  version: '0.5.0'
+  version: '0.6.0'
 ---
 
 # Serving & publishing STT tiles

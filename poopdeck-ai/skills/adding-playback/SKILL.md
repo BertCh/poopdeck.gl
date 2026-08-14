@@ -10,7 +10,7 @@ description: >-
   React hooks.
 license: MIT
 metadata:
-  version: '0.5.0'
+  version: '0.6.0'
 ---
 
 # Adding playback to an STT map

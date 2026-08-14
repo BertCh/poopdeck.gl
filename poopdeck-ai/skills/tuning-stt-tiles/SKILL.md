@@ -9,7 +9,7 @@ description: >-
   temporal bucketing, and non-lossy byte levers — NEVER by thinning features.
 license: MIT
 metadata:
-  version: '0.5.0'
+  version: '0.6.0'
 ---
 
 # Tuning STT tiles for publishing

@@ -7,14 +7,14 @@
   },
   "metadata": {
     "description": "AI-assisted suite for poopdeck.gl / SpatioTemporal Tiles — an MCP server plus Agent Skills for building, tuning, serving, debugging, and rendering time-aware vector tiles.",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "plugins": [
     {
       "name": "poopdeck-ai",
       "source": "./poopdeck-ai",
       "description": "SpatioTemporal Tiles agent suite: the @poopdeck.gl/mcp server (dataset discovery, analysis, @deck.gl/json map composition, gated build/validate) wired via .mcp.json, plus Agent Skills that teach the stt-build/stt-optimize/stt-serve workflow and route between the CLIs and the MCP tools.",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "category": "geospatial",
       "keywords": [
         "mcp",

@@ -139,6 +139,47 @@ function cargoWorkspaceVersionTarget(file) {
   };
 }
 
+/**
+ * The `version = "x.y.z"` inside every internal path-dependency of a member
+ * manifest — `stt-core = { path = "../stt-core", version = "0.6.0" }`.
+ *
+ * These are separate from `workspace.package.version` and are NOT optional
+ * decoration: cargo requires a version alongside `path` for a dependency that
+ * is published, and it is the version REQUIREMENT consumers resolve. Left at
+ * the previous release they do not merely go stale — `cargo update -w` fails
+ * outright ("failed to select a version for the requirement `stt-core =
+ * ^0.5.0`, candidate versions found which didn't match: 0.6.0"), which is how
+ * this gap surfaced during the 0.6.0 cut. Matching on the `path = "../…"` shape
+ * keeps this to first-party crates; third-party pins are never touched.
+ */
+const CARGO_PATH_DEP_RE =
+  /^([ \t]*[\w-]+[ \t]*=[ \t]*\{[^}\n]*\bpath[ \t]*=[ \t]*"\.\.[^"]*"[^}\n]*\bversion[ \t]*=[ \t]*")([^"]*)(")/gm;
+
+function cargoPathDepTarget(file) {
+  const names = (text) =>
+    [...text.matchAll(CARGO_PATH_DEP_RE)].map(
+      (m) => m[1].trim().split(/[ \t]*=/)[0],
+    );
+  return {
+    file,
+    read() {
+      if (!existsSync(file)) return [];
+      const text = read(file);
+      const found = [...text.matchAll(CARGO_PATH_DEP_RE)];
+      return found.map((m, i) => ({
+        label: `dependencies.${names(text)[i]}.version`,
+        value: m[2],
+      }));
+    },
+    write(text, want) {
+      return text.replace(
+        CARGO_PATH_DEP_RE,
+        (_m, head, _old, tail) => `${head}${want}${tail}`,
+      );
+    },
+  };
+}
+
 /** The text between the leading `---` fence and its closer (empty if absent). */
 function frontmatter(text) {
   if (!text.startsWith('---\n')) return '';
@@ -157,6 +198,16 @@ function collectTargets() {
       ['plugins', 0, 'version'],
     ]),
   ];
+  // Every workspace member's internal path-deps, in a stable order.
+  const cratesDir = join(ROOT, 'crates');
+  if (existsSync(cratesDir)) {
+    for (const entry of readdirSync(cratesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      const manifest = join(cratesDir, entry.name, 'Cargo.toml');
+      if (existsSync(manifest)) targets.push(cargoPathDepTarget(manifest));
+    }
+  }
   const skillsDir = join(ROOT, 'poopdeck-ai/skills');
   if (existsSync(skillsDir)) {
     for (const entry of readdirSync(skillsDir, { withFileTypes: true })

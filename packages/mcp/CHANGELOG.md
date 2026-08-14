@@ -1,5 +1,7 @@
 # @poopdeck.gl/mcp
 
+## 0.6.0
+
 ## 0.5.0
 
 The first published tarball. This package had lived in the monorepo since the AI

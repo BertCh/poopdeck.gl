@@ -9,7 +9,7 @@ description: >-
   recommend_build (or stt-optimize recommend) FIRST to get an evidence-backed recipe.
 license: MIT
 metadata:
-  version: '0.5.0'
+  version: '0.6.0'
 ---
 
 # Building an STT dataset

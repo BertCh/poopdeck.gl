@@ -1,5 +1,18 @@
 # @poopdeck.gl/react
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [d5163aa]
+- Updated dependencies [2c020da]
+- Updated dependencies [d5163aa]
+- Updated dependencies [a7b57dc]
+- Updated dependencies [d5163aa]
+- Updated dependencies [2a58eb4]
+  - @poopdeck.gl/core@0.6.0
+  - @poopdeck.gl/playback@0.6.0
+
 ## 0.4.0
 
 ### Minor Changes

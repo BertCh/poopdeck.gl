@@ -1,6 +1,6 @@
 {
   "name": "@poopdeck.gl/mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP (Model Context Protocol) server for spatiotemporal tiles: an open, self-hostable counterpart to CARTO's hosted MCP server — dataset discovery, @deck.gl/json view-map composition, and gated build/validate CLI tools over a directory of packed STT archives",
   "publishConfig": {
     "access": "public"
