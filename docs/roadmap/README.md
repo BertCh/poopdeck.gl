@@ -133,51 +133,75 @@ proves it, and states the condition that closes it. Ordered by what blocks what,
 not by size.
 
 **Where this actually stands.** The B1 → B2 → B3 chain that dominated the last
-three registers is two-thirds discharged: the payload byte break landed and is
-pushed (HEAD is level with `origin/main`), and the fleet is republished and
-verified at **68/68 `formatVersion: 2`**. What is left of that chain is the
-release cut itself — the crate registry is still two releases behind the tree,
-and no `v0.5.0` tag ever existed, so the install path both READMEs advertise
-still dead-ends.
+four registers is **discharged**. The payload byte break landed and is pushed;
+the fleet was republished at 68/68 `formatVersion: 2`; and **0.6.0 shipped on
+2026-08-13** — crates.io and npm both show it, `v0.6.0` is tagged and pushed,
+and the emitter decision the cut was holding open was resolved by removal.
 
-Green, stated honestly, means: **34 Rust test targets at `--all-features`
-(680 tests), the six feature lanes, the curated clippy set, `cargo fmt --check`,
-oxlint, `oxfmt --check`, the roadmap-citation gate, the golden-pin gate, 1,456
-package tests and 639 showcase tests.** The 2026-07-31 lesson behind that phrasing — that
-`cargo test --workspace` alone was hiding four red jobs — is recorded in T2 and
-in [db-input-adaptors.md §5](./db-input-adaptors.md).
+What replaced that chain is a **fleet rebuild at `formatVersion: 3`**, and its
+first finding is the reason it gets its own item (B4) rather than a checkbox:
+a rebuild is not automatically a replacement.
 
-The remaining queue is dominated by **manual verification**, not code: browser
-sign-off has been accumulating since 2026-07-22 (L2), and the repository the
-whole published surface points at is still private (T1).
+Green, stated honestly, means: **45 Rust test targets at `--all-features`
+(1,264 tests), the six feature lanes, the curated clippy set, `cargo fmt
+--check`, the MSRV check, 35 Python tests, oxlint, `oxfmt --check`, the
+version-sync gate, the roadmap-citation gate, the golden-pin gate and its own
+41 tests, `smoke-pack`, and 6,240 package + showcase tests.** The 2026-07-31
+lesson behind that phrasing — that `cargo test --workspace` alone was hiding
+four red jobs — is recorded in T2 and in
+[db-input-adaptors.md §5](./db-input-adaptors.md).
+
+The remaining queue is dominated by **manual verification and data**, not
+library code: browser sign-off has been accumulating since 2026-07-22 (L2), the
+repository the whole published surface points at is still private (T1), and the
+fleet is still v2 on the wire (B4).
 
 ### B — Blocking
 
-**B3. Cut 0.6.0 across both registries.** crates.io `spatiotemporal-tiles`
-max_version is **0.4.0** (it has 0.1.0, 0.1.1, 0.3.0, 0.4.0 — never a 0.2.0 or
-0.5.0); all eight `@poopdeck.gl` packages and the workspace are **0.5.0**;
-origin tags stop at **v0.4.0**. cargo-dist builds binaries on tag push, so the
-prebuilt binaries and shell installer that
-`crates/spatiotemporal-tiles/README.md` sends users to **do not exist for 0.5.0**
-— an advertised install path that dead-ends. Four changesets are queued
-(`drop-packed-format-v1`, `stt-layer-name-prefix`, `payload-byte-break`,
-`animated-scenegraph-layer`); three are breaking and the fourth is a minor
-riding inside the major, so the next number is **0.6.0**, not 0.5.1. Budget for
-the operational constraint in [shipping.md](./shipping.md): `cargo publish`
-stalls on HTTP/2 upload from the author's network — publish from a different one.
+**B4. The published fleet is still `formatVersion: 2`, and rebuilding it is a
+program, not a batch job.** 0.6.0's writer emits v3 only; its reader opens v2
+and v3, so the live fleet keeps working untouched and this is an upgrade rather
+than an outage. 54 of the 60 referenced archives are v2 (~18 GB, ~380 M
+features); `storm-cells`, `storm-field` and `storm-tracks` are already v3.
 
-One public-API decision must be made **at** the cut, not after it:
-`@poopdeck.gl/core`'s `emitGLSL300` and its sole caller `@poopdeck.gl/cesium`'s
-`timeFilterAlphaGlsl` are **unwired** — no shipped shader is generated from the
-AST, and no Cesium layer calls the wrapper (`emitGLSL100` was already deleted as
-dead). Either wire the Cesium GPU-`Appearance` path or drop both exports, keeping
-`ALPHA_EXPR`/`evalExpr`, which are load-bearing as the conformance second oracle.
-Rationale in
-[renderer-architecture.md §5.1](./renderer-architecture.md#51-decision-6--gpu-conformance-ci-the-one-live-decision-blocked).
+**A rebuild is not automatically a replacement, and the checks that existed did
+not say so.** The first run produced a `wildfires` archive holding 175 features
+against the live 4,600 — and it passed both gates, because the manifest really
+did say `formatVersion: 3` and `stt-validate` really did exit 0 on a flawless
+encoding of almost no data. NIFC now returns 15 source perimeters for 2020–2023
+where it once returned hundreds; `tools/stt-generate/src/datasets/wildfires.rs`
+has carried a warning about exactly this since 2026-07-29. `scripts/rebuild-fleet-v3.sh`
+therefore compares `feature_count` against the archive currently serving and
+fails a dataset on a material shortfall. Measured so far: `earthquakes-v2`
+1.000×, `hurricanes` 1.037×, `wildfires` **0.038× (refused)**.
 
-**Accept:** `v0.6.0` tagged and pushed, crates.io and npm both showing 0.6.0, a
-releases page whose binaries exist, and the two unwired emitter exports either
-wired or removed.
+Three tiers, and they are not equally tractable:
+
+- **API-sourced** (`stt-generate`, no staged input) — reproducible from a clean
+  checkout. Rebuild times scale with tiles, not bytes: 231 s for 523 K
+  earthquake points, 370 s for the hurricane tracks.
+- **Staged-source** — the weather / storm / AV families come from the Python
+  generators in `scripts/data-generation` over ~26 GB of staged inputs, not from
+  `stt-generate`. A separate pass with its own toolchain.
+- **No rebuild path at all** — `lines-v2` (synthetic, no recipe anywhere),
+  `nyc-taxi-od-summary` (no generator), `osm-nyc-nodes` (needs a login-gated
+  Geofabrik full-history extract), and now `wildfires` (upstream coverage
+  collapsed). These stay v2. That is not a gap in the plan; it is the case the
+  reader's v2 read window was kept for, and the argument for keeping it is
+  written into [the packed spec §9.1](../spec/stt-packed-format.md).
+
+**Ordering, which is load-bearing.** Packs are content-addressed, so uploading
+them is invisible to the live site; only `manifest.json` is the switch. Upload
+immutable objects → deploy the reader → flip manifests. The reverse order hands
+a v3 manifest to a deployed reader that knows only v2. A rebuilt polygon archive
+additionally declares `triangles-partial`, which a client without the decoder
+backfill refuses at open — loud by design, and another reason the client ships
+first.
+
+**Accept:** every archive with a working recipe rebuilt at v3 and accepted by
+the feature-count gate, uploaded, manifests flipped after the client deploy, and
+the no-path list above recorded in
+[demos-and-datasets.md](./demos-and-datasets.md) with its evidence.
 
 ### L — Live defects on poopdeck.gl today
 
@@ -365,6 +389,22 @@ One line each, so the ledger is auditable — not to imply they are still open.
 
 **Since the 2026-07-26 register.**
 
+- **B3 — 0.6.0 shipped (2026-08-13).** crates.io `stt-core` / `stt-optimize` /
+  `stt-build` / `spatiotemporal-tiles` and the seven published `@poopdeck.gl`
+  packages all read **0.6.0**, `v0.6.0` is tagged and pushed, and the registries
+  are level again (crates.io skips 0.5.0, which was cut on npm but never
+  published there). The HTTP/2 publish stall [shipping.md](./shipping.md) budgets
+  for did **not** recur; `CARGO_HTTP_TIMEOUT=900` and publishing in dependency
+  order was enough. The cut's reserved public-API decision was resolved by
+  **removal**: `emitGLSL300` and Cesium's `timeFilterAlphaGlsl` are gone,
+  `ALPHA_EXPR`/`evalExpr` stay, and `render-spec.json` now declares an empty
+  emitter list with a contract test pinning both names absent. Two gate holes
+  surfaced in the process and were closed rather than worked around —
+  `sync-versions.mjs` never covered the internal cargo path-dep `version` pins
+  (cargo refuses to update a lockfile when they lag, which is how it was found),
+  and `smoke-pack` left `@deck.gl/widgets` unpinned, so an upstream 9.3.10
+  release could redden the publish gate with nothing in the repo changing.
+  ([renderer-architecture §5.1](./renderer-architecture.md))
 - **B1 — the 2026-07-26 payload byte break landed** as `a7b57dc`, one commit as
   the accept condition required, and is **pushed**: HEAD is level with
   `origin/main`. ([format §10](./stt-packed-format-decisions.md))
