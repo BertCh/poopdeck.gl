@@ -8,4 +8,4 @@
 // Source of truth: this package's package.json `version`.
 
 /** Version reported to MCP clients in the `initialize` response (`serverInfo.version`). */
-export const PACKAGE_VERSION = '0.5.0';
+export const PACKAGE_VERSION = '0.6.0';
