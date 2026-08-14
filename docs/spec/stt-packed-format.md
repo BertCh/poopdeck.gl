@@ -14,8 +14,9 @@ authority rule) and readers MUST refuse any value outside the window in §9.1.
 > v5, object-magic version byte 2) **read-only**, because a published archive
 > is a durable artifact and several have no reproducible source — a read-side
 > cutover would strand them rather than migrate them. v1 is refused. There is
-> no transcode path in either direction and no negotiation: v2 forks in the
-> container only, never below the layer frame.
+> no reader negotiation: v2 forks in the container only, never below the layer
+> frame. A v2 archive can be MIGRATED to v3 in place (§9.4) — container-only,
+> packs untouched — but nothing transcodes payloads, in either direction.
 
 > **Spec license.** The STT specification documents — everything under
 > `docs/spec/` plus the tile-payload spec
@@ -1025,7 +1026,8 @@ rule generalized):
 - **Version-window policy:** the reference toolchain **writes** exactly
   `formatVersion: 3` with directory v6, and **reads** 3 and 2 — a read-only
   window, not a compatibility period. There is no v1 reader, no v2 writer, and
-  no transcode path in any direction; a v2 archive is opened where it lies.
+  no payload transcode in any direction; a v2 archive is opened where it lies,
+  or migrated container-only per §9.4.
   The window exists because published archives are durable and several have no
   reproducible source, so dropping the read path would strand them rather than
   migrate them. v2 forks in the container only — no `variants` registry (every
@@ -1035,6 +1037,42 @@ rule generalized):
   implementations pin the window as a constant pair (`MIN_PACKED_FORMAT_VERSION`
   ..= `PACKED_FORMAT_VERSION`). Within v3, additive fields and unknown skippable
   sections retain the compatibility guarantees above.
+
+### 9.4 Container migration (v2 → v3)
+
+A v2 archive can be promoted to v3 **without re-deriving anything**, because the
+break is container-only: the manifest gains the `variants` registry, the
+directory codec goes v5 → v6 to carry `variant_id`, and the object magic's
+version byte moves 2 → 3. Every tile payload is byte-identical across it.
+
+What makes this legal rather than a loophole is the **object magic floor**: a
+reader accepts magic version `2..=3` on every `.sttp`, independently of
+`manifest.formatVersion`, because the magic version identifies the OBJECT layout
+(which did not change) while `formatVersion` identifies the ADDRESSING model
+(which did). So a v3 manifest may reference packs written with v2 magic.
+
+A conforming migration therefore:
+
+1. re-encodes the directory under codec v6, mapping every entry to
+   `variant_id` 0 — which is exactly what a v3 reader already infers for a v2
+   archive, so behaviour is preserved by construction;
+2. preserves the source layout (a paged v5 directory migrates to a paged v6 one,
+   so the reader's cold-start request pattern is unchanged);
+3. writes `variants: [{ id: 0, kind: "raw" }]` and `formatVersion: 3`;
+4. **leaves every pack object untouched** — same bytes, same content address,
+   so a published fleet re-uploads one small directory object per dataset
+   instead of its whole pack set.
+
+**Summary tiers cannot be migrated.** v3 exists to separate raw and summary
+products that v2 forced to share `(z, x, y, t)`, and a v2 directory carries no
+column recording which entry is which — the information required to split them
+is not in the archive. A migration MUST refuse such an archive rather than
+guess; only a rebuild, which knows which tier it is emitting, can produce the
+v3 form.
+
+This is a one-way, container-only promotion. It is not a transcode path and must
+not become one: if a future break moves payload bytes, migration cannot carry it
+and a rebuild is the only answer.
 
 ### 9.2 Media types & magic bytes
 

@@ -15,7 +15,8 @@ STT uses one current archive contract:
 - immutable, content-addressed `.sttp` packs and `.sttd` directory objects;
 - a required manifest `variants` registry;
 - raw variant 0 and summary variant 1;
-- no v2 writer, no v1 reader, and no transcode path in either direction.
+- no v2 writer, no v1 reader, and no PAYLOAD transcode in either direction
+  (a v2 archive is promoted container-only, per packed-format §9.4).
 
 Readers keep a **read-only** window back to packed v2 (directory codec v5), so
 already-published archives are not stranded — several have no reproducible
