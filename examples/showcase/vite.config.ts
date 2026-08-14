@@ -60,11 +60,17 @@ function excludeUnusedPublicFiles(): Plugin {
           // deploy stays well under Cloudflare's per-asset (25 MiB) and total
           // limits. Dev server reads public/ directly, so local dev is
           // unaffected.
-          for (const tree of ['data']) {
-            if (rel === tree || rel.startsWith(`${tree}/`)) {
-              if (rel === tree) skipped.push(`${tree}/ (entire tree)`);
-              return false;
-            }
+          // Matched by SHAPE, not by an allow-list of known names: `data/`
+          // plus any `data-*` sibling. Staging trees appear whenever a fleet is
+          // rebuilt or migrated beside the live one (`data-v2/`, `data-v3/`,
+          // `data-publish/`), and a name-by-name list silently stops covering
+          // the next one. It already did: a 16 GB `data-v3/` tree sailed into
+          // `build/client` because the list said only `data`, which would have
+          // shipped the entire staged fleet to the CDN as Worker assets.
+          const top = rel.split('/')[0];
+          if (top === 'data' || top.startsWith('data-')) {
+            if (rel === top) skipped.push(`${top}/ (entire tree)`);
+            return false;
           }
           // Tile archives (.stt) and intermediate build artifacts (.parquet) are
           // served from R2 (VITE_DATA_BASE_URL), never from the site origin, and
