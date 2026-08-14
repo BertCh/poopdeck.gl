@@ -39,6 +39,13 @@ export type ProbeChannel =
 
 interface ProbeBag {
   enabled?: boolean;
+  /** Sample arrays are optional: the in-app HUD consumes snapshots only. */
+  captureSamples?: boolean;
+  /** Reference counts owned by acquireProbe(); intentionally internal. */
+  _consumers?: number;
+  _samplingConsumers?: number;
+  /** Legacy enableProbe() is a durable, sampling consumer until disableProbe(). */
+  _legacyEnabled?: boolean;
   consolidations?: unknown[];
   renderLayers?: unknown[];
   tilePrepare?: unknown[];
@@ -57,13 +64,20 @@ interface ProbeBag {
  * expected to drain on its own cadence.
  */
 const MAX_SAMPLES_PER_CHANNEL = 4096;
+/**
+ * Trim in batches instead of shifting one element on every sample after the
+ * cap. At 120 Hz the old `shift()` path copied ~4k array slots every frame
+ * forever once a channel had filled. A quarter-buffer batch keeps the public
+ * plain-array contract while amortising that copy across 1024 future samples.
+ */
+const SAMPLE_TRIM_BATCH = MAX_SAMPLES_PER_CHANNEL / 4;
 
 /** Record a sample to `__sttProbe[channel]`. No-op when the probe isn't set up. */
 export function emit<T>(channel: ProbeChannel, payload: T): void {
   // `globalThis` works in Node, browsers, and workers — the probe may sit
   // on any of them.
   const bag = (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
-  if (!bag || bag.enabled === false) return;
+  if (!bag || bag.enabled === false || bag.captureSamples === false) return;
   let arr = bag[channel] as unknown[] | undefined;
   if (!arr) {
     arr = [];
@@ -71,9 +85,7 @@ export function emit<T>(channel: ProbeChannel, payload: T): void {
   }
   arr.push(payload);
   if (arr.length > MAX_SAMPLES_PER_CHANNEL) {
-    // Cheap drop-oldest: pop from the front. The cap is generous enough
-    // that the per-call shift cost is amortised across thousands of pushes.
-    arr.shift();
+    arr.splice(0, SAMPLE_TRIM_BATCH);
   }
 }
 
@@ -92,7 +104,8 @@ export function measure<T>(
   // Fast-path: when probe isn't enabled we skip the `performance.now()`
   // syscalls entirely. The bag check happens twice (once here, once in
   // emit) but it's a single property read; cheaper than the syscalls.
-  if (!bag || bag.enabled === false) return fn();
+  if (!bag || bag.enabled === false || bag.captureSamples === false)
+    return fn();
   const t0 =
     typeof performance !== 'undefined' ? performance.now() : Date.now();
   try {
@@ -111,7 +124,10 @@ export function measure<T>(
  */
 export function disableProbe(): void {
   const bag = (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
-  if (bag) bag.enabled = false;
+  if (!bag) return;
+  bag._legacyEnabled = false;
+  bag.enabled = (bag._consumers ?? 0) > 0;
+  bag.captureSamples = (bag._samplingConsumers ?? 0) > 0;
 }
 
 /**
@@ -163,5 +179,38 @@ export function isProbeEnabled(): boolean {
 export function enableProbe(): void {
   const g = globalThis as unknown as { __sttProbe?: ProbeBag };
   if (!g.__sttProbe) g.__sttProbe = {};
+  g.__sttProbe._legacyEnabled = true;
   g.__sttProbe.enabled = true;
+  g.__sttProbe.captureSamples = true;
+}
+
+/**
+ * Acquire a scoped probe consumer and return its release function.
+ *
+ * HUDs should request snapshots only (`samples: false`), while benchmark tools
+ * use the legacy enableProbe() API or acquire with samples enabled. Multiple
+ * mounted consumers compose without one unmount disabling another.
+ */
+export function acquireProbe(options: { samples?: boolean } = {}): () => void {
+  const g = globalThis as unknown as { __sttProbe?: ProbeBag };
+  const bag = (g.__sttProbe ??= {});
+  const samples = options.samples ?? true;
+  bag._consumers = (bag._consumers ?? 0) + 1;
+  if (samples) bag._samplingConsumers = (bag._samplingConsumers ?? 0) + 1;
+  bag.enabled = true;
+  bag.captureSamples =
+    bag._legacyEnabled === true || (bag._samplingConsumers ?? 0) > 0;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    bag._consumers = Math.max(0, (bag._consumers ?? 1) - 1);
+    if (samples) {
+      bag._samplingConsumers = Math.max(0, (bag._samplingConsumers ?? 1) - 1);
+    }
+    bag.enabled = bag._legacyEnabled === true || (bag._consumers ?? 0) > 0;
+    bag.captureSamples =
+      bag._legacyEnabled === true || (bag._samplingConsumers ?? 0) > 0;
+  };
 }

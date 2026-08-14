@@ -254,6 +254,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The golden-pin gate below diffs against a merge-base, which the
+          # default depth-1 checkout cannot compute. It fails closed rather
+          # than checking nothing, so full history is not optional here.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -272,6 +277,18 @@ jobs:
       # ~50 ms.
       - name: roadmap citations resolve
         run: node .github/scripts/check-roadmap-citations.mjs
+      # Golden-pin gate: the v2 byte fixtures are the encoder's determinism
+      # oracle, and the two times they moved, each move cost a full fleet
+      # re-upload (29.3 GiB / 1,324 objects in 2026-07-26). Moving them is a
+      # reviewed decision, declared with a `Rebuild-Window: R1` commit trailer;
+      # anything else is an encoder bug wearing a re-blessed fixture. Pure git,
+      # no install or build needed, so it runs in the fast pre-build block.
+      - name: golden byte pins only move inside rebuild window R1
+        run: node .github/scripts/check-golden-pins.mjs
+      # The gate's own tests, in the same block: a gate nobody tests rots into
+      # a green light. node:test, no dependencies, well under a second.
+      - name: golden-pin gate self-test
+        run: node --test .github/scripts/check-golden-pins.test.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run build
       # Generated-doc gate: re-renders docs/spec/backend-capabilities.md from
@@ -297,6 +314,15 @@ jobs:
       - run: pnpm --filter '@poopdeck.gl/three' test
       - run: pnpm --filter '@poopdeck.gl/cesium' test
       - run: pnpm --filter '@poopdeck.gl/showcase' test
+      # The measurement harness's own tests. `tools/bench` is a workspace
+      # package (pnpm-workspace.yaml globs `tools/*`) but had never appeared in
+      # a filter line here, so the trace replayer's determinism and
+      # conservation-invariant tests — including the guard that request count is
+      # never a ranking key on its own — ran only when someone remembered to.
+      # No build needed: the replayer imports `@poopdeck.gl/core` lazily and
+      # only when `--archive` is passed, and these tests replay the committed
+      # micro-trace fixture instead.
+      - run: pnpm --filter '@poopdeck.gl/bench' test
       # Publish-shape gate: pack every tarball, scratch-install with real
       # peers, import every exports subpath under plain Node, prove the react
       # barrel works without the optional @deck.gl peers, and check that the
@@ -304,38 +330,42 @@ jobs:
       - name: smoke-pack (tarball import matrix)
         run: node scripts/smoke-pack.mjs
 
-  bench-regression:
-    name: Bench (regression vs baseline)
-    runs-on: ubuntu-latest
-    needs: [rust, typescript]
-    # NOTE: no job-level hashFiles() guard — hashFiles is step-context-only,
-    # and using it in jobs.<id>.if makes GitHub reject the ENTIRE workflow at
-    # parse time (every run "fails" with zero jobs). The baseline JSON is
-    # committed (tools/bench/baselines/earthquakes-ci.json), so the job just
-    # runs; if the baseline is ever removed, delete this job with it.
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter '@poopdeck.gl/core' build
-      - name: Run bench against committed fixture baseline
-        # The 733 KB `earthquakes-ci.stt` fixture and its matching JSON
-        # baseline are committed to the repo (see tools/bench/baselines/),
-        # so the regression check is a pure local comparison with no
-        # network or USGS dependency. Tolerance is 15% — generous enough
-        # to absorb cold-start noise on shared CI runners while still
-        # catching real perf cliffs.
-        run: |
-          node tools/bench/src/index.mjs \
-            tools/bench/baselines/earthquakes-ci.stt \
-            --check tools/bench/baselines/earthquakes-ci.json \
-            --tolerance 0.15
+  # ── RETIRED 2026-08-10: `bench-regression` ────────────────────────────────
+  #
+  # It ran `tools/bench/src/index.mjs` against `earthquakes-ci.stt` with
+  # `--tolerance 0.15`. It could not have passed since the single-file archive
+  # container was removed, and nobody saw that because of backlog T2 (GitHub
+  # Actions has never executed in this repo, so every job here is enforced by
+  # local discipline). Verbatim, on 2026-08-10:
+  #
+  #     Error: STT manifest: invalid JSON
+  #            (Unexpected token 'S', "STTqZ*"... is not valid JSON)
+  #
+  # TWO independent breakages, both fatal:
+  #
+  #   1. The fixture. `earthquakes-ci.stt` began `53 54 54 04` — the retired
+  #      single-file v4 container. No reader in this repo opens that shape any
+  #      more (`ArchiveWriter`/`ArchiveReader` survive only in prose), so
+  #      `STTArchive` treated the container as a packed `manifest.json` and
+  #      JSON-parsed its header. Not a symptom of the in-flight v2→v3 bump —
+  #      it fails before the version gate.
+  #   2. The harness. `bench.mjs`'s `createFileFetch` serves every Range out of
+  #      ONE in-memory buffer, so a packed archive (manifest.json + index/ +
+  #      packs/) cannot be replayed through it either — pointing it at a real
+  #      packed manifest gets you `STT directory truncated: got 5024 bytes,
+  #      expected 156`. Re-cutting the fixture alone would NOT have revived
+  #      this job.
+  #
+  # Retired rather than repaired because a gate that cannot run is worse than
+  # an absent one: it launders confidence. Reviving it needs (a) a URL-aware
+  # local fetch in `tools/bench/src/bench.mjs` and (b) a packed fixture minted
+  # AFTER the in-flight v2→v3 format break settles — anything minted now is
+  # formatVersion 3 and unreadable by a HEAD checkout. Full finding, with the
+  # restoration recipe: docs/roadmap/measurements-2026-08.md §8.6.
+  #
+  # `tools/bench`'s own tests now run in the `typescript` job above, which is
+  # real coverage of the harness in place of a check that never executed.
+  # ───────────────────────────────────────────────────────────────────────────
 
   showcase-probe:
     name: Showcase (all demos load)

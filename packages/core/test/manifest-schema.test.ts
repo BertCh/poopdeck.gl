@@ -9,9 +9,9 @@
  *
  * A tiny dependency-free validator covers the subset of JSON Schema the
  * manifest schema actually uses (type / const / enum / required / properties /
- * additionalProperties:false / items / minItems / minimum / pattern). The
- * negative cases below prove it actually rejects drift rather than rubber-
- * stamping anything.
+ * additionalProperties as `false` OR as a sub-schema / items / minItems /
+ * maxItems / minimum / pattern). The negative cases below prove it actually
+ * rejects drift rather than rubber-stamping anything.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { PackedManifest } from '../src';
 import { Compression, KNOWN_MANIFEST_CAPABILITIES } from '../src';
+import { manifestBuildAssumedGapBytes } from '../src/archive';
 
 const SCHEMA_PATH = fileURLToPath(
   new URL('../../../docs/spec/manifest.schema.json', import.meta.url),
@@ -100,16 +101,29 @@ function validate(
         errors.push(`${path}: missing required property "${req}"`);
     }
     const props: Record<string, Schema> = schema.properties ?? {};
+    const extra = schema.additionalProperties;
     for (const [k, v] of Object.entries(obj)) {
       if (props[k]) validate(v, props[k], `${path}.${k}`, errors);
-      else if (schema.additionalProperties === false)
+      else if (extra === false)
         errors.push(`${path}: unexpected property "${k}"`);
+      // `additionalProperties` as a SUB-SCHEMA is how the fingerprint's
+      // per-column maps (`numeric_ranges`, `categorical_cardinality`,
+      // `column_tolerance`) pin their VALUES while leaving the key set open —
+      // column names are dataset-specific, the shape of what they map to is
+      // not. Without this branch those maps would validate vacuously.
+      else if (extra && typeof extra === 'object')
+        validate(v, extra, `${path}.${k}`, errors);
     }
   }
   if (schema.type === 'array' && Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) {
       errors.push(
         `${path}: array length ${value.length} < minItems ${schema.minItems}`,
+      );
+    }
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) {
+      errors.push(
+        `${path}: array length ${value.length} > maxItems ${schema.maxItems}`,
       );
     }
     if (schema.items)
@@ -124,22 +138,20 @@ const schema: Schema = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 const golden = JSON.parse(readFileSync(GOLDEN_MANIFEST_PATH, 'utf8'));
 
 describe('packed-format manifest contract', () => {
-  it('the published schema is well-formed and pins formatVersion 2', () => {
+  it('the published schema is well-formed and pins formatVersion 3', () => {
     expect(schema.$schema).toContain('json-schema.org');
     expect(schema.properties.format.const).toBe('stt-packed');
-    // formatVersion is the closed [2] enum — the authoritative
+    // formatVersion is the closed [3] enum — the authoritative
     // discriminator (packed spec §5.2); readers refuse anything else at open.
-    expect(schema.properties.formatVersion.enum).toEqual([2]);
+    expect(schema.properties.formatVersion.enum).toEqual([3]);
     expect(schema.properties.directory.properties.directoryVersion.const).toBe(
-      5,
+      6,
     );
-    // directory.encoding is additive: declared (so its vocabulary is pinned)
-    // but never required (pre-encoding manifests omit it).
     expect(schema.properties.directory.properties.encoding.enum).toEqual([
       'zstd',
     ]);
     expect(schema.properties.directory.required).not.toContain('encoding');
-    // formatVersion-2 `schemas` table (packed spec §3.2): declared with the
+    // formatVersion-3 `schemas` table (packed spec §3.2): declared with the
     // {hash, data} entry shape, never required (v1 manifests omit the key).
     const schemas = schema.properties.schemas;
     expect(schemas.type).toBe('array');
@@ -153,7 +165,7 @@ describe('packed-format manifest contract', () => {
     expect(errors).toEqual([]);
   });
 
-  it('the Rust-produced formatVersion-2 golden manifest conforms too (schemas table)', () => {
+  it('the Rust-produced current golden manifest conforms too (schemas table)', () => {
     const goldenV2 = JSON.parse(
       readFileSync(
         fileURLToPath(
@@ -165,7 +177,7 @@ describe('packed-format manifest contract', () => {
     expect(validate(goldenV2, schema)).toEqual([]);
     // Assignable to the exported type, with the v2 additions populated.
     const m: PackedManifest = goldenV2;
-    expect(m.formatVersion).toBe(2);
+    expect(m.formatVersion).toBe(3);
     expect(m.schemas!.length).toBeGreaterThan(0);
     // Sorted by hash + deduped (byte-reproducible manifests, spec §3.2).
     const hashes = m.schemas!.map((s) => s.hash);
@@ -177,8 +189,8 @@ describe('packed-format manifest contract', () => {
     // Compile-time: the public type must be importable and structurally match.
     const m: PackedManifest = golden;
     expect(m.format).toBe('stt-packed');
-    expect(m.formatVersion).toBe(2);
-    expect(m.directory.directoryVersion).toBe(5);
+    expect(m.formatVersion).toBe(3);
+    expect(m.directory.directoryVersion).toBe(6);
     // The Rust writer compresses the directory at rest and declares it.
     expect(m.directory.encoding).toBe('zstd');
     expect(m.packs.length).toBeGreaterThan(0);
@@ -188,8 +200,7 @@ describe('packed-format manifest contract', () => {
     const wrongFormat = { ...golden, format: 'stt-v4' };
     expect(validate(wrongFormat, schema).length).toBeGreaterThan(0);
 
-    // 2 is a valid formatVersion since the 2026-07 byte break; 3 is not.
-    const wrongVersion = { ...golden, formatVersion: 3 };
+    const wrongVersion = { ...golden, formatVersion: 2 };
     expect(validate(wrongVersion, schema).length).toBeGreaterThan(0);
 
     const badSchemaEntry = {
@@ -319,10 +330,279 @@ describe('packed-format manifest contract', () => {
     expect(validate(extended, schema)).toEqual([]);
   });
 
-  it('a pre-encoding directory pointer (no `encoding` key) still validates', () => {
-    // The shape of every deployed manifest: raw directory bytes, no field.
+  it('a raw v3 directory pointer (no `encoding` key) still validates', () => {
     const legacyDir = { ...golden.directory };
     delete (legacyDir as Record<string, unknown>).encoding;
     expect(validate({ ...golden, directory: legacyDir }, schema)).toEqual([]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// M7 — the manifest-honesty blocks (SH-1 fingerprint, SH-2 z_range, SH-3
+// ordering workload). Normative text: docs/spec/conformance.md §3.
+//
+// These three are the only manifest fields whose whole point is that they make
+// a CLAIM about content rather than describing structure, so their wire shape
+// is pinned harder than the envelope around them: a malformed claim is worse
+// than an absent one, because the validator would compare against it.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The workload block a `measured` build records, at both pinned keys. */
+const WORKLOAD = {
+  scrub: 3,
+  pan: 2,
+  playback: 1,
+  playback_window_buckets: 8,
+  runway_multiplier: 4,
+  coalesce_gap_bytes: 2 * 1024 * 1024,
+};
+
+/** A well-formed version-1 content fingerprint. */
+const FINGERPRINT = {
+  version: 1,
+  bbox: [-122.52, 37.7, -122.35, 37.83],
+  z_range: [0, 1250.5],
+  distinct_feature_count: 4096,
+  numeric_ranges: { speed: [0, 31.25] },
+  categorical_cardinality: { kind: 3 },
+  coord_tolerance_deg: 0,
+  column_tolerance: {},
+};
+
+/**
+ * The golden manifest plus every M7 honesty block, i.e. the shape an archive
+ * rebuilt in window R1 carries.
+ */
+function honest(
+  metadataOver: Record<string, unknown> = {},
+  topOver: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...golden,
+    blobOrdering: 'time-major',
+    orderingWorkload: WORKLOAD,
+    metadata: {
+      ...golden.metadata,
+      z_range: [0, 1250.5],
+      content_fingerprint: FINGERPRINT,
+      ordering_workload: WORKLOAD,
+      ...metadataOver,
+    },
+    ...topOver,
+  };
+}
+
+/** The fingerprint with one field replaced (or deleted, when `undefined`). */
+function fingerprintWith(
+  over: Record<string, unknown>,
+  drop?: string,
+): Record<string, unknown> {
+  const fp: Record<string, unknown> = { ...FINGERPRINT, ...over };
+  if (drop) delete fp[drop];
+  return { content_fingerprint: fp };
+}
+
+describe('manifest honesty blocks (M7)', () => {
+  it('a manifest carrying all three blocks validates', () => {
+    expect(validate(honest(), schema)).toEqual([]);
+  });
+
+  it('all three are additive — absent, the manifest still validates', () => {
+    // The byte-identity criterion: an archive built before the fields existed
+    // (which is every published archive) must not be made non-conformant by
+    // adding them to the schema.
+    expect(validate(golden, schema)).toEqual([]);
+    expect(schema.required).not.toContain('orderingWorkload');
+    expect(schema.properties.metadata.required).toBeUndefined();
+    const meta = { ...golden.metadata };
+    for (const k of ['z_range', 'content_fingerprint', 'ordering_workload'])
+      delete (meta as Record<string, unknown>)[k];
+    expect(validate({ ...golden, metadata: meta }, schema)).toEqual([]);
+  });
+
+  it('rejects a wrong-arity fingerprint bbox (too few AND too many)', () => {
+    // The bbox is the containment claim the scrambled-coordinate check is
+    // evaluated against; a 3- or 5-element one is not a bbox.
+    for (const bbox of [
+      [-1, -1, 1],
+      [-1, -1, 1, 1, 9],
+    ]) {
+      const errors = validate(honest(fingerprintWith({ bbox })), schema);
+      expect(
+        errors.some((e) => /content_fingerprint\.bbox: array length/.test(e)),
+      ).toBe(true);
+    }
+    // A non-numeric element is drift too.
+    expect(
+      validate(honest(fingerprintWith({ bbox: [-1, -1, 1, 'east'] })), schema)
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('requires the four load-bearing fingerprint fields', () => {
+    for (const key of [
+      'version',
+      'bbox',
+      'distinct_feature_count',
+      'coord_tolerance_deg',
+    ]) {
+      const errors = validate(honest(fingerprintWith({}, key)), schema);
+      expect(
+        errors.some((e) => e.includes(`missing required property "${key}"`)),
+      ).toBe(true);
+    }
+    // The optional halves really are optional.
+    expect(
+      validate(
+        honest({
+          content_fingerprint: {
+            version: 1,
+            bbox: [-1, -1, 1, 1],
+            distinct_feature_count: 0,
+            coord_tolerance_deg: 0,
+          },
+        }),
+        schema,
+      ),
+    ).toEqual([]);
+  });
+
+  it('pins the per-column maps: open keys, closed value shapes', () => {
+    // Column NAMES are dataset-specific, so the key set stays open; what they
+    // map to is a contract (`[min, max]` pairs, non-negative counts/slack).
+    expect(
+      validate(
+        honest(fingerprintWith({ numeric_ranges: { speed: [0, 1, 2] } })),
+        schema,
+      ).some((e) => /numeric_ranges\.speed: array length/.test(e)),
+    ).toBe(true);
+    expect(
+      validate(
+        honest(fingerprintWith({ categorical_cardinality: { kind: 2.5 } })),
+        schema,
+      ).some((e) => /categorical_cardinality\.kind/.test(e)),
+    ).toBe(true);
+    expect(
+      validate(
+        honest(fingerprintWith({ column_tolerance: { speed: -0.5 } })),
+        schema,
+      ).some((e) => /column_tolerance\.speed: -0\.5 < minimum/.test(e)),
+    ).toBe(true);
+    // …and an arbitrary column name is fine.
+    expect(
+      validate(
+        honest(
+          fingerprintWith({
+            numeric_ranges: { 'mag/☂': [-1, 1], other: [0, 0] },
+          }),
+        ),
+        schema,
+      ),
+    ).toEqual([]);
+  });
+
+  it('rejects a tolerance that is not a non-negative number', () => {
+    // Tolerances are capability-gated slack; a malformed one would widen every
+    // comparison, which is exactly the laundering the gate exists to stop.
+    for (const bad of ['1e-5', -1]) {
+      expect(
+        validate(honest(fingerprintWith({ coord_tolerance_deg: bad })), schema)
+          .length,
+      ).toBeGreaterThan(0);
+    }
+    expect(
+      validate(
+        honest(fingerprintWith({ distinct_feature_count: 12.5 })),
+        schema,
+      ).some((e) => /distinct_feature_count: expected type integer/.test(e)),
+    ).toBe(true);
+  });
+
+  it('tolerates unknown keys INSIDE the fingerprint (additive evolution)', () => {
+    // A version-2 writer adding a statistic must not make the block invalid
+    // for a version-1 validator, which warns and skips on the version instead.
+    expect(
+      validate(
+        honest(fingerprintWith({ version: 2, temporal_histogram: [1, 2, 3] })),
+        schema,
+      ),
+    ).toEqual([]);
+  });
+
+  it('pins metadata.z_range to exactly two numbers', () => {
+    for (const bad of [[0], [0, 1, 2], '0..1250']) {
+      expect(validate(honest({ z_range: bad }), schema).length).toBeGreaterThan(
+        0,
+      );
+    }
+    expect(validate(honest({ z_range: [-430, 18500.5] }), schema)).toEqual([]);
+  });
+
+  it('pins coalesce_gap_bytes to an integer at BOTH ordering-workload keys', () => {
+    const bad = { ...WORKLOAD, coalesce_gap_bytes: 2097152.5 };
+    expect(
+      validate(honest({ ordering_workload: bad }), schema).some((e) =>
+        /metadata\.ordering_workload\.coalesce_gap_bytes: expected type integer/.test(
+          e,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      validate(honest({}, { orderingWorkload: bad }), schema).some((e) =>
+        /orderingWorkload\.coalesce_gap_bytes: expected type integer/.test(e),
+      ),
+    ).toBe(true);
+    // A missing member of the workload tuple is drift, not evolution: the
+    // block co-versions a layout, and a partial one cannot be compared.
+    const partial: Record<string, unknown> = { ...WORKLOAD };
+    delete partial.runway_multiplier;
+    expect(
+      validate(honest({}, { orderingWorkload: partial }), schema).some((e) =>
+        e.includes('missing required property "runway_multiplier"'),
+      ),
+    ).toBe(true);
+  });
+
+  it('the two ordering-workload copies are pinned to the SAME shape', () => {
+    // The spec MUST is "a writer emitting one emits both, with equal values",
+    // so the two schema declarations must not be allowed to drift apart.
+    const top = schema.properties.orderingWorkload;
+    const mirror = schema.properties.metadata.properties.ordering_workload;
+    expect(mirror.type).toBe(top.type);
+    expect([...mirror.required].sort()).toEqual([...top.required].sort());
+    expect(Object.keys(mirror.properties).sort()).toEqual(
+      Object.keys(top.properties).sort(),
+    );
+    for (const key of Object.keys(top.properties)) {
+      expect(mirror.properties[key].type).toBe(top.properties[key].type);
+      expect(mirror.properties[key].minimum).toBe(top.properties[key].minimum);
+    }
+  });
+
+  it('the shipped reader resolves the build-assumed gap through the MIRROR', () => {
+    // Why the mirror exists at all (and why deleting it is a breaking change
+    // until the reader moves): `manifestBuildAssumedGapBytes` reads
+    // `metadata.ordering_workload`, not the canonical top-level key.
+    const m = honest() as unknown as PackedManifest;
+    expect(manifestBuildAssumedGapBytes(m)).toBe(2 * 1024 * 1024);
+    // Absent ⇒ null ⇒ the layout's provenance is unknown and never guessed at.
+    const legacy = { ...golden } as unknown as PackedManifest;
+    expect(manifestBuildAssumedGapBytes(legacy)).toBeNull();
+    // The top-level key alone does NOT satisfy the reader today — the pin that
+    // makes the mirror's "removal trigger" checkable rather than folkloric.
+    const topOnly = honest({ ordering_workload: undefined });
+    delete (topOnly.metadata as Record<string, unknown>).ordering_workload;
+    expect(
+      manifestBuildAssumedGapBytes(topOnly as unknown as PackedManifest),
+    ).toBeNull();
+  });
+
+  it('an honest manifest is assignable to the exported PackedManifest type', () => {
+    const m: PackedManifest = honest() as unknown as PackedManifest;
+    expect(m.blobOrdering).toBe('time-major');
+    const meta = m.metadata as Record<string, unknown>;
+    const fp = meta.content_fingerprint as Record<string, unknown>;
+    expect(fp.version).toBe(1);
+    expect(meta.z_range).toEqual([0, 1250.5]);
   });
 });

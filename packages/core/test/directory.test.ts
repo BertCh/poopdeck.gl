@@ -2,8 +2,7 @@
  * Directory codec (TypeScript): round-trip + bounds validation.
  *
  * The production writer is Rust; `encodeDirectory` exists for tests/tooling.
- * The TS encoder emits v5 (per-run pack_id + pack-relative offsets); the
- * decoder reads both v4 (single-file, one implicit pack) and v5. These tests
+ * The TS encoder and decoder implement only v6. These tests
  * pin the encode↔decode round-trip, the pack-id column, and the bounds checks
  * that stop an out-of-range value silently truncating on the Rust (`as u32`)
  * side.
@@ -30,10 +29,11 @@ const base: DirectoryEncodeEntry = {
 };
 
 describe('directory codec (TS)', () => {
-  it('defaults packId to 0 and emits a v5 directory', () => {
+  it('defaults packId/variantId to raw and emits a v6 directory', () => {
     const bytes = encodeDirectory([base]);
-    expect(bytes[0]).toBe(5); // DIRECTORY_VERSION
+    expect(bytes[0]).toBe(6); // DIRECTORY_VERSION
     expect(decodeDirectory(bytes)[0].packId).toBe(0);
+    expect(decodeDirectory(bytes)[0].variantId).toBe(0);
   });
 
   it('round-trips entries across multiple packs with pack-relative offsets', () => {
@@ -233,18 +233,18 @@ describe('decodeDirectory corruption guards', () => {
   });
 
   it('rejects a varint that runs off the end of the buffer', () => {
-    // Version byte 5, then a single 0x80 (continuation bit set, no following
+    // Version byte 6, then a single 0x80 (continuation bit set, no following
     // byte) — the first uvarint read (entry count N) walks past the end.
-    expect(() => decodeDirectory(Uint8Array.from([5, 0x80]))).toThrow(
+    expect(() => decodeDirectory(Uint8Array.from([6, 0x80]))).toThrow(
       /truncated varint/,
     );
   });
 
   it('rejects a run whose run_length exceeds the entry count', () => {
     // n=1, runCount=1, one all-zero entry (6 ivarints + featureCount +
-    // bucketPresent = 8 zero bytes), then a run declaring run_length=2.
+    // bucketPresent + variantId = 9 zero bytes), then a run declaring run_length=2.
     const bytes = Uint8Array.from([
-      5, // version
+      6, // version
       1, // n = 1
       1, // runCount = 1
       0,
@@ -255,6 +255,7 @@ describe('decodeDirectory corruption guards', () => {
       0, // Δzoom Δhilbert Δx Δy Δtime duration (all 0)
       0, // featureCount = 0
       0, // bucketPresent = 0
+      0, // variantId = raw
       2, // run_length = 2  (> n)
       0, // Δpack_id = 0
       0, // offset flag = 0 (contiguous)
@@ -273,7 +274,7 @@ describe('decodeDirectory corruption guards', () => {
   it('rejects when the runs cover fewer entries than declared', () => {
     // n=2 but the single run only covers run_length=1 entry → cursor (1) != n.
     const bytes = Uint8Array.from([
-      5, // version
+      6, // version
       2, // n = 2
       1, // runCount = 1
       0,
@@ -283,7 +284,8 @@ describe('decodeDirectory corruption guards', () => {
       0,
       0,
       0,
-      0, // entry 0 (8 zero bytes)
+      0,
+      0, // entry 0 (9 zero bytes)
       0,
       0,
       0,
@@ -291,7 +293,8 @@ describe('decodeDirectory corruption guards', () => {
       0,
       0,
       0,
-      0, // entry 1 (8 zero bytes)
+      0,
+      0, // entry 1 (9 zero bytes)
       1, // run_length = 1  (covers only entry 0)
       0, // Δpack_id = 0
       0, // offset flag = 0
@@ -346,5 +349,35 @@ describe('decodePagedRoot error branches', () => {
     expect(() => decodePagedRoot(rootHeader(1, 0, 3))).toThrow(
       /truncated \(12 B, need 168 for 3 pages\)/,
     );
+  });
+
+  it('rejects non-zero reserved root bytes and trailing data', () => {
+    const reserved = rootHeader(1, 0, 0);
+    new DataView(reserved.buffer).setUint16(2, 1, true);
+    expect(() => decodePagedRoot(reserved)).toThrow(
+      /reserved header bytes must be zero/,
+    );
+
+    const trailing = new Uint8Array(13);
+    trailing.set(rootHeader(1, 0, 0));
+    expect(() => decodePagedRoot(trailing)).toThrow(/trailing bytes/);
+  });
+
+  it('rejects descriptor offsets outside the safe integer range', () => {
+    const root = new Uint8Array(12 + 52);
+    const dv = new DataView(root.buffer);
+    dv.setUint8(0, 1);
+    dv.setUint32(4, 1, true);
+    dv.setUint32(8, 1, true);
+    dv.setBigUint64(12, 1n << 53n, true);
+    dv.setUint32(20, 1, true);
+    dv.setUint32(24, 1, true);
+    expect(() => decodePagedRoot(root)).toThrow(/safe integer range/);
+  });
+
+  it('checks root bookkeeping against the manifest', () => {
+    expect(() =>
+      decodePagedRoot(rootHeader(1, 0, 0), { pageCount: 1 }),
+    ).toThrow(/page count 0 disagrees with manifest 1/);
   });
 });

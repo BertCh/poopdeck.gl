@@ -11,6 +11,7 @@ import {
 } from '../src/lib/quadbin-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeVectorTile as summaryTile } from './_support/features';
+import { onScreen } from './_support/color-space';
 
 // ── Reference Quadbin encoder (1:1 port of crates/stt-build/src/quadbin.rs) ──
 // so the test generates valid u64 cell ids the decoder must invert.
@@ -133,9 +134,12 @@ describe('buildQuadbinBuffers', () => {
     const high =
       DEFAULT_QUADBIN_COLOR_RANGE[DEFAULT_QUADBIN_COLOR_RANGE.length - 1];
     // cell 0 (count 0) → first stop; cell 1 (count 100 ≥ hi) → last stop.
-    expect(buf.colors[0]).toBeCloseTo(low[0] / 255, 5);
+    // The buffer holds LINEAR-light values (the summary mesh shades through a
+    // classic `vertexColors` material, so it decodes on the CPU); the ramp byte
+    // is what Three's sRGB output pass puts back on screen — assert THAT.
+    expect(onScreen(buf.colors[0])).toBeCloseTo(low[0] / 255, 5);
     const c1 = 4 * 4; // cell 1, vert 0
-    expect(buf.colors[c1]).toBeCloseTo(high[0] / 255, 5);
+    expect(onScreen(buf.colors[c1])).toBeCloseTo(high[0] / 255, 5);
   });
 
   it('coverage shrinks the quad toward its centroid', () => {
@@ -161,14 +165,15 @@ describe('buildQuadbinBuffers', () => {
       [2, 8],
     );
     const buf = buildQuadbinBuffers([tile], proj, {});
-    // Lowest count maps to first stop, highest (== hi) to last stop.
-    expect(buf.colors[0]).toBeCloseTo(
+    // Lowest count maps to first stop, highest (== hi) to last stop — compared
+    // as displayed (see above).
+    expect(onScreen(buf.colors[0])).toBeCloseTo(
       DEFAULT_QUADBIN_COLOR_RANGE[0][0] / 255,
       5,
     );
     const last =
       DEFAULT_QUADBIN_COLOR_RANGE[DEFAULT_QUADBIN_COLOR_RANGE.length - 1];
-    expect(buf.colors[16]).toBeCloseTo(last[0] / 255, 5);
+    expect(onScreen(buf.colors[16])).toBeCloseTo(last[0] / 255, 5);
   });
 
   it('falls back to a layer carrying id64+weight when summary name absent', () => {

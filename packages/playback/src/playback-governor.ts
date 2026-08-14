@@ -22,7 +22,23 @@
  */
 
 import { TimeController } from './time-controller.js';
-import { emit as emitProbe } from './telemetry.js';
+import {
+  SPEED_STEPS,
+  DISPERSION_SCALE_K,
+  dispersionScale,
+} from './auto-speed.js';
+import {
+  emit as emitProbe,
+  isProbeEnabled,
+  snapshot as snapshotProbe,
+  PLAYBACK_STATE_SNAPSHOT,
+  type PlaybackStateSnapshot,
+} from './telemetry.js';
+import {
+  computeProgressiveFillWeights,
+  computeRunwayShedWeights,
+  type ProgressiveFillProbe,
+} from './fairness.js';
 
 /**
  * Snapshot of the contiguous loaded span ahead of the playhead, as reported
@@ -66,6 +82,33 @@ export interface BufferSource {
   estimateTimeToReadyMs(range: { start: number; end: number }): number | null;
   flushPrefetch(): void;
   /**
+   * Optional (the core tileset has it, as `SpatioTemporalTileset.getByteDensityProfile`):
+   * the per-bucket byte-density profile of `range` — for every temporal bucket
+   * the range touches, its ascending start and how many directory bytes of it
+   * are still MISSING.
+   *
+   * {@link estimateCost} collapses the same walk to one number, which is
+   * exactly what a controller reasoning about TIME cannot use: "2 GB missing
+   * somewhere in the next minute" is comfortable if it is spread evenly and
+   * hopeless if it is one wall two seconds ahead. With this the governor runs
+   * the FLUID feasibility check (cumulative-missing-vs-deadline at every bucket
+   * boundary) instead of the one-window ETA compare, which is what catches the
+   * byte cliff two windows out (M5/CO-3).
+   *
+   * Honesty contract, inherited verbatim from the core implementation: `null`
+   * means "no profile" — the coverage index is not built, or the byte channel
+   * is blind (a blind channel reports 0 bytes per tile and a caller cannot tell
+   * "free" from "unknown"). The governor treats `null`, a missing method on ANY
+   * required source, and a cold throughput estimator all the same way: it falls
+   * back to the incumbent one-window path, unchanged. Never guessed at.
+   *
+   * `bucketStarts` and `missingBytes` are aligned and `bucketStarts` ascends.
+   */
+  getByteDensityProfile?(range: { start: number; end: number }): {
+    bucketStarts: number[];
+    missingBytes: number[];
+  } | null;
+  /**
    * Optional (the core tileset has it): keep the loader's prefetch machinery
    * running at the given signed speed. The governor asserts this while a gate
    * holds the clock frozen — without it, freezing the clock reads as "paused"
@@ -105,12 +148,62 @@ export interface BufferSource {
    * restored when fairness deactivates (Phase 2 of multi-source coordination).
    */
   setBandwidthWeight?(weight: number): void;
+  /**
+   * Optional (the core tileset has it): declare the LOOPING range the playhead
+   * wraps within, or `null` when playback is not looping (BH-7, §9.4).
+   *
+   * Cache eviction scores tiles by their distance ahead of / behind the
+   * playhead. Under a loop that metric is the exact inverse of Belady at the
+   * wrap: the tiles at the loop START are the furthest "behind" the playhead as
+   * it approaches the loop END, so a wrap-blind policy evicts precisely the
+   * tiles it is about to need. Given the range, a loader can compute that
+   * distance in loop-modular arithmetic instead and stop doing that.
+   *
+   * The governor is the one component that knows the boundary (it already
+   * routes the clock's `wrap` event through seek semantics), so it pushes the
+   * range: on source registration, and whenever the clock's loop mode or range
+   * changes (observed at the next gate/probe evaluation, or immediately via
+   * {@link PlaybackGovernor.syncLoopWindows}). Sources without the method are
+   * never called and behave exactly as they do today.
+   */
+  setLoopWindow?(range: { start: number; end: number } | null): void;
+  /**
+   * Optional (the core tileset has it, as its `temporalBucketMs` option): the
+   * source's DECLARED temporal bucket size in sim-ms — the cadence at which its
+   * buffered horizon can advance at all (BH-4, §11.2).
+   *
+   * The cadence tolerance band (see {@link PlaybackGovernorOptions.runwayToleranceMs})
+   * exists to absorb the horizon misalignment between sources chunked at
+   * DIFFERENT cadences. A single wall-ms constant cannot: 200 ms × |speed| is
+   * far too small to cover a 1-hour-bucketed radar field next to a 1-minute
+   * fronts overlay (false stalls), and needlessly generous for two fine-grained
+   * sources. With the declared bucket the band becomes per-source —
+   * `τ_i = max(Δ_i, Δ_leader) + probe-staleness` — so it absorbs exactly the
+   * quantization each pair actually has.
+   *
+   * Report the bucket in SIM-ms (it is a property of the archive, not of the
+   * playback rate); `0`, a negative value, or a missing method all mean
+   * "undeclared" and fall back to the wall-ms default band — never to a zero
+   * band, which would re-introduce the raw-min false stall.
+   */
+  getTemporalBucketMs?(): number;
 }
 
 /** Network throughput estimate (archive dual-EWMA, see WS-A5). */
 export interface ThroughputEstimate {
   bytesPerMs: number | null;
   samples?: number;
+  /**
+   * Standard deviation of the sampled rate around the slow average, in bytes
+   * per ms — the dispersion channel `@poopdeck.gl/core`'s `ThroughputEstimator`
+   * publishes alongside the point min (M5/CO-3).
+   *
+   * OPTIONAL BY CONTRACT: absent from a cold estimator and from any producer
+   * that predates dispersion tracking, and read as `0` in both cases. Every
+   * consumer here degenerates to its incumbent constant at `stdDev = 0`, so a
+   * missing channel is the incumbent behaviour, not a degraded one.
+   */
+  stdDev?: number;
 }
 
 /**
@@ -201,6 +294,16 @@ export interface PlaybackGovernorOptions {
    * ({@link TICK_PROBE_INTERVAL_MS}, the wall cadence at which the frontier is
    * re-sampled): differences smaller than one probe interval of consumption
    * are below the governor's own observation resolution and must not gate.
+   *
+   * PRECEDENCE (BH-4). Authoring this value pins the band GLOBALLY: every
+   * source is banded at `runwayToleranceMs × |speed|`, exactly as before, and
+   * `0` still reproduces the raw min/AND fold bit-for-bit. Leaving it unset
+   * switches the band to the per-source cadence derivation — for source *i*
+   * against the leading source *L*, `τ_i = max(Δ_i, Δ_L) + 200 ms × |speed|`,
+   * where Δ are the buckets sources declare via
+   * {@link BufferSource.getTemporalBucketMs}. Sources that declare nothing keep
+   * this default, so the derivation can only ever WIDEN the band — never
+   * narrow it — and never below the probe-staleness residue it is built on.
    * @default 200
    */
   runwayToleranceMs?: number;
@@ -217,6 +320,83 @@ export interface PlaybackGovernorOptions {
    * @default true
    */
   multiSourceFairness?: boolean;
+  /**
+   * Kill switch for the FLUID feasibility check (M5/CO-3). When true (default)
+   * and EVERY required source exposes
+   * {@link BufferSource.getByteDensityProfile} — and the throughput estimator
+   * has a rate to be conservative about — the canplaythrough predictor walks
+   * bucket boundaries comparing cumulative missing bytes against a moving
+   * deadline, instead of comparing one window's ETA against the runway. Set
+   * false to pin the incumbent one-window path even where profiles exist.
+   *
+   * Note the primary rollback is not this flag: a source that stops exposing
+   * the profile routes to the incumbent path all by itself.
+   * @default true
+   */
+  fluidFeasibility?: boolean;
+  /**
+   * Wall-ms of lookahead the fluid check spans (× |speed| → sim-ms). The walk
+   * stops at the dataset end all by itself — the profile simply has no buckets
+   * past it — so this only bounds the work, never the honesty. Floored at the
+   * gate window being evaluated, so the fluid check can never see LESS than the
+   * one-window path it replaces.
+   * @default 60000
+   */
+  fluidCheckHorizonWallMs?: number;
+  /**
+   * Standard deviations of headroom for the conservative rate the fluid check
+   * spends: `max(0, bytesPerMs − z·stdDev)` — the quantile-not-point-min rule.
+   * `0` reproduces the point estimate exactly; a producer with no `stdDev`
+   * channel does too, for any z.
+   * @default 1
+   */
+  conservativeRateZ?: number;
+  /**
+   * The `k` of the shared jitter re-fit `clamp(1 + k·cv, 1, 3)`
+   * (see `dispersionScale`), where `cv = stdDev / bytesPerMs`. One knob, two
+   * consumers: the EFFECTIVE low watermark scales UP with it (a jittery link
+   * stalls earlier and honestly) and the auto-speed safety factor scales DOWN
+   * with it (a jittery link rises more slowly).
+   *
+   * The configured `startGateWallMs` / `lowWatermarkWallMs` / `resumeFactor`
+   * stay the base — only the effective watermark moves, and it is additionally
+   * held under the start gate so the re-fit can never collapse the two
+   * thresholds into one. `0` disables both re-fits.
+   * @default 2
+   */
+  dispersionK?: number;
+  /**
+   * Base speed (TimeController units — sim-ms per wall-ms) for ONE multiplier
+   * step, i.e. `SttPlayer.baseRate`. Supplying it switches
+   * {@link PlaybackGovernor.getAutoSpeedSuggestion} to LADDER evaluation
+   * (M5/CO-4): every multiplier in the ladder is priced over ITS OWN horizon,
+   * so a density spike that only a faster candidate's window would sweep is
+   * seen before Auto upshifts into it — instead of being measured once at the
+   * current speed and extrapolated.
+   *
+   * Pass the function form when the base rate is mutable (`SttPlayer.baseRate`
+   * has a setter); it is read at evaluation time. `null`/absent/non-positive ⇒
+   * candidates cannot be expressed in speed units, so the governor keeps the
+   * incumbent single-point computation, bit-for-bit.
+   *
+   * The multiplier↔speed conversion policy stays with `SttPlayer`; this is only
+   * the exchange rate it hands over.
+   * @default null
+   */
+  baseSpeed?: number | (() => number | null) | null;
+  /**
+   * The multiplier ladder auto-speed evaluates, descending. Must match whatever
+   * the consumer passes to `decideAutoSpeedMultiplier`'s `steps` or the
+   * governor will price candidates the consumer can never select.
+   * @default SPEED_STEPS (the canonical 13-step ladder)
+   */
+  speedSteps?: readonly number[];
+  /**
+   * Kill switch for auto-speed ladder evaluation (M5/CO-4). `false` restores
+   * the single-point computation even when {@link baseSpeed} is supplied.
+   * @default true
+   */
+  ladderEvaluation?: boolean;
 }
 
 /** Payload of the 'ready' event (a gate passed and the clock started). */
@@ -274,6 +454,72 @@ export interface PlaybackQoeStats {
    * frontier, advancing at data-arrival rate), including in-progress creep.
    */
   creepMs: number;
+}
+
+/**
+ * Scrub quality-of-experience counters for ONE drag bracket
+ * ({@link PlaybackGovernor.beginScrub} … {@link PlaybackGovernor.endScrub}).
+ *
+ * These are the §11.6 measurements the scrub-LOD keep-vs-delete decision
+ * hinges on, made readable without a browser harness. Snapshot via
+ * {@link PlaybackGovernor.getScrubQoeStats}; one sample per bracket is also
+ * pushed on the telemetry `scrub` channel at `scrubstart` and `scrubend`.
+ *
+ * OBSERVATION ONLY. Nothing here gates, degrades, or restores anything — the
+ * preview-never-gates contract and the restore invariant are measured, never
+ * tuned (they are in the standing do-not-touch register).
+ *
+ * COST. Accumulation is unconditional (so the getter is honest with or without
+ * a probe bag installed) and costs one {@link PlaybackGovernor.getBufferedRanges}
+ * read per preview position — the same read a buffered-range bar already
+ * performs. `scrubTo` is pointer-paced, not render-paced, so this never lands
+ * in the steady-state frame budget. Only the `scrub` CHANNEL emission and the
+ * `bytesDuringScrub` attribution depend on the probe.
+ */
+export interface ScrubQoeStats {
+  /**
+   * Wall ms from the drag's FIRST {@link PlaybackGovernor.scrubTo} until the
+   * previewed instant is covered by the required sources' buffered ranges —
+   * i.e. until a frame CAN show data at the new instant. `0` when the very
+   * first preview already landed on resident data (the target case: a
+   * resident coarse tile inside one 60 Hz frame). `null` when the drag never
+   * reached coverage, or when no preview was issued.
+   *
+   * This is a data-readiness proxy for time-to-first-pixel: the governor sees
+   * the clock and the buffered ranges, not the compositor. A browser harness
+   * that can time the actual presented frame should report ITS number and use
+   * this as the lower bound.
+   */
+  timeToFirstPixelMs: number | null;
+  /**
+   * Fraction of the drag's preview positions whose instant was already
+   * covered by resident data at preview time — "% of drag frames showing
+   * current-instant data, any tier". `0` when the drag issued no previews.
+   */
+  freshFrameFraction: number;
+  /**
+   * Bytes fetched during the bracket, attributed by windowing the core
+   * `requests` probe channel over `[bracket start, bracket end]`. Requires
+   * `globalThis.__sttProbe` to be installed (the channel does not exist
+   * otherwise); `0` when it is not.
+   */
+  bytesDuringScrub: number;
+  /**
+   * Wall ms from {@link PlaybackGovernor.endScrub} until the post-release
+   * gate cleared — the settle-to-full-detail latency (the gate measures the
+   * FINE tier by the preview-only contract, so this is honest about full
+   * detail). `0` when the release did not gate at all. Reports the elapsed
+   * time so far while a settle is still pending, and `null` before the first
+   * release.
+   */
+  settleMs: number | null;
+  /**
+   * Interactive-bit transitions broadcast to sources during the bracket — the
+   * pop/oscillation count. A clean drag is 2 (degrade at grab, restore at
+   * release); extra counts mean sources joined/left or were swapped mid-drag,
+   * each of which is a visible tier change.
+   */
+  tierSwitchCount: number;
 }
 
 /**
@@ -338,6 +584,23 @@ const PLAYTHROUGH_MIN_WALL_MS = 250;
  * band the gate itself ignores.
  */
 const RUN_AHEAD_SLACK_WALL_MS = 3000;
+/**
+ * Default lookahead of the FLUID feasibility check, in wall-ms (× |speed| →
+ * sim-ms). 60 s is ~30× the default start gate: far enough out that a byte
+ * cliff several windows ahead is seen while there is still runway to spend
+ * reacting to it, and still a bounded, sub-millisecond walk over the coverage
+ * index's prefix sums.
+ */
+const FLUID_CHECK_HORIZON_WALL_MS = 60_000;
+/**
+ * The re-fit must not collapse the two thresholds (standing register entry).
+ * The effective low watermark is therefore held at this fraction of the START
+ * GATE — a jittery link stalls earlier, but the watermark can never climb into
+ * the gate and turn the two-threshold hysteresis into one. Only binds when the
+ * configured watermark was already below the gate; a configuration that puts
+ * them the other way round is left exactly as configured.
+ */
+const WATERMARK_GATE_HEADROOM = 0.9;
 /** Fairness write throttle: caps/weights re-send only past this relative change. */
 const FAIRNESS_RESEND_FRACTION = 0.2;
 /**
@@ -351,6 +614,15 @@ const FAIRNESS_RESEND_FRACTION = 0.2;
  */
 const LAGGARD_ENTER_BAND_FRACTION = 0.25;
 const LAGGARD_EXIT_BAND_FRACTION = 0.5;
+/**
+ * BH-3 rollback switch (one release). `true` runs the byte-aware progressive
+ * fill (`computeProgressiveFillWeights`); flipping it to `false` restores the
+ * incumbent `1/x` runway shed (`computeRunwayShedWeights`) with no other
+ * change — the fairness pass consumes both through the same map. Typed
+ * `boolean` on purpose so the fallback branch stays live code, not something
+ * the compiler narrows away.
+ */
+const USE_PROGRESSIVE_FILL_WEIGHTS: boolean = true;
 
 /**
  * One probe of one registered source. A single per-source probe per
@@ -364,6 +636,24 @@ interface SourceProbe {
   baseWeight: number;
   source: BufferSource;
   runway: BufferedRunway;
+  /**
+   * The source's DECLARED temporal bucket in sim-ms at probe time (BH-4), or
+   * null when it declares none. Collected here — not re-read inside the fold —
+   * so every consumer of one probe sweep sees one consistent cadence vector.
+   */
+  bucketMs: number | null;
+}
+
+/**
+ * One required source's contribution to the frontier fold: its runway plus the
+ * cadence it was probed at. The pair travels together because the lift band is
+ * now per-source (`τ_i = max(Δ_i, Δ_L) + π|s|`, BH-4) and a runway without its
+ * Δ cannot be banded.
+ */
+interface RunwayFoldEntry {
+  runway: BufferedRunway;
+  /** Declared temporal bucket in sim-ms, or null (undeclared → wall default). */
+  bucketMs: number | null;
 }
 
 export class PlaybackGovernor {
@@ -378,8 +668,28 @@ export class PlaybackGovernor {
   private readonly getThroughput: (() => ThroughputEstimate) | null;
   /** Cadence tolerance in WALL-ms; scaled by |speed| per evaluation. See options. */
   private readonly runwayToleranceMs: number;
+  /**
+   * True when `runwayToleranceMs` was AUTHORED. An authored band wins globally
+   * (BH-4 precedence): the per-source cadence derivation replaces only the
+   * default, so `runwayToleranceMs: 0` still folds the exact raw min.
+   */
+  private readonly runwayToleranceAuthored: boolean;
   /** Kill switch for run-ahead fairness + dynamic weights (see options). */
   private readonly multiSourceFairness: boolean;
+  /** Kill switch for the fluid feasibility check (see options). */
+  private readonly fluidFeasibility: boolean;
+  /** Fluid-check lookahead in WALL-ms; scaled by |speed| per evaluation. */
+  private readonly fluidCheckHorizonWallMs: number;
+  /** Standard deviations of headroom on the conservative rate (see options). */
+  private readonly conservativeRateZ: number;
+  /** `k` of the shared jitter re-fit `clamp(1 + k·cv, 1, 3)` (see options). */
+  private readonly dispersionK: number;
+  /** Base speed for auto-speed ladder candidates, or null (see options). */
+  private readonly baseSpeed: number | (() => number | null) | null;
+  /** Multiplier ladder auto-speed evaluates (see options). */
+  private readonly speedSteps: readonly number[];
+  /** Kill switch for auto-speed ladder evaluation (see options). */
+  private readonly ladderEvaluation: boolean;
 
   /**
    * The classified source registry (Phase 0 of multi-source coordination).
@@ -404,6 +714,24 @@ export class PlaybackGovernor {
    */
   private lastSentCaps = new Map<string, number | null>();
   private lastSentWeights = new Map<string, number>();
+  /**
+   * Loop-window write memo (BH-7): the range last pushed per source id, or
+   * null when the last push cleared it. Absent = never pushed, which is the
+   * same state a fresh source is in — so a non-looping session never calls
+   * {@link BufferSource.setLoopWindow} at all.
+   */
+  private lastSentLoopRanges = new Map<
+    string,
+    { start: number; end: number } | null
+  >();
+  /**
+   * β memo (BH-3): the last frontier byte density computed per source id,
+   * keyed by the (frontier bucket, Δ) it was measured over. `estimateCost` is a
+   * directory walk; the probe cadence would otherwise pay one per source per
+   * 200 ms. Invalidated by the key, so it re-measures exactly when the frontier
+   * crosses a bucket or the speed changes Δ.
+   */
+  private betaMemo = new Map<string, { key: string; beta: number | null }>();
   /** Laggard ids from the last fairness pass (removing one deactivates fairness). */
   private lastLaggardIds = new Set<string>();
   /** Wall time of the last SELF-probed fairness pass (gated-path rate limit).
@@ -474,6 +802,31 @@ export class PlaybackGovernor {
   private stallEnteredAtWall = 0;
   /** Wall timestamp the current degraded creep began. */
   private creepStartedAtWall = 0;
+  // ── Scrub QoE accounting (see ScrubQoeStats) ──────────────────────────────
+  /**
+   * The bracket being accumulated: the live drag while `scrubbing`, otherwise
+   * the most recently completed one. Null before the first `beginScrub`.
+   */
+  private scrubQoe: {
+    /** Wall stamp of beginScrub — the left edge of the byte window. */
+    startedAtWall: number;
+    /** Wall stamp of endScrub; null while the thumb is still held. */
+    endedAtWall: number | null;
+    /** Wall stamp of the first scrubTo in this bracket; null until one lands. */
+    firstPreviewAtWall: number | null;
+    /** Wall stamp of the first preview instant observed as covered. */
+    firstFreshAtWall: number | null;
+    /** Preview positions issued in this bracket. */
+    previews: number;
+    /** Previews whose instant was already covered at preview time. */
+    freshPreviews: number;
+    /** Interactive-bit broadcasts inside the bracket. */
+    tierSwitches: number;
+    /** Wall stamp endScrub entered a gate; null when not settling. */
+    settlePendingSince: number | null;
+    /** Closed settle latency; null until the post-release gate clears. */
+    settleMs: number | null;
+  } | null = null;
   /**
    * Guards the playState subscription against reacting to OUR OWN play/pause
    * calls (the controller notifies synchronously).
@@ -588,6 +941,11 @@ export class PlaybackGovernor {
    */
   private readonly wrapHandler = (_time: number): void => {
     if (this.disposed || this.scrubbing) return;
+    // A wrap is the strongest possible evidence that the clock is looping and
+    // that the range is the one it just wrapped within (BH-7): push it before
+    // anything else, so the post-wrap refill's eviction pass already scores in
+    // loop-modular arithmetic.
+    this.syncLoopWindows();
     // The frontier is stale after a wrap regardless of machine state.
     this.bufferedUntil = null;
     if (this._state !== 'playing' || !this.userWantsPlayback) return;
@@ -625,7 +983,26 @@ export class PlaybackGovernor {
       0,
       opts.runwayToleranceMs ?? TICK_PROBE_INTERVAL_MS,
     );
+    // An authored band pins every source at it (BH-4 precedence); only the
+    // DEFAULT hands the band over to the per-source cadence derivation.
+    this.runwayToleranceAuthored = opts.runwayToleranceMs !== undefined;
     this.multiSourceFairness = opts.multiSourceFairness ?? true;
+    this.fluidFeasibility = opts.fluidFeasibility ?? true;
+    this.fluidCheckHorizonWallMs = positiveOr(
+      opts.fluidCheckHorizonWallMs,
+      FLUID_CHECK_HORIZON_WALL_MS,
+    );
+    // z and k are the two BOUNDED knobs of the re-fit; both accept 0 (which
+    // reproduces the incumbent constants exactly), neither accepts a negative
+    // value (which would invert the conservatism).
+    this.conservativeRateZ = nonNegativeOr(opts.conservativeRateZ, 1);
+    this.dispersionK = nonNegativeOr(opts.dispersionK, DISPERSION_SCALE_K);
+    this.baseSpeed = opts.baseSpeed ?? null;
+    this.speedSteps =
+      opts.speedSteps && opts.speedSteps.length > 0
+        ? opts.speedSteps
+        : SPEED_STEPS;
+    this.ladderEvaluation = opts.ladderEvaluation ?? true;
     if (opts.source) this.setSource(opts.source);
 
     this.timeController.on('playState', this.playStateHandler);
@@ -733,6 +1110,10 @@ export class PlaybackGovernor {
       this.lastSentCaps.delete(id);
       this.lastSentWeights.delete(id);
       this.lastLaggardIds.delete(id);
+      // The loop window and the β measurement belong to the OUTGOING object
+      // too: the replacement has been told nothing and has measured nothing.
+      this.lastSentLoopRanges.delete(id);
+      this.betaMemo.delete(id);
     }
     this.sources.set(id, {
       source,
@@ -744,7 +1125,13 @@ export class PlaybackGovernor {
     // registered mid-drag must see `true` — the broadcast in beginScrub
     // predates it — and a source carrying a stale `true` from an earlier
     // lifecycle is synchronized back to `false` outside a drag.
+    this.noteScrubTierSwitch();
     source.setInteractive?.(this.scrubbing);
+    // Same reasoning for the loop window (BH-7): a source registered into a
+    // looping session must learn the wrap boundary now — nothing else pushes
+    // it until the next evaluation, and a wrap-blind eviction pass in between
+    // discards exactly the tiles the wrap is about to need.
+    this.syncLoopWindows();
     this.evaluateNow();
   }
 
@@ -753,7 +1140,10 @@ export class PlaybackGovernor {
     // A source dropped mid-drag would otherwise keep interactive=true
     // forever — endScrub's clearing broadcast only reaches sources still
     // registered. Clear the bit on its way out.
-    if (this.scrubbing) this.sources.get(id)?.source.setInteractive?.(false);
+    if (this.scrubbing) {
+      this.noteScrubTierSwitch();
+      this.sources.get(id)?.source.setInteractive?.(false);
+    }
     // Same reasoning for fairness state: a departing source must not keep a
     // stale run-ahead cap or shed weight (no future pass can reach it).
     const departing = this.sources.get(id);
@@ -767,6 +1157,14 @@ export class PlaybackGovernor {
       }
       this.lastSentCaps.delete(id);
       this.lastSentWeights.delete(id);
+      // A departing source must not keep a loop window either: no future
+      // sync can reach it, and a stale wrap boundary would keep rotating its
+      // eviction scores around a range it is no longer being played through.
+      if (this.lastSentLoopRanges.get(id)) {
+        departing.source.setLoopWindow?.(null);
+      }
+      this.lastSentLoopRanges.delete(id);
+      this.betaMemo.delete(id);
     }
     this.sources.delete(id);
     // Dropping the LAGGARD leaves every peer capped against a stale floor;
@@ -799,10 +1197,14 @@ export class PlaybackGovernor {
     // clear the bit before they leave the registry (endScrub can no longer
     // reach them). The replacement gets the current bit via addSource.
     if (this.scrubbing) {
+      this.noteScrubTierSwitch();
       for (const s of this.allSources()) s.setInteractive?.(false);
     }
-    // Outgoing sources also shed any fairness caps/weights on the way out.
+    // Outgoing sources also shed any fairness caps/weights — and any loop
+    // window — on the way out.
     this.deactivateFairness();
+    this.clearLoopWindows();
+    this.betaMemo.clear();
     this.sources.clear();
     // addSource calls evaluateNow on success; on a bad-source rejection it
     // returns early WITHOUT evaluating, so re-evaluate here unconditionally.
@@ -897,8 +1299,28 @@ export class PlaybackGovernor {
     if (this.scrubbing) return; // already dragging — same bracket
     this.scrubbing = true;
     this.pauseClock();
+    // Open a fresh QoE bracket BEFORE the broadcast so the degrade counts as
+    // this drag's first tier switch.
+    const startedAtWall = nowWall();
+    this.scrubQoe = {
+      startedAtWall,
+      endedAtWall: null,
+      firstPreviewAtWall: null,
+      firstFreshAtWall: null,
+      previews: 0,
+      freshPreviews: 0,
+      tierSwitches: 0,
+      settlePendingSince: null,
+      settleMs: null,
+    };
+    this.noteScrubTierSwitch();
     for (const source of this.allSources()) source.setInteractive?.(true);
     this.emit('scrubstart', this.timeController.getTime());
+    emitProbe('scrub', {
+      event: 'scrubstart',
+      startedAtWall,
+      time: this.timeController.getTime(),
+    });
   }
 
   /**
@@ -908,6 +1330,7 @@ export class PlaybackGovernor {
   scrubTo(time: number): void {
     if (this.rejectDisposedUse()) return;
     this.timeController.setTime(time);
+    this.noteScrubPreview(time);
   }
 
   /** The scrubber was released — commit the final position as a real seek. */
@@ -916,6 +1339,13 @@ export class PlaybackGovernor {
     const wasScrubbing = this.scrubbing;
     this.scrubbing = false;
     if (wasScrubbing) {
+      // Close the QoE bracket at the release instant, before the restore
+      // broadcast (which counts as this drag's last tier switch).
+      const bracket = this.scrubQoe;
+      if (bracket) {
+        bracket.endedAtWall = nowWall();
+        bracket.tierSwitches++;
+      }
       // Clear the interactive bit BEFORE the commit below: a scrub-LOD
       // loader restores its fine (settle) tier first, so the commit's flush
       // + post-seek gate measure full detail — the G7 preview-only contract.
@@ -933,9 +1363,69 @@ export class PlaybackGovernor {
         this.gateStartedAtWall = nowWall();
         this.evaluateNow();
       }
+      if (wasScrubbing) this.closeScrubBracket();
       return;
     }
     this.commitSeek(time);
+    if (wasScrubbing) this.closeScrubBracket();
+  }
+
+  /**
+   * Arm the settle clock (if the release gated) and publish the bracket's
+   * roll-up on the `scrub` channel. Runs AFTER the commit so `isGated()`
+   * reflects the post-release gate.
+   */
+  private closeScrubBracket(): void {
+    const bracket = this.scrubQoe;
+    if (!bracket) return;
+    if (this.isGated()) {
+      bracket.settlePendingSince = bracket.endedAtWall ?? nowWall();
+    } else {
+      // No gate on release ⇒ full detail was already resident.
+      bracket.settleMs = 0;
+    }
+    emitProbe('scrub', {
+      event: 'scrubend',
+      startedAtWall: bracket.startedAtWall,
+      endedAtWall: bracket.endedAtWall,
+      ...this.getScrubQoeStats(),
+    });
+  }
+
+  /**
+   * Count one interactive-bit broadcast against the live bracket (the
+   * pop/oscillation signal). Called from every place the governor asserts the
+   * bit mid-drag: the grab, the release, and source add/remove/swap.
+   */
+  private noteScrubTierSwitch(): void {
+    if (this.scrubQoe && this.scrubbing) this.scrubQoe.tierSwitches++;
+  }
+
+  /**
+   * Record one preview position against the live bracket and, if the instant
+   * is already covered by resident data, close the time-to-first-pixel span.
+   * Pure observation — the coverage probe is the same read the buffered bar
+   * already performs.
+   */
+  private noteScrubPreview(time: number): void {
+    const bracket = this.scrubQoe;
+    if (!bracket || !this.scrubbing) return;
+    const now = nowWall();
+    bracket.previews++;
+    if (bracket.firstPreviewAtWall === null) bracket.firstPreviewAtWall = now;
+    if (this.isTimeBuffered(time)) {
+      bracket.freshPreviews++;
+      if (bracket.firstFreshAtWall === null) bracket.firstFreshAtWall = now;
+    }
+  }
+
+  /** True when `time` falls inside the required sources' combined buffered span. */
+  private isTimeBuffered(time: number): boolean {
+    const ranges = this.getBufferedRanges();
+    for (const r of ranges) {
+      if (time >= r.start && time <= r.end) return true;
+    }
+    return false;
   }
 
   /** Programmatic committed seek (keyboard arrows, jump-to-start, story beats). */
@@ -953,8 +1443,78 @@ export class PlaybackGovernor {
    */
   notifyBufferChange(runway: BufferedRunway): void {
     if (this.disposed) return;
+    // While the thumb is held, arriving data is the ONLY thing that can close
+    // the time-to-first-pixel span for a preview position the user is resting
+    // on (no further scrubTo will land). Observation only.
+    this.noteScrubCoverageProbe();
     this.emit('progress', runway);
     this.evaluateNow();
+    // Republish the state snapshot on the playback PULSE, not only on
+    // transitions: during steady playback the state machine is silent for
+    // minutes at a time, and a harness sampling `playback.state` would read a
+    // play-head frozen at the last transition. This is the busiest callback
+    // the governor has that is still data-paced (tiles landing) rather than
+    // frame-paced — no timer is added, and it is the last statement in the
+    // method so nothing observes what it publishes.
+    this.publishStateSnapshot();
+  }
+
+  /**
+   * Publish the governor's latest state + QoE counters as the `playback.state`
+   * probe snapshot (see `telemetry.ts` for why the key and its field names are
+   * a consumer contract).
+   *
+   * OBSERVATION ONLY, and gated: `getQoeStats()` allocates, so the whole thing
+   * is skipped on one property read when no probe bag is installed. Callers
+   * are the two places the value can change — every {@link setState} and every
+   * {@link notifyBufferChange}.
+   */
+  private publishStateSnapshot(): void {
+    if (!isProbeEnabled()) return;
+    const speed = this.timeController.getSpeed();
+    snapshotProbe<PlaybackStateSnapshot>(PLAYBACK_STATE_SNAPSHOT, {
+      state: this._state,
+      playheadMs: this.timeController.getTime(),
+      speed,
+      direction: speed < 0 ? -1 : 1,
+      // Intent, not clock motion: a gate FREEZES the clock while re-asserting
+      // animating-at-speed on every source, so a replay that keyed eviction
+      // grace off "is the clock ticking" would see a paused session at exactly
+      // the moment the loader is reaching hardest.
+      animating: this.userWantsPlayback && speed !== 0,
+      ...this.getQoeStats(),
+    });
+  }
+
+  /**
+   * Re-check whether the CURRENT preview instant became covered, without
+   * counting a new preview. Closes `timeToFirstPixelMs` when data lands under
+   * a resting thumb.
+   *
+   * DELIBERATELY NOT PROBE-GATED. The scrub bracket accumulates unconditionally
+   * so {@link getScrubQoeStats} is honest with or without a probe bag installed
+   * (that is the documented contract on {@link ScrubQoeStats}, and the
+   * `scrub-cost` harness reads the getter, not the channel) — gating this would
+   * make the getter silently under-report `timeToFirstPixelMs` in exactly the
+   * probe-off configuration a CI run uses. The off-drag cost is bounded at one
+   * null property read: `scrubQoe` is null until the first `beginScrub`, and
+   * after that `!this.scrubbing` short-circuits before any work. The single
+   * `isTimeBuffered` call is reached only mid-drag, at pointer cadence, and
+   * never from the render path.
+   */
+  private noteScrubCoverageProbe(): void {
+    const bracket = this.scrubQoe;
+    if (
+      !bracket ||
+      !this.scrubbing ||
+      bracket.firstPreviewAtWall === null ||
+      bracket.firstFreshAtWall !== null
+    ) {
+      return;
+    }
+    if (this.isTimeBuffered(this.timeController.getTime())) {
+      bracket.firstFreshAtWall = nowWall();
+    }
   }
 
   /**
@@ -1084,6 +1644,96 @@ export class PlaybackGovernor {
   }
 
   /**
+   * Measured coefficient of variation of the link's throughput,
+   * `stdDev / bytesPerMs`, or `0` when there is no variance channel to read
+   * (no `getThroughput` wired, a cold estimator, a producer with no `stdDev`,
+   * or a perfectly steady link).
+   *
+   * `0` is the incumbent-behaviour value everywhere it is consumed, so a caller
+   * may read this unconditionally. Exposed so the consumer-side half of the
+   * re-fit — `decideAutoSpeedMultiplier`'s `dispersionCv` — is fed from the same
+   * measurement as the governor's own two knobs, instead of a second estimator.
+   */
+  getThroughputDispersionCv(): number {
+    const estimate = this.getThroughput?.();
+    if (!estimate) return 0;
+    const rate = estimate.bytesPerMs;
+    const stdDev = estimate.stdDev;
+    if (rate == null || !Number.isFinite(rate) || rate <= 0) return 0;
+    if (typeof stdDev !== 'number' || !Number.isFinite(stdDev) || stdDev <= 0) {
+      return 0;
+    }
+    return stdDev / rate;
+  }
+
+  /**
+   * The low watermark actually in force, in wall-ms — the configured
+   * `lowWatermarkWallMs` scaled by the measured jitter
+   * (`× clamp(1 + k·cv, 1, 3)`) and held under the start gate so the re-fit can
+   * never collapse the two thresholds (M5/CO-3).
+   *
+   * Equal to the configured value on a calm link, with no variance channel, and
+   * at `dispersionK: 0`. Diagnostic only — nothing reads it but the stall check
+   * and debug surfaces.
+   */
+  get effectiveLowWatermarkWallMs(): number {
+    const scaled =
+      this.lowWatermarkWallMs *
+      dispersionScale(this.getThroughputDispersionCv(), this.dispersionK);
+    // The START GATE, the WATERMARK and the resumeFactor HYSTERESIS are three
+    // distinct behaviours and must stay that way: a jittery link may stall
+    // earlier, but never so early that the watermark reaches the gate it is
+    // supposed to sit below. A configuration that already puts the watermark
+    // at/above the gate is left alone — that is the operator's call, not a
+    // re-fit artefact.
+    const ceiling = Math.max(
+      this.lowWatermarkWallMs,
+      this.startGateWallMs * WATERMARK_GATE_HEADROOM,
+    );
+    return Math.min(scaled, ceiling);
+  }
+
+  /**
+   * Snapshot of the CURRENT drag's scrub-QoE counters while the thumb is held,
+   * otherwise of the most recently completed drag. All-zero / null before the
+   * first {@link beginScrub}, so a harness can read it unconditionally.
+   *
+   * In-progress spans are reported as elapsed-so-far (same convention as
+   * {@link getQoeStats}'s `totalStallMs`), so a mid-drag read is meaningful.
+   */
+  getScrubQoeStats(): ScrubQoeStats {
+    const bracket = this.scrubQoe;
+    if (!bracket) {
+      return {
+        timeToFirstPixelMs: null,
+        freshFrameFraction: 0,
+        bytesDuringScrub: 0,
+        settleMs: null,
+        tierSwitchCount: 0,
+      };
+    }
+    const timeToFirstPixelMs =
+      bracket.firstPreviewAtWall !== null && bracket.firstFreshAtWall !== null
+        ? Math.max(0, bracket.firstFreshAtWall - bracket.firstPreviewAtWall)
+        : null;
+    let settleMs = bracket.settleMs;
+    if (settleMs === null && bracket.settlePendingSince !== null) {
+      settleMs = Math.max(0, nowWall() - bracket.settlePendingSince);
+    }
+    return {
+      timeToFirstPixelMs,
+      freshFrameFraction:
+        bracket.previews > 0 ? bracket.freshPreviews / bracket.previews : 0,
+      bytesDuringScrub: sumRequestBytesInWindow(
+        bracket.startedAtWall,
+        bracket.endedAtWall ?? nowWall(),
+      ),
+      settleMs,
+      tierSwitchCount: bracket.tierSwitches,
+    };
+  }
+
+  /**
    * Opt-in "Auto" speed (WS-D): the maximum sustainable playback speed
    * (TimeController units — sim-ms per wall-ms) the measured network can
    * feed, derived from the COMBINED byte cost of the upcoming horizon across
@@ -1126,6 +1776,24 @@ export class PlaybackGovernor {
    * tiles pending whose byte sizes the directory doesn't expose. Consumers
    * apply their own snapping/clamping/hysteresis; the governor only does the
    * honest math.
+   *
+   * LADDER EVALUATION (M5/CO-4). Measuring demand ONCE over a horizon scaled by
+   * the CURRENT speed is myopic: a faster candidate sweeps a LONGER window,
+   * which may cross a density spike the current-speed window never sees, so
+   * Auto upshifts straight into a stall (the §11.4 gap). When
+   * {@link PlaybackGovernorOptions.baseSpeed} is supplied, every multiplier in
+   * the ladder is instead priced over ITS OWN horizon, descending, and the
+   * answer is the sustainable value at the LARGEST FEASIBLE candidate — where
+   * feasible means `Σbytes_c / H ≤ η · Ĉ`, equivalently "the speed this
+   * candidate's own window says is sustainable is at least the candidate
+   * itself". Below the top of the ladder that value is capped at the candidate,
+   * because the step above it was measured and refused and consumers snap to
+   * the nearest step. Without a base speed there is no way to express
+   * candidates in speed units, so the single-point computation runs unchanged.
+   *
+   * Everything below is enforced PER EVALUATED CANDIDATE, not once: the
+   * `Infinity`-when-nothing-pending contract, the `null`-when-blind contracts,
+   * and the contended aggregate-rate recovery.
    */
   getAutoSpeedSuggestion(): number | null {
     const required = this.requiredSources();
@@ -1134,10 +1802,110 @@ export class PlaybackGovernor {
     const absSpeed = Math.abs(speed);
     if (absSpeed <= 0) return null;
 
-    const horizonSimMs = AUTO_SPEED_HORIZON_WALL_MS * absSpeed;
     const time = this.timeController.getTime();
+    const direction: 1 | -1 = speed < 0 ? -1 : 1;
+    // η, shrunk by measured dispersion (a jittery link rises more slowly).
+    // Exactly AUTO_SPEED_SAFETY on a calm link / with no variance channel.
+    const safety =
+      AUTO_SPEED_SAFETY /
+      dispersionScale(this.getThroughputDispersionCv(), this.dispersionK);
+
+    const candidates = this.autoSpeedCandidates();
+    if (candidates === null) {
+      // Incumbent single-point path (no base speed, or ladder evaluation pinned
+      // off): one measurement at the current speed, exactly as before.
+      return this.evaluateAutoSpeedCandidate(
+        required,
+        time,
+        direction,
+        absSpeed,
+        safety,
+      );
+    }
+
+    // Descending: the FIRST feasible candidate is the largest feasible one.
+    let smallest: number | null = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const candidateSpeed = candidates[i];
+      const sustainable = this.evaluateAutoSpeedCandidate(
+        required,
+        time,
+        direction,
+        candidateSpeed,
+        safety,
+      );
+      // Honesty short-circuit: a candidate whose window cannot be priced makes
+      // the whole evaluation dishonest, exactly as the single-point path's
+      // blind cases do. Abstain rather than fall through to a smaller (and
+      // therefore optimistically cheaper) window.
+      if (sustainable === null) return null;
+      if (sustainable < candidateSpeed) {
+        smallest = sustainable;
+        continue; // infeasible — try the next step down
+      }
+      // Feasible. At the TOP of the ladder there is nothing above to protect
+      // against, so the raw value is reported — including `Infinity`, which is
+      // the fully-cached "network imposes no cap" contract.
+      if (i === 0) return sustainable;
+      // Below the top, the value is capped at the candidate itself. The step
+      // ABOVE this one was priced over its own longer window and REFUSED, and
+      // consumers snap the answer to the nearest ladder step — so reporting the
+      // uncapped `sustainable` (which this candidate's shorter, spike-free
+      // window can easily put above the next step) is exactly the myopic
+      // upshift-into-a-stall this item exists to remove.
+      return Math.min(sustainable, candidateSpeed);
+    }
+    // Nothing on the ladder is sustainable — report the slowest candidate's
+    // honest value and let the consumer's clamp land it on the bottom step.
+    return smallest;
+  }
+
+  /**
+   * The ladder in ABSOLUTE speed units, descending, or `null` when candidates
+   * cannot be enumerated (ladder evaluation pinned off, or no usable base
+   * speed) — in which case {@link getAutoSpeedSuggestion} keeps its incumbent
+   * single-point computation.
+   */
+  private autoSpeedCandidates(): number[] | null {
+    if (!this.ladderEvaluation) return null;
+    const raw =
+      typeof this.baseSpeed === 'function' ? this.baseSpeed() : this.baseSpeed;
+    if (raw == null || !Number.isFinite(raw)) return null;
+    const base = Math.abs(raw);
+    if (base <= 0) return null;
+    const out: number[] = [];
+    for (let i = this.speedSteps.length - 1; i >= 0; i--) {
+      const step = this.speedSteps[i];
+      if (!Number.isFinite(step) || step <= 0) continue;
+      out.push(step * base);
+    }
+    // The ladder is declared ascending; defend the descending contract rather
+    // than assume it, so a custom `speedSteps` can't silently invert the
+    // largest-feasible-first walk.
+    out.sort((a, b) => b - a);
+    return out.length > 0 ? out : null;
+  }
+
+  /**
+   * Price ONE candidate speed: the contended sustainable speed over the horizon
+   * that candidate would sweep, or `null` when the math cannot be honest.
+   *
+   * This is the incumbent computation verbatim, parameterised by the candidate
+   * speed. In particular the aggregate-rate recovery on the no-`getThroughput`
+   * path is `max_i(bytes_i / eta_i)` and stays that way — it is a standing
+   * do-not-touch entry, and the alternative (`Σbytes / max eta`) is the
+   * recorded racing-ahead bug.
+   */
+  private evaluateAutoSpeedCandidate(
+    required: BufferSource[],
+    time: number,
+    direction: 1 | -1,
+    candidateAbsSpeed: number,
+    safety: number,
+  ): number | null {
+    const horizonSimMs = AUTO_SPEED_HORIZON_WALL_MS * candidateAbsSpeed;
     const range =
-      speed < 0
+      direction < 0
         ? { start: time - horizonSimMs, end: time }
         : { start: time, end: time + horizonSimMs };
 
@@ -1221,7 +1989,9 @@ export class PlaybackGovernor {
     if (aggregateBytesPerMs == null || aggregateBytesPerMs <= 0) return null;
 
     const bytesPerSimMs = sumBytes / horizonSimMs;
-    return (aggregateBytesPerMs / bytesPerSimMs) * AUTO_SPEED_SAFETY;
+    // `safety` is AUTO_SPEED_SAFETY on a calm link / with no variance channel,
+    // so this is the incumbent expression bit-for-bit in the default case.
+    return (aggregateBytesPerMs / bytesPerSimMs) * safety;
   }
 
   /** Detach from the TimeController and stop all timers. The clock is left as-is. */
@@ -1245,11 +2015,16 @@ export class PlaybackGovernor {
     // before dropping the registry — a loader must not stay pinned to its
     // degraded scrub tier forever.
     if (this.scrubbing) {
+      this.noteScrubTierSwitch();
       for (const s of this.allSources()) s.setInteractive?.(false);
     }
-    // Loaders outlive the governor: leaving a run-ahead cap or shed weight
-    // behind would throttle them forever with nothing left to lift it.
+    // Loaders outlive the governor: leaving a run-ahead cap, a shed weight, or
+    // a loop window behind would steer them forever with nothing left to lift
+    // it. (clearLoopWindows runs before `disposed` gates syncLoopWindows —
+    // this is the direct write path, not the sync.)
     this.deactivateFairness();
+    this.clearLoopWindows();
+    this.betaMemo.clear();
     this.sources.clear();
   }
 
@@ -1311,12 +2086,43 @@ export class PlaybackGovernor {
     direction: 1 | -1,
     horizonSimMs: number | undefined,
     tolSimMs = 0,
+    absSpeed = 0,
   ): BufferedRunway {
-    const runways: BufferedRunway[] = [];
+    const entries: RunwayFoldEntry[] = [];
     for (const source of this.requiredSources()) {
-      runways.push(source.getBufferedRunway(time, direction, horizonSimMs));
+      entries.push({
+        runway: source.getBufferedRunway(time, direction, horizonSimMs),
+        bucketMs: declaredBucketMs(source),
+      });
     }
-    return this.foldRequiredRunways(runways, horizonSimMs, tolSimMs);
+    return this.foldRequiredRunways(entries, horizonSimMs, tolSimMs, absSpeed);
+  }
+
+  /**
+   * The per-source lift band τ_i (BH-4, §11.2).
+   *
+   * An AUTHORED `runwayToleranceMs` wins globally — every source is banded at
+   * the authored wall constant × |speed|, so `0` still folds the raw min.
+   * Otherwise the band is derived from the cadences the two sources actually
+   * declare: `τ_i = max(Δ_i, Δ_L) + TICK_PROBE_INTERVAL_MS × |speed|`. The
+   * residue is the probe staleness — the fold reads runways that are up to one
+   * probe interval old, and that much misalignment is below the governor's own
+   * observation resolution. It is also exactly the incumbent default, so a
+   * derived band is never NARROWER than today's: a pair that declares nothing
+   * (`Δ = 0` / no method) falls straight back to it, which is the whole
+   * degradation contract — an undeclared `temporalBucketMs` must land on the
+   * wall default, never on τ = 0.
+   */
+  private liftBandSimMs(
+    bucketMs: number | null,
+    leadBucketMs: number | null,
+    tolSimMs: number,
+    absSpeed: number,
+  ): number {
+    if (this.runwayToleranceAuthored) return tolSimMs;
+    const declared = Math.max(bucketMs ?? 0, leadBucketMs ?? 0);
+    if (!(declared > 0)) return tolSimMs;
+    return declared + TICK_PROBE_INTERVAL_MS * absSpeed;
   }
 
   /**
@@ -1326,11 +2132,12 @@ export class PlaybackGovernor {
    * re-probing.
    */
   private foldRequiredRunways(
-    runways: BufferedRunway[],
+    entries: RunwayFoldEntry[],
     horizonSimMs: number | undefined,
     tolSimMs: number,
+    absSpeed = 0,
   ): BufferedRunway {
-    if (runways.length === 0) {
+    if (entries.length === 0) {
       // No gating source: never stall. Report a complete, unbounded runway.
       return {
         simMs: horizonSimMs ?? Infinity,
@@ -1345,13 +2152,19 @@ export class PlaybackGovernor {
     let bytesPending = 0;
     let allComplete = true;
     let leadSimMs = -Infinity;
-    const incomplete: number[] = [];
-    for (const r of runways) {
+    /** Cadence of the LEADING incomplete source — the Δ_L of every τ_i. */
+    let leadBucketMs: number | null = null;
+    const incomplete: RunwayFoldEntry[] = [];
+    for (const e of entries) {
+      const r = e.runway;
       bytesPending += r.bytesPending;
       if (r.complete) continue;
       allComplete = false;
-      incomplete.push(r.simMs);
-      if (r.simMs > leadSimMs) leadSimMs = r.simMs;
+      incomplete.push(e);
+      if (r.simMs > leadSimMs) {
+        leadSimMs = r.simMs;
+        leadBucketMs = e.bucketMs;
+      }
     }
     if (allComplete) {
       // Every required source is complete — unbounded, which `complete`
@@ -1363,12 +2176,22 @@ export class PlaybackGovernor {
         complete: true,
       };
     }
-    // Second pass: lift any source within tolerance of the leader to the
-    // leader, then take the min. Sources further behind keep their real
-    // runway (full stall protection).
+    // Second pass: lift any source within ITS OWN band τ_i of the leader to
+    // the leader, then take the min. Sources further behind keep their real
+    // runway (full stall protection). The lift is still measured BETWEEN
+    // sources against the leader — never against the gate or the watermark
+    // (the §11.2 structural constraint) — and complete sources are still
+    // excluded from both the lead and the min.
     let minSimMs = Infinity;
-    for (const simMs of incomplete) {
-      const effective = leadSimMs - simMs <= tolSimMs ? leadSimMs : simMs;
+    for (const e of incomplete) {
+      const simMs = e.runway.simMs;
+      const tau = this.liftBandSimMs(
+        e.bucketMs,
+        leadBucketMs,
+        tolSimMs,
+        absSpeed,
+      );
+      const effective = leadSimMs - simMs <= tau ? leadSimMs : simMs;
       if (effective < minSimMs) minSimMs = effective;
     }
     return {
@@ -1402,6 +2225,21 @@ export class PlaybackGovernor {
       this.qoeStallCount++;
       this.stallEnteredAtWall = now;
     }
+    // Settle-to-full-detail closes the FIRST time the post-release gate lets
+    // go (the gate measures the fine tier, so this is honest about full
+    // detail). A later stall opens a new gate but does not reopen this span.
+    const bracket = this.scrubQoe;
+    if (
+      bracket &&
+      bracket.settleMs === null &&
+      bracket.settlePendingSince !== null &&
+      next !== 'starting' &&
+      next !== 'buffering' &&
+      next !== 'seeking'
+    ) {
+      bracket.settleMs = Math.max(0, now - bracket.settlePendingSince);
+      bracket.settlePendingSince = null;
+    }
     this._state = next;
     this.emit('statechange', next);
     emitProbe('playback', {
@@ -1409,6 +2247,9 @@ export class PlaybackGovernor {
       state: next,
       ...this.getQoeStats(),
     });
+    // Same counters, latest-value: a measurement window that contains no
+    // transition at all still gets a reading (the channel would be empty).
+    this.publishStateSnapshot();
   }
 
   /**
@@ -1495,9 +2336,84 @@ export class PlaybackGovernor {
     }
   }
 
+  /**
+   * Push the clock's LOOPING range to every registered source (BH-7), or
+   * `null` when playback is not looping. Idempotent and write-throttled by an
+   * exact-value memo, so a non-looping session never calls
+   * {@link BufferSource.setLoopWindow} at all and a looping one calls it once
+   * per source per boundary change.
+   *
+   * The governor runs this itself on source registration and on every gate /
+   * probe evaluation, which covers every path that can change the answer with
+   * at most one evaluation of lag. It is public because
+   * `TimeController.setLoop`/`setTimeRange` announce nothing — a host that
+   * toggles looping outside a play/pause/seek can call this to push the change
+   * immediately instead of waiting for the next evaluation.
+   */
+  syncLoopWindows(): void {
+    if (this.disposed) return;
+    // `bounce` (which takes precedence over `loop` in the clock) is NOT
+    // exposed by TimeController, so it cannot be excluded here. A bouncing
+    // clock never wraps — it reflects — so a loop window pushed under
+    // `{loop: true, bounce: true}` would describe a boundary the clock does
+    // not cross. That combination is already contradictory at the clock; if a
+    // bounce accessor lands, gate this on it.
+    const range = this.timeController.getLoop()
+      ? (this.timeController.getTimeRange() ?? null)
+      : null;
+    for (const [id, entry] of this.sources) {
+      this.sendLoopWindow(id, entry.source, range);
+    }
+  }
+
+  /**
+   * Throttled loop-window write: "never sent" and "sent null" are the same
+   * state (a fresh source has no loop window), so a non-looping session is
+   * byte-for-byte the incumbent — zero calls.
+   */
+  private sendLoopWindow(
+    id: string,
+    source: BufferSource,
+    range: { start: number; end: number } | null,
+  ): void {
+    const last = this.lastSentLoopRanges.get(id) ?? null;
+    if (range === null) {
+      if (last === null) {
+        // Record the (default) state so the memo is authoritative per id.
+        this.lastSentLoopRanges.set(id, null);
+        return;
+      }
+      this.lastSentLoopRanges.set(id, null);
+      source.setLoopWindow?.(null);
+      return;
+    }
+    if (last !== null && last.start === range.start && last.end === range.end) {
+      return;
+    }
+    this.lastSentLoopRanges.set(id, { start: range.start, end: range.end });
+    source.setLoopWindow?.({ start: range.start, end: range.end });
+  }
+
+  /**
+   * Clear every outstanding loop window ONCE (registry teardown / swap): a
+   * source leaving the governor must not keep rotating its eviction scores
+   * around a wrap boundary nothing is driving any more.
+   */
+  private clearLoopWindows(): void {
+    if (this.lastSentLoopRanges.size === 0) return;
+    for (const [id, entry] of this.sources) {
+      if (this.lastSentLoopRanges.get(id)) entry.source.setLoopWindow?.(null);
+    }
+    this.lastSentLoopRanges.clear();
+  }
+
   /** Immediate re-evaluation: gate check while gated, stall check while playing. */
   private evaluateNow(): void {
     if (this.disposed) return;
+    // Loop mode / range can change without announcing itself (the clock has no
+    // event for either), so re-derive on the evaluation cadence. Two getters
+    // and a numeric compare per source — no probe, no timer of its own.
+    this.syncLoopWindows();
     if (this.isGated()) {
       this.evaluateGate();
     } else if (this._state === 'playing' && !this.scrubbing) {
@@ -1555,6 +2471,7 @@ export class PlaybackGovernor {
         direction,
         requiredSimMs,
         this.toleranceSimMs(absSpeed),
+        absSpeed,
       );
       passed = runway.complete || runway.simMs >= requiredSimMs;
       if (!passed) {
@@ -1647,8 +2564,12 @@ export class PlaybackGovernor {
       direction,
       !this.multiSourceFairness,
     );
-    const requiredRunways: BufferedRunway[] = [];
-    for (const p of probes) if (p.required) requiredRunways.push(p.runway);
+    const requiredRunways: RunwayFoldEntry[] = [];
+    for (const p of probes) {
+      if (p.required) {
+        requiredRunways.push({ runway: p.runway, bucketMs: p.bucketMs });
+      }
+    }
     // The NEAREST required-source frontier (cadence-tolerance-banded min
     // simMs); complete = AND over required. The same band that keeps the gate
     // from false-stalling must also lift the cached frontier so the per-tick
@@ -1658,6 +2579,7 @@ export class PlaybackGovernor {
       requiredRunways,
       undefined,
       this.toleranceSimMs(absSpeed),
+      absSpeed,
     );
     this.frontierDirection = direction;
     this.bufferedUntil = runway.complete
@@ -1690,6 +2612,7 @@ export class PlaybackGovernor {
         baseWeight: entry.weight,
         source: entry.source,
         runway: entry.source.getBufferedRunway(time, direction),
+        bucketMs: declaredBucketMs(entry.source),
       });
     }
     return out;
@@ -1711,9 +2634,16 @@ export class PlaybackGovernor {
    *   one ahead of the required laggard is pure dead weight; one behind is
    *   unaffected, since the cap only limits run-AHEAD.
    *
-   * - WEIGHT: each incomplete REQUIRED source gets
-   *   `base × clamp((slack + laggard) / (slack + runway_i), 0.25, 4)` — the
-   *   laggard lands exactly on base, leaders shed share, bounded both ways.
+   * - WEIGHT (BH-3, §11.3): each incomplete REQUIRED source is priced by the
+   *   BYTES it must still buy to reach the leader — `N_i = β_i × deficit_i` —
+   *   and weights are filled proportional to `N_i`, normalized so the neediest
+   *   lands on `4 × base` and a source already inside the slack band sheds to
+   *   `0.25 × base` (see {@link computeProgressiveFillWeights}). β is this
+   *   source's byte density at its own frontier, measured through
+   *   {@link BufferSource.estimateCost} over one bucket
+   *   ({@link frontierByteDensity}); a bytes-blind source reads β = 1 and the
+   *   fill degrades to the runway-only shed it replaces
+   *   ({@link computeRunwayShedWeights}, retained as the named fallback).
    *   DRR is work-conserving, so this only matters while leaders still have
    *   legitimate queued work (e.g. refetching near-window evictions); the
    *   run-ahead cap does most of the work. Optional/complete sources stay at
@@ -1747,10 +2677,19 @@ export class PlaybackGovernor {
         return;
       }
       this.lastFairnessSelfProbeWall = now;
-      const speed = this.timeController.getSpeed();
-      const direction: 1 | -1 = speed < 0 ? -1 : 1;
-      probes = this.probeAllRunways(this.timeController.getTime(), direction);
+      const gatedSpeed = this.timeController.getSpeed();
+      const gatedDirection: 1 | -1 = gatedSpeed < 0 ? -1 : 1;
+      probes = this.probeAllRunways(
+        this.timeController.getTime(),
+        gatedDirection,
+      );
     }
+    // The playhead the probes were taken at — the anchor β measures from. Both
+    // entry paths probe at the clock's CURRENT time/direction, so re-reading
+    // them here is the same pair, not a second sample.
+    const speed = this.timeController.getSpeed();
+    const direction: 1 | -1 = speed < 0 ? -1 : 1;
+    const time = this.timeController.getTime();
     // laggard = min runway over incomplete REQUIRED sources (complete sources
     // never gate, so they never define the floor).
     let laggardSimMs = Infinity;
@@ -1768,6 +2707,17 @@ export class PlaybackGovernor {
     const slackSimMs =
       Math.max(this.runwayToleranceMs, RUN_AHEAD_SLACK_WALL_MS) * absSpeed;
     const capSimMs = laggardSimMs + slackSimMs;
+    // WEIGHTS (BH-3): price every incomplete required source's deficit in
+    // BYTES and fill share proportional to that need. β is only worth
+    // measuring when there are at least two of them — one source has nobody to
+    // be fair against, and the fill returns base weights for it either way, so
+    // the directory walk would be pure cost.
+    const weights = this.computeFairnessWeights(
+      probes,
+      slackSimMs,
+      time,
+      direction,
+    );
     // Hysteresis bands (see LAGGARD_*_BAND_FRACTION): membership from the
     // PREVIOUS pass widens a source's band, so a near-tie can't flap
     // identity — and cap writes — across evaluations.
@@ -1785,23 +2735,102 @@ export class PlaybackGovernor {
         p.runway.simMs <= laggardSimMs + band;
       if (isLaggard) nextLaggards.add(p.id);
       this.sendRunAheadCap(p.id, p.source, isLaggard ? null : capSimMs);
-      if (p.required && !p.runway.complete) {
-        const shed = Math.min(
-          4,
-          Math.max(
-            0.25,
-            (slackSimMs + laggardSimMs) / (slackSimMs + p.runway.simMs),
-          ),
-        );
-        this.sendBandwidthWeight(
-          p.id,
-          p.source,
-          p.baseWeight * shed,
-          p.baseWeight,
-        );
+      const weight = weights.get(p.id);
+      if (weight !== undefined) {
+        this.sendBandwidthWeight(p.id, p.source, weight, p.baseWeight);
       }
     }
     this.lastLaggardIds = nextLaggards;
+  }
+
+  /**
+   * The fair-share weight per incomplete REQUIRED source id (BH-3). Optional
+   * and complete sources are absent from the map and are therefore never
+   * written — they stay at their registered base weight, exactly as before.
+   *
+   * Returns the byte-aware progressive fill by default; flipping
+   * {@link USE_PROGRESSIVE_FILL_WEIGHTS} restores the incumbent `1/x` runway
+   * shed through the identical map interface (the one-release rollback).
+   */
+  private computeFairnessWeights(
+    probes: SourceProbe[],
+    slackSimMs: number,
+    time: number,
+    direction: 1 | -1,
+  ): Map<string, number> {
+    const contenders: SourceProbe[] = [];
+    for (const p of probes) {
+      if (p.required && !p.runway.complete) contenders.push(p);
+    }
+    if (contenders.length === 0) return new Map();
+    // Δ for the β walk: one declared bucket, floored at the slack the fill
+    // measures need against, so a source that declares nothing still samples a
+    // meaningful span. Bounded to ONE bucket on purpose (the BH-3 risk note):
+    // the density is a local rate, not a horizon sum.
+    const fill: ProgressiveFillProbe[] = [];
+    for (const p of contenders) {
+      const deltaSimMs = Math.max(p.bucketMs ?? 0, slackSimMs);
+      const beta =
+        contenders.length < 2
+          ? null
+          : this.frontierByteDensity(p, deltaSimMs, time, direction);
+      fill.push({
+        id: p.id,
+        runwaySimMs: p.runway.simMs,
+        // A bytes-blind source (no measurable density) prices at 1 byte per
+        // sim-ms, which is what makes the fill degrade to a runway-only shed
+        // instead of guessing.
+        betaBytesPerSimMs: beta ?? 1,
+        baseWeight: p.baseWeight,
+      });
+    }
+    return USE_PROGRESSIVE_FILL_WEIGHTS
+      ? computeProgressiveFillWeights(fill, slackSimMs)
+      : computeRunwayShedWeights(fill, slackSimMs);
+  }
+
+  /**
+   * β_i: bytes still missing per sim-ms at THIS source's own frontier, or null
+   * when the source cannot answer in bytes (BH-3).
+   *
+   * Measured with the existing {@link BufferSource.estimateCost} over one Δ
+   * immediately past the source's frontier — the span the source would buy
+   * next — so a source whose tiles are 10× heavier prices 10× the need for the
+   * same sim-ms of deficit. `0` bytes is read as BLIND, not as free: a byte
+   * channel with no `getTileByteSize` wired reports 0 for every tile and a
+   * caller cannot tell the two apart (the same honesty contract
+   * {@link BufferSource.getByteDensityProfile} states).
+   *
+   * MEMOIZED per (source, frontier bucket, Δ): `estimateCost` is a directory
+   * walk and this runs on the 200 ms probe cadence. The key changes exactly
+   * when the frontier crosses a bucket boundary or |speed| changes Δ.
+   */
+  private frontierByteDensity(
+    probe: SourceProbe,
+    deltaSimMs: number,
+    time: number,
+    direction: 1 | -1,
+  ): number | null {
+    if (!(deltaSimMs > 0) || !Number.isFinite(deltaSimMs)) return null;
+    const runwaySimMs = probe.runway.simMs;
+    if (!Number.isFinite(runwaySimMs)) return null;
+    const frontier = time + direction * Math.max(0, runwaySimMs);
+    if (!Number.isFinite(frontier)) return null;
+    const key = `${Math.floor(frontier / deltaSimMs)}|${deltaSimMs}`;
+    const memo = this.betaMemo.get(probe.id);
+    if (memo && memo.key === key) return memo.beta;
+    const start = direction > 0 ? frontier : frontier - deltaSimMs;
+    const cost = probe.source.estimateCost({
+      start,
+      end: start + deltaSimMs,
+    });
+    const bytes = cost?.bytes;
+    const beta =
+      typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0
+        ? bytes / deltaSimMs
+        : null;
+    this.betaMemo.set(probe.id, { key, beta });
+    return beta;
   }
 
   /** Throttled cap write: re-send only on a to/from-null transition or a >20% change. */
@@ -1890,7 +2919,11 @@ export class PlaybackGovernor {
     const absSpeed = Math.abs(speed);
     if (absSpeed <= 0) return;
 
-    const watermarkSimMs = this.lowWatermarkWallMs * absSpeed;
+    // EFFECTIVE watermark: the configured value scaled by measured link jitter
+    // (see effectiveLowWatermarkWallMs). Identical to `lowWatermarkWallMs` on a
+    // calm link, so today's transitions are reproduced exactly; a jittery link
+    // stalls earlier and honestly instead of sailing into a dry-out.
+    const watermarkSimMs = this.effectiveLowWatermarkWallMs * absSpeed;
     const direction: 1 | -1 = speed < 0 ? -1 : 1;
     const time = this.timeController.getTime();
     // Combined over REQUIRED sources: stall when the LAGGARD's runway drops
@@ -1903,6 +2936,7 @@ export class PlaybackGovernor {
       direction,
       watermarkSimMs,
       this.toleranceSimMs(absSpeed),
+      absSpeed,
     );
     if (!runway.complete && runway.simMs < watermarkSimMs) {
       // Same canplaythrough predictor as the gate: don't stall when the
@@ -1923,12 +2957,25 @@ export class PlaybackGovernor {
   }
 
   /**
-   * HAVE_ENOUGH_DATA predictor: true when the needed-but-missing bytes inside
-   * `windowSimMs` ahead of `time` are estimated to download within the wall
-   * time the buffered runway already buys (floored at
-   * {@link PLAYTHROUGH_MIN_WALL_MS} so instant networks pass cold gates).
-   * Conservative when blind: returns false while the throughput estimator has
-   * no samples yet.
+   * HAVE_ENOUGH_DATA predictor. Two implementations, one contract:
+   *
+   * - FLUID (M5/CO-3, preferred): when every required source exposes
+   *   {@link BufferSource.getByteDensityProfile} and the estimator has a rate,
+   *   walk the merged bucket boundaries and require cumulative missing bytes
+   *   through each boundary to fit inside that boundary's own deadline. This is
+   *   what sees a byte cliff two windows out; the one-window compare below
+   *   cannot, because it folds the whole window into a single number and so
+   *   passes "thin now, wall later".
+   * - ONE-WINDOW (incumbent, retained as the fallback): true when the
+   *   needed-but-missing bytes inside `windowSimMs` ahead of `time` are
+   *   estimated to download within the wall time the buffered runway already
+   *   buys (floored at {@link PLAYTHROUGH_MIN_WALL_MS} so instant networks pass
+   *   cold gates).
+   *
+   * Both are conservative when blind: false while the throughput estimator has
+   * no samples yet. Anything that makes the fluid check unanswerable — one
+   * source without the method, one `null` profile, a cold estimator, the kill
+   * switch — routes to the incumbent path unchanged, never to a guess.
    */
   private predictsPlaythrough(
     time: number,
@@ -1940,6 +2987,15 @@ export class PlaybackGovernor {
     const required = this.requiredSources();
     if (required.length === 0) return true; // nothing gates ⇒ always plays through
     if (absSpeed <= 0) return false;
+    const fluid = this.predictsPlaythroughFluid(
+      required,
+      time,
+      direction,
+      windowSimMs,
+      runway,
+      absSpeed,
+    );
+    if (fluid !== null) return fluid;
     const window =
       direction > 0
         ? { start: time, end: time + windowSimMs }
@@ -1957,6 +3013,139 @@ export class PlaybackGovernor {
     if (maxEtaMs == null) return false;
     const runwayWallMs = runway.simMs / absSpeed;
     return maxEtaMs <= Math.max(runwayWallMs, PLAYTHROUGH_MIN_WALL_MS);
+  }
+
+  /**
+   * The FLUID feasibility check (M5/CO-3): one pass over the merged bucket
+   * boundaries `T_k` of every required source's byte-density profile, out to
+   * `min(dataset end, fluidCheckHorizonWallMs × |speed|)`, asserting
+   *
+   *   cumulative missing bytes through `T_k`
+   *     ≤ conservative rate × (buffered-runway wall time + `T_k`'s wall offset)
+   *
+   * The one-window compare it replaces asks a strictly weaker question — "do
+   * the whole window's missing bytes fit in the runway's wall time" — which a
+   * window whose bytes are FLAT now and a WALL later passes trivially. Here
+   * every boundary carries its own deadline, so the wall is priced at the
+   * instant the playhead would actually hit it.
+   *
+   * `T_k`'s wall offset is measured from the buffered frontier (the runway
+   * already covers everything nearer than that), which makes the budget at a
+   * boundary beyond the runway exactly `(T_k − playhead) / |speed|` — the wall
+   * time until the playhead arrives. The {@link PLAYTHROUGH_MIN_WALL_MS} floor
+   * is carried over verbatim so an instant network still passes a cold gate.
+   *
+   * Returns `null` — meaning "not answerable here, use the incumbent path" —
+   * when the kill switch is off, when any required source lacks the profile
+   * method or returns `null`/malformed arrays, or when there is no conservative
+   * rate to spend. Never guesses a byte count and never guesses a rate.
+   *
+   * Deterministic: a pure function of the profiles, the rate, the runway and
+   * the arguments. Boundaries are ordered by a total comparator so a tie
+   * between two sources' buckets can never depend on registry iteration order.
+   */
+  private predictsPlaythroughFluid(
+    required: BufferSource[],
+    time: number,
+    direction: 1 | -1,
+    windowSimMs: number,
+    runway: BufferedRunway,
+    absSpeed: number,
+  ): boolean | null {
+    if (!this.fluidFeasibility) return null;
+    for (const source of required) {
+      if (typeof source.getByteDensityProfile !== 'function') return null;
+    }
+    const rate = this.conservativeRateBytesPerMs();
+    if (rate === null || !(rate > 0)) return null;
+
+    // Floored at the window being evaluated so the fluid check never sees LESS
+    // than the one-window path it replaces. The dataset end needs no clamp of
+    // its own: the profile simply has no buckets past it.
+    const horizonSimMs = Math.max(
+      windowSimMs,
+      this.fluidCheckHorizonWallMs * absSpeed,
+    );
+    const span =
+      direction > 0
+        ? { start: time, end: time + horizonSimMs }
+        : { start: time - horizonSimMs, end: time };
+
+    // One entry per bucket that still owes bytes: how far ahead of the playhead
+    // the playhead ENTERS it (sim-ms), and what it costs.
+    const deadlines: Array<{ distSimMs: number; bytes: number }> = [];
+    for (let s = 0; s < required.length; s++) {
+      const profile = required[s].getByteDensityProfile!(span);
+      if (!profile) return null;
+      const starts = profile.bucketStarts;
+      const missing = profile.missingBytes;
+      if (
+        !Array.isArray(starts) ||
+        !Array.isArray(missing) ||
+        starts.length !== missing.length
+      ) {
+        return null;
+      }
+      for (let i = 0; i < starts.length; i++) {
+        const bytes = missing[i];
+        if (!Number.isFinite(bytes) || bytes <= 0) continue;
+        // Travelling forward the playhead enters a bucket at its START;
+        // travelling backward, at its RIGHT edge — which is the next bucket's
+        // start (`bucketStarts` ascends), or the playhead itself for the last.
+        const entry = direction > 0 ? starts[i] : (starts[i + 1] ?? span.end);
+        if (!Number.isFinite(entry)) continue;
+        deadlines.push({
+          distSimMs: Math.max(0, direction > 0 ? entry - time : time - entry),
+          bytes,
+        });
+      }
+    }
+    if (deadlines.length === 0) return true; // nothing missing anywhere ahead
+
+    // Total order: nearest deadline first, ties broken by byte count so the
+    // walk is independent of source registration order.
+    deadlines.sort((a, b) =>
+      a.distSimMs !== b.distSimMs
+        ? a.distSimMs - b.distSimMs
+        : a.bytes - b.bytes,
+    );
+
+    const runwayWallMs = Math.max(
+      runway.simMs / absSpeed,
+      PLAYTHROUGH_MIN_WALL_MS,
+    );
+    let cumulativeBytes = 0;
+    for (const d of deadlines) {
+      cumulativeBytes += d.bytes;
+      const beyondRunwaySimMs = Math.max(0, d.distSimMs - runway.simMs);
+      const budgetWallMs = runwayWallMs + beyondRunwaySimMs / absSpeed;
+      if (cumulativeBytes > rate * budgetWallMs) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The quantile-style lower bound on the link rate the feasibility check
+   * spends: `max(0, bytesPerMs − z·stdDev)`, or `null` when there is no
+   * estimate at all.
+   *
+   * This is the same rule `@poopdeck.gl/core`'s `conservativeRateFromEstimate`
+   * applies — restated rather than imported because this package has ZERO
+   * runtime dependencies by design and only ever sees a {@link
+   * ThroughputEstimate} across the `getThroughput()` boundary, never the
+   * estimator itself. `null` in ⇒ `null` out; a producer with no `stdDev` reads
+   * as 0 dispersion and therefore returns the point estimate unchanged.
+   */
+  private conservativeRateBytesPerMs(): number | null {
+    const estimate = this.getThroughput?.();
+    if (!estimate) return null;
+    const point = estimate.bytesPerMs;
+    if (point == null || !Number.isFinite(point)) return null;
+    const stdDev =
+      typeof estimate.stdDev === 'number' && Number.isFinite(estimate.stdDev)
+        ? Math.max(0, estimate.stdDev)
+        : 0;
+    return Math.max(0, point - this.conservativeRateZ * stdDev);
   }
 
   /** The sim-time window the current (or a would-be) gate must cover. */
@@ -2008,6 +3197,83 @@ export class PlaybackGovernor {
 /** performance.now when available (browsers, vitest), Date.now otherwise. */
 function nowWall(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/**
+ * A source's DECLARED temporal bucket in sim-ms, or null (BH-4).
+ *
+ * Feature-detected, never assumed: a source without the method, one that
+ * throws, and one that declares `0` (an archive whose `temporalBucketMs` was
+ * never set) are all "undeclared" — which routes the lift band back to the
+ * wall-ms default, never to a zero band.
+ */
+function declaredBucketMs(source: BufferSource): number | null {
+  const read = source.getTemporalBucketMs;
+  if (typeof read !== 'function') return null;
+  const bucketMs = read.call(source);
+  return typeof bucketMs === 'number' &&
+    Number.isFinite(bucketMs) &&
+    bucketMs > 0
+    ? bucketMs
+    : null;
+}
+
+/** Option sanitiser: a finite POSITIVE number, else the documented default. */
+function positiveOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+/**
+ * Option sanitiser: a finite NON-NEGATIVE number, else the documented default.
+ * Distinct from {@link positiveOr} because `0` is a meaningful setting for the
+ * two re-fit knobs — it pins the incumbent constant.
+ */
+function nonNegativeOr(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback;
+}
+
+/** Shape of a core `requests` probe sample, as far as byte windowing cares. */
+interface RequestSampleLike {
+  bytes?: unknown;
+  completedAt?: unknown;
+  dispatchedAt?: unknown;
+}
+
+/**
+ * Sum bytes on the core `requests` probe channel whose request COMPLETED
+ * inside `[fromWall, toWall]` — the byte attribution for a scrub bracket.
+ *
+ * Reads `globalThis.__sttProbe.requests` directly: `@poopdeck.gl/playback` has
+ * zero runtime dependencies by design, so it cannot import
+ * `@poopdeck.gl/core`'s telemetry module — but both packages write the ONE
+ * shared probe bag, and both stamp `performance.now()`, so the window is
+ * directly comparable. Returns 0 when the probe (or the channel) is absent,
+ * and defensively ignores malformed samples: a diagnostic must never throw
+ * into the drag path. Samples with `dispatchedAt === 0` never occupied a slot
+ * (superseded while queued) and moved no bytes, so they are skipped.
+ */
+function sumRequestBytesInWindow(fromWall: number, toWall: number): number {
+  const bag = (
+    globalThis as unknown as { __sttProbe?: Record<string, unknown> }
+  ).__sttProbe;
+  if (!bag || bag.enabled === false) return 0;
+  const samples = bag.requests;
+  if (!Array.isArray(samples)) return 0;
+  let total = 0;
+  for (const raw of samples as RequestSampleLike[]) {
+    if (!raw || typeof raw !== 'object') continue;
+    const completedAt = raw.completedAt;
+    const bytes = raw.bytes;
+    if (typeof completedAt !== 'number' || typeof bytes !== 'number') continue;
+    if (raw.dispatchedAt === 0) continue;
+    if (completedAt < fromWall || completedAt > toWall) continue;
+    total += bytes;
+  }
+  return total;
 }
 
 /**

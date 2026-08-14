@@ -15,7 +15,9 @@ import { describe, it, expect } from 'vitest';
 import { KNOWN_MANIFEST_CAPABILITIES, STTArchive } from '../src/archive';
 import { encodeDirectory } from '../src/directory';
 import {
+  directoryKey,
   directoryObject,
+  packKey,
   packedFromGolden,
   packedFetch,
 } from './helpers/packed-fixture';
@@ -32,6 +34,8 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
   fetch: typeof fetch;
 } {
   const blob = new Uint8Array([0x42]);
+  const pack = new Uint8Array(9);
+  pack[8] = blob[0];
   const dir = encodeDirectory([
     {
       zoom: 5,
@@ -40,7 +44,7 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
       timeStart: 0,
       timeEnd: 1,
       packId: 0,
-      offset: 0,
+      offset: 8,
       length: blob.length,
       uncompressedSize: blob.length,
       featureCount: 1,
@@ -49,19 +53,22 @@ function buildPackedDataset(manifestOverrides: Record<string, unknown> = {}): {
     },
   ]);
   const objects = new Map<string, Uint8Array>();
-  objects.set('packs/p0.sttp', blob);
+  const pKey = packKey(pack);
+  objects.set(pKey, pack);
   const dirObject = directoryObject(dir);
-  objects.set('index/dir.sttd', dirObject);
+  const dKey = directoryKey(dirObject);
+  objects.set(dKey, dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: [{ id: 0, kind: 'raw' }],
     compression: 'none',
     directory: {
-      key: 'index/dir.sttd',
+      key: dKey,
       length: dirObject.length,
-      directoryVersion: 5,
+      directoryVersion: 6,
     },
-    packs: [{ key: 'packs/p0.sttp', length: blob.length }],
+    packs: [{ key: pKey, length: pack.length }],
     metadata: {
       name: 'test',
       bounds: { min_lon: -180, min_lat: -85, max_lon: 180, max_lat: 85 },
@@ -120,7 +127,7 @@ describe('packed-format manifest', () => {
     const meta = await archive.getMetadata();
     expect(meta.name).toBe('test');
     // `version` surfaces the manifest schema version (formatVersion).
-    expect(meta.version).toBe(2);
+    expect(meta.version).toBe(3);
     expect(meta.minZoom).toBe(5);
     expect(meta.temporalBucketMs).toBe(1000);
   });
@@ -162,13 +169,15 @@ describe('packed-format manifest', () => {
     });
     const archive = new STTArchive({ url, fetch });
     await expect(archive.getMetadata()).rejects.toThrow(
-      /directory pointer or pack table/i,
+      /directory pointer|packs must be/i,
     );
   });
 
   it('rejects a tile that references a non-existent pack', async () => {
     // A directory entry referencing packId 5 with only one pack present.
     const blob = new Uint8Array([0x42]);
+    const pack = new Uint8Array(9);
+    pack[8] = blob[0];
     const dir = encodeDirectory([
       {
         zoom: 5,
@@ -177,7 +186,7 @@ describe('packed-format manifest', () => {
         timeStart: 0,
         timeEnd: 1,
         packId: 5,
-        offset: 0,
+        offset: 8,
         length: blob.length,
         uncompressedSize: blob.length,
         featureCount: 1,
@@ -186,22 +195,25 @@ describe('packed-format manifest', () => {
       },
     ]);
     const objects = new Map<string, Uint8Array>();
-    objects.set('packs/p0.sttp', blob);
+    const pKey = packKey(pack);
+    objects.set(pKey, pack);
     const dirObject = directoryObject(dir);
-    objects.set('index/dir.sttd', dirObject);
+    const dKey = directoryKey(dirObject);
+    objects.set(dKey, dirObject);
     objects.set(
       'manifest.json',
       new TextEncoder().encode(
         JSON.stringify({
           format: 'stt-packed',
-          formatVersion: 2,
+          formatVersion: 3,
+          variants: [{ id: 0, kind: 'raw' }],
           compression: 'none',
           directory: {
-            key: 'index/dir.sttd',
+            key: dKey,
             length: dirObject.length,
-            directoryVersion: 5,
+            directoryVersion: 6,
           },
-          packs: [{ key: 'packs/p0.sttp', length: blob.length }],
+          packs: [{ key: pKey, length: pack.length }],
           metadata: {
             name: 't',
             min_zoom: 5,
@@ -274,13 +286,36 @@ describe('manifest version gates (conformance reader-MUST)', () => {
   });
 
   it('rejects an unrecognized formatVersion', async () => {
-    // 2 is now implemented (packed v2, spec §5.2) — the gate moves to 3.
+    // v1 is below the supported window (it predates the packed container
+    // entirely); v4 is above it. v2 is deliberately NOT used here — it is a
+    // READ-supported legacy container, pinned by its own test below.
+    for (const version of [1, 4]) {
+      const archive = datasetWithManifest((m) => {
+        m.formatVersion = version;
+      });
+      await expect(archive.getMetadata()).rejects.toThrow(
+        new RegExp(`unsupported formatVersion ${version}`),
+      );
+    }
+  });
+
+  it('OPENS a legacy formatVersion 2 container', async () => {
+    // The v2→v3 break is container-only: no `variants` registry (the variant
+    // axis did not exist, so every payload is raw) and directory codec v5 (no
+    // per-entry variantId). Tile payloads share this reader's layer-frame
+    // version, so nothing below the container forks.
+    //
+    // Read support is not a softening of the format: the WRITER is still v3
+    // only. It exists because several published archives have no reproducible
+    // source, so refusing them strands data rather than migrating it.
     const archive = datasetWithManifest((m) => {
-      m.formatVersion = 3;
+      m.formatVersion = 2;
+      delete m.variants;
+      m.directory.directoryVersion = 5;
+      delete m.directory.rootHash;
+      delete m.directory.pageHashes;
     });
-    await expect(archive.getMetadata()).rejects.toThrow(
-      /unsupported formatVersion 3/,
-    );
+    await expect(archive.getMetadata()).resolves.toBeDefined();
   });
 
   it('rejects a missing formatVersion', async () => {
@@ -293,6 +328,8 @@ describe('manifest version gates (conformance reader-MUST)', () => {
   });
 
   it('rejects an unrecognized directoryVersion', async () => {
+    // v4 is the RETIRED single-file directory this packed client never read, so
+    // it stays below the window even though v5 is now inside it.
     const archive = datasetWithManifest((m) => {
       m.directory.directoryVersion = 4;
     });
@@ -307,6 +344,60 @@ describe('manifest version gates (conformance reader-MUST)', () => {
     });
     await expect(archive.getIndex()).rejects.toThrow(
       /unsupported directoryVersion/,
+    );
+  });
+
+  it('rejects an unknown compression codec at archive open', async () => {
+    const archive = datasetWithManifest((m) => {
+      m.compression = 'zstd-future';
+    });
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /unsupported compression "zstd-future"/,
+    );
+  });
+
+  it('rejects malformed capabilities instead of treating them as absent', async () => {
+    const archive = datasetWithManifest((m) => {
+      m.capabilities = 'coord-quant';
+    });
+    await expect(archive.getMetadata()).rejects.toThrow(
+      /capabilities must be an array of strings/,
+    );
+  });
+
+  it('rejects traversal and cross-prefix object keys before object fetch', async () => {
+    const traversal = datasetWithManifest((m) => {
+      m.directory.key = 'index/../secrets.sttd';
+    });
+    await expect(traversal.getMetadata()).rejects.toThrow(
+      /directory\.key must match/,
+    );
+
+    const wrongPrefix = datasetWithManifest((m) => {
+      m.packs[0].key = 'index/00000000000000000000000000000000.sttp';
+    });
+    await expect(wrongPrefix.getMetadata()).rejects.toThrow(
+      /packs\[0\]\.key must match/,
+    );
+  });
+
+  it('enforces paged manifest field/hash pairing and page count', async () => {
+    const missingFields = datasetWithManifest((m) => {
+      m.directory.layout = 'paged';
+    });
+    await expect(missingFields.getMetadata()).rejects.toThrow(
+      /directory\.rootLength must be a safe integer/,
+    );
+
+    const unpairedHashes = datasetWithManifest((m) => {
+      m.directory.layout = 'paged';
+      m.directory.rootLength = 1;
+      m.directory.pageCount = 1;
+      m.directory.pageEntries = 1;
+      m.directory.rootHash = '0'.repeat(32);
+    });
+    await expect(unpairedHashes.getMetadata()).rejects.toThrow(
+      /paged directory requires rootHash and pageHashes/,
     );
   });
 
@@ -327,7 +418,7 @@ describe('manifest version gates (conformance reader-MUST)', () => {
       m.capabilities = ['coord-quant', 'attr-quant', 'elevation-fold'];
     });
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(2);
+    expect(meta.version).toBe(3);
   });
 
   it('opens a dataset built by the CURRENT writer (every capability it can declare)', async () => {
@@ -344,16 +435,16 @@ describe('manifest version gates (conformance reader-MUST)', () => {
         m.capabilities = [cap];
       });
       const meta = await archive.getMetadata();
-      expect(meta.version, `capability ${cap}`).toBe(2);
+      expect(meta.version, `capability ${cap}`).toBe(3);
     }
     expect(KNOWN_MANIFEST_CAPABILITIES).toContain('time-delta');
     expect(KNOWN_MANIFEST_CAPABILITIES).toContain('vertex-value-quant');
   });
 
-  it('accepts the golden formatVersion=2 / directoryVersion=5 manifest', async () => {
+  it('accepts the golden formatVersion=3 / directoryVersion=6 manifest', async () => {
     const archive = datasetWithManifest(() => {});
     const meta = await archive.getMetadata();
-    expect(meta.version).toBe(2);
+    expect(meta.version).toBe(3);
     const index = await archive.getIndex();
     expect(index.tiles.length).toBeGreaterThan(0);
   });

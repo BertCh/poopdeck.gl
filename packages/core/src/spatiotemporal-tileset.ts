@@ -15,11 +15,36 @@
  * - Prefetch steps scaled based on playback speed
  */
 
-import type { Tile, TileId, BoundingBox, TemporalLodLevel } from './types.js';
+import type {
+  Tile,
+  TileId,
+  BoundingBox,
+  SelectionCost,
+  TemporalLodLevel,
+} from './types.js';
 import { tileKey, type TileKey } from './tile-key.js';
-import { estimateTileSize, tileXSpanForLonRange, wrapLon } from './archive.js';
-import { PrefetchPolicy } from './prefetch-policy.js';
+import {
+  addressableTemporalTiers,
+  estimateTileSize,
+  temporalTierArgmin,
+  tileXSpanForLonRange,
+  wrapLon,
+} from './archive.js';
+import {
+  PrefetchPolicy,
+  PREFETCH_CACHE_FRACTION,
+  PREFETCH_COLD_BYTE_EXPANSION,
+  byteExpansionRatio,
+  type HorizonBytesOracle,
+} from './prefetch-policy.js';
 import { normalizeViewportBounds } from './geo/viewport-bounds.js';
+import {
+  emit as emitProbe,
+  isProbeEnabled,
+  recordViewport,
+  type EvictionTier,
+  type EvictProbeSample,
+} from './telemetry.js';
 
 const DEBUG = false;
 
@@ -35,10 +60,90 @@ const MAX_COALESCE_BATCH = 1024;
 
 /**
  * Per-tile byte guess when the directory size lookup is unavailable
- * (`getTileByteSize` unset or the id is unknown). Turns the byte budget into
- * an effective count cap (e.g. cold 4 MiB / 64 KiB = 64 tiles).
+ * (`getTileByteSize` unset or the id is unknown). COMPRESSED currency, like
+ * every other per-tile charge in the prefetch budget. Turns the byte budget
+ * into an effective count cap (e.g. cold 4 MiB / 64 KiB = 64 tiles).
  */
 const PREFETCH_UNKNOWN_TILE_BYTES = 64 * 1024;
+
+/**
+ * Bounds on the per-pass walk that measures the decoded/compressed expansion
+ * (see {@link SpatioTemporalTileset.prefetchByteExpansion}): at most this many
+ * priced tiles, and at most this many headers examined looking for them. The
+ * sample is byte-weighted, so a few hundred tiles already pin the rate; the
+ * examined cap keeps a huge cache from making the walk the expensive part of a
+ * planning pass.
+ */
+const PREFETCH_EXPANSION_MAX_SAMPLES = 512;
+const PREFETCH_EXPANSION_SCAN_LIMIT = 4096;
+
+/**
+ * Break ties WITHIN an eviction tier by descending byte size (M6/BH-7b) —
+ * the DEFAULT for {@link setEvictionByteDensityBands}.
+ *
+ * The over-limit loop evicts until the cache is back under BOTH limits, so
+ * among candidates the tier ordering already considers equally valuable, the
+ * big ones end the pass soonest — fewer tiles evicted per over-budget event,
+ * and fewer of them to re-fetch. "Equally valuable" is quantized to one
+ * temporal bucket: distance still dominates across bands, byte size only
+ * decides inside one. Tier A (LRU) and tier D (the last-resort recency order)
+ * are deliberately untouched.
+ *
+ * ## Unconditional by design — NOT loop-gated
+ *
+ * BH-7 has two halves answering two DIFFERENT §9.4 gaps, with two separate
+ * kill switches, and they must not be conflated:
+ *
+ * - **(a) loop rotation** answers gap 2 (a wrap inverts "behind ⇒ never
+ *   needed again"). It is active only while a loop is declared; its kill
+ *   switch is {@link SpatioTemporalTileset.setLoopWindow}`(null)`.
+ * - **(b) this band sort** answers gap 1 (byte-blindness *within* a tier),
+ *   whose measurable is refetched bytes per session under memory pressure —
+ *   one-directional playback included. Gating it on a declared loop would
+ *   leave it dead on every non-looping route, i.e. on almost every route
+ *   where over-budget eviction actually happens.
+ *
+ * Say the consequence plainly, because it is easy to state wrongly: with no
+ * loop declared the eviction plan is byte-identical to the pre-BH-7 plan
+ * **only with this switch disengaged**. With it engaged (the default) two
+ * candidates sharing a band come out biggest-first, where the incumbent left
+ * them in cache-insertion order — no loop required.
+ *
+ * ## Why that EXTENDS the pinned B→C→D tiering rather than replacing it
+ *
+ * A band is exactly one temporal bucket wide and every tier-B/C metric is
+ * derived from the tile's bucket start, so under the incumbent (un-rotated)
+ * metric two tiles in one band have *identical* distance: the incumbent
+ * comparator returned 0 for them and the surviving order fell out of the
+ * `this.tiles` Map iteration order — tile ARRIVAL order. This sort replaces
+ * that non-order with a deterministic one. Tier membership, the B→C→D tier
+ * order, and the across-band distance dominance are all untouched: nothing
+ * moves across a tier or across a band. (Under rotation a loop span that is
+ * not a whole number of buckets can fold two buckets into one band; there the
+ * band is a genuine approximation, bounded by one bucket.)
+ */
+export const EVICTION_BYTE_DENSITY_BANDS_DEFAULT = true;
+
+/** Live value of the BH-7b band sort; see {@link setEvictionByteDensityBands}. */
+let evictionByteDensityBands: boolean = EVICTION_BYTE_DENSITY_BANDS_DEFAULT;
+
+/**
+ * The documented BH-7b rollback, made operable (and therefore testable):
+ * `setEvictionByteDensityBands(false)` restores the pre-BH-7 within-tier
+ * comparator EXACTLY — identity bands, no byte tiebreak, so tiers B and C sort
+ * on the raw metric alone. Returns the PREVIOUS value so a caller can restore
+ * it.
+ *
+ * Deliberately a module-level knob rather than a per-tileset option: rolling
+ * BH-7b back is a program-level decision, not a per-map one. It is
+ * intentionally NOT re-exported from the package index — this is a rollback
+ * lever and a test seam, not public API.
+ */
+export function setEvictionByteDensityBands(enabled: boolean): boolean {
+  const previous = evictionByteDensityBands;
+  evictionByteDensityBands = enabled;
+  return previous;
+}
 
 /**
  * Real-time margin (ms) for SPEED-AWARE seek detection in `update()`: a time
@@ -83,6 +188,62 @@ const SPATIAL_FLUSH_TOLERANCE = 1 / 8;
  * primary display zoom is NEVER subject to this — we always load what we draw.
  */
 const DEFAULT_MAX_PARENT_TILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * λ — the blank-cell-ms exchange rate in the placeholder-fetch expected-value
+ * rule (CO-6, problems §8.3): how many ms of download this tileset will spend to
+ * avert ONE visible primary cell staying blank for ONE ms. The rule fetches a
+ * coarse parent `u` iff
+ *
+ * ```
+ *   bytes(u) / θ̂   <   λ · A(u) · Ê[coverMs]
+ *   └ time to get u ┘      └ blank cell-ms it averts ┘
+ * ```
+ *
+ * with `A(u)` = visible primary child cells under `u` and `Ê[coverMs]` the ETA
+ * of `u`'s still-missing children (capped, see
+ * {@link PLACEHOLDER_COVER_HORIZON_MS}).
+ *
+ * FIT: 1/16 reproduces the flat 2 MiB rule's verdicts on the two cases that rule
+ * was chosen from — a 300 KB z13 parent under a z14 view is fetched (needs
+ * λ > ≈0.023), a 14 MB z10 Manhattan parent is skipped (would need λ > ≈0.23) —
+ * while letting link speed and actual child cost move the boundary in between,
+ * which a constant cannot. It is a DERIVED default, not a measured one: the
+ * measured fit needs the blank-frame instrumentation that is still NEEDS-HARNESS
+ * (implementation plan, CO-6 Evaluation). Override via
+ * {@link SpatioTemporalTilesetOptions.placeholderValueLambda}.
+ */
+const DEFAULT_PLACEHOLDER_VALUE_LAMBDA = 1 / 16;
+
+/**
+ * Saturation horizon (ms) for the `Ê[coverMs]` term of the placeholder rule.
+ *
+ * Without it the rule is scale-INVARIANT in throughput and the estimator is
+ * decorative: both `bytes(u)/θ̂` and `childBytes/θ̂` scale as `1/θ̂`, so θ̂
+ * cancels and a 2 MB placeholder is judged identically on a 20 MB/s link and a
+ * 100 KB/s one. It should not be: the value of averting blankness has an
+ * ABSOLUTE time scale (a frame blank for 200 ms is nearly free; one blank for
+ * 30 s has already cost the user the session), whereas the placeholder's own
+ * arrival time does not saturate. Capping the benefit term — and only it —
+ * restores that asymmetry, which is what makes "same parent, slow link ⇒ don't
+ * bother" come out of the arithmetic rather than out of a second rule.
+ *
+ * 10 s is one order of magnitude above the ~1 s a placeholder is normally
+ * useful for and comfortably past any interaction the user is still waiting on.
+ */
+const PLACEHOLDER_COVER_HORIZON_MS = 10_000;
+
+/**
+ * Ceiling on how many primary cells the expected-value rule will walk to price
+ * ONE parent. The walk is already clamped to the viewport's tile box, so the
+ * common case is tens of cells; this only bounds the pathological one (a
+ * whole-world viewport at a deep primary zoom, where the clamp removes
+ * nothing). Above it the rule ABSTAINS and the flat cutoff answers — the same
+ * fallback every other unavailable input takes, chosen over sampling the block
+ * because a sampled child byte sum is a guess wearing a measurement's clothes.
+ * 256 = a 4-level parent's full block, i.e. the deepest the fetch ladder goes.
+ */
+const PLACEHOLDER_EV_MAX_CELLS = 256;
 
 /**
  * How many zoom levels below the primary display zoom the 'best-available'
@@ -222,8 +383,41 @@ const FAILED_TILE_READINESS_WRITEOFF_SETTLES = 8;
  * gesture, and capped for the same reason: the search is a pure `this.tiles`
  * lookup, but each level up must also verify that NO primary cell under that
  * ancestor is already loaded (4^depth lookups) before it may draw.
+ *
+ * RETAINED as the `coverSearch: 'capped'` escape hatch only — the default cover
+ * path is the DP, whose band is {@link COVER_DP_ANCESTOR_LEVELS}.
  */
 const ANCESTOR_LOOKBACK_LEVELS = 2;
+
+/**
+ * The DP cover band, ZOOM-OUT half: how many levels FINER than the primary the
+ * stand-in search reaches. Deliberately unchanged from
+ * {@link CHILD_LOOKAHEAD_LEVELS}, and the asymmetry with
+ * {@link COVER_DP_ANCESTOR_LEVELS} is the point. The two directions have
+ * opposite delivery costs: ONE ancestor covers 4^up cells, so reaching further
+ * up costs one extra tile in the delivered list, whereas reaching one level
+ * further DOWN multiplies the delivered descendants per blank cell by four. At
+ * depth 3 a single blank cell can hand the renderer 64 tiles — the draw-call
+ * pathology `/drive` already exhibits (measurements §10.2) — so the search cost
+ * argument that the DP dissolves is replaced by a delivery cost argument that
+ * it does not. This is the `[z*−4, z*+2]` band the implementation plan names.
+ */
+const COVER_DP_DESCENDANT_LEVELS = CHILD_LOOKAHEAD_LEVELS;
+
+/**
+ * The DP cover band, ZOOM-IN half: how many levels COARSER than the primary the
+ * stand-in search reaches — the de-capped half (2 → 4).
+ *
+ * The depth-2 cap existed because each level up cost a 4^up block scan per
+ * candidate cell. The DP propagates "this block already has content" UPWARD
+ * from the covered cells instead (one walk per covered cell, `O(|covered| ×
+ * levels)`), so the block test is a set lookup and the cap has no cost left to
+ * justify it. Matched to {@link PARENT_FALLBACK_LEVELS} so the render side can
+ * reuse everything the fetch side was willing to load: below the DP, a
+ * three-notch zoom-in threw away a resident ancestor the fetch ladder had
+ * deliberately fetched as that exact fallback.
+ */
+const COVER_DP_ANCESTOR_LEVELS = PARENT_FALLBACK_LEVELS;
 
 /**
  * Minimum spacing (ms of wall time) between `onBufferChange` invocations —
@@ -295,6 +489,11 @@ interface CoverageBucket {
   keys: TileKey[];
   /** Compressed byte length per tile (0 when `getTileByteSize` is unwired). */
   bytes: number[];
+  /**
+   * Σ {@link bytes} — accumulated as the bucket is filled, not by a second
+   * pass, so the byte-density profile costs the index build one add per tile.
+   */
+  totalBytes: number;
 }
 
 /**
@@ -326,6 +525,30 @@ interface CoverageIndex {
    * data, or `null` when the viewport has no tiles at any time.
    */
   timeRange: { start: number; end: number } | null;
+  /**
+   * Σ directory bytes per bucket, ALIGNED WITH {@link bucketStarts} (index i
+   * is the total for `bucketStarts[i]`). Totals, not missing bytes: residency
+   * cost is a property of the data, whereas what is missing changes with every
+   * tile that settles.
+   */
+  bucketByteTotals: Float64Array;
+  /**
+   * Prefix sums of {@link bucketByteTotals}, length `bucketStarts.length + 1`
+   * with `cumulativeBytes[0] === 0`. Bytes over any bucket span `[i, j)` are
+   * `cumulativeBytes[j] - cumulativeBytes[i]`, which is what turns
+   * {@link SpatioTemporalTileset.bytesForHorizon} into two binary searches
+   * instead of a walk — the property a horizon SOLVE (rather than a horizon
+   * probe) needs, since it evaluates many candidate horizons per plan.
+   */
+  cumulativeBytes: Float64Array;
+  /**
+   * `true` when every tile in the index has a known compressed length. False
+   * when `getTileByteSize` is unwired, or wired but blind to some tile: the
+   * per-tile fallback is `0`, so the byte columns would read as "free" rather
+   * than "unknown". The byte queries refuse to answer in that state instead of
+   * publishing a total that is a floor pretending to be a fact.
+   */
+  bytesKnown: boolean;
 }
 
 /** Bookkeeping for the single overview (storyboard) preload attempt. */
@@ -350,6 +573,18 @@ function lowerBound(arr: number[], x: number): number {
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     if (arr[mid] < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** First index in ascending `arr` with `arr[i] > x` (`arr.length` if none). */
+function upperBound(arr: number[], x: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= x) lo = mid + 1;
     else hi = mid;
   }
   return lo;
@@ -495,6 +730,159 @@ function latToTileClamped(lat: number, zoom: number): number {
     ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n,
   );
   return Math.max(0, Math.min(n - 1, y));
+}
+
+// ── The frustum cut (FS-2) ──────────────────────────────────────────────────
+// Small, total, allocation-light helpers over a quadtree CUT — a mixed-zoom
+// set of `(z, x, y)` SPATIAL addresses. Every one of them resolves uncertainty
+// toward INCLUSION or toward `null` (which means "take the incumbent box
+// path", a strict superset); none of them may ever silently shrink a cover.
+
+/** Deepest zoom a cut cell may address — well past the spec's tile-zoom cap. */
+const MAX_CUT_ZOOM = 30;
+
+/** A cut cell's canonical string address (also its de-duplication key). */
+function cutCellKey(z: number, x: number, y: number): string {
+  return `${z}/${x}/${y}`;
+}
+
+/**
+ * Validate, de-duplicate and sign a caller-supplied cut.
+ *
+ * Returns `null` — meaning "there is no usable cut, take the incumbent box
+ * path" — for a missing, empty or wholly unusable list. Individual malformed
+ * cells are dropped rather than repaired: a cell address is integers, and there
+ * is no defensible guess at what a fractional or out-of-world one meant.
+ *
+ * The signature is ORDER-INDEPENDENT (sorted keys). That matters because it
+ * gates the prefetch-runway flush: a chassis that rebuilds the same cut in a
+ * different order must not read as a camera move and throw the runway away.
+ */
+function normalizeTileCells(
+  cells: readonly TileId[] | null | undefined,
+): { cells: TileId[]; signature: string } | null {
+  if (!cells || !Array.isArray(cells) || cells.length === 0) return null;
+  const seen = new Set<string>();
+  const out: TileId[] = [];
+  for (const cell of cells) {
+    if (!cell) continue;
+    const { z, x, y } = cell;
+    if (!Number.isInteger(z) || z < 0 || z > MAX_CUT_ZOOM) continue;
+    const world = 2 ** z;
+    if (!Number.isInteger(x) || x < 0 || x >= world) continue;
+    if (!Number.isInteger(y) || y < 0 || y >= world) continue;
+    const key = cutCellKey(z, x, y);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // `t` is deliberately dropped: a cut cell is a SPATIAL address and the
+    // temporal coordinate comes from the selection's own time range.
+    out.push({ z, x, y, t: 0 });
+  }
+  if (out.length === 0) return null;
+  return { cells: out, signature: [...seen].sort().join(',') };
+}
+
+/**
+ * Reduce a cell set to an ANTICHAIN, keeping the ANCESTOR and dropping the
+ * descendant whenever two members nest.
+ *
+ * Direction matters and only one direction is safe: an ancestor covers
+ * everything its descendants do, so dropping downward costs resolution, while
+ * dropping upward would cost AREA — the blank-region symptom class. A cut
+ * arrives as an antichain, but the scrub-LOD spatial drop can lift a deep cell
+ * onto a shallow one's block, so the reduction runs after it.
+ */
+function reduceToAntichain(cells: readonly TileId[]): TileId[] {
+  const keys = new Set<string>();
+  for (const c of cells) keys.add(cutCellKey(c.z, c.x, c.y));
+  const kept: TileId[] = [];
+  for (const c of cells) {
+    let nested = false;
+    for (let az = c.z - 1; az >= 0; az--) {
+      const shift = 2 ** (c.z - az);
+      if (
+        keys.has(
+          cutCellKey(az, Math.floor(c.x / shift), Math.floor(c.y / shift)),
+        )
+      ) {
+        nested = true;
+        break;
+      }
+    }
+    if (!nested) kept.push(c);
+  }
+  return kept;
+}
+
+/**
+ * Apply the scrub-LOD spatial drop to a cut: a uniform `−k` on every branch's
+ * target zoom, floored at `minZoom`.
+ *
+ * This is `effectiveSelectionZoom`'s clamp logic lifted onto a per-branch cut —
+ * the one shape change the plan asks for. Coarsening can make two branches
+ * nest, so the result is re-reduced to an antichain.
+ */
+function applyCutZoomDrop(
+  cells: readonly TileId[],
+  drop: number,
+  minZoom: number,
+): TileId[] {
+  if (drop <= 0) return cells as TileId[];
+  const seen = new Set<string>();
+  const out: TileId[] = [];
+  for (const c of cells) {
+    // A cell already at or below the floor is kept where it is: the drop is a
+    // degrade, never a promotion. Without the outer `min` a cell shallower than
+    // `minZoom` would be re-labelled at `minZoom` while keeping its old x/y —
+    // a different piece of ground, which is the silent-wrong-data class.
+    const z = Math.min(c.z, Math.max(minZoom, c.z - drop));
+    const dz = c.z - z;
+    const x = dz > 0 ? Math.floor(c.x / 2 ** dz) : c.x;
+    const y = dz > 0 ? Math.floor(c.y / 2 ** dz) : c.y;
+    const key = cutCellKey(z, x, y);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ z, x, y, t: 0 });
+  }
+  return reduceToAntichain(out);
+}
+
+/**
+ * The coarser stand-in cells a cut needs, `levels` zooms up from each member
+ * and never above `minZoom`.
+ *
+ * This is `getZoomLevelsToLoad`'s parent band expressed per branch instead of
+ * per screen. Under `lodMode: 'additive'` the caller passes the full depth, and
+ * the result is the union of the cut's ancestor chains — which is exactly the
+ * set of interior nodes the quadtree walk visited on its way to the cut, at
+ * zero extra enumeration. Cells that are already IN the cut are excluded, so a
+ * far-field branch that cuts at z6 never re-enters as its own neighbour's
+ * parent.
+ */
+function cutAncestors(
+  cells: readonly TileId[],
+  levels: number,
+  minZoom: number,
+): TileId[] {
+  if (levels <= 0) return [];
+  const inCut = new Set<string>();
+  for (const c of cells) inCut.add(cutCellKey(c.z, c.x, c.y));
+  const seen = new Set<string>();
+  const out: TileId[] = [];
+  for (const c of cells) {
+    for (let i = 1; i <= levels; i++) {
+      const z = c.z - i;
+      if (z < minZoom || z < 0) break;
+      const shift = 2 ** i;
+      const x = Math.floor(c.x / shift);
+      const y = Math.floor(c.y / shift);
+      const key = cutCellKey(z, x, y);
+      if (inCut.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ z, x, y, t: 0 });
+    }
+  }
+  return out;
 }
 
 /** O(n) set equality used to decide whether the needed-tile set actually changed. */
@@ -671,11 +1059,85 @@ export interface SpatioTemporalTilesetOptions {
     bucketMs: number,
   ) => Promise<TileId[]>;
 
+  /**
+   * How a temporal-LOD tier is chosen when the temporal axis is live (CO-5).
+   *
+   * - `'zoom-threshold'` (default): the incumbent snap — the coarsest declared
+   *   level whose `maxZoomLevel` covers the requested zoom, exactly
+   *   `STTArchive.pickTemporalLodForZoom`. Knows nothing about the window, so
+   *   a narrow window over-fetches and a wide one under-aggregates.
+   * - `'cost-argmin'`: price every addressable tier with the selection-cost
+   *   oracle and take the cheapest under
+   *   `bytes + tiles × requestOverheadBytes` (ties to the COARSER tier).
+   *   Requires {@link estimateSelectionCost} and
+   *   {@link getRequestOverheadBytes}; falls back to the zoom threshold
+   *   whenever either is unwired or any tier prices with `unknownTiles > 0`.
+   *
+   * The default is preserved DELIBERATELY. Temporal-LOD selection is currently
+   * scrub-only ("inert until the `scrubLod.temporal` axis is switched on"), so
+   * with the default nothing about today's behaviour moves; flipping it is a
+   * separate, measured decision.
+   * @default 'zoom-threshold'
+   */
+  temporalTierPolicy?: 'zoom-threshold' | 'cost-argmin';
+
+  /**
+   * CO-1's SYNCHRONOUS selection-cost oracle (wire
+   * `STTArchive.estimateSelectionCost`): exact compressed bytes for a
+   * (bounds × zoom × window × tier) query, read straight off resident
+   * directory entries with zero network.
+   *
+   * Consumed by {@link temporalTierPolicy}`: 'cost-argmin'`. `unknownTiles`
+   * rides in the answer and is honoured — a selection the reader cannot see is
+   * counted, and the tier pick abstains rather than comparing lower bounds.
+   */
+  estimateSelectionCost?: (
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: { start: number; end: number },
+    opts?: { bucketMs?: number; variantId?: number },
+  ) => SelectionCost;
+
+  /**
+   * The bytes-equivalent price of ONE request — CO-7's fitted `L̂ × θ̂`, i.e.
+   * how many bytes the link would move in the time one extra round trip
+   * costs (wire `STTArchive.effectiveCoalesceGap`).
+   *
+   * This is the exchange rate that makes a tile COUNT commensurable with a
+   * byte count in {@link temporalTierPolicy}'s objective, and it is
+   * deliberately the SAME number the archive's range coalescer fuses on —
+   * one estimator, one exchange rate.
+   */
+  getRequestOverheadBytes?: () => number;
+
   /** Callback to get available raw tiles for bounds/time. */
   getAvailableTiles: (
     bounds: BoundingBox,
     zoom: number,
     timeRange: { start: number; end: number },
+  ) => Promise<TileId[]>;
+
+  /**
+   * Optional CELL-ADDRESSED directory slice (wire
+   * `STTArchive.getAvailableTilesForCells`) — the callback the frustum
+   * selection path needs and the ONLY thing that makes
+   * {@link SpatioTemporalTileset.update}'s `tileCells` do anything.
+   *
+   * A frustum cut is a mixed-zoom antichain, so there is no `(bounds, zoom)`
+   * pair that describes it and the three bounds callbacks above cannot serve
+   * it. This one takes the cells verbatim and dispatches the SAME three tiers
+   * through its `opts` bag: default = base raw, `{ bucketMs }` = a temporal-LOD
+   * tier, `{ tier: 'summary' }` = the declared summary variant with its zoom
+   * gate applied per cell.
+   *
+   * CAPABILITY-GATED, and that is the kill switch: with this unwired, a
+   * `tileCells` viewport falls straight back to the incumbent per-zoom box
+   * enumeration. Selection then behaves exactly as it does today.
+   */
+  getAvailableTilesForCells?: (
+    cells: readonly TileId[],
+    timeRange: { start: number; end: number },
+    opts?: { tier?: 'raw' | 'summary'; bucketMs?: number },
   ) => Promise<TileId[]>;
 
   /**
@@ -729,8 +1191,59 @@ export interface SpatioTemporalTilesetOptions {
   /**
    * Byte ceiling above which a PARENT-fallback tile is skipped (requires
    * {@link getTileByteSize}). Defaults to {@link DEFAULT_MAX_PARENT_TILE_BYTES}.
+   *
+   * Under the default `placeholderPolicy: 'expected-value'` this is the FALLBACK
+   * rule, applied whenever the expected-value rule cannot be priced (throughput
+   * estimator cold, tile size unknown, viewport degenerate) and whenever
+   * `placeholderPolicy: 'flat'` pins it.
    */
   maxParentTileBytes?: number;
+
+  /**
+   * How a coarse PARENT-fallback placeholder is judged worth fetching.
+   *
+   * - `'expected-value'` (default): fetch iff the time to download it is less
+   *   than the blank-cell-ms it averts (see
+   *   {@link DEFAULT_PLACEHOLDER_VALUE_LAMBDA}) — a rule that reads the tile's
+   *   real size, the visible area it would cover, its children's real cost and
+   *   the measured link speed, instead of one constant. Falls back to the flat
+   *   {@link maxParentTileBytes} rule, bit-for-bit, whenever any of those inputs
+   *   is unavailable.
+   * - `'flat'`: the pre-CO-6 rule — skip any parent over
+   *   {@link maxParentTileBytes}, full stop. The kill switch.
+   *
+   * The PRIMARY display zoom is never skipped under either policy, and
+   * `lodMode: 'additive'` bypasses both.
+   * @default 'expected-value'
+   */
+  placeholderPolicy?: 'expected-value' | 'flat';
+
+  /**
+   * λ for the expected-value placeholder rule — ms of download this tileset
+   * will spend per blank visible-cell-ms averted. Higher fetches more
+   * placeholders. See {@link DEFAULT_PLACEHOLDER_VALUE_LAMBDA} for the fit.
+   * Ignored under `placeholderPolicy: 'flat'`.
+   */
+  placeholderValueLambda?: number;
+
+  /**
+   * How {@link SpatioTemporalTileset.getVisibleTiles}'s stand-in pass searches
+   * the resident set for a cover.
+   *
+   * - `'dp'` (default): one bottom-up DP over the resident loaded set across
+   *   `[z* − COVER_DP_ANCESTOR_LEVELS, z* + COVER_DP_DESCENDANT_LEVELS]`,
+   *   emitting the maximum-detail antichain.
+   * - `'capped'`: the pre-CO-6 walks, bounded at {@link CHILD_LOOKAHEAD_LEVELS}
+   *   / {@link ANCESTOR_LOOKBACK_LEVELS} in each direction. Retained for one
+   *   release as the escape hatch.
+   *
+   * Both honour the identical contracts (single cover per visible cell,
+   * descendants before ancestors, ancestors only over a wholly blank block,
+   * fail-open on a degenerate viewport, base-tier-only stand-ins);
+   * `lodMode: 'additive'` bypasses the pass entirely under both.
+   * @default 'dp'
+   */
+  coverSearch?: 'dp' | 'capped';
 
   /**
    * Callback invoked with a fresh {@link BufferedRunway} (probed from the
@@ -832,13 +1345,23 @@ function normalizeTilesetOptions(
     scrubLod: options.scrubLod ?? null,
     temporalLodLevels: options.temporalLodLevels ?? null,
     getAvailableTemporalLodTiles: options.getAvailableTemporalLodTiles ?? null,
+    // CO-5: the tier pick stays on the incumbent zoom threshold until a
+    // caller explicitly asks for the cost argmin AND wires both oracles.
+    temporalTierPolicy: options.temporalTierPolicy ?? 'zoom-threshold',
+    estimateSelectionCost: options.estimateSelectionCost ?? null,
+    getRequestOverheadBytes: options.getRequestOverheadBytes ?? null,
     getAvailableTiles: options.getAvailableTiles,
+    getAvailableTilesForCells: options.getAvailableTilesForCells ?? null,
     getAvailableSummaryTiles: options.getAvailableSummaryTiles ?? null,
     getTileData: options.getTileData,
     getTileDataBatch: options.getTileDataBatch ?? null,
     getTileByteSize: options.getTileByteSize ?? null,
     maxParentTileBytes:
       options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
+    placeholderPolicy: options.placeholderPolicy ?? 'expected-value',
+    placeholderValueLambda:
+      options.placeholderValueLambda ?? DEFAULT_PLACEHOLDER_VALUE_LAMBDA,
+    coverSearch: options.coverSearch ?? 'dp',
     onBufferChange: options.onBufferChange ?? null,
     getThroughput: options.getThroughput ?? null,
     setSchedulerWeight: options.setSchedulerWeight ?? null,
@@ -916,6 +1439,50 @@ export interface SpatioTemporalTileHeader {
 }
 
 /**
+ * Return type of {@link SpatioTemporalTileset.getCacheStats} — the tileset's
+ * client-side cache/QoE counters.
+ *
+ * `evictionsByTier` and `bytesEvicted` are the P0-2 additions: they EXTEND the
+ * existing `cacheStats` object rather than standing up a parallel one, so
+ * every consumer of the incumbent fields keeps working unchanged.
+ */
+export interface TilesetCacheStats {
+  /** Needed tiles already decoded in memory. */
+  hits: number;
+  /** Needed tiles that required a fetch. */
+  misses: number;
+  /** Tiles removed from the registry over the tileset's lifetime. */
+  evictions: number;
+  /**
+   * Over-limit evictions that reached INTO the protected playhead window
+   * (tiers C/D) — the fetch-evict-refetch thrash signal.
+   */
+  runwayEvictions: number;
+  /**
+   * Evictions attributed to the three playhead-relative tiers: `b` = coverage
+   * far behind the playhead (back buffer), `c` = coverage far ahead (distant
+   * speculation), `d` = the near-playhead protected window (last resort).
+   * Tier A (stale/non-coverage LRU, the grace sweep, the no-coverage
+   * fallback) is not a playhead-relative decision and is recoverable as
+   * `evictions - (b + c + d)`; the `evict` probe channel carries it explicitly.
+   */
+  evictionsByTier: Record<'b' | 'c' | 'd', number>;
+  /** Decoded bytes released by eviction over the tileset's lifetime. */
+  bytesEvicted: number;
+  /** Headers currently in the registry (loaded + in-flight). */
+  tileCount: number;
+  /** Decoded bytes currently resident. */
+  cacheBytes: number;
+  /** `hits / (hits + misses)`; 0 before the first needed tile. */
+  hitRate: number;
+  activeRequests: number;
+  priorityQueueLength: number;
+  prefetchQueueLength: number;
+  /** The prefetch policy's current speculation scale (1 = full horizon). */
+  prefetchPressureScale: number;
+}
+
+/**
  * Manages spatiotemporal tile loading with:
  * - Request concurrency control (maxRequests)
  * - Debouncing for viewport changes
@@ -937,6 +1504,16 @@ export class SpatioTemporalTileset {
     zoom: number;
     time: number;
     timeWindow: number;
+    /**
+     * The frustum-quadtree CUT for this camera, already validated and
+     * de-duplicated, or `null` for the incumbent box path. `bounds`/`zoom` are
+     * ALWAYS present and always the AABB values: the cut governs which cells
+     * selection addresses, while the box keeps serving the prefetch-flush
+     * tolerance, the coverage index and every readiness estimate.
+     */
+    tileCells: readonly TileId[] | null;
+    /** Order-independent signature of `tileCells`; `''` when there is no cut. */
+    cutSignature: string;
   } | null = null;
 
   // Debounce timer
@@ -948,11 +1525,27 @@ export class SpatioTemporalTileset {
   // Cache statistics. `runwayEvictions` counts over-limit evictions that had
   // to reach INTO the protected playhead window (tiers C/D of
   // evictUnusedTiles) — the observable fetch-evict-refetch thrash signal.
+  //
+  // P0-2 extends the SAME object (never a parallel one) with per-tier
+  // attribution and a byte total: `runwayEvictions` says only that *some*
+  // eviction reached the runway, which is not enough to tell a healthy
+  // back-buffer trim (tier B) from distant-speculation loss (C) from a
+  // near-playhead emergency (D).
   private cacheStats = {
     hits: 0,
     misses: 0,
     evictions: 0,
     runwayEvictions: 0,
+    /**
+     * Evictions attributed to the three PLAYHEAD-RELATIVE tiers. Tier A
+     * (stale/non-coverage LRU, the grace sweep, and the no-coverage fallback)
+     * is deliberately absent — it is not a playhead-relative decision, and
+     * `evictions - (b + c + d)` recovers it. The `evict` probe channel does
+     * carry an `'a'` tier for those samples.
+     */
+    evictionsByTier: { b: 0, c: 0, d: 0 } as Record<'b' | 'c' | 'd', number>,
+    /** Total decoded bytes released by eviction over the tileset's lifetime. */
+    bytesEvicted: 0,
   };
 
   /**
@@ -1007,6 +1600,17 @@ export class SpatioTemporalTileset {
   /** Pending deferred prefetch pass; the policy decides when it may fire. */
   private prefetchPendingTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Declared playback LOOP window in sim-time, or `null` when playback is
+   * one-directional (the default). `null` means the eviction metric is the
+   * incumbent one-directional distance — it reverts BH-7's ROTATION half
+   * only; the BH-7b band sort is unconditional and has its own switch (see
+   * {@link EVICTION_BYTE_DENSITY_BANDS_DEFAULT}). Pushed by the
+   * PlaybackGovernor through the optional `BufferSource.setLoopWindow` hook —
+   * see {@link setLoopWindow}.
+   */
+  private loopRange: { start: number; end: number } | null = null;
+
   // ── Buffer model state (WS-A) ──────────────────────────────────────────
   // Coverage tracking is LAZY: the index costs one extra getAvailableTiles
   // call per spatial viewport change, so it's only maintained once a buffer
@@ -1031,6 +1635,27 @@ export class SpatioTemporalTileset {
    */
   private lastSpatialBounds?: BoundingBox;
   private lastSpatialZoom?: number;
+  /**
+   * The cut signature the previous selection pass ran with, under the frustum
+   * path. It stands in for `lastSpatialZoom` in the prefetch-flush test there:
+   * a quadtree cut has no single zoom to compare, and its own identity is the
+   * honest "did the camera actually move to a different working set?" signal.
+   * Sub-tile drift leaves the cut untouched and so keeps the runway, exactly
+   * as the centre/span tolerance does for the box — the CONSTANTS are
+   * untouched, only the key changes.
+   */
+  private lastSpatialCutKey?: string;
+
+  /**
+   * The cut the most recent selection pass actually addressed, AFTER the
+   * scrub-LOD spatial drop and the antichain reduction that follows it — or
+   * `null` whenever the pass ran on the incumbent box path.
+   *
+   * Published for FS-3, which owns the mixed-zoom delivery semantics
+   * downstream (`getVisibleTiles` still derives ONE `primaryZoom` today).
+   * Nothing in this file reads it.
+   */
+  private selectionCut: readonly TileId[] | null = null;
 
   /**
    * In-flight PREFETCH-tier requests (shared AbortController + the registry
@@ -1184,20 +1809,33 @@ export class SpatioTemporalTileset {
       changed('getAvailableSummaryTiles') ||
       changed('getAvailableTemporalLodTiles') ||
       changed('temporalLodLevels') ||
+      // Which temporal tier the scrub axis addresses (CO-5).
+      changed('temporalTierPolicy') ||
+      changed('estimateSelectionCost') ||
+      changed('getRequestOverheadBytes') ||
       changed('lodMode') ||
       changed('refinementStrategy') ||
       changed('minZoom') ||
       changed('maxZoom') ||
       changed('getAvailableTiles') ||
+      // Wiring (or unwiring) the cell-addressed slice flips the whole
+      // selection path between the frustum cut and the incumbent box
+      // enumeration, so it is exactly as selection-relevant as its siblings.
+      changed('getAvailableTilesForCells') ||
       changed('maxParentTileBytes') ||
       changed('getTileByteSize') ||
+      // Which parent placeholders the fetch ladder is willing to buy.
+      changed('placeholderPolicy') ||
+      changed('placeholderValueLambda') ||
       // scrubLod only bites while interactive, but the axes are compared
       // structurally so an equal-but-fresh object literal is a no-op.
       scrubAxes(prev.scrubLod) !== scrubAxes(this.options.scrubLod);
 
     // What `getVisibleTiles` composites from an UNCHANGED needed set.
     const compositionChanged =
-      changed('lodMode') || changed('refinementStrategy');
+      changed('lodMode') ||
+      changed('refinementStrategy') ||
+      changed('coverSearch');
 
     // The tier the coverage index (and every readiness API on top of it) was
     // enumerated from. `lodMode`/`refinementStrategy` don't qualify: the
@@ -1444,6 +2082,57 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * Declare the playback LOOP window (optional `BufferSource` method, M6/BH-7).
+   * The PlaybackGovernor already knows the loop boundary — it subscribes to the
+   * clock's `wrap` event — and pushes the range here on source-add and on
+   * loop-mode change; `null` clears it.
+   *
+   * What it buys: cache eviction becomes loop-modular. Under a loop, "behind
+   * the playhead" stops meaning "done with" — a tile just past the loop START
+   * is the most imminent thing in the cache when the head is near the loop END.
+   * The incumbent tiering evicts furthest-behind FIRST, i.e. exactly the
+   * inverse of Belady across the wrap, so a looping demo re-fetches its whole
+   * loop-start working set on every lap. With a range declared, distances are
+   * measured modulo the loop span and those tiles are protected instead.
+   *
+   * Storage only — no fetch, no selection change, no eviction pass is triggered
+   * by this call. A degenerate range (non-finite, or `end <= start`) is treated
+   * as `null`.
+   *
+   * **Scope of the kill switch, stated exactly.** `setLoopWindow(null)` is the
+   * rollback for the ROTATION half of BH-7 and for nothing else: with no range
+   * declared, tier classification and the tier metrics are the incumbent
+   * one-directional ones, tile for tile. It does NOT restore the pre-BH-7
+   * eviction plan byte for byte, because BH-7's other half — the within-tier
+   * byte-density band sort — is unconditional by design and reorders
+   * same-band candidates whether or not a loop is declared. That half's
+   * rollback is {@link setEvictionByteDensityBands}`(false)`; both are pinned
+   * in `eviction-playhead-tiers.test.ts`.
+   */
+  setLoopWindow(range: { start: number; end: number } | null): void {
+    if (
+      !range ||
+      !Number.isFinite(range.start) ||
+      !Number.isFinite(range.end) ||
+      range.end <= range.start
+    ) {
+      this.loopRange = null;
+      return;
+    }
+    this.loopRange = { start: range.start, end: range.end };
+  }
+
+  /**
+   * The archive's temporal bucket size in ms (optional `BufferSource` method,
+   * M6/BH-7). The governor uses it to quantize its own playhead-relative
+   * reasoning onto the same grid the loader tiles on, so the two agree on what
+   * "one bucket away" means. `0` when the archive declares no buckets.
+   */
+  getTemporalBucketMs(): number {
+    return this.options.temporalBucketMs;
+  }
+
+  /**
    * Update this source's fair-share weight in the process-shared request
    * scheduler (optional `BufferSource` method — the governor's bandwidth
    * re-balancing hook, effective immediately for queued work). Forwards to
@@ -1489,17 +2178,49 @@ export class SpatioTemporalTileset {
    * held, the temporal axis is enabled, the archive declares a pyramid AND
    * the LOD enumeration callback is wired (capability detection — archives
    * built without `--temporal-lod` no-op here), and the picked level is
-   * genuinely coarser than the base bucket. The pick mirrors
-   * `STTArchive.pickTemporalLodForZoom`: the coarsest level whose
-   * `maxZoomLevel` covers the requested (already-degraded) zoom.
+   * genuinely coarser than the base bucket.
+   *
+   * WHICH level is picked is {@link SpatioTemporalTilesetOptions.temporalTierPolicy}'s
+   * business: the default `'zoom-threshold'` mirrors
+   * `STTArchive.pickTemporalLodForZoom` (the coarsest level whose
+   * `maxZoomLevel` covers the requested, already-degraded zoom), while
+   * `'cost-argmin'` prices the tiers and takes the cheapest. Both live behind
+   * the SAME `scrubLod.temporal` kill switch — the gates below are unchanged
+   * and run first, so an archive or a config that no-opped before still
+   * no-ops, whatever the policy says.
    */
-  private scrubTemporalLodBucketMs(selectionZoom: number): number | null {
+  private scrubTemporalLodBucketMs(
+    selectionZoom: number,
+    bounds: BoundingBox,
+    timeRange: { start: number; end: number },
+  ): number | null {
     if (!this.prefetch.isInteractive) return null;
     const cfg = this.options.scrubLod;
     if (!cfg?.temporal) return null;
     const levels = this.options.temporalLodLevels;
     if (!levels || levels.length === 0) return null;
     if (!this.options.getAvailableTemporalLodTiles) return null;
+    const bucketMs =
+      this.costArgminTemporalBucketMs(selectionZoom, bounds, timeRange) ??
+      this.zoomThresholdTemporalBucketMs(selectionZoom, levels);
+    // A pick equal to the base bucket is not a degrade — it IS the base tier,
+    // so selection stays on the ordinary path (`null`), exactly as when no
+    // level applies at all.
+    if (bucketMs === null || bucketMs === this.options.temporalBucketMs) {
+      return null;
+    }
+    return bucketMs;
+  }
+
+  /**
+   * The INCUMBENT tier rule, retained verbatim as the fallback: the coarsest
+   * declared level whose `maxZoomLevel` covers `selectionZoom`, or `null` when
+   * none does. Byte-for-byte `STTArchive.pickTemporalLodForZoom`.
+   */
+  private zoomThresholdTemporalBucketMs(
+    selectionZoom: number,
+    levels: TemporalLodLevel[],
+  ): number | null {
     let pick: TemporalLodLevel | null = null;
     for (const level of levels) {
       if (
@@ -1509,8 +2230,58 @@ export class SpatioTemporalTileset {
         pick = level;
       }
     }
-    if (!pick || pick.bucketMs === this.options.temporalBucketMs) return null;
-    return pick.bucketMs;
+    return pick?.bucketMs ?? null;
+  }
+
+  /**
+   * CO-5's cost argmin over the addressable tier set, or `null` when the
+   * comparison cannot be made — which routes the caller straight back to
+   * {@link zoomThresholdTemporalBucketMs}. It returns `null` when:
+   *
+   *  - the policy is the default `'zoom-threshold'` (the option kill switch);
+   *  - either oracle is unwired, or the base bucket is unknown, so there is no
+   *    exchange rate / no base candidate to compare against;
+   *  - only the base tier is addressable at this zoom (nothing to choose);
+   *  - any tier priced with `unknownTiles > 0` — a non-resident directory leaf.
+   *    The reader COUNTS what it cannot see and abstains; it never guesses,
+   *    and a cheapest-of-lower-bounds is a guess.
+   *
+   * Synchronous by construction: the oracle reads resident directory entries
+   * with no I/O, so the selection fast-path keeps its shape and no await is
+   * introduced ahead of the `selectKey` short-circuit. Cost is one directory
+   * walk per addressable tier per selection pass, and it is paid ONLY while a
+   * drag is held with the temporal axis and this policy both switched on —
+   * every gate above returns first otherwise. Deliberately uncached: the
+   * answer depends on which directory leaves are resident, and a memo keyed
+   * on the viewport alone would pin an abstention after the leaves arrived.
+   */
+  private costArgminTemporalBucketMs(
+    selectionZoom: number,
+    bounds: BoundingBox,
+    timeRange: { start: number; end: number },
+  ): number | null {
+    if (this.options.temporalTierPolicy !== 'cost-argmin') return null;
+    const price = this.options.estimateSelectionCost;
+    const requestPrice = this.options.getRequestOverheadBytes;
+    if (!price || !requestPrice) return null;
+    const base = this.options.temporalBucketMs;
+    if (typeof base !== 'number' || !Number.isFinite(base) || base <= 0) {
+      return null;
+    }
+    const tiers = addressableTemporalTiers(
+      this.options.temporalLodLevels,
+      base,
+      selectionZoom,
+    );
+    if (tiers.length <= 1) return null;
+    const argmin = temporalTierArgmin(
+      tiers.map((bucketMs) => ({
+        bucketMs,
+        selection: price(bounds, selectionZoom, timeRange, { bucketMs }),
+      })),
+      requestPrice(),
+    );
+    return argmin.pick?.bucketMs ?? null;
   }
 
   /**
@@ -1541,6 +2312,106 @@ export class SpatioTemporalTileset {
       );
     }
     return this.fetchAvailableTilesForZoom(bounds, zoom, timeRange);
+  }
+
+  /**
+   * {@link fetchSelectionTilesForZoom} for a frustum CUT: one grouped,
+   * cell-addressed directory slice per distinct zoom, all in parallel.
+   *
+   * The grouping is by ZOOM because that is the only thing tier dispatch
+   * depends on — `pickTierForZoom` is a function of the zoom alone, so within a
+   * group every cell shares a tier and one call serves it. Under a mixed-zoom
+   * cut this means the summary tier can legitimately serve the far-field cells
+   * while raw serves the near-field ones in the SAME pass, which the box path
+   * (one zoom for the whole screen) could never express.
+   *
+   * Groups are ordered deepest-first: the near field is what the user is
+   * looking at, and the loop that consumes this unshifts primaries onto the
+   * priority queue in the order they arrive. Stand-ins follow, all marked
+   * non-primary, so they queue behind everything the camera actually draws.
+   *
+   * Zooms outside the archive's `[minZoom, maxZoom]` are dropped rather than
+   * clamped: clamping would move a cell to an address that covers a DIFFERENT
+   * piece of ground. The cover primitive already clamps its own targets to the
+   * same range, so this only fires on a hand-built cut.
+   */
+  private async fetchSelectionTilesForCut(
+    cut: readonly TileId[],
+    standIns: readonly TileId[],
+    timeRange: { start: number; end: number },
+    scrubBucketMs: number | null,
+  ): Promise<Array<{ zoom: number; primary: boolean; tileIds: TileId[] }>> {
+    const { minZoom, maxZoom } = this.options;
+    const groups: Array<{ zoom: number; primary: boolean; cells: TileId[] }> =
+      [];
+    for (const [cells, primary] of [
+      [cut, true],
+      [standIns, false],
+    ] as Array<[readonly TileId[], boolean]>) {
+      const byZoom = new Map<number, TileId[]>();
+      for (const cell of cells) {
+        if (cell.z < minZoom || cell.z > maxZoom) continue;
+        const list = byZoom.get(cell.z);
+        if (list) list.push(cell);
+        else byZoom.set(cell.z, [cell]);
+      }
+      for (const zoom of [...byZoom.keys()].sort((a, b) => b - a)) {
+        groups.push({ zoom, primary, cells: byZoom.get(zoom)! });
+      }
+    }
+
+    return Promise.all(
+      groups.map(async (group) => ({
+        zoom: group.zoom,
+        primary: group.primary,
+        tileIds: await this.fetchCellsForZoom(
+          group.cells,
+          group.zoom,
+          timeRange,
+          scrubBucketMs,
+        ),
+      })),
+    );
+  }
+
+  /**
+   * One tier-dispatched, cell-addressed slice. The dispatch ladder is
+   * {@link fetchSelectionTilesForZoom}'s, rule for rule: a held scrub with a
+   * temporal-LOD bucket serves raw-tier zooms from that tier, summary-tier
+   * zooms keep the summary dispatch, everything else is the base tier.
+   */
+  private async fetchCellsForZoom(
+    cells: readonly TileId[],
+    zoom: number,
+    timeRange: { start: number; end: number },
+    scrubBucketMs: number | null,
+  ): Promise<TileId[]> {
+    const slice = this.options.getAvailableTilesForCells!;
+    const tier = this.pickTierForZoom(zoom);
+    if (scrubBucketMs !== null && tier === 'raw') {
+      const ids = await slice(cells, timeRange, { bucketMs: scrubBucketMs });
+      // Normalize for custom callbacks exactly as the box path does, so a LOD
+      // id can never alias a base tile's keys (tileKey folds the bucket in).
+      return ids.map((id) =>
+        id.bucketMs === undefined ? { ...id, bucketMs: scrubBucketMs } : id,
+      );
+    }
+    return slice(cells, timeRange, { tier });
+  }
+
+  /**
+   * The frustum CUT the most recent selection pass addressed — post scrub-LOD
+   * drop, post antichain reduction — or `null` when that pass ran on the
+   * incumbent box path.
+   *
+   * FS-2 stops here: the cut governs which cells are FETCHED. FS-3 owns what a
+   * mixed-zoom working set means downstream, where `getVisibleTiles` still
+   * derives ONE `primaryZoom` from the needed set and treats everything coarser
+   * as fallback. This accessor is how it gets the antichain it needs; nothing
+   * in this file reads it.
+   */
+  getSelectionCut(): readonly TileId[] | null {
+    return this.selectionCut;
   }
 
   /**
@@ -1586,6 +2457,20 @@ export class SpatioTemporalTileset {
    * otherwise make `boundsToTiles`' row loop never execute (zero tiles) while
    * `getBufferedRunway` reports `complete: true` and `isLoaded` reports
    * settled: a blank map with every readiness signal saying it is fine.
+   *
+   * `viewport.tileCells` (FS-2, OPTIONAL) is the frustum-quadtree CUT for this
+   * camera — a mixed-zoom antichain of `(z, x, y)` cells from
+   * `coverFrustumQuadtree`. When it is present AND
+   * {@link SpatioTemporalTilesetOptions.getAvailableTilesForCells} is wired,
+   * selection addresses exactly those cells instead of enumerating
+   * `[minZoom..zoom]` boxes. `bounds` and `zoom` are still REQUIRED alongside
+   * it and are still the AABB values: the box keeps serving the prefetch-flush
+   * tolerance, the coverage index, the prefetch planner and every readiness
+   * estimate, so a cut can only ever narrow which cells are FETCHED — it never
+   * silently redefines what the viewport is. Anything about the cut this method
+   * cannot vouch for (not an array, empty, a non-integer or out-of-world
+   * address) drops the cut and takes the incumbent path, which is a strict
+   * superset by construction.
    */
   update(
     viewport: {
@@ -1593,6 +2478,7 @@ export class SpatioTemporalTileset {
       zoom: number;
       time: number;
       timeWindow: number;
+      tileCells?: readonly TileId[] | null;
     },
     skipDebounce: boolean = false,
   ): number {
@@ -1620,11 +2506,14 @@ export class SpatioTemporalTileset {
     // `currentViewport = viewport` assignment carried: the deck chassis reuses
     // one cached bounds object across frames, so a caller that mutates it in
     // place used to change what the tileset believed the last frame was.
+    const cut = normalizeTileCells(viewport.tileCells);
     this.currentViewport = {
       bounds: normalized.bounds,
       zoom: viewport.zoom,
       time: viewport.time,
       timeWindow: viewport.timeWindow,
+      tileCells: cut?.cells ?? null,
+      cutSignature: cut?.signature ?? '',
     };
 
     // Track animation speed based on time changes
@@ -1665,6 +2554,32 @@ export class SpatioTemporalTileset {
       }
     }
     this.lastUpdateTime = now;
+
+    // ── Trajectory publication (observation only) ────────────────────────────
+    // This is the ONE place that sees the repaired box, the play-head and the
+    // window together, so it is where the trace recorder's trajectory comes
+    // from (`tools/bench/src/policy-record.mjs` feature-detects
+    // `snapshots['tileset.viewport']` and refuses to write a trace without it).
+    //
+    // Placed AFTER the direction/speed observation above so `direction` is the
+    // one this update committed, and BEFORE selection so a throwing selection
+    // pass cannot swallow the sample. Deliberately NOT inside
+    // `selectAndLoadTiles`: a debounced pan must still record where the camera
+    // went, and the rejected-box early return above must record nothing (the
+    // tileset kept its previous viewport, so the previous sample is still the
+    // truth).
+    //
+    // Probe off ⇒ one property read inside `recordViewport`, no allocation —
+    // the gate is in the callee precisely so the bounds array is never built
+    // on this per-tick path. Nothing below reads what it publishes.
+    recordViewport(
+      this.currentViewport.bounds,
+      this.currentViewport.zoom,
+      this.currentViewport.time,
+      this.currentViewport.timeWindow,
+      this.prefetch.direction,
+      this.prefetch.isAnimating,
+    );
 
     // Cancel pending debounce if viewport changed
     if (this.debounceTimer) {
@@ -1753,6 +2668,134 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * THE parent-placeholder fetch gate (CO-6): `true` skips the fetch.
+   *
+   * Under the default `placeholderPolicy: 'expected-value'` the verdict comes
+   * from {@link placeholderWorthFetching}; whenever that abstains — a cold
+   * throughput estimator, an unknown tile size, a viewport whose tile box could
+   * not be computed — the decision falls through to the flat
+   * {@link isOversizedParent} cutoff BIT-FOR-BIT. So a session that never
+   * measures throughput behaves exactly as it did before CO-6, and the first
+   * throughput sample is the only thing that changes the rule in play.
+   *
+   * The two invariants above the policy: `lodMode: 'additive'` never skips
+   * anything, and the primary display zoom is never skipped — we always load
+   * what we draw.
+   */
+  private shouldSkipParentFetch(tileId: TileId, primaryZoom: number): boolean {
+    if (this.options.lodMode === 'additive') return false;
+    if (tileId.z >= primaryZoom) return false;
+    if (this.options.placeholderPolicy !== 'expected-value') {
+      return this.isOversizedParent(tileId, primaryZoom);
+    }
+    const worth = this.placeholderWorthFetching(tileId, primaryZoom);
+    if (worth === null) return this.isOversizedParent(tileId, primaryZoom);
+    return !worth;
+  }
+
+  /**
+   * Expected-value verdict on ONE coarse parent placeholder: is the time to
+   * download it less than the blank visible-cell-ms it averts?
+   *
+   * ```
+   *   bytes(u) / θ̂   <   λ · A(u) · min(Ê[coverMs], PLACEHOLDER_COVER_HORIZON_MS)
+   * ```
+   *
+   * `A(u)` counts the primary-zoom cells under `u` that are inside the
+   * viewport's tile box — the same clamped arithmetic pass 2 of
+   * {@link getVisibleTiles} runs, and the reason a parent much larger than the
+   * frame is priced on what it actually shows rather than on its nominal 4^d
+   * block. `Ê[coverMs]` prices the blankness there is to avert: the ETA of `u`'s
+   * still-MISSING children only, so a parent whose children have already landed
+   * is worth nothing however cheap it is.
+   *
+   * Returns `null` — abstains, and the caller falls back to the flat rule —
+   * rather than guessing, whenever an input is missing: no size lookup, an
+   * unknown size for `u`, no throughput probe, no throughput sample yet, no
+   * viewport, or a viewport whose tile box is degenerate. The last is the
+   * fail-open stance the cover side takes for the same reason: "I could not
+   * work out what you can see" must never be spent as a reason to withhold a
+   * fallback.
+   */
+  private placeholderWorthFetching(
+    tileId: TileId,
+    primaryZoom: number,
+  ): boolean | null {
+    const getSize = this.options.getTileByteSize;
+    if (!getSize) return null;
+    const bytes = getSize(tileId);
+    if (bytes === undefined) return null;
+
+    const getThroughput = this.options.getThroughput;
+    if (!getThroughput) return null;
+    const { bytesPerMs } = getThroughput();
+    if (bytesPerMs === null || !(bytesPerMs > 0)) return null;
+
+    const bounds = this.currentViewport?.bounds;
+    if (!bounds) return null;
+
+    const zDiff = primaryZoom - tileId.z;
+    if (zDiff <= 0) return null; // caller guarantees a parent; be defensive
+    const n = 1 << primaryZoom;
+    const xSpans = viewportTileXIntervals(bounds, primaryZoom);
+    const vpMinY = latToTileClamped(bounds.maxLat, primaryZoom); // y is flipped
+    const vpMaxY = latToTileClamped(bounds.minLat, primaryZoom);
+    if (xSpans.length === 0 || vpMinY > vpMaxY) return null; // fail open
+
+    const range = 1 << zDiff;
+    const baseX = tileId.x << zDiff;
+    const baseY = tileId.y << zDiff;
+    const y0 = Math.max(baseY, vpMinY);
+    const y1 = Math.min(baseY + range - 1, vpMaxY, n - 1);
+    // Price the walk before running it: a whole-world viewport at a deep
+    // primary zoom clamps to nothing, and this is called once per candidate
+    // parent per selection AND per prefetch pass.
+    const rows = Math.max(0, y1 - y0 + 1);
+    let plannedCells = 0;
+    for (const [vx0, vx1] of xSpans) {
+      const width =
+        Math.min(baseX + range - 1, vx1, n - 1) - Math.max(baseX, vx0) + 1;
+      if (width > 0) plannedCells += width * rows;
+    }
+    if (plannedCells > PLACEHOLDER_EV_MAX_CELLS) return null;
+
+    let visibleCells = 0;
+    let missingChildBytes = 0;
+    for (const [vx0, vx1] of xSpans) {
+      const x0 = Math.max(baseX, vx0);
+      const x1 = Math.min(baseX + range - 1, vx1, n - 1);
+      for (let cy = y0; cy <= y1; cy++) {
+        for (let cx = x0; cx <= x1; cx++) {
+          visibleCells++;
+          const childId: TileId = {
+            z: primaryZoom,
+            x: cx,
+            y: cy,
+            t: tileId.t,
+          };
+          // A child already resident averts nothing — it is the detail the
+          // placeholder would be standing in for.
+          if (this.tiles.get(tileKey(childId))?.isLoaded) continue;
+          missingChildBytes += getSize(childId) ?? 0;
+        }
+      }
+    }
+    // Covers nothing the camera can see: not evidence about the tile, just an
+    // answer we can't price (the render box is a frame or two ahead of the
+    // selection pass). Hand it back to the flat rule.
+    if (visibleCells === 0) return null;
+
+    const arrivalMs = bytes / bytesPerMs;
+    const coverMs = Math.min(
+      missingChildBytes / bytesPerMs,
+      PLACEHOLDER_COVER_HORIZON_MS,
+    );
+    const avertedValueMs =
+      this.options.placeholderValueLambda * visibleCells * coverMs;
+    return arrivalMs < avertedValueMs;
+  }
+
+  /**
    * Quantize the viewport bounds to a ~{@link SPATIAL_FLUSH_TOLERANCE} grid of
    * their own extent, yielding a signature that is STABLE under sub-tile camera
    * drift (an AV ego-follow tracking the car, an easing pan) but that changes
@@ -1782,7 +2825,14 @@ export class SpatioTemporalTileset {
   private async selectAndLoadTiles(): Promise<void> {
     if (!this.currentViewport) return;
 
-    const { bounds, zoom, time, timeWindow } = this.currentViewport;
+    const { bounds, zoom, time, timeWindow, tileCells, cutSignature } =
+      this.currentViewport;
+
+    // The frustum path runs only when BOTH halves are present: a validated cut
+    // from the chassis and the cell-addressed directory slice to serve it.
+    // Either one missing is the incumbent box path, unchanged.
+    const cellSlice = this.options.getAvailableTilesForCells;
+    const hasCut = tileCells !== null && cellSlice !== null;
 
     // Calculate temporal range
     const timeRange = {
@@ -1797,7 +2847,11 @@ export class SpatioTemporalTileset {
     // and both are selection-only: coverage/runway math, prefetch, and the
     // overview tier stay on the fine settle tier (preview-only).
     const selectionZoom = this.effectiveSelectionZoom(zoom);
-    const scrubBucketMs = this.scrubTemporalLodBucketMs(selectionZoom);
+    const scrubBucketMs = this.scrubTemporalLodBucketMs(
+      selectionZoom,
+      bounds,
+      timeRange,
+    );
 
     // Cheap fast-path: when the (bounds, zoom, time-range) signature is
     // identical to the previous call we'd just rebuild the same
@@ -1807,9 +2861,52 @@ export class SpatioTemporalTileset {
     // case and the await round-trip is the dominant cost. The scrub-LOD
     // degrade state is part of the signature so an interactive toggle
     // between identical viewports still reselects.
+    // ── The cut this pass will address, if it has a usable one ────────────
+    //
+    // Built here, ahead of the select key, because whether it is usable at all
+    // is part of what the key identifies. The scrub-LOD spatial drop is the
+    // SAME `−k` the box path applies to one global zoom, here applied to every
+    // branch's target; `getZoomLevelsToLoad`'s parent band becomes
+    // `cutAncestors`'s per-branch band, at the identical depth
+    // (`PARENT_FALLBACK_LEVELS`, or all the way to `minZoom` under additive
+    // LOD, or none at all under `no-overlap`).
+    //
+    // A cut with no member the archive can serve is NOT treated as a cut. It
+    // would otherwise select nothing at all — a blank map — where the box path
+    // clamps into range and returns something. Fail open, always.
+    const { minZoom, maxZoom, refinementStrategy } = this.options;
+    let cut: readonly TileId[] = [];
+    let cutStandIns: readonly TileId[] = [];
+    let useCells = false;
+    if (hasCut) {
+      const dropped = applyCutZoomDrop(
+        tileCells,
+        zoom - selectionZoom,
+        minZoom,
+      );
+      if (dropped.some((c) => c.z >= minZoom && c.z <= maxZoom)) {
+        cut = dropped;
+        cutStandIns = cutAncestors(
+          cut,
+          refinementStrategy === 'no-overlap'
+            ? 0
+            : this.options.lodMode === 'additive'
+              ? MAX_CUT_ZOOM
+              : PARENT_FALLBACK_LEVELS,
+          minZoom,
+        );
+        useCells = true;
+      }
+    }
+
+    // Under the frustum path the cut is what selection actually addresses, so
+    // it has to be in the key: two cameras can share a box and a zoom and cut
+    // the quadtree differently. It contributes the empty string on the box
+    // path, leaving that path's equality semantics exactly as they were.
     const selectKey =
       `${bounds.minLon}|${bounds.minLat}|${bounds.maxLon}|${bounds.maxLat}` +
-      `|${zoom}|${selectionZoom}|${scrubBucketMs ?? ''}|${timeRange.start}|${timeRange.end}`;
+      `|${zoom}|${selectionZoom}|${scrubBucketMs ?? ''}|${timeRange.start}|${timeRange.end}` +
+      `|${useCells ? cutSignature : ''}`;
     if (selectKey === this.lastSelectKey) {
       return;
     }
@@ -1847,8 +2944,16 @@ export class SpatioTemporalTileset {
       const dSpanLat = Math.abs(
         bounds.maxLat - bounds.minLat - (prev.maxLat - prev.minLat),
       );
+      // The zoom term becomes a CUT term under the frustum path: a quadtree
+      // cut has no single zoom to compare, and its identity is the honest
+      // "did the working set change?" signal. Only the KEY changes here —
+      // `SPATIAL_FLUSH_TOLERANCE` and the four tolerance tests below are
+      // untouched (D6's "one physical cost, three constants").
+      const spatialTermChanged = useCells
+        ? cutSignature !== this.lastSpatialCutKey
+        : zoom !== this.lastSpatialZoom;
       spatialFlush =
-        zoom !== this.lastSpatialZoom ||
+        spatialTermChanged ||
         dCenterLon > lonSpan * SPATIAL_FLUSH_TOLERANCE ||
         dCenterLat > latSpan * SPATIAL_FLUSH_TOLERANCE ||
         dSpanLon > lonSpan * SPATIAL_FLUSH_TOLERANCE ||
@@ -1868,6 +2973,7 @@ export class SpatioTemporalTileset {
       maxLat: bounds.maxLat,
     };
     this.lastSpatialZoom = zoom;
+    this.lastSpatialCutKey = useCells ? cutSignature : undefined;
     this.lastSelectKey = selectKey;
 
     // Keep the coverage index aligned with the spatial viewport (no-op until
@@ -1877,11 +2983,23 @@ export class SpatioTemporalTileset {
       this.maybeRebuildCoverageIndex(bounds, zoom);
     }
 
-    // Get zoom levels to load (supports LOD with parent tiles). The first
-    // entry is the primary (clamped display) zoom; the rest are coarser
-    // parents. Built from the (possibly scrub-degraded) selection zoom.
+    // Zoom levels for the BOX path: the first entry is the primary (clamped
+    // display) zoom, the rest coarser parents. Built from the (possibly
+    // scrub-degraded) selection zoom. The frustum path's equivalent — the cut
+    // and its stand-ins — was built above the select key.
     const zoomLevels = this.getZoomLevelsToLoad(selectionZoom);
-    const primaryZoom = zoomLevels[0];
+    let primaryZoom = zoomLevels[0];
+    if (useCells) {
+      // Every CUT member is primary at its own zoom — the mixed-zoom cover IS
+      // what the camera draws. Taking the cut's shallowest zoom as the
+      // "primary" for the placeholder gate therefore exempts the whole cut
+      // from parent-skipping (`z >= primaryZoom` for every member) and leaves
+      // only the stand-ins, which really are placeholders, in its scope.
+      let shallowest = Number.POSITIVE_INFINITY;
+      for (const c of cut) if (c.z < shallowest) shallowest = c.z;
+      if (Number.isFinite(shallowest)) primaryZoom = shallowest;
+    }
+    this.selectionCut = useCells ? cut : null;
 
     // Mark tiles as used (for LRU)
     const now = Date.now();
@@ -1896,23 +3014,37 @@ export class SpatioTemporalTileset {
     // with IDENTICAL params; it cannot order concurrent different-param ones.)
     const generation = ++this.selectGeneration;
 
-    // Query available tiles for ALL zoom levels IN PARALLEL
-    // This is much faster than sequential queries, especially for initial load.
-    // Dispatches between raw and summary tiers per zoom based on the
-    // configured tier setting (see pickTierForZoom).
-    let tileIdsByZoom: Array<{ zoom: number; tileIds: TileId[] }>;
+    // Query available tiles for every group IN PARALLEL — much faster than
+    // sequential queries, especially for initial load. Each group carries
+    // `primary`, which is the queue-position decision the loop below makes:
+    // what the camera draws goes to the FRONT of the priority queue, coarse
+    // stand-ins behind it. Tier dispatch (raw / summary / temporal-LOD) is
+    // per zoom on BOTH paths — see pickTierForZoom.
+    let tileIdsByZoom: Array<{
+      zoom: number;
+      primary: boolean;
+      tileIds: TileId[];
+    }>;
     try {
-      tileIdsByZoom = await Promise.all(
-        zoomLevels.map(async (z) => ({
-          zoom: z,
-          tileIds: await this.fetchSelectionTilesForZoom(
-            bounds,
-            z,
+      tileIdsByZoom = useCells
+        ? await this.fetchSelectionTilesForCut(
+            cut,
+            cutStandIns,
             timeRange,
             scrubBucketMs,
-          ),
-        })),
-      );
+          )
+        : await Promise.all(
+            zoomLevels.map(async (z) => ({
+              zoom: z,
+              primary: z === selectionZoom,
+              tileIds: await this.fetchSelectionTilesForZoom(
+                bounds,
+                z,
+                timeRange,
+                scrubBucketMs,
+              ),
+            })),
+          );
     } catch (error) {
       // A transient directory failure (e.g. a paged-leaf range request
       // blipping) used to escape as an unhandled rejection — no caller
@@ -1954,15 +3086,19 @@ export class SpatioTemporalTileset {
     let enqueuedPriority = false;
 
     // Process results - primary zoom first for proper queue ordering
-    for (const { zoom: z, tileIds: availableTileIds } of tileIdsByZoom) {
+    for (const {
+      primary: isPrimaryGroup,
+      tileIds: availableTileIds,
+    } of tileIdsByZoom) {
       for (const tileId of availableTileIds) {
-        // Skip giant low-zoom parent-fallback tiles — coarse placeholders not
-        // worth a multi-MB fetch under a deep-zoom view. Never skips the primary.
-        // FETCH-skip only: an oversized parent that is ALREADY loaded (e.g. a
+        // Skip parent-fallback placeholders that are not worth their bytes —
+        // coarse stand-ins whose download costs more than the blank screen time
+        // they avert (see shouldSkipParentFetch). Never skips the primary.
+        // FETCH-skip only: a skipped parent that is ALREADY loaded (e.g. a
         // pinned overview tile, or a leftover from a shallower view) costs
         // nothing to keep in the needed/visible set — excluding it would blank
         // the very fallback it exists to provide.
-        if (this.isOversizedParent(tileId, primaryZoom)) {
+        if (this.shouldSkipParentFetch(tileId, primaryZoom)) {
           const key = tileKey(tileId);
           const loadedHeader = this.tiles.get(key);
           if (loadedHeader?.isLoaded) {
@@ -1996,11 +3132,11 @@ export class SpatioTemporalTileset {
 
           // Add to HIGH PRIORITY queue for current time tiles
           // These always load before prefetch tiles
-          if (z === selectionZoom) {
-            // Primary zoom - front of priority queue
+          if (isPrimaryGroup) {
+            // What the camera draws - front of priority queue
             this.priorityQueue.unshift(tileId);
           } else {
-            // Parent zoom - back of priority queue (still before prefetch)
+            // Coarse stand-in - back of priority queue (still before prefetch)
             this.priorityQueue.push(tileId);
           }
           priorityKeys.add(key);
@@ -2041,8 +3177,8 @@ export class SpatioTemporalTileset {
                 promotedFromPrefetch.add(key);
                 prefetchKeys.delete(key);
               }
-              // Enqueue at priority (front for primary zoom).
-              if (z === selectionZoom) {
+              // Enqueue at priority (front for what the camera draws).
+              if (isPrimaryGroup) {
                 this.priorityQueue.unshift(tileId);
               } else {
                 this.priorityQueue.push(tileId);
@@ -2108,6 +3244,54 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * Decoded cache bytes per COMPRESSED directory byte, measured from the tiles
+   * this tileset is holding right now (M6/BH-2, F3 repair).
+   *
+   * The prefetch budget has to compare a compressed sum against a decoded cap
+   * (see {@link PREFETCH_COLD_BYTE_EXPANSION}); this is the only exchange rate
+   * available without guessing, and it is a fact rather than a constant because
+   * a resident tile has been priced BOTH ways — `getTileByteSize` gave its
+   * `entry.length` before the fetch, and `estimateTileSize` gave its in-memory
+   * footprint after the decode, which is exactly what the LRU charges it.
+   *
+   * A ratio OF SUMS, not a mean of ratios: big tiles should dominate the rate
+   * the budget is converted with, because they dominate the cache. Re-derived
+   * per planning pass rather than accumulated over the session, so the rate
+   * tracks the current zoom/variant mix and depends on no history — same cache
+   * contents, same answer, whatever order they arrived in.
+   *
+   * Bounded: the walk stops after {@link PREFETCH_EXPANSION_MAX_SAMPLES}
+   * priced tiles or {@link PREFETCH_EXPANSION_SCAN_LIMIT} examined headers,
+   * whichever comes first, so a 100k-header cache cannot make a planning pass
+   * quadratic. `Map` iteration is insertion-ordered, so the truncated sample is
+   * deterministic too.
+   *
+   * Falls back to the conservative cold value when the directory is byte-blind
+   * or too few tiles are resident to measure.
+   */
+  private prefetchByteExpansion(): number {
+    const getSize = this.options.getTileByteSize;
+    if (!getSize) return PREFETCH_COLD_BYTE_EXPANSION;
+
+    let compressed = 0;
+    let decoded = 0;
+    let samples = 0;
+    let examined = 0;
+    for (const header of this.tiles.values()) {
+      if (++examined > PREFETCH_EXPANSION_SCAN_LIMIT) break;
+      // Only LOADED tiles carry a decoded byteSize; a queued prefetch header
+      // still reads 0 and would drag the rate toward zero if counted.
+      if (!header.isLoaded || !(header.byteSize > 0)) continue;
+      const entryBytes = getSize(header.id);
+      if (entryBytes === undefined || !(entryBytes > 0)) continue;
+      compressed += entryBytes;
+      decoded += header.byteSize;
+      if (++samples >= PREFETCH_EXPANSION_MAX_SAMPLES) break;
+    }
+    return byteExpansionRatio(compressed, decoded, samples);
+  }
+
+  /**
    * Prefetch tiles ahead of current animation time
    * This ensures smooth playback by loading tiles before they're needed
    *
@@ -2133,6 +3317,31 @@ export class SpatioTemporalTileset {
     const primaryZoom = zoomLevels[0];
     const now = Date.now();
 
+    // CO-2: hand the policy a directory ORACLE so the horizon is solved against
+    // the cache budget instead of discovered through tier-C/D evictions. Offered
+    // only when coverage tracking is ALREADY on — the oracle reads the coverage
+    // index, and asking for it would otherwise enable index maintenance (one
+    // extra full-time-range `getAvailableTiles` per viewport change) for
+    // consumers that never wanted the readiness APIs. Without it the policy runs
+    // its pressure ladder exactly as before, so the plan stays byte-identical.
+    const direction = this.prefetch.direction;
+    const bytesForHorizon: HorizonBytesOracle | null = this
+      .bufferTrackingEnabled
+      ? (horizonSimMs: number): { bytes: number; exact: boolean } =>
+          this.bytesForHorizon(time, direction, horizonSimMs)
+      : null;
+
+    // The exchange rate between this pass's two byte currencies, measured once
+    // and used by BOTH budgets below (F3). Everything a pass can price before
+    // fetching — the horizon oracle's prefix sums and the per-candidate charge
+    // alike — is in COMPRESSED directory bytes; `maxCacheByteSize` is a DECODED
+    // cap. Converting the cap once, here, is what makes the two comparisons
+    // honest instead of off by the compression ratio.
+    const byteExpansion = this.prefetchByteExpansion();
+    /** The DECODED cache cap expressed in the directory's own bytes. */
+    const compressedCacheShare =
+      (PREFETCH_CACHE_FRACTION * this.options.maxCacheByteSize) / byteExpansion;
+
     // Ask the policy for the horizon. `null` means the play head still has
     // enough planned runway ahead of it that another pass is wasted work; a
     // plan CLAIMS its span, so from here on the pass must either enqueue
@@ -2145,6 +3354,15 @@ export class SpatioTemporalTileset {
       prefetchSteps,
       pipelineIdle:
         this.prefetchQueue.length === 0 && this.inflightPrefetch.size === 0,
+      // The runway's share of the BYTE cache, in the oracle's currency. The
+      // enqueue below is bounded by the SAME converted share
+      // (`enqueueBudgetBytes`, BH-2) plus the tile-count budget as the
+      // byte-blind guard, so the horizon the policy solves for and the runway
+      // the pass actually commits are denominated in one unit — and that unit
+      // is the one `bytesForHorizon` answers in (compressed `entry.length`
+      // sums), not the decoded one the cache cap is written in.
+      byteBudget: bytesForHorizon ? compressedCacheShare : null,
+      bytesForHorizon,
     });
     if (!plan) return;
     const { effectiveAhead } = plan;
@@ -2200,9 +3418,31 @@ export class SpatioTemporalTileset {
     // overflow the LRU and thrash. Nearest-first ordering means this budget
     // always buys the most imminent buckets; the runway then slides forward as
     // the head consumes it.
+    //
+    // TWO budgets, whichever binds first (M6/BH-2). Tiles are not fungible —
+    // one satellite tile is ~17 MB where one sparse leaf is ~5 KB — so a
+    // count-only budget can pass a runway several times the size of the BYTE
+    // cache, which is the LRU's actual binding constraint. The byte budget
+    // prices the runway in the unit the cache is denominated in; the count
+    // budget survives as the guard for byte-blind directories, where per-tile
+    // sizes are unknown (or reported as 0) and the byte budget never binds.
+    //
+    // ONE CURRENCY (F3). Both sides of the byte comparison are COMPRESSED
+    // directory bytes: the charge is `getTileByteSize` (`entry.length`), and
+    // the ceiling is the DECODED cache cap divided by the measured expansion.
+    // Comparing the raw cap against compressed charges over-admits the runway
+    // by the compression ratio — several-fold on real archives — which is the
+    // residency failure this budget exists to prevent, not a rounding error.
     const prefetchBudget = this.prefetch.enqueueBudget(
       this.options.maxCacheSize,
     );
+    const prefetchBudgetBytes = this.prefetch.enqueueBudgetBytes(
+      this.options.maxCacheByteSize,
+      byteExpansion,
+    );
+    // Same lookup + same fallback the slice sizer uses, so one pass prices a
+    // tile identically whether it is being budgeted or being dispatched.
+    const getTileBytes = this.options.getTileByteSize;
 
     // Keys already sitting in either queue: a dead header (see below) must not
     // be double-enqueued. Built once per pass — the candidate loop would be
@@ -2212,6 +3452,10 @@ export class SpatioTemporalTileset {
     for (const qid of this.priorityQueue) queuedKeys.add(tileKey(qid));
 
     let newTilesAdded = 0;
+    /** Directory bytes this pass has committed to the runway (BH-2). */
+    let enqueuedBytes = 0;
+    /** Set when the BYTE budget (rather than the count budget) ended the pass. */
+    let byteBudgetSpent = false;
     // Furthest ahead-of-head distance actually ENQUEUED this pass — the
     // honest frontier when the budget truncates the span (behind-head
     // sentinel distances are ignored).
@@ -2222,64 +3466,78 @@ export class SpatioTemporalTileset {
     };
     for (const tileId of candidates) {
       if (newTilesAdded >= prefetchBudget) break;
-      // Don't prefetch giant low-zoom parent placeholders either (see
-      // isOversizedParent); they'd evict the runway they're meant to warm.
-      if (this.isOversizedParent(tileId, primaryZoom)) continue;
+      // Don't prefetch low-value low-zoom parent placeholders either (see
+      // shouldSkipParentFetch); they'd evict the runway they're meant to warm.
+      if (this.shouldSkipParentFetch(tileId, primaryZoom)) continue;
       const key = tileKey(tileId);
       const header = this.tiles.get(key);
 
-      if (!header) {
-        // Create header for prefetch tile and add to the LOW PRIORITY queue.
-        // These only load when the priority queue has capacity.
-        this.tiles.set(key, {
-          id: tileId,
-          tile: null,
-          isLoaded: false,
-          isLoading: false,
-          isCancelled: false,
-          lastUsed: now,
-          byteSize: 0,
-        });
-        this.prefetchQueue.push(tileId);
-        newTilesAdded++;
-        noteEnqueued(tileId);
-      } else if (
+      // DEAD header: a previous fetch was aborted (its shared batch was
+      // superseded by a viewport/time change) or failed, leaving a header
+      // that is neither loaded, loading, nor queued. Without reviving it, it
+      // silently blocks the tile from ever being planned again — the
+      // buffered runway then plateaus at "whatever survived" and a gated
+      // high-speed playback starves forever. The revival resets the one-way
+      // isCancelled latch (mirrors the priority-path reset in
+      // selectAndLoadTiles) and re-enqueues.
+      //
+      // The retry backoff (isQuarantined) is the missing bound on that
+      // revival: a tile the origin will NEVER serve came back here on every
+      // planning pass, so the runway spent its whole budget re-fetching the
+      // same 404 for as long as the viewport contained it. The gate is a
+      // decaying rate rather than a permanent write-off, so lookahead work
+      // lost to one bad minute is still planned again afterwards.
+      const revivable =
+        header !== undefined &&
         !header.isLoaded &&
         !header.isLoading &&
         !this.isQuarantined(header) &&
-        !queuedKeys.has(key)
-      ) {
-        // DEAD header: a previous fetch was aborted (its shared batch was
-        // superseded by a viewport/time change) or failed, leaving a header
-        // that is neither loaded, loading, nor queued. Without this branch it
-        // silently blocks the tile from ever being planned again — the
-        // buffered runway then plateaus at "whatever survived" and a gated
-        // high-speed playback starves forever. Reset the one-way isCancelled
-        // latch (mirrors the priority-path reset in selectAndLoadTiles) and
-        // re-enqueue.
-        //
-        // The retry backoff (isQuarantined) is the missing bound on that
-        // revival: a tile the origin will NEVER serve came back here on every
-        // planning pass, so the runway spent its whole budget re-fetching the
-        // same 404 for as long as the viewport contained it. The gate is a
-        // decaying rate rather than a permanent write-off, so lookahead work
-        // lost to one bad minute is still planned again afterwards.
-        header.isCancelled = false;
-        header.lastUsed = now;
-        this.prefetchQueue.push(tileId);
-        queuedKeys.add(key);
+        !queuedKeys.has(key);
+
+      if (header === undefined || revivable) {
+        // BYTE BUDGET (BH-2), charged only against tiles this pass actually
+        // commits to the runway. The first tile is admitted unconditionally —
+        // the same progress guarantee the slice sizer makes for a tile bigger
+        // than a whole slice — and after that the runway stops BEFORE it
+        // exceeds its share of the byte cache.
+        const size = getTileBytes?.(tileId) ?? PREFETCH_UNKNOWN_TILE_BYTES;
+        if (newTilesAdded > 0 && enqueuedBytes + size > prefetchBudgetBytes) {
+          byteBudgetSpent = true;
+          break;
+        }
+        enqueuedBytes += size;
+
+        if (header === undefined) {
+          // Create header for prefetch tile and add to the LOW PRIORITY queue.
+          // These only load when the priority queue has capacity.
+          this.tiles.set(key, {
+            id: tileId,
+            tile: null,
+            isLoaded: false,
+            isLoading: false,
+            isCancelled: false,
+            lastUsed: now,
+            byteSize: 0,
+          });
+          this.prefetchQueue.push(tileId);
+        } else {
+          header.isCancelled = false;
+          header.lastUsed = now;
+          this.prefetchQueue.push(tileId);
+          queuedKeys.add(key);
+        }
         newTilesAdded++;
         noteEnqueued(tileId);
-      } else {
+      } else if (header !== undefined) {
         // Update last used time to prevent eviction
         header.lastUsed = now;
       }
     }
 
     // Budget-capped pass: the plan claimed the FULL speed-scaled span, but the
-    // enqueue stopped at the budget. Hand the honest frontier back so the next
-    // pass re-plans against what was actually planned.
-    if (newTilesAdded >= prefetchBudget) {
+    // enqueue stopped at the budget (either one). Hand the honest frontier back
+    // so the next pass re-plans against what was actually planned.
+    if (newTilesAdded >= prefetchBudget || byteBudgetSpent) {
       this.prefetch.anchorTruncatedRunway(plan, coveredAheadMs, bucketMs);
     }
 
@@ -2288,6 +3546,7 @@ export class SpatioTemporalTileset {
       console.log('[Tileset] Prefetch results:', {
         totalTilesFound,
         newTilesAdded,
+        enqueuedBytes,
         prefetchQueueLength: this.prefetchQueue.length,
       });
     }
@@ -3314,6 +4573,110 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * The byte-density profile of `range`: for every temporal bucket the range
+   * touches, how many directory bytes that bucket costs in total, and how many
+   * of them are still missing.
+   *
+   * {@link estimateCost} collapses the same walk to one number, which is
+   * exactly what a controller reasoning about *time* cannot use: "2 GB missing
+   * somewhere in the next hour" is feasible if it is spread evenly and
+   * hopeless if it is one wall two seconds ahead. The per-bucket arrays are the
+   * cumulative-vs-deadline check the governor's fluid feasibility test needs,
+   * and the bucket grid the prefetch horizon solve bisects over.
+   *
+   * All three arrays are aligned and ascending in `bucketStarts`. The bucket
+   * set is byte-identical to {@link estimateCost}'s, so
+   * `Σ missingBytes === estimateCost(range).bytes` for the same range —
+   * written-off tiles are excluded from BOTH by {@link isCoverageReady}, since
+   * no fetch will ever be issued for them again.
+   *
+   * Returns `null` — abstains rather than guesses — when the coverage index
+   * has not been built yet, or when the byte channel is blind (no
+   * `getTileByteSize`, or one wired but unable to size some tile). A blind
+   * channel reports `0` per tile, and a caller cannot tell "free" from
+   * "unknown"; `null` says which it is. Callers must treat `null` as "no
+   * profile" and keep whatever behaviour they had before asking.
+   */
+  getByteDensityProfile(range: { start: number; end: number }): {
+    bucketStarts: number[];
+    totalBytes: number[];
+    missingBytes: number[];
+  } | null {
+    this.ensureBufferTracking();
+    const idx = this.coverageIndex;
+    if (!idx || !idx.bytesKnown) return null;
+    const bucketMs = this.options.temporalBucketMs;
+    const starts = idx.bucketStarts;
+
+    const outStarts: number[] = [];
+    const totalBytes: number[] = [];
+    const missingBytes: number[] = [];
+    // Same bucket-intersection rule as estimateCost, deliberately: the two are
+    // pinned equal by test and by contract.
+    for (
+      let i = lowerBound(starts, range.start - bucketMs);
+      i < starts.length && starts[i] <= range.end;
+      i++
+    ) {
+      const b = starts[i];
+      if (b + bucketMs < range.start) continue;
+      const bucket = idx.buckets.get(b)!;
+      let missing = 0;
+      for (let j = 0; j < bucket.keys.length; j++) {
+        if (!this.isCoverageReady(bucket.keys[j])) missing += bucket.bytes[j];
+      }
+      outStarts.push(b);
+      totalBytes.push(idx.bucketByteTotals[i]);
+      missingBytes.push(missing);
+    }
+    return { bucketStarts: outStarts, totalBytes, missingBytes };
+  }
+
+  /**
+   * Total directory bytes the viewport's tiles occupy over a probe horizon —
+   * `horizonSimMs` of sim-time from `time` in `direction` — in O(log buckets)
+   * off the coverage index's prefix sums.
+   *
+   * TOTAL, not missing, and that is the point: this prices RESIDENCY (does the
+   * runway a prefetch plan is about to demand fit in the cache?), which is a
+   * property of the horizon alone and therefore stable enough to bisect over.
+   * A caller pricing the FETCH instead wants
+   * {@link getByteDensityProfile}'s `missingBytes`, which changes with every
+   * tile that settles.
+   *
+   * `exact` is the honesty flag and carries the same meaning as
+   * {@link SelectionCost.unknownTiles} on the archive: `false` means the index
+   * is missing or its byte channel is blind, `bytes` is then a floor (`0` in
+   * the un-built case), and the caller must fall back rather than solve on it.
+   * The horizon is used AS GIVEN (clamped only at 0) — no bucket floor — so a
+   * solver's candidate horizons map monotonically onto byte totals.
+   */
+  bytesForHorizon(
+    time: number,
+    direction: 1 | -1,
+    horizonSimMs: number,
+  ): { bytes: number; exact: boolean } {
+    this.ensureBufferTracking();
+    const idx = this.coverageIndex;
+    if (!idx) return { bytes: 0, exact: false };
+    const horizon = Number.isFinite(horizonSimMs)
+      ? Math.max(0, horizonSimMs)
+      : 0;
+    const bucketMs = this.options.temporalBucketMs;
+    const starts = idx.bucketStarts;
+    const far = time + direction * horizon;
+    const spanStart = Math.min(time, far);
+    const spanEnd = Math.max(time, far);
+    // Half-open bucket window [lo, hi): the same intersection rule the walking
+    // queries use, resolved by two binary searches instead of a scan.
+    const lo = lowerBound(starts, spanStart - bucketMs);
+    const hi = upperBound(starts, spanEnd);
+    const bytes =
+      hi > lo ? idx.cumulativeBytes[hi] - idx.cumulativeBytes[lo] : 0;
+    return { bytes, exact: idx.bytesKnown };
+  }
+
+  /**
    * Honest ETA (ms) until `range` could be fully buffered:
    * `estimateCost(range).bytes / measured throughput`. Returns `null` when
    * no `getThroughput` option is wired or the estimator has no signal yet
@@ -3738,19 +5101,40 @@ export class SpatioTemporalTileset {
         const getSize = this.options.getTileByteSize;
         const buckets = new Map<number, CoverageBucket>();
         const keySet = new Set<TileKey>();
+        // Blind until proven otherwise per tile: one unknown length makes the
+        // whole byte channel a floor, and a floor must not be published as a
+        // total (see CoverageIndex.bytesKnown).
+        let bytesKnown = true;
         for (const id of ids) {
           let bucket = buckets.get(id.t);
           if (!bucket) {
-            bucket = { keys: [], bytes: [] };
+            bucket = { keys: [], bytes: [], totalBytes: 0 };
             buckets.set(id.t, bucket);
           }
           const key = tileKey(id);
           bucket.keys.push(key);
           keySet.add(key);
-          bucket.bytes.push((getSize ? getSize(id) : undefined) ?? 0);
+          const size = getSize ? getSize(id) : undefined;
+          if (size === undefined) bytesKnown = false;
+          const bytes = size ?? 0;
+          bucket.bytes.push(bytes);
+          // Same loop, not a second pass over `ids`: the per-bucket total is
+          // the only quantity the density profile needs that the existing
+          // build did not already have.
+          bucket.totalBytes += bytes;
         }
         const bucketStarts = Array.from(buckets.keys()).sort((a, b) => a - b);
         const bucketMs = this.options.temporalBucketMs;
+        // Bucket-aligned byte columns + their prefix sums. O(buckets), which is
+        // strictly smaller than the O(tiles) loop above, and the only work the
+        // profile adds to the build.
+        const bucketByteTotals = new Float64Array(bucketStarts.length);
+        const cumulativeBytes = new Float64Array(bucketStarts.length + 1);
+        for (let i = 0; i < bucketStarts.length; i++) {
+          const total = buckets.get(bucketStarts[i])!.totalBytes;
+          bucketByteTotals[i] = total;
+          cumulativeBytes[i + 1] = cumulativeBytes[i] + total;
+        }
         const timeRange =
           bucketStarts.length > 0
             ? {
@@ -3764,6 +5148,9 @@ export class SpatioTemporalTileset {
           buckets,
           keySet,
           timeRange,
+          bucketByteTotals,
+          cumulativeBytes,
+          bytesKnown,
         };
         this.notifyBufferChange();
       })
@@ -3860,6 +5247,8 @@ export class SpatioTemporalTileset {
         }
       }
 
+      // The grace sweep is not a playhead-relative decision — it reports as
+      // tier A on the probe channel (and does not touch `evictionsByTier`).
       this.evictTiles(tilesToEvict);
       return;
     }
@@ -3894,9 +5283,15 @@ export class SpatioTemporalTileset {
     const bucketMs = this.options.temporalBucketMs;
 
     // Ordered eviction plan. `runway` marks tiers C/D — evictions that reach
-    // into the protected playhead window (the thrash signal).
+    // into the protected playhead window (the thrash signal). `tierFrom` marks
+    // where each tier starts in `plan`, so an eviction can be attributed to
+    // the tier that freed its bytes (P0-2, observation only — the plan order
+    // and the runway boundary are unchanged).
     let plan: Array<{ key: TileKey; header: SpatioTemporalTileHeader }>;
     let runwayFrom: number;
+    let bFrom: number;
+    let cFrom: number;
+    let dFrom: number;
 
     if (!coverageKeys || playhead === undefined) {
       // No coverage index / no playhead (consumers that never touch the
@@ -3905,6 +5300,8 @@ export class SpatioTemporalTileset {
         .sort((a, b) => a[1].lastUsed - b[1].lastUsed) // Oldest first
         .map(([key, header]) => ({ key, header }));
       runwayFrom = plan.length; // nothing counts as a runway eviction
+      // Every entry is the stale/LRU bucket — tier A.
+      bFrom = cFrom = dFrom = plan.length;
     } else {
       const direction = this.prefetch.direction;
       const timeWindow = this.currentViewport?.timeWindow ?? bucketMs;
@@ -3913,6 +5310,23 @@ export class SpatioTemporalTileset {
       // committed playback direction.
       const keepBehind = Math.max(timeWindow, bucketMs);
       const protectedAhead = Math.max(timeWindow, 2 * bucketMs);
+
+      // LOOP ROTATION (BH-7a). Under a declared loop, "behind the playhead"
+      // stops meaning "done with": the head will come back round, so the right
+      // metric is the distance to the tile ALONG THE LOOP, i.e. modulo its
+      // span. A tile just past the loop start, seen from a head near the loop
+      // end, is the most imminent thing in the cache — the incumbent rule
+      // classifies it tier B and evicts it FIRST, which is the exact inverse of
+      // Belady and re-fetches the loop-start working set on every lap.
+      //
+      // The clamp is load-bearing: below it the modular metric degenerates
+      // (every tile lands inside protectedAhead + keepBehind, so everything is
+      // protected and the pass cannot free the bytes it must free). A loop that
+      // short is already entirely inside the protected window under the
+      // incumbent rule anyway, so nothing is lost by not rotating it.
+      const loop = this.loopRange;
+      const loopSpan = loop ? loop.end - loop.start : 0;
+      const rotate = loopSpan > protectedAhead + keepBehind;
 
       type Ranked = {
         key: TileKey;
@@ -3933,24 +5347,77 @@ export class SpatioTemporalTileset {
         }
         const behind = direction > 0 ? playhead - (t + bucketMs) : t - playhead;
         const ahead = direction > 0 ? t - playhead : playhead - (t + bucketMs);
-        if (behind > keepBehind) {
-          tierB.push({ key, header, metric: behind });
-        } else if (ahead > protectedAhead) {
-          tierC.push({ key, header, metric: ahead });
-        } else {
+        if (!rotate || loop === null) {
+          if (behind > keepBehind) {
+            tierB.push({ key, header, metric: behind });
+          } else if (ahead > protectedAhead) {
+            tierC.push({ key, header, metric: ahead });
+          } else {
+            tierD.push({ key, header, metric: header.lastUsed });
+          }
+          continue;
+        }
+
+        // A tile whose whole bucket falls OUTSIDE the declared loop is never
+        // replayed at all, so it must not be handed a (meaningless) wrapped
+        // distance that could protect it over an in-loop tile. It goes to the
+        // head of tier B, ahead of every in-loop candidate.
+        if (t + bucketMs < loop.start || t > loop.end) {
+          tierB.push({ key, header, metric: loopSpan + bucketMs });
+          continue;
+        }
+
+        // aheadMod = ((d × (t − playhead)) mod span + span) mod span, carrying
+        // the same bucket-end correction the incumbent `ahead` already applies
+        // for backward playback — so with an un-wrapped tile ahead of the head
+        // this is `ahead` exactly, and the rotation is a strict generalization.
+        const aheadMod = ((ahead % loopSpan) + loopSpan) % loopSpan;
+        // ...and the wrapped mirror of `behind`, on the same bucket geometry.
+        const behindMod = loopSpan - aheadMod - bucketMs;
+        if (aheadMod <= protectedAhead || behindMod <= keepBehind) {
+          // The protected window, now including the wrap-around approach.
           tierD.push({ key, header, metric: header.lastUsed });
+        } else if (aheadMod * 2 > loopSpan) {
+          // Nearer BEHIND than ahead: the head has just passed it and will not
+          // want it again until the far side of the wrap — evict first.
+          tierB.push({ key, header, metric: aheadMod });
+        } else {
+          // Genuinely upcoming, just distant: tier C, furthest-ahead first.
+          tierC.push({ key, header, metric: aheadMod });
         }
       }
+
+      // Within-tier byte density (BH-7b): distance dominates ACROSS bands
+      // (one temporal bucket wide), byte size decides INSIDE one. Never
+      // crosses a tier boundary; tiers A and D keep their pure recency order.
+      //
+      // UNCONDITIONAL — this half of BH-7 does NOT depend on `rotate`/`loop`
+      // (see EVICTION_BYTE_DENSITY_BANDS_DEFAULT for why, and for the
+      // register-compliance argument). One read per pass so the comparator
+      // cannot see the switch change mid-sort.
+      const banded = evictionByteDensityBands;
+      const band =
+        banded && bucketMs > 0
+          ? (m: number): number => Math.floor(m / bucketMs)
+          : (m: number): number => m;
+      const byDistanceThenBytes = (a: Ranked, b: Ranked): number =>
+        band(b.metric) - band(a.metric) ||
+        (banded ? b.header.byteSize - a.header.byteSize : 0);
+
       tierA.sort((a, b) => a.metric - b.metric); // LRU: oldest first
-      tierB.sort((a, b) => b.metric - a.metric); // furthest behind first
-      tierC.sort((a, b) => b.metric - a.metric); // furthest ahead first
+      tierB.sort(byDistanceThenBytes); // furthest first, big first inside a band
+      tierC.sort(byDistanceThenBytes); // furthest first, big first inside a band
       tierD.sort((a, b) => a.metric - b.metric); // LRU (last resort)
 
       plan = [...tierA, ...tierB, ...tierC, ...tierD];
       runwayFrom = tierA.length + tierB.length;
+      bFrom = tierA.length;
+      cFrom = bFrom + tierB.length;
+      dFrom = cFrom + tierC.length;
     }
 
     const tilesToEvict: TileKey[] = [];
+    const evictTiers: EvictionTier[] = [];
     let runwayEvicted = false;
 
     for (let i = 0; i < plan.length; i++) {
@@ -3964,6 +5431,9 @@ export class SpatioTemporalTileset {
 
       const { key, header } = plan[i];
       tilesToEvict.push(key);
+      evictTiers.push(
+        i >= dFrom ? 'd' : i >= cFrom ? 'c' : i >= bFrom ? 'b' : 'a',
+      );
       loadedCount--;
       cacheBytes -= header.byteSize;
       if (i >= runwayFrom) {
@@ -3978,16 +5448,25 @@ export class SpatioTemporalTileset {
     // scale once the evictions stop — see its pressure ladder.
     if (runwayEvicted) this.prefetch.noteRunwayEviction();
 
-    this.evictTiles(tilesToEvict);
+    this.evictTiles(tilesToEvict, evictTiers);
   }
 
   /**
    * Actually evict tiles from cache. Keeps the running byte counter +
    * loaded-tile count accurate.
+   *
+   * `tiers` (optional, P0-2) is a parallel array naming the eviction tier that
+   * selected each key. Omitted ⇒ tier A (the stale/LRU bucket: the grace
+   * sweep and the no-coverage fallback). Observation only: no key is skipped,
+   * reordered or retained on account of its tier.
    */
-  private evictTiles(tileKeys: TileKey[]): void {
+  private evictTiles(tileKeys: TileKey[], tiers?: EvictionTier[]): void {
     let evictedLoaded = false;
-    for (const key of tileKeys) {
+    // One property read when the probe is off; gates the payload ALLOCATION,
+    // not just the emit (telemetry.ts's probe-off contract).
+    const probeOn = isProbeEnabled();
+    for (let i = 0; i < tileKeys.length; i++) {
+      const key = tileKeys[i];
       const header = this.tiles.get(key);
       if (header) {
         if (header.isLoading && !header.isLoaded) {
@@ -3998,15 +5477,28 @@ export class SpatioTemporalTileset {
           // one AbortController, and the batch may carry needed tiles.)
           header.isCancelled = true;
         }
+        let releasedBytes = 0;
         if (header.tile) {
           this.options.onTileUnload?.(header.tile);
           // Incrementally decrement the running counters.
           this.currentCacheBytes -= header.byteSize;
           if (header.isLoaded) this.loadedTileCount--;
           evictedLoaded = true;
+          releasedBytes = header.byteSize;
         }
         this.tiles.delete(key);
         this.cacheStats.evictions++;
+        this.cacheStats.bytesEvicted += releasedBytes;
+        const tier = tiers?.[i] ?? 'a';
+        if (tier !== 'a') this.cacheStats.evictionsByTier[tier]++;
+        if (probeOn) {
+          emitProbe<EvictProbeSample>('evict', {
+            key,
+            tier,
+            bytes: releasedBytes,
+            playheadMs: this.currentViewport?.time ?? null,
+          });
+        }
       }
     }
     // Evicting a loaded tile can shrink the buffered runway.
@@ -4108,6 +5600,14 @@ export class SpatioTemporalTileset {
     // are the only cells OUTSIDE the viewport's own tile box that can still
     // justify holding a coarse parent on screen — see the slack ring below.
     const primaryPending = new Set<string>();
+    // The same cells as `primaryCover`, kept STRUCTURED for the pass-3 DP: it
+    // propagates "this block already has content" upward by shifting x/y, which
+    // wants integers, not the string form the cover tests key on.
+    const primaryCoverIds: TileId[] = [];
+    // Coarse parents pass 2 decided to keep. Also DP input: an emitted parent
+    // puts content into every block above it, so no ancestor stand-in may draw
+    // over one.
+    const parentCoverIds: TileId[] = [];
 
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
@@ -4117,6 +5617,7 @@ export class SpatioTemporalTileset {
         tiles.push(header.tile);
         emitted.add(key);
         primaryCover.add(cell);
+        primaryCoverIds.push(header.id);
       } else {
         primaryPending.add(cell);
       }
@@ -4234,6 +5735,7 @@ export class SpatioTemporalTileset {
       if (needed) {
         tiles.push(header.tile);
         emitted.add(key);
+        parentCoverIds.push(header.id);
       }
     }
 
@@ -4263,45 +5765,176 @@ export class SpatioTemporalTileset {
     // that is invisible; on a translucent one — every storm4d volume and
     // isoline layer, the heatmaps, the flow corridors — it is a patch of
     // doubled density that vanishes when the real primary tile lands.
+    //
+    // CO-6 replaced the ancestor half of this with a bottom-up DP over the
+    // resident set (see coverWithAncestorDp) and lifted its depth cap from 2 to
+    // PARENT_FALLBACK_LEVELS. `coverSearch: 'capped'` restores the pre-CO-6
+    // walks verbatim.
+    const capped = this.options.coverSearch === 'capped';
+    const downLevels = capped
+      ? CHILD_LOOKAHEAD_LEVELS
+      : COVER_DP_DESCENDANT_LEVELS;
     const standInCover = new Set<string>();
+    const standInIds: TileId[] = [];
     const uncovered: TileId[] = [];
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
       if (!header || header.id.z !== primaryZoom || header.isLoaded) continue;
       const { z, x, y, t } = header.id;
       if (
-        this.collectLoadedDescendants(
-          z,
-          x,
-          y,
-          t,
-          CHILD_LOOKAHEAD_LEVELS,
-          tiles,
-          emitted,
-        )
+        this.collectLoadedDescendants(z, x, y, t, downLevels, tiles, emitted)
       ) {
         // Finer detail wins when both exist, and taking only one of the two
         // keeps the "never overlap" property: an ancestor drawn on top of a
         // descendant of the same cell would double-paint that area.
         standInCover.add(`${x}/${y}/${t}`);
+        standInIds.push(header.id);
       } else {
         uncovered.push(header.id);
       }
     }
-    for (const { z, x, y, t } of uncovered) {
-      this.collectLoadedAncestor(
-        z,
-        x,
-        y,
-        t,
-        primaryCover,
-        standInCover,
-        tiles,
-        emitted,
-      );
+    if (uncovered.length === 0) return tiles;
+    if (capped) {
+      for (const { z, x, y, t } of uncovered) {
+        this.collectLoadedAncestor(
+          z,
+          x,
+          y,
+          t,
+          primaryCover,
+          standInCover,
+          tiles,
+          emitted,
+        );
+      }
+      return tiles;
     }
+    this.coverWithAncestorDp(
+      primaryZoom,
+      uncovered,
+      [primaryCoverIds, standInIds],
+      parentCoverIds,
+      tiles,
+      emitted,
+    );
 
     return tiles;
+  }
+
+  /**
+   * The ancestor half of the cover pass, as a bottom-up DP over the resident
+   * loaded set (CO-6). Every still-blank primary cell in `uncovered` gets the
+   * NEAREST resident ancestor whose whole visible block is blank, or nothing.
+   *
+   * Two things change versus the capped walk it replaces, and both fall out of
+   * the same restructuring:
+   *
+   * - THE DEPTH CAP GOES (2 → {@link COVER_DP_ANCESTOR_LEVELS}). The cap paid
+   *   for a 4^up block scan per candidate cell. Here "this block already has
+   *   content" is PROPAGATED UPWARD once per covered cell instead — `O(|covered|
+   *   × levels)` set inserts — so the block test is a single lookup and depth
+   *   costs a shift. A three-notch zoom-in now reuses the resident ancestor the
+   *   fetch ladder had already bought as exactly that fallback.
+   * - THE CROSS-ANCESTOR OVERLAP CLOSES. The capped walk resolved one CELL at a
+   *   time and recorded nothing when it emitted, so a cell whose only cover was
+   *   a grandparent could emit it, and a sibling cell processed later could then
+   *   emit its own (resident, still "blank") parent INSIDE that grandparent's
+   *   block — two covers over the same area, decided by `neededTileKeys`
+   *   iteration order. Going LEVEL-MAJOR (all up=1 candidates, then all up=2, …)
+   *   and blocking an emitted node's own ancestors makes that unreachable: the
+   *   finer cover always wins, and the coarser one sees a block that is no
+   *   longer blank. This is the same class of order-dependence the
+   *   descendants-before-ancestors split fixed one layer up.
+   *
+   * Contracts held, unchanged: at most one cover per visible cell; an ancestor
+   * draws only over a WHOLLY blank block; base-tier only (the synthesized ids
+   * carry no `bucketMs`, so a temporal-LOD scrub preview can never stand in for
+   * a settled base cell); nothing here fetches, pins, or touches the needed set.
+   *
+   * Deterministic: `uncovered` arrives in `neededTileKeys` order and each level
+   * is walked in that order, so the delivered list is a pure function of the
+   * resident set.
+   *
+   * @param coveredCellSets Primary cells that already have content — loaded
+   *                        primaries and descendant stand-ins. Kept as separate
+   *                        arrays only to avoid concatenating them per frame.
+   * @param parentCoverIds  Coarse parents pass 2 kept: they put content into
+   *                        every block ABOVE them.
+   */
+  private coverWithAncestorDp(
+    primaryZoom: number,
+    uncovered: TileId[],
+    coveredCellSets: TileId[][],
+    parentCoverIds: TileId[],
+    out: Tile[],
+    emitted: Set<TileKey>,
+  ): void {
+    const maxUp = Math.min(
+      COVER_DP_ANCESTOR_LEVELS,
+      primaryZoom - Math.max(0, this.options.minZoom),
+    );
+    if (maxUp < 1) return;
+
+    // The DP table: quadtree nodes in [z*−maxUp, z*−1] that may NOT draw,
+    // because some primary cell inside their block already has content. Built
+    // bottom-up — one walk up from each covered cell — which is what makes the
+    // "is this whole block blank?" question O(1) at every level instead of
+    // O(4^up). Monotone by construction: a blocked node's own ancestors span a
+    // superset of its block, so they are blocked too.
+    const blocked = new Set<string>();
+    const blockAbove = (
+      x: number,
+      y: number,
+      t: number,
+      from: number,
+    ): void => {
+      for (let up = from; up <= maxUp; up++) {
+        blocked.add(`${primaryZoom - up}/${x >> up}/${y >> up}/${t}`);
+      }
+    };
+    for (const cells of coveredCellSets) {
+      for (const { x, y, t } of cells) blockAbove(x, y, t, 1);
+    }
+    // A pass-2 parent is on screen at its own level; everything coarser than it
+    // would be laid over it. (Its own level is caught by the `emitted` test.)
+    for (const { z, x, y, t } of parentCoverIds) {
+      const up = primaryZoom - z;
+      if (up >= 1 && up < maxUp) blockAbove(x << up, y << up, t, up + 1);
+    }
+
+    // Level-major sweep, nearest ancestor first. A cell drops out of `remaining`
+    // the moment it is covered — or the moment it is provably uncoverable,
+    // which is what `blocked` decides: if the node at this level would
+    // double-paint, so would every coarser one (strict superset), exactly the
+    // early-out the capped walk made per cell.
+    let remaining = uncovered;
+    for (let up = 1; up <= maxUp && remaining.length > 0; up++) {
+      const z = primaryZoom - up;
+      const next: TileId[] = [];
+      for (const cell of remaining) {
+        const ax = cell.x >> up;
+        const ay = cell.y >> up;
+        const node = `${z}/${ax}/${ay}/${cell.t}`;
+        if (blocked.has(node)) continue;
+        // Base tier only, deliberately: the synthesized id carries no
+        // `bucketMs`, so this matches a base-tier ancestor and never a
+        // temporal-LOD one.
+        const key = tileKey({ z, x: ax, y: ay, t: cell.t });
+        // Already on screen — a pass-2 parent, or this level's own emission for
+        // a sibling cell. Either way this cell has its one cover.
+        if (emitted.has(key)) continue;
+        const header = this.tiles.get(key);
+        if (!header?.isLoaded || !header.tile) {
+          next.push(cell); // nothing resident here; try one level coarser
+          continue;
+        }
+        out.push(header.tile);
+        emitted.add(key);
+        // Its block now has content, so nothing coarser may draw over it.
+        blockAbove(ax << up, ay << up, cell.t, up + 1);
+      }
+      remaining = next;
+    }
   }
 
   /**
@@ -4430,10 +6063,13 @@ export class SpatioTemporalTileset {
    * `hits` and `misses` reflect genuine cache behaviour: a hit is a needed tile
    * already decoded in memory, a miss is a needed tile that required a fetch.
    */
-  getCacheStats() {
+  getCacheStats(): TilesetCacheStats {
     const total = this.cacheStats.hits + this.cacheStats.misses;
     return {
       ...this.cacheStats,
+      // Copy the nested counter so a caller holding the snapshot cannot
+      // mutate the tileset's live accounting.
+      evictionsByTier: { ...this.cacheStats.evictionsByTier },
       tileCount: this.tiles.size,
       cacheBytes: this.currentCacheBytes,
       hitRate: total > 0 ? this.cacheStats.hits / total : 0,

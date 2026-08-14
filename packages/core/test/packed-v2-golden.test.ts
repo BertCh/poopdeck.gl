@@ -1,5 +1,5 @@
 /**
- * Cross-impl contract test for packed **formatVersion 2** (spec §§3.2, 5.2).
+ * Cross-impl contract test for packed **formatVersion 3** (spec §§3.2, 5.2).
  *
  * Reads the committed Rust-produced v2 golden fixtures (see
  * `scripts/make-v2-golden.sh`) through `STTArchive` and proves:
@@ -120,7 +120,7 @@ async function decodeAll(
   return out;
 }
 
-describe('STT packed formatVersion 2 (golden fixtures)', () => {
+describe('STT packed formatVersion 3 (golden fixtures)', () => {
   it('marks features time-sorted (§5.2.3)', async () => {
     const v2 = openArchive('v2-golden');
     const i2 = await v2.getIndex();

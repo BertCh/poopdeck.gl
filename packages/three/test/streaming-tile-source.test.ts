@@ -24,7 +24,13 @@ const h = vi.hoisted(() => ({
   metadata: { current: null as unknown },
 }));
 
-vi.mock('@poopdeck.gl/core', () => {
+vi.mock('@poopdeck.gl/core', async (importOriginal) => {
+  // Spread the REAL module rather than enumerating exports: the factory must
+  // define every binding the source imports, and a hand-kept list goes stale
+  // the moment the source reaches for one more (it did, for the canonical
+  // `tileKey`). Only the archive + tileset are stubbed; everything else stays
+  // real, which is what the `tileKey` assertions below exercise.
+  const actual = await importOriginal<Record<string, unknown>>();
   class FakeArchive {
     constructor(_opts: unknown) {}
     getMetadata(): Promise<unknown> {
@@ -67,12 +73,16 @@ vi.mock('@poopdeck.gl/core', () => {
     setAnimationState(): void {}
     clear(): void {}
   }
-  return { STTArchive: FakeArchive, SpatioTemporalTileset: FakeTileset };
+  return {
+    ...actual,
+    STTArchive: FakeArchive,
+    SpatioTemporalTileset: FakeTileset,
+  };
 });
 
 describe('tileKey / residentSetEqual', () => {
   it('keys by tile address (z/x/y/t)', () => {
-    expect(tileKey(tile({ z: 14, x: 1, y: 2, t: 3 }))).toBe('14/1/2/3');
+    expect(tileKey(tile({ z: 14, x: 1, y: 2, t: 3 }))).toBe('14/1/2/3#0');
   });
 
   it('treats reordered same-address sets as equal', () => {

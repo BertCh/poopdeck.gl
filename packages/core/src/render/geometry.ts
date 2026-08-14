@@ -65,6 +65,102 @@ export function deriveSourceTargetPositions(
 }
 
 /**
+ * True when `boundaries` (an ascending nested boundary array — `ringIndices` or
+ * `partIndices`) puts no break STRICTLY inside `(vStart, vEnd)`.
+ *
+ * Both arrays are documented to contain every feature boundary, so the values
+ * at the feature's own ends are expected and not breaks.
+ */
+function hasNoInteriorBreak(
+  boundaries: Uint32Array,
+  vStart: number,
+  vEnd: number,
+): boolean {
+  // First boundary strictly greater than vStart (binary search: ascending).
+  let lo = 0;
+  let hi = boundaries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (boundaries[mid] <= vStart) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo >= boundaries.length || boundaries[lo] >= vEnd;
+}
+
+/**
+ * Whether the vertex run `[vStart, vEnd)` is provably a single ring — one
+ * exterior, no holes, no additional parts.
+ *
+ * ABSENT `ringIndices` PROVES NOTHING and so answers `false`. That asymmetry is
+ * the whole safety property: see the corruption note on
+ * {@link tessellateFeature}.
+ *
+ * Shared by the decoder's triangle backfill and by `tessellateFeature`, so the
+ * "is it safe to earcut this as one loop?" question has exactly one answer in
+ * the codebase.
+ */
+export function isSingleRingRun(
+  ringIndices: Uint32Array | undefined,
+  partIndices: Uint32Array | undefined,
+  vStart: number,
+  vEnd: number,
+): boolean {
+  if (!ringIndices) return false;
+  if (!hasNoInteriorBreak(ringIndices, vStart, vEnd)) return false;
+  // partIndices is coarser than ringIndices, so a part break inside the run
+  // implies a ring break inside it and the check above already returned. Test it
+  // anyway: the nesting is a documented contract, not something to lean on when
+  // the cost of being wrong is a silently filled hole.
+  if (partIndices && !hasNoInteriorBreak(partIndices, vStart, vEnd))
+    return false;
+  return true;
+}
+
+/**
+ * Earcut the vertex run `[vStart, vEnd)` of `positions`, returning GLOBAL
+ * indices (already shifted by `vStart`). `null` for a degenerate run.
+ *
+ * The caller is responsible for having established that the run is one ring —
+ * {@link isSingleRingRun}.
+ */
+export function earcutRun(
+  positions: Float64Array,
+  dims: number,
+  vStart: number,
+  vEnd: number,
+): Uint32Array | null {
+  const ringLen = vEnd - vStart;
+  if (ringLen < 3) return null;
+  // Flat 2D coords for earcut (topology is unaffected by dropping z).
+  const flat = new Float64Array(ringLen * 2);
+  for (let i = 0; i < ringLen; i++) {
+    flat[i * 2] = positions[(vStart + i) * dims];
+    flat[i * 2 + 1] = positions[(vStart + i) * dims + 1];
+  }
+  const local = earcut(flat, undefined, 2);
+  const out = new Uint32Array(local.length);
+  for (let i = 0; i < local.length; i++) out[i] = local[i] + vStart; // local → global
+  return out;
+}
+
+/**
+ * Whether feature `featureIndex` is provably a single ring.
+ */
+function isProvablySingleRing(
+  binary: BinaryFeatures,
+  featureIndex: number,
+): boolean {
+  const startIndices = binary.startIndices;
+  if (!startIndices) return false;
+  return isSingleRingRun(
+    binary.ringIndices,
+    binary.partIndices,
+    startIndices[featureIndex],
+    startIndices[featureIndex + 1],
+  );
+}
+
+/**
  * Tessellate one polygon feature into GLOBAL triangle indices (into the tile's
  * `positions` vertices), the single dispatch every backend shares:
  *
@@ -76,6 +172,20 @@ export function deriveSourceTargetPositions(
  *    (`startIndices[f] … startIndices[f+1]`), matching maplibre's current
  *    fallback. (Multi-ring earcut needs a `holeIndices` field STT does not yet
  *    emit — the multi-ring case is handled by build-time baking above.)
+ *
+ * TB-12 — DECODER-SIDE BACKFILL. A pre-baked list may now be EMPTY for a
+ * feature the builder chose not to bake (`triangles-partial`). When that
+ * feature is provably single-ring we earcut it here instead of returning the
+ * empty slice, which is what relaxes the reader contract from layer-global to
+ * per-feature for all three backends at once — they all read this output.
+ *
+ * "Provably" is load-bearing and deliberately conservative: an empty list on a
+ * HOLED or MULTI-PART feature must stay empty, because earcutting its rings as
+ * one flat loop renders the holes FILLED — a silent corruption, not a visible
+ * failure. So we backfill only when {@link BinaryFeatures.ringIndices} is
+ * present AND shows no ring break strictly inside the feature (and likewise for
+ * `partIndices`). A tile whose reader predates those columns cannot prove
+ * anything, so it keeps the empty list.
  *
  * Returns `null` when the feature has no polygon geometry. Indices are `Uint32`
  * (a returned pre-baked `Uint32Array` is a zero-copy subarray view).
@@ -89,27 +199,22 @@ export function tessellateFeature(
   if (preferPrebaked && binary.triangles && binary.triangleOffsets) {
     const start = binary.triangleOffsets[featureIndex];
     const end = binary.triangleOffsets[featureIndex + 1];
-    return binary.triangles.subarray(start, end);
+    if (end > start) return binary.triangles.subarray(start, end);
+    // Empty baked list: backfill only if we can PROVE the feature is one ring.
+    if (!isProvablySingleRing(binary, featureIndex)) {
+      return binary.triangles.subarray(start, end);
+    }
+    // fall through to the earcut path below
   }
 
   const startIndices = binary.startIndices;
   if (!startIndices) return null;
-  const dims = binary.positionDimensions ?? 2;
-  const vStart = startIndices[featureIndex];
-  const vEnd = startIndices[featureIndex + 1];
-  const ringLen = vEnd - vStart;
-  if (ringLen < 3) return null;
-
-  // Flat 2D coords for earcut (topology is unaffected by dropping z).
-  const flat = new Float64Array(ringLen * 2);
-  for (let i = 0; i < ringLen; i++) {
-    flat[i * 2] = binary.positions[(vStart + i) * dims];
-    flat[i * 2 + 1] = binary.positions[(vStart + i) * dims + 1];
-  }
-  const local = earcut(flat, undefined, 2);
-  const out = new Uint32Array(local.length);
-  for (let i = 0; i < local.length; i++) out[i] = local[i] + vStart; // local → global
-  return out;
+  return earcutRun(
+    binary.positions,
+    binary.positionDimensions ?? 2,
+    startIndices[featureIndex],
+    startIndices[featureIndex + 1],
+  );
 }
 
 /**

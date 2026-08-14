@@ -157,7 +157,7 @@ export function usePlaybackHotkeys(
       const span = range.end - range.start;
       // Committed seek, clamped to the range and rate-capped (see
       // SEEK_THROTTLE_MS). The exact playhead comes from the controller — the
-      // hook's `currentTime` is the 20Hz-throttled UI clock and may trail it.
+      // hook's `currentTime` is the 10Hz-throttled UI clock and may trail it.
       const seekTo = (time: number) => {
         const now = performance.now();
         if (now - lastSeekAtRef.current < SEEK_THROTTLE_MS) return;

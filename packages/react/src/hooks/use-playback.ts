@@ -54,7 +54,7 @@ export interface PlaybackState {
   governor: PlaybackGovernor | null;
   /** Loaded-tileset handle; the cube lattice polls getVisibleTiles off it. */
   tilesetRef: React.MutableRefObject<BufferSource | null>;
-  /** 20Hz-throttled UI clock (slider/label/cube overlays — NOT the layers). */
+  /** 10Hz-throttled UI clock (slider/label/cube overlays — NOT the layers). */
   currentTime: number;
   isPlaying: boolean;
   /**
@@ -261,14 +261,15 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
   // displayed-time label. Updating those at 60Hz forces a full page
   // re-render every frame, which made deck.gl receive a fresh `layers`
   // array prop on every tick and rerun layer matching + updateState on
-  // every visible sublayer. 20Hz is visually indistinguishable for the
-  // UI and cuts React/deck.gl prop-diff work to a third.
+  // every visible sublayer. The timeline animates between samples in CSS, so a
+  // 10Hz UI clock remains smooth while cutting React/deck.gl prop-diff work to
+  // one sixth of the render clock.
   const lastUiTickRef = useRef(0);
   useEffect(() => {
     lastUiTickRef.current = 0;
     const handleTimeUpdate = (time: number) => {
       const now = performance.now();
-      if (now - lastUiTickRef.current < 50) return;
+      if (now - lastUiTickRef.current < 100) return;
       lastUiTickRef.current = now;
       setCurrentTime(time);
     };

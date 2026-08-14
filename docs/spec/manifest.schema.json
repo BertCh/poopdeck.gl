@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://poopdeck.gl/spec/manifest.schema.json",
   "title": "STT packed-format manifest",
-  "description": "Canonical schema for the per-dataset `manifest.json` of the STT packed format (formatVersion 2). This is the cross-language wire contract: the Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion): readers MUST ignore fields they do not recognize. formatVersion 1 is WITHDRAWN (2026-07-26, stt-packed-format.md §9.1): both reference readers refuse it at open, so this schema no longer describes it — a v1 manifest is not valid against this document. See docs/spec/stt-packed-format.md.",
+  "description": "Canonical schema for the per-dataset `manifest.json` of STT packed formatVersion 3 — the only version reference writers emit, and the only one this document describes. Reference readers additionally OPEN formatVersion 2 (directory codec v5) read-only so already-published archives are not stranded; a v2 manifest is out of scope HERE and is not validated against this schema (see stt-packed-format.md §9.1). The Rust writer (`crate::pack::Manifest`) and every reader (TS `@poopdeck.gl/core` `PackedManifest`, Rust `PackedReader`) MUST agree with this document. Unknown properties are permitted at every envelope level (additive evolution within a formatVersion).",
   "type": "object",
   "required": [
     "format",
     "formatVersion",
+    "variants",
     "compression",
     "directory",
     "packs",
@@ -18,6 +19,8 @@
     "coord-quant",
     "elevation-fold",
     "time-delta",
+    "triangles-partial",
+    "vertex-time-feature-anchor",
     "vertex-value-quant"
   ],
   "properties": {
@@ -26,12 +29,13 @@
       "const": "stt-packed"
     },
     "formatVersion": {
-      "description": "Packed format version \u2014 the AUTHORITATIVE discriminator (stt-packed-format.md \u00a75.2 authority rule): STTP/STTD object magic with object-absolute blob offsets, manifest-embedded `schemas` templates, and the sectioned layer frame. Distinct from the directory codec version (see `directory.directoryVersion`) and the tile-payload encoding. Readers MUST refuse values outside this enum at open. The enum is CLOSED at [2]: `1` was withdrawn 2026-07-26 (stt-packed-format.md \u00a79.1/\u00a79.3) \u2014 both reference readers refuse it, so leaving it valid here would make the schema disagree with every conformant reader.",
-      "enum": [2]
+      "description": "Packed format version — the AUTHORITATIVE discriminator. v3 adds the required variant registry and directory-v6 variant identity. Pinned to 3 here because this schema describes a v3 manifest; readers accept the version WINDOW in stt-packed-format.md §9.1 (3 for writing, 3 and 2 for reading) and MUST refuse every value outside it.",
+      "enum": [3]
     },
     "schemas": {
       "description": "The dataset's Arrow IPC schema templates, embedded (stt-packed-format.md \u00a73.2). Optional: a writer that emits only self-contained frames (every layer inlining its own schema section \u2014 what `stt-serve` does, and what `make-golden-fixture` writes) references no template and omits the key. Each entry is the raw template bytes (stream start through the end of the Schema message) base64-encoded, addressed by their blake3-128 hash \u2014 the 16-byte reference v2 layer frames carry. Entries MUST be sorted by `hash` and deduped (byte-reproducible manifests). Readers MUST validate blake3_128(data) == hash for every entry at open, failing the whole dataset loudly on any mismatch, then resolve frame references against the resulting registry.",
       "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "object",
         "required": ["hash", "data"],
@@ -50,10 +54,36 @@
       }
     },
     "capabilities": {
-      "description": "OPTIONAL required-to-understand feature declarations (see stt-packed-format.md \u00a73.1). Each entry names a feature the writer used that RE-TYPES existing tile columns, so a reader that does not implement it would silently misdecode; a reader MUST refuse a dataset declaring a capability outside the set it implements (loud failure at open). The current registry is the top-level `x-stt-capability-registry` array of this schema \u2014 the single machine-readable source both reference implementations pin their constants against in CI. Values are deliberately open-ended strings \u2014 future registry entries are added by spec revision (extending `x-stt-capability-registry`) without invalidating old manifests, and readers enforce their OWN implemented set, not this schema. Additive columns (triangles, vector groups, ...) never need a capability. Absent = none used (the shape of every pre-capabilities manifest; writers omit the key rather than emit an empty array).",
+      "description": "OPTIONAL required-to-understand feature declarations (see stt-packed-format.md \u00a73.1). Each entry names a feature the writer used that RE-TYPES existing tile columns, so a reader that does not implement it would silently misdecode; a reader MUST refuse a dataset declaring a capability outside the set it implements (loud failure at open). The current registry is the top-level `x-stt-capability-registry` array of this schema \u2014 the single machine-readable source both reference implementations pin their constants against in CI. Values are deliberately open-ended strings \u2014 future registry entries are added by spec revision (extending `x-stt-capability-registry`) without invalidating old manifests, and readers enforce their OWN implemented set, not this schema. Additive columns (vector groups, ...) never need a capability. The triangle sidecar is additive only when it is complete: `triangles-partial` declares that a polygon layer bakes indices for SOME features and leaves the rest empty for the reader to earcut, which a reader without the backfill would draw as nothing. Absent = none used (the shape of every pre-capabilities manifest; writers omit the key rather than emit an empty array).",
       "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
       "items": {
         "type": "string"
+      }
+    },
+    "variants": {
+      "description": "Required registry of independently addressable tile representations. Every directory entry's variant_id resolves to exactly one item. Variant 0 is always kind raw; the canonical summary variant is 1.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["id", "kind"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          },
+          "kind": {
+            "enum": ["raw", "summary"]
+          },
+          "layerName": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "compression": {
@@ -64,8 +94,52 @@
       "description": "OPTIONAL. The concrete space-filling blob byte-ordering the writer resolved and laid down (`--blob-ordering`, see stt-packed-format.md \u00a75). Informational: it records how the on-disk blob byte order was chosen so a tool need not re-infer it from the (packId, offset) layout; a reader indexes by (z, x, y, t) regardless and does not depend on it. Always a concrete order \u2014 never `auto`/`measured`, which resolve at build. Absent on pre-2026-07 archives (writers omit the key rather than emit a default, so pre-field manifests stay byte-identical).",
       "enum": ["spatial", "time-major", "hilbert3", "morton3"]
     },
+    "orderingWorkload": {
+      "description": "OPTIONAL co-versioning for `blobOrdering`: the workload model the layout was chosen under, and the reader-mirroring range-coalescing gap the writer's cost model priced it at. `blobOrdering` alone says WHAT the layout is; it cannot say whether the layout is still optimal, because two things invalidate a simulated layout without moving a single archive byte — a re-fit of the query weights, and a change to the reader's coalescing gap. Informational, NEVER a reader directive: `stt-optimize order-audit` compares these values against today's to report drift, and the reader's adaptive coalesce gap uses `coalesce_gap_bytes` only to bound how far it may move from the assumption the layout was priced at. Present on exactly the archives whose ordering was resolved by SIMULATION (`--blob-ordering measured`, with enough tiles to simulate) and ABSENT everywhere else — the presence/absence is itself the signal, since `blobOrdering` only ever names the concrete winner and cannot distinguish a fitted layout from a declared one. Absent ⇒ the layout's provenance is unknown; do not assume a gap. Keys are snake_case: this object is written byte-identically to `metadata.ordering_workload` (see there), so a consumer reading either key sees the same shape.",
+      "type": "object",
+      "required": [
+        "scrub",
+        "pan",
+        "playback",
+        "playback_window_buckets",
+        "runway_multiplier",
+        "coalesce_gap_bytes"
+      ],
+      "properties": {
+        "scrub": {
+          "description": "Weight on the “scrub a viewport across all time” query.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "pan": {
+          "description": "Weight on the “pan at one instant” query.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "playback": {
+          "description": "Weight on the “play a sliding time window” query. `0` means the dataset has no playback dimension (a single time bucket).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "playback_window_buckets": {
+          "description": "Sliding-window width, in time buckets, the playback query was priced at.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "runway_multiplier": {
+          "description": "Multiplier applied to the worst single playhead advance (the buffered-runway / stall term).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "coalesce_gap_bytes": {
+          "description": "The range-read coalescing gap the simulation assumed, in bytes — the READER-mirroring constant (TS `DEFAULT_RANGE_COALESCE_GAP`, Rust `stt_core::ordering_sim::DEFAULT_COALESCE_GAP_BYTES`, both 2 MiB today). Drift here invalidates the layout's premise without changing an archive byte, which is why it is recorded rather than re-derived.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "directory": {
-      "description": "Pointer to the single immutable, content-addressed directory object (the v5 run-length index). The object is either a single whole-load buffer (default) or a paged container \u2014 root page + leaf pages \u2014 selected by `layout`. Either way the leaf codec is v5; `layout`, not `directoryVersion`, discriminates the container shape.",
+      "description": "Pointer to the single immutable, content-addressed directory object (the v6 run-length index). The object is either a single whole-load buffer or a paged container. Either way the leaf codec is v6.",
       "type": "object",
       "required": ["key", "length", "directoryVersion"],
       "properties": {
@@ -77,14 +151,14 @@
         "length": {
           "description": "Directory object length in bytes \u2014 the at-rest object, i.e. the compressed length when `encoding` is set. Readers validate the fetched body against it before any decode.",
           "type": "integer",
-          "minimum": 0
+          "minimum": 9
         },
         "directoryVersion": {
-          "description": "Directory (leaf) codec version. The packed format emits v5 (per-run pack_id column + object-absolute offsets), wrapped in the 8-byte STTD magic prelude. Unchanged by the paged container.",
-          "const": 5
+          "description": "Directory (leaf) codec version. v6 adds a required per-entry variant_id key and is wrapped in the 8-byte STTD v3 magic prelude.",
+          "const": 6
         },
         "encoding": {
-          "description": "OPTIONAL at-rest encoding of the directory object. `zstd` = the object is a zstd frame (for a paged directory: EACH page \u2014 root + every leaf \u2014 is its own zstd frame). Absent = raw codec bytes (the shape of every manifest written before this field existed). Readers MUST support both.",
+          "description": "Optional at-rest encoding. `zstd` means each single directory, paged root, and paged leaf is an independent zstd frame; absent means raw codec bytes.",
           "enum": ["zstd"]
         },
         "layout": {
@@ -94,19 +168,78 @@
         "rootLength": {
           "description": "Paged only: at-rest byte length of the root page (a prefix of the object). The reader range-GETs `bytes=0-(8+rootLength-1)` for the root — the 8-byte STTD object magic shifts it — then leaf ranges on demand. Leaf descriptor offsets are relative to this (absolute = rootLength + rel_offset, within the post-magic codec bytes).",
           "type": "integer",
-          "minimum": 0
+          "minimum": 1
         },
         "pageCount": {
           "description": "Paged only: number of leaf pages (informational / validation).",
           "type": "integer",
-          "minimum": 0
+          "minimum": 1
         },
         "pageEntries": {
           "description": "Paged only: nominal entries-per-leaf-page used at build (informational; the sim-validated sweet spot is 1024\u20134096).",
           "type": "integer",
           "minimum": 1
+        },
+        "rootHash": {
+          "description": "Paged only: required blake3-128 of the at-rest root frame bytes, excluding the 8-byte STTD object magic.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "pageHashes": {
+          "description": "Paged only: ordered blake3-128 hashes of each at-rest leaf frame, one per root descriptor/page. Hashes cover the exact ranged bytes before decompression. Length MUST equal `pageCount` and is checked semantically by readers.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
         }
-      }
+      },
+      "dependentRequired": {
+        "rootHash": ["pageHashes"],
+        "pageHashes": ["rootHash"]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "layout": {
+                "const": "paged"
+              }
+            },
+            "required": ["layout"]
+          },
+          "then": {
+            "required": [
+              "rootLength",
+              "pageCount",
+              "pageEntries",
+              "rootHash",
+              "pageHashes"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["rootLength"]
+                },
+                {
+                  "required": ["pageCount"]
+                },
+                {
+                  "required": ["pageEntries"]
+                },
+                {
+                  "required": ["rootHash"]
+                },
+                {
+                  "required": ["pageHashes"]
+                }
+              ]
+            }
+          }
+        }
+      ]
     },
     "packs": {
       "description": "Ordered table of immutable, content-addressed pack objects. The index of a pack in this array IS the `pack_id` the directory references. Must be non-empty.",
@@ -124,15 +257,36 @@
           "length": {
             "description": "Pack object length in bytes. Normally <= the pack target (64 MiB by default); a single blob larger than the target gets its own oversized pack and may exceed it.",
             "type": "integer",
-            "minimum": 0
+            "minimum": 8
           }
         }
-      }
+      },
+      "uniqueItems": true
     },
     "metadata": {
-      "description": "The full stt-core `Metadata` JSON, folded in verbatim (snake_case keys) so a cold reader needs no separate metadata object. Opaque to this schema except for the OPTIONAL `style_hints` block pinned below; see crate::metadata::Metadata.",
+      "description": "The full stt-core `Metadata` JSON, folded in verbatim (snake_case keys) so a cold reader needs no separate metadata object. Opaque to this schema except for the OPTIONAL `style_hints`, `ordering_workload`, `z_range` and `content_fingerprint` blocks pinned below; see crate::metadata::Metadata.",
       "type": "object",
       "properties": {
+        "ordering_workload": {
+          "description": "OPTIONAL. The reader-compat MIRROR of the top-level `orderingWorkload` — byte-identical object, same emission rule (simulated orderings only). The canonical key is the top-level one, which sits beside the `blobOrdering` it co-versions; this copy exists because the shipped TS reader (`@poopdeck.gl/core`, `manifestBuildAssumedGapBytes`) resolves the build-assumed coalescing gap through `metadata.ordering_workload.coalesce_gap_bytes`. A writer emitting one MUST emit both, with equal values; a reader MAY read either and MUST NOT treat a difference as meaningful (no writer produces one). Scheduled for removal once the TS reader reads `orderingWorkload`.",
+          "type": "object",
+          "required": [
+            "scrub",
+            "pan",
+            "playback",
+            "playback_window_buckets",
+            "runway_multiplier",
+            "coalesce_gap_bytes"
+          ],
+          "properties": {
+            "scrub": { "type": "integer", "minimum": 0 },
+            "pan": { "type": "integer", "minimum": 0 },
+            "playback": { "type": "integer", "minimum": 0 },
+            "playback_window_buckets": { "type": "integer", "minimum": 0 },
+            "runway_multiplier": { "type": "integer", "minimum": 0 },
+            "coalesce_gap_bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
         "style_hints": {
           "description": "OPTIONAL build-time style hints (additive; written by `stt-build --style-hints`). Per-property statistics plus archive-level rendering DEFAULTS a renderer may adopt and a user can always override. Old readers are unaffected \u2014 absent means no hints.",
           "type": "object",
@@ -199,14 +353,101 @@
               }
             },
             "suggested_playback_seconds": {
-              "description": "Suggested playback duration in seconds: `clamp(round(sqrt(bucket_count)), 20, 90)` where `bucket_count` = time-range duration / `temporal_bucket_ms`. Absent when the bucket size is unknown/zero.",
+              "description": "Suggested playback duration in seconds, from one of two writer formulas — the archive does not say which, because a reader only ever consumes the number. LEGACY (the default emission): `clamp(round(sqrt(K)), 20, 90)`. FRAME-RATE REFIT (`stt-build --derived-playback-params`): `clamp(K/20, K/30, K/12)` further clamped to `[5, 300]`, which holds the implied data frame rate near 20 buckets/s instead of letting a 10-bucket archive crawl or a 100 000-bucket archive blur. `K` = time-range duration / `temporal_bucket_ms`. Absent when the bucket size is unknown/zero. The range below is the UNION of the two formulas' outputs — a reader MUST NOT infer the formula from the value.",
               "type": "integer",
-              "minimum": 20,
-              "maximum": 90
+              "minimum": 5,
+              "maximum": 300
+            },
+            "suggested_time_window_ms": {
+              "description": "OPTIONAL. Suggested playback WINDOW width in milliseconds — how much time to show at once, the companion to `suggested_playback_seconds` (how fast to sweep). The widest window whose resident decoded payload still fits a reference client memory budget, capped at 24 temporal buckets and floored at one: `min(M_REF · span / total_payload_bytes, 24·Δ)`, with `M_REF` = 256 MiB and `Δ` = `temporal_bucket_ms`. A DEFAULT like every other hint: an explicit reader/user `timeWindow` wins, and an authored sub-range is respected verbatim. Absent on archives built before the field existed and on builds with no payload total (streaming) — a reader MUST keep its own bucket-multiple fallback. Emitted only by `stt-build --derived-playback-params`.",
+              "type": "integer",
+              "minimum": 1
             },
             "layer_hint": {
               "description": "Dominant produced layer kind (absent when none could be derived). Lines with per-vertex times hint `trips`; timeless lines hint `paths`.",
               "enum": ["points", "paths", "trips", "polygons"]
+            }
+          }
+        },
+        "z_range": {
+          "description": "OPTIONAL vertical extent `[min_z, max_z]` of the dataset, in the units the geometry's third ordinate carries (metres for every reference producer). Additive and omitted entirely for a 2D dataset, so pre-field manifests stay byte-identical. `bounds` is horizontal-only and TileJSON pins it at exactly four elements, which is why the vertical extent is a separate key rather than a wider bbox; a STAC Item derived from this manifest DOES fold the two into the RFC 7946 six-element form `[w, s, z_min, e, n, z_max]`. Written from geometry z, or from the property column a build declares as its elevation source (metadata only — declaring it does not rewrite geometry). Like `bounds`, this is a CONTAINMENT claim: every altitude the archive decodes to MUST lie inside it. See crate::metadata::Metadata::z_range and docs/spec/conformance.md §3.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "content_fingerprint": {
+          "description": "OPTIONAL semantic fingerprint of the dataset's DECODED CONTENT, computed by the writer from the SOURCE features before tiling and encode, and recomputed by `stt-validate` from the decoded tiles (check 12). Structural validation is sound but incomplete — an archive whose coordinates have been silently scrambled still hashes, decodes and schema-checks perfectly, which is how a stride-2 read of a 3D `xyz` leaf flattened 106 archives that all passed. Only REPLICATION-INVARIANT statistics appear here: a feature lands in N tiles (zoom pyramid, clipping, temporal LOD), so min/max and distinct counts survive tiling unchanged while sums and means do not. Absent on every archive written before the field existed; a reader ignores it and the validator warns rather than errors. ⚠️ A tool that transforms an archive LOSSLESSLY (reorder, repack, re-optimize) MUST carry this block through verbatim and MUST NOT recompute it from its own output — see docs/spec/conformance.md §3. See crate::metadata::ContentFingerprint.",
+          "type": "object",
+          "required": [
+            "version",
+            "bbox",
+            "distinct_feature_count",
+            "coord_tolerance_deg"
+          ],
+          "properties": {
+            "version": {
+              "description": "Fingerprint block schema version. This schema describes version 1. A validator meeting a HIGHER version warns and skips the comparison rather than mis-checking it against rules it does not know, so the value is an open integer rather than a `const`.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "bbox": {
+              "description": "Decoded-VERTEX bbox `[min_lon, min_lat, max_lon, max_lat]`. Unlike `bounds` this deliberately INCLUDES null-island `(0, 0)` features: `bounds` is a presentation quantity (an opening camera must not zoom to the whole globe over one coerced row) whereas this is a containment claim, and excluding data the archive will later be asked to contain would make the claim false.",
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "z_range": {
+              "description": "Vertical extent `[min_z, max_z]` when any vertex (or a declared elevation column) carried altitude. Pairs with `metadata.z_range`.",
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "distinct_feature_count": {
+              "description": "Count of DISTINCT source features — the same quantity as `metadata.distinct_feature_count`, repeated here so the block is self-contained when captured to a sidecar file for transform acceptance (`stt-validate --emit-fingerprint`).",
+              "type": "integer",
+              "minimum": 0
+            },
+            "numeric_ranges": {
+              "description": "Per property column, the non-null `[min, max]` of its numeric values. Omitted when empty.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "categorical_cardinality": {
+              "description": "Per property column, its distinct-value count, capped at 10000 (a value AT the cap means 'at least this many' — the same ceiling `style_hints.properties[].cardinality` uses). Omitted when empty.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "coord_tolerance_deg": {
+              "description": "Slack, in degrees, allowed on every coordinate comparison. `0` unless the build quantizes coordinates. CAPABILITY-GATED: the validator REJECTS a non-zero value on an archive that does not declare the `coord-quant` capability, so a writer cannot declare a wide tolerance to launder corruption.",
+              "type": "number",
+              "minimum": 0
+            },
+            "column_tolerance": {
+              "description": "Per-column slack for numeric property columns; an absent entry means exact. Capability-gated exactly like `coord_tolerance_deg`, against `attr-quant`. Omitted when empty. Per-vertex value quantization (`TILE_META.vq`) is explicitly out of version 1's scope — `vertex_value` / `vertex_value_matrix` contribute no fingerprint statistic, so they need no tolerance.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "number",
+                "minimum": 0
+              }
             }
           }
         }

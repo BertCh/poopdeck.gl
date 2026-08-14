@@ -485,32 +485,27 @@ backs `inspect`, `diff`, `doctor`, `order-audit`. Removed from the register.
 
 ## 9. Open tail
 
-The backlog lives in [README.md](./README.md); B1, B2, K1, K2 and K5 are this
+The backlog lives in [README.md](./README.md); K2, K5, K6 and K10 are this
 record's, and are not restated here. Format-specific notes only:
 
-- **Demo-fleet republish to packed v2** — ⚠ **now blocking, not optional**
-  (**B2**). Measured 2026-07-26 by probing all 64 manifest URLs registered in
-  `datasets.ts`: **24 are still `formatVersion: 1`**, 35 are v2, 5 are 404. With
-  v1 read support withdrawn 2026-07-26 (§10, spec §9.1) those 24 are
-  **unopenable by the current readers**, so the flip is a prerequisite for
-  shipping the reader, not a follow-up. The 2026-07-26
-  payload break (§10) makes it a full re-upload regardless — every content
-  address churns, including for the archives already on v2. Prune-grace is
-  shipped but does **not** cover a change where nothing is shared with the
-  previous manifest: use `--no-prune` and let the retention window pass.
-  Rollback = re-upload the previous manifest AND pin the previous reader.
-  This gate carries the **requests- / bytes-to-first-frame** capture (the COPC
-  "4 reads" benchmark) — measure after the flip, since measuring before would
-  just measure the old layout.
+- **The fleet is on packed v2** — all 68 registered manifests as of 2026-07-31,
+  from 24 still on v1 that morning. With v1 read support withdrawn (§10, spec
+  §9.1) that flip was a prerequisite for shipping the reader, not a follow-up.
+  The publish ordering it produced is a standing procedure in
+  [shipping.md](./shipping.md). Still outstanding is the capture it gates: the
+  **requests- / bytes-to-first-frame** figures (the COPC "4 reads" benchmark) are
+  pre-flip and measure the old layout — **K10**.
 - **Lazy-props client materialization** — format-enabled by the core/props split;
   the reader is eager-only. Already decided: the Arrow parse must run in the decode
   worker and cached tile `byteSize` must be re-accounted through an explicit tileset
   callback, never silently.
-- **serve-v2** — DONE: serve emits self-contained v2 frames and advertises
-  `formatVersion` on `/metadata.json`. What remains open is the
-  **`capabilities` channel** (§10.4) and updating
-  `docs/spec/stt-serve-protocol.md`, which still documents the v1 behaviour —
-  **K1**.
+- **serve-v2** — DONE, including the `capabilities` channel (§10.4): serve emits
+  self-contained v2 frames and `/metadata.json` carries both `formatVersion` and a
+  `capabilities` array from the same `EncoderSettings::required_capabilities()`
+  the offline build declares with. The array is **always present**, empty when the
+  server encodes the capability-free shape, so its absence means "server predates
+  this key" rather than "declares nothing". `docs/spec/stt-serve-protocol.md`
+  documents it.
 - **Temporal-LOD reader wiring beyond scrub-LOD P0–P2** — wired and kill-switched,
   but `scrubLod` is set at zero showcase call-sites, so the pyramid is consumed
   nowhere at rest. P3/P4: [playback-and-loading.md](./playback-and-loading.md).

@@ -52,6 +52,11 @@ function buildPolygonTileWithTriangles(opts: {
    * decoder must handle both. Defaults to 'u32' to match the original fixture.
    */
   triangleWireWidth?: 'u16' | 'u32';
+  /**
+   * TB-12 `triangles-partial`: bake feature 0 only and leave feature 1's run
+   * EMPTY, the mixed shape a per-feature builder emits.
+   */
+  partialTriangles?: boolean;
 }): Uint8Array {
   // Two square polygons: feature 0 at (0,0)-(1,1), feature 1 at (5,5)-(6,6).
   // Each ring is 5 verts (closing duplicate of vert 0).
@@ -128,7 +133,9 @@ function buildPolygonTileWithTriangles(opts: {
   // feature's own 5 ring vertices). Square earcuts into 2 triangles, 6 idx.
   // (one valid earcut for a CCW square: [3,0,1, 3,1,2])
   const wireWidth = opts.triangleWireWidth ?? 'u32';
-  const triFlatValues = [3, 0, 1, 3, 1, 2, 3, 0, 1, 3, 1, 2];
+  const triFlatValues = opts.partialTriangles
+    ? [3, 0, 1, 3, 1, 2]
+    : [3, 0, 1, 3, 1, 2, 3, 0, 1, 3, 1, 2];
   const triType = wireWidth === 'u16' ? new Uint16() : new Uint32();
   const triFlat =
     wireWidth === 'u16'
@@ -139,7 +146,9 @@ function buildPolygonTileWithTriangles(opts: {
     type: new List(new Field('item', triType, false)),
     length: featureCount,
     nullCount: 0,
-    valueOffsets: new Int32Array([0, 6, 12]),
+    valueOffsets: new Int32Array(
+      opts.partialTriangles ? [0, 6, 6] : [0, 6, 12],
+    ),
     child: triValues,
   });
 
@@ -254,5 +263,37 @@ describe('decodeTile: pre-tessellated polygon column', () => {
     expect(Array.from(f.triangles!.subarray(6, 12))).toEqual([
       8, 5, 6, 8, 6, 7,
     ]);
+  });
+
+  // TB-12 — the decoder completes a partially-baked buffer, so the layer-global
+  // reader contract (deck's whole-buffer `indices` handoff, three's
+  // `hasPreBaked` switch) stays true for `triangles-partial` archives.
+  it('backfills an EMPTY per-feature run so the buffer stays complete', () => {
+    const payload = buildPolygonTileWithTriangles({
+      withTriangles: true,
+      partialTriangles: true,
+    });
+    const tile = decodeTile(payload, tileId);
+    const f = tile.layers[0].features;
+
+    // Feature 0 keeps its baked indices verbatim.
+    expect(Array.from(f.triangles!.subarray(0, 6))).toEqual([3, 0, 1, 3, 1, 2]);
+
+    // Feature 1's run was empty on the wire and is now tessellated, with the
+    // per-feature offsets describing it and indices inside its own vertices.
+    expect(f.triangleOffsets![1]).toBe(6);
+    const f1 = f.triangles!.subarray(
+      f.triangleOffsets![1],
+      f.triangleOffsets![2],
+    );
+    expect(f1.length).toBe(6);
+    for (const i of f1) {
+      expect(i).toBeGreaterThanOrEqual(5);
+      expect(i).toBeLessThan(10);
+    }
+
+    // And the completed buffer is exactly as long as the offsets claim — no
+    // stale tail from the pre-backfill sizing.
+    expect(f.triangles!.length).toBe(f.triangleOffsets![2]);
   });
 });

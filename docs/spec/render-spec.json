@@ -1,6 +1,6 @@
 {
-  "$comment": "STT render-kernel shader-codegen contract (renderer-abstraction-2026-06 §5.1). The scalar time-filter alpha is authored once as an Expr AST in @poopdeck.gl/core/shader-codegen and machine-emitted per backend. This file STATES the frozen op-set so it is a declared contract, not something discovered by reading emitters. Enforced by packages/core/test/render-spec-contract.test.ts — the ALPHA_EXPR ASTs must stay inside `ops` and `variables`, and adding an op is gated on every emitter listed in `emitters` compiling it.",
-  "version": 1,
+  "$comment": "STT render-kernel time-filter contract (renderer-abstraction-2026-06 §5.1). The scalar time-filter alpha has ONE definition — @poopdeck.gl/core/time-filter's timeFilterAlpha — and a second, independently-derived branchless statement of the same four formulas as an Expr AST in @poopdeck.gl/core/shader-codegen (ALPHA_EXPR + evalExpr). Every renderer backend HAND-WRITES its own shader in its own dialect; none is machine-emitted. What prevents drift is the per-backend conformance obligation in `conformance` below, not codegen. This file STATES the frozen op-set and those obligations so both are declared contracts, not facts discovered by reading source. Enforced by packages/core/test/render-spec-contract.test.ts.",
+  "version": 2,
   "ops": [
     "uniform",
     "attr",
@@ -33,24 +33,68 @@
     "attributes": ["startTime", "endTime", "vertexTime"]
   },
   "modes": ["window", "wake", "cumulative", "trail"],
-  "emitters": [
-    {
-      "name": "emitGLSL300",
-      "package": "@poopdeck.gl/core",
-      "dialect": "GLSL ES 3.00 (deck.gl inject snippet)"
+  "oracles": {
+    "primary": {
+      "symbol": "timeFilterAlpha",
+      "module": "@poopdeck.gl/core/time-filter",
+      "form": "if / early-return control flow"
     },
-    {
-      "name": "emitGLSL100",
-      "package": "@poopdeck.gl/core",
-      "dialect": "GLSL ES 1.00 (maplibre custom layer)"
-    },
-    {
-      "name": "emitTSL",
-      "package": "@poopdeck.gl/three",
-      "dialect": "three.js TSL node graph (WebGPU)",
-      "status": "planned — three still uses hand-written TSL nodes pinned to the CPU oracle by parity tests"
+    "second": {
+      "symbol": "evalExpr(ALPHA_EXPR[mode])",
+      "module": "@poopdeck.gl/core/shader-codegen",
+      "form": "branchless step/select composition over the frozen op-set",
+      "$comment": "Independently derived on purpose: two derivations disagree where the SPEC is ambiguous, which one implementation can never reveal. Pinned equal to `primary` by a 2000-sample randomized sweep in packages/core/test/shader-codegen.test.ts."
     }
-  ],
+  },
+  "conformance": {
+    "$comment": "Every backend hand-writes its shader. Each MUST carry a conformance test that pins its shader math to BOTH oracles — so editing a formula in one dialect goes red until every renderer follows. Enforced structurally: render-spec-contract.test.ts asserts each backend package's test suite references both oracle modules. Shader source cannot execute headless, so the last leg is a structural lock (verbatim formula-line assertions) rather than execution; packages/maplibre/test/time-modes.test.ts is the reference implementation of the whole pattern.",
+    "obligations": [
+      "backend JS reference == primary oracle, over a dense sweep including boundary and degenerate inputs",
+      "backend JS reference == second oracle",
+      "shipped shader source == backend JS reference, by structural lock",
+      "genuine divergences are pinned explicitly with an explaining comment, never hidden by a loosened tolerance or a skipped case"
+    ],
+    "backends": [
+      {
+        "backend": "deck.gl",
+        "package": "@poopdeck.gl/layers",
+        "testDir": "packages/layers/test",
+        "dialect": "GLSL ES 3.00",
+        "authoring": "hand-written",
+        "shaderSource": "packages/layers/src/extensions/time-filter-extension.ts",
+        "$comment": "Mode dispatch is by UNIFORM VALUE at draw time (cumulative > wake > trail > window), not per-mode shader variants — the extension is a singleton whose memoized getShaders() exists to avoid a pipeline re-link per tile."
+      },
+      {
+        "backend": "maplibre",
+        "package": "@poopdeck.gl/maplibre",
+        "testDir": "packages/maplibre/test",
+        "dialect": "GLSL ES 1.00",
+        "authoring": "hand-written",
+        "shaderSource": "packages/maplibre/src/shaders/time-window.glsl.ts",
+        "$comment": "Mode is chosen at shader-BUILD time (buildPointVertexSource picks the snippet), so each mode ships as an independent function."
+      },
+      {
+        "backend": "three.js",
+        "package": "@poopdeck.gl/three",
+        "testDir": "packages/three/test",
+        "dialect": "TSL node graph (WebGPU / WebGL2)",
+        "authoring": "hand-written",
+        "shaderSource": "packages/three/src/tsl/time-filter.ts",
+        "$comment": "Also carries a three-local hard 0|1 vertex-collapse mirror (tsl/time-filter-math.ts's *Visible) with the safe-collapse invariant `visible === 0 implies alpha === 0`; that invariant is part of this backend's obligation."
+      },
+      {
+        "backend": "cesium",
+        "package": "@poopdeck.gl/cesium",
+        "testDir": "packages/cesium/test",
+        "dialect": "GLSL ES 3.00",
+        "authoring": "CPU — no shader",
+        "shaderSource": null,
+        "$comment": "Cesium's shipped path calls the primary oracle per feature per frame on the CPU; it has no GPU time-filter shader. Its obligation is to keep calling the oracle rather than drift to a local copy."
+      }
+    ]
+  },
+  "emitters": [],
+  "$emittersComment": "Empty on purpose, and it is a decision rather than an omission. `emitGLSL100` was deleted first (no callers, byte-identical output to the 3.00 emitter), then `emitGLSL300` and its sole caller @poopdeck.gl/cesium's `timeFilterAlphaGlsl` were removed at the 0.6.0 cut for the same reason: no shipped shader was ever generated from the AST, and every backend hand-writes its shader in its own dialect. The AST (`ALPHA_EXPR`) and its CPU evaluator (`evalExpr`) survive and are load-bearing — they are the SECOND ORACLE each backend's shader math is pinned to. Re-add an emitter only alongside something that compiles its output.",
   "exclusions": {
     "$comment": "Deliberately OUTSIDE the frozen op-set; each stays per-backend, pinned to the CPU oracle by parity tests rather than codegen.",
     "surfelTemporalGaussian": "exp(dt^2 * -0.5) temporal weight (SplatLayer/SurfelLayer)",

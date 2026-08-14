@@ -119,7 +119,7 @@ interface BinaryFeatures {
 
   /**
    * True when this tile's rows are stable-sorted by `start_time` — declared
-   * by the packed formatVersion-2 frame's TILE_META `sorted` flag.
+   * by the packed formatVersion-3 frame's TILE_META `sorted` flag.
    * `undefined` for synthetic fixtures: per the spec, readers MUST NOT assume
    * sortedness without the flag.
    */
@@ -266,7 +266,7 @@ to its `currentTime` uniform; if you build a custom layer, pass
 
 ## Row ordering (`timesSorted`)
 
-`timesSorted` mirrors the packed formatVersion-2 frame's `TILE_META.sorted`
+`timesSorted` mirrors the packed formatVersion-3 frame's `TILE_META.sorted`
 flag: `true` means the tile's rows are stable-sorted by `start_time`, which
 enables window slicing and future partial decode. Per the spec, readers **must
 not** assume sortedness without the flag — `undefined` (synthetic fixtures and

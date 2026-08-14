@@ -9,7 +9,8 @@
  * §6) — it validates the extension surface is thin: this package implements a
  * tiny `SttRenderNode` + this descriptor and reuses `core/geo` (WGS84 globe),
  * `core/style` (color), `core/tileset-adapter` (streaming), and
- * `core/shader-codegen`/`core/time-filter` (time-filter alpha).
+ * `core/time-filter` (time-filter alpha — computed per feature on the CPU;
+ * this backend ships no time-filter shader, see `shaders.ts`).
  *
  * CATALOG: the movement family is implemented — `point` (`STTPointLayer`),
  * `path`+`line` (`STTPathLayer`; an OD line is a 2-vertex LineString),

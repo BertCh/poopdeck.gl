@@ -6,9 +6,12 @@ Tile payloads are re-encoded — rebuild and republish every archive
 
 Six wire changes land as **one** churn event, on purpose: content addresses are
 blake3 of the bytes, so batching them means the fleet re-uploads once instead of
-six times. `formatVersion` stays `2` — every change either rides a
-`manifest.capabilities` declaration or is strictly additive, so the envelope,
-object layout and addressing rules are untouched.
+six times. Each change either rides a `manifest.capabilities` declaration or is
+strictly additive, so none of them needed an envelope bump of its own — they
+were authored against `formatVersion: 2` and left the object layout and
+addressing rules untouched. (The envelope did move in this same release, for an
+unrelated reason: see the `formatVersion: 3` entry, which adds the variant
+axis. Both land in one re-upload.)
 
 **What you have to do.** Rebuild each archive with the 0.6.0 `stt-build` and
 re-upload it. Every pack hash changes even for archives already on

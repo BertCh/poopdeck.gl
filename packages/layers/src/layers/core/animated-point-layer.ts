@@ -655,6 +655,11 @@ interface PreparedTile {
   features: BinaryFeatures;
 }
 
+interface WindowPointGroup {
+  members: PreparedTile[];
+  layer: ScatterplotLayer;
+}
+
 /**
  * One absorbed tile's feature range within a consolidated slab. Holds the
  * tile ID (not the Tile) — a slab outlives spatially-evicted tiles, and a
@@ -801,6 +806,11 @@ interface PointRenderCache {
   layerPropsKey: string;
   /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
   tilesRef: Tile[] | null;
+  /**
+   * Exact-offset groups used only for resident sets with many tiny point
+   * tiles. The normal dense-tile path remains zero-copy and one layer per tile.
+   */
+  windowGroups: Map<string, WindowPointGroup>;
 
   /* ── Cumulative consolidation ──────────────────────────────────────────── */
   /** Packed slabs, in arrival order. The last entry is the open (growing) slab. */
@@ -851,6 +861,7 @@ function emptyPointRenderCache(): PointRenderCache {
     sublayers: new Map(),
     layerPropsKey: '',
     tilesRef: null,
+    windowGroups: new Map(),
     slabs: [],
     absorbed: new Set(),
     slabBaseOffset: null,
@@ -1086,6 +1097,10 @@ export class AnimatedPointLayer<
   }
   private set lastTilesRef(v: Tile[] | null) {
     this.cache.tilesRef = v;
+  }
+
+  private get windowGroups(): Map<string, WindowPointGroup> {
+    return this.cache.windowGroups;
   }
 
   /* ── Glide (motion-interpolation) state — only the `interpolate` path ─────
@@ -1499,6 +1514,7 @@ export class AnimatedPointLayer<
     if (layerPropsKey !== this.lastLayerPropsKey) {
       this.lastLayerPropsKey = layerPropsKey;
       this.sublayerCache.clear();
+      this.windowGroups.clear();
     }
 
     // styleKey is layer-global (same for every tile this render) — compute it
@@ -1506,11 +1522,28 @@ export class AnimatedPointLayer<
     // on every miss. Mirrors SplatLayer.renderLayers.
     const styleKey = this.computeStyleKey();
 
-    const sublayers: Layer[] = [];
+    const preparedTiles: PreparedTile[] = [];
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
         const prepared = this.prepareTile(tile, tileLayer, styleKey);
         if (!prepared) continue;
+        preparedTiles.push(prepared);
+      }
+    }
+
+    const pointCount = preparedTiles.reduce(
+      (sum, prepared) => sum + prepared.data.length,
+      0,
+    );
+    const useSparseGroups =
+      preparedTiles.length >= 32 && pointCount / preparedTiles.length <= 2_048;
+    const sublayers: Layer[] = useSparseGroups
+      ? this.buildWindowGroups(preparedTiles)
+      : [];
+
+    if (!useSparseGroups) {
+      this.windowGroups.clear();
+      for (const prepared of preparedTiles) {
         const cached = this.sublayerCache.get(prepared.tileKey);
         if (
           cached &&
@@ -1534,6 +1567,15 @@ export class AnimatedPointLayer<
       layer: 'AnimatedPointLayer',
       tiles: tiles.length,
       sublayers: sublayers.length,
+      // Resident POINTS behind those sublayers. The interesting ratio for this
+      // layer is points-per-draw-call: one sublayer per tile is the right
+      // trade when a tile is large, and pure overhead when it is not.
+      points: pointCount,
+      // Distinct `timeOffset` values across the resident set — the floor on how
+      // few sublayers this set could collapse to WITHOUT rebasing any times
+      // (tiles that share an offset can be packed into one buffer with the
+      // shader semantics unchanged).
+      offsets: residentTimeOffsetCount(tiles),
       ms: performance.now() - t0,
     });
     if (DEBUG) {
@@ -1543,6 +1585,97 @@ export class AnimatedPointLayer<
       );
     }
     return sublayers;
+  }
+
+  /**
+   * Collapse only schema-compatible tiles that share an exact timeOffset.
+   * This removes draw-call overhead without rebasing time attributes or
+   * changing shader semantics. Groups are rebuilt only when their member
+   * PreparedTile identities change.
+   */
+  private buildWindowGroups(preparedTiles: PreparedTile[]): Layer[] {
+    const buckets = new Map<string, PreparedTile[]>();
+    for (const prepared of preparedTiles) {
+      const entries = Object.entries(prepared.data.attributes).sort(
+        ([a], [b]) => a.localeCompare(b),
+      );
+      const schema = entries
+        .map(
+          ([name, attribute]) =>
+            `${name}:${attribute.value?.constructor?.name ?? 'unknown'}:` +
+            `${attribute.size}:${attribute.normalized === true ? 1 : 0}`,
+        )
+        .join(',');
+      const palette = prepared.gpuPalette
+        ? JSON.stringify(prepared.gpuPalette)
+        : '';
+      const key = `${prepared.timeOffset}|${schema}|${palette}`;
+      const bucket = buckets.get(key);
+      if (bucket) bucket.push(prepared);
+      else buckets.set(key, [prepared]);
+    }
+
+    const layers: Layer[] = [];
+    const used = new Set<string>();
+    for (const [bucketKey, members] of buckets) {
+      if (members.length === 1) {
+        const prepared = members[0];
+        const cached = this.sublayerCache.get(prepared.tileKey);
+        if (
+          cached &&
+          cached.preparedKey === prepared &&
+          cached.layerPropsKey === this.lastLayerPropsKey
+        ) {
+          layers.push(cached.layer);
+        } else {
+          const layer = this.buildSublayer(prepared);
+          this.sublayerCache.set(prepared.tileKey, {
+            layer,
+            preparedKey: prepared,
+            layerPropsKey: this.lastLayerPropsKey,
+          });
+          layers.push(layer);
+        }
+        continue;
+      }
+
+      const key = `${bucketKey}|${members.map((m) => m.tileKey).join(';')}`;
+      used.add(key);
+      const cached = this.windowGroups.get(key);
+      if (
+        cached &&
+        cached.members.length === members.length &&
+        cached.members.every((member, i) => member === members[i])
+      ) {
+        layers.push(cached.layer);
+        continue;
+      }
+
+      const data = mergePreparedPointData(members);
+      const provenance: SlabProvenance[] = [];
+      let start = 0;
+      for (const member of members) {
+        provenance.push({
+          start,
+          count: member.data.length,
+          tileId: member.tile.id,
+          layerName: member.layerName,
+        });
+        start += member.data.length;
+      }
+      const grouped: PreparedTile = {
+        ...members[0],
+        tileKey: `window-${members[0].tileKey}`,
+        data,
+      };
+      const layer = this.buildSublayer(grouped, provenance);
+      this.windowGroups.set(key, { members: [...members], layer });
+      layers.push(layer);
+    }
+    for (const key of this.windowGroups.keys()) {
+      if (!used.has(key)) this.windowGroups.delete(key);
+    }
+    return layers;
   }
 
   /**
@@ -1990,7 +2123,10 @@ export class AnimatedPointLayer<
     return prepared;
   }
 
-  private buildSublayer(prepared: PreparedTile): ScatterplotLayer {
+  private buildSublayer(
+    prepared: PreparedTile,
+    provenance?: SlabProvenance[],
+  ): ScatterplotLayer {
     // `Required<>`-typed: the defaultProps value guarantees a number here.
     const timeWindow = this.props.timeWindow;
     // Column filter: install STTDataFilterExtension only when a column is named
@@ -2055,8 +2191,9 @@ export class AnimatedPointLayer<
 
       // TileLayer convention: the source tile rides on the sublayer so the
       // base getPickingInfo can enrich info.tile / decode the picked feature.
-      tile: prepared.tile,
-      sttFeatures: prepared.features,
+      ...(provenance
+        ? { tile: null, sttSlabProvenance: provenance }
+        : { tile: prepared.tile, sttFeatures: prepared.features }),
 
       // Always set `useCategoryColor` so tests / debug tooling can distinguish
       // the two paths via prop inspection. The extension itself only does
@@ -2997,6 +3134,38 @@ export class AnimatedPointLayer<
 }
 
 /**
+ * Merge a schema-compatible exact-offset group. The caller verifies every
+ * attribute's constructor/size/normalization before reaching this helper.
+ */
+function mergePreparedPointData(members: PreparedTile[]): PreparedTile['data'] {
+  const length = members.reduce((sum, member) => sum + member.data.length, 0);
+  const attributes: PreparedTile['data']['attributes'] = {};
+  for (const [name, first] of Object.entries(members[0].data.attributes)) {
+    const ValueArray = first.value.constructor as {
+      new (length: number): {
+        length: number;
+        set(source: ArrayLike<number>, offset?: number): void;
+      };
+    };
+    const merged = new ValueArray(length * first.size);
+    let offset = 0;
+    for (const member of members) {
+      const source = member.data.attributes[name].value as ArrayLike<number>;
+      merged.set(source, offset);
+      offset += source.length;
+    }
+    attributes[name] = {
+      value: merged,
+      size: first.size,
+      ...(first.normalized === undefined
+        ? {}
+        : { normalized: first.normalized }),
+    };
+  }
+  return { length, attributes };
+}
+
+/**
  * Pad a 2D Float64Array of positions [x0,y0, x1,y1, ...] into a 3D buffer
  * [x0,y0,z0, x1,y1,z1, ...] for ScatterplotLayer's size-3 attribute. This is
  * the only allocation per tile in the prepare step; the previous v2 path
@@ -3007,6 +3176,16 @@ export class AnimatedPointLayer<
  * is undefined, z stays 0 (the Float64Array is already zero-initialized), so
  * the no-elevation output is byte-identical to the prior flat behavior.
  */
+/** Distinct `timeOffset` values across a visible-tile set. Telemetry only. */
+function residentTimeOffsetCount(tiles: Tile[]): number {
+  const seen = new Set<number>();
+  for (const tile of tiles) {
+    for (const tileLayer of tile.layers)
+      seen.add(tileLayer.features.timeOffset);
+  }
+  return seen.size;
+}
+
 function padPositionsTo3D(
   src: Float64Array,
   count: number,

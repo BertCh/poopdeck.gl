@@ -6,9 +6,10 @@
  * calls it with empty plumbing + a flat (timeHeightScale 0) frozen controller.
  *
  * The space-time-cube OVERLAY layers (tile lattice, now-plane) deliberately
- * stay in DemoViewer — they ride the 20 Hz UI clock and are not part of the
+ * stay in DemoViewer — they ride the 10 Hz UI clock and are not part of the
  * dataset's own layer tree.
  */
+import type { Color } from '@deck.gl/core';
 import { SolidPolygonLayer } from '@deck.gl/layers';
 import {
   AnimatedPointLayer,
@@ -888,72 +889,101 @@ export function buildDemoLayers({
             tripsLayer,
           ]
         : [tripsLayer];
-      // Composite: overlay moving head-dots from a SECOND (per-trip, OSRM-routed)
-      // archive on top of the flow corridors (bixi-live = directional flow +
-      // moving riders). Painter order puts it last (topmost). Gating is
-      // policy-driven: by DEFAULT the overlay registers as a REQUIRED governor
-      // source, so the shared clock waits for the riders too (MSE-intersection
-      // semantics) instead of animating the corridors while the heads run dry;
+      // Composite: overlay a SECOND (per-trip, OSRM-routed) archive on top of
+      // the flow corridors (bixi-live = directional flow + moving riders).
+      // Painter order puts it last (topmost). Gating is policy-driven: by
+      // DEFAULT the overlay registers as a REQUIRED governor source, so the
+      // shared clock waits for the riders too (MSE-intersection semantics)
+      // instead of animating the corridors while the heads run dry;
       // overlayGatesPlayback: false opts a decorative overlay back into
       // continue-and-degrade.
       if (selectedDataset.headsOverlayUrl) {
+        const trail = selectedDataset.overlayTrail;
+        // Shared by both overlay kinds — everything about WHICH TILES load,
+        // which is independent of how the rider is drawn.
+        const overlayProps = {
+          ...baseProps,
+          ...sourceProps(
+            `${selectedDataset.id}-heads`,
+            selectedDataset.overlayGatesPlayback ?? true,
+          ),
+          data: selectedDataset.headsOverlayUrl,
+          // The overlay archive's temporal bucket is independent of the
+          // primary's, and `timeWindow` was authored for the primary. The
+          // overlay's window is (near enough) pure residency — the heads layer
+          // never RENDERS by it at all, and a trails overlay reads only
+          // `trailLength` — so an over-wide one both loads buckets that can
+          // never draw and inflates the governor's `4 × timeWindow` runway
+          // horizon past what the tile cache can hold, which turns the loader
+          // into a permanent evict-and-refetch loop. See
+          // `headsOverlayTimeWindow`. Trails add ONE constraint the dots don't
+          // have: the window must still reach `trailLength` into the past
+          // (selection covers `[t − window/2, t + window/2]`), which is why
+          // `overlayTrail.trailLength` is sized against it in datasets.ts.
+          // The PREFETCH horizon narrows with it, and is handed over as the
+          // plain WINDOW rather than baseProps' `max(window, speed × 5 s)`.
+          // PrefetchPolicy already speed-scales on its own — its horizon is
+          // `max(prefetchAhead × prefetchSteps, speed × 8 real s)` — so a
+          // speed-scaled `prefetchAhead` gets multiplied by prefetchSteps (4)
+          // and double-counts speed into a 20-real-second lookahead. On this
+          // 1-minute-bucket overlay that planned 53 buckets ≈ 740 tiles of
+          // speculative load; passing the window lets the policy's own
+          // 8-real-second lookahead win, as it was designed to.
+          ...(selectedDataset.headsOverlayTimeWindow
+            ? {
+                timeWindow: selectedDataset.headsOverlayTimeWindow,
+                prefetchAhead: selectedDataset.headsOverlayTimeWindow,
+              }
+            : null),
+          // Exact zoom only. `best-available` (the default) also fetches up to
+          // PARENT_FALLBACK_LEVELS = 4 coarser levels as placeholders to show
+          // while the primary zoom streams in — and a moving rider has no use
+          // for a coarse placeholder: a parent tile carries the same trip at a
+          // SIMPLIFIED position, so the fallback is not a lower-detail version
+          // of the answer, it's a wrong one (and for trails it DOUBLE-DRAWS the
+          // route). It is also the most expensive thing the overlay does: the
+          // placeholders are discarded the moment the primary tile lands, but
+          // on a 1-minute-bucket archive at ~159× real time the playhead enters
+          // a new bucket every ~0.4 s, so they are re-fetched and re-discarded
+          // continuously — and coarse tiles are BIGGER (z10 averages 61 KB here
+          // against z12's 16 KB). Measured on nyc-flow-and-riders: z10 + z11
+          // were 1764 of 2186 tile decodes during 8 s of playback — 81% of all
+          // decode work on two zoom levels that never drew a pixel.
+          refinementStrategy: 'no-overlap' as const,
+          // Overlays never pin the storyboard preview tier (the primary does).
+          overviewPreload: false,
+          onOverviewPreload: undefined,
+        };
         tripsLayers.push(
-          new AnimatedTripHeadsLayer({
-            ...baseProps,
-            id: `${selectedDataset.id}-heads`,
-            ...sourceProps(
-              `${selectedDataset.id}-heads`,
-              selectedDataset.overlayGatesPlayback ?? true,
-            ),
-            data: selectedDataset.headsOverlayUrl,
-            // The overlay archive's temporal bucket is independent of the
-            // primary's, and `timeWindow` was authored for the primary. Since
-            // the heads layer never RENDERS by timeWindow (a dot appears iff its
-            // trip is active at the playhead), the overlay's window is pure
-            // residency — and an over-wide one both loads buckets that can never
-            // draw and inflates the governor's `4 × timeWindow` runway horizon
-            // past what the tile cache can hold, which turns the loader into a
-            // permanent evict-and-refetch loop. See `headsOverlayTimeWindow`.
-            // The PREFETCH horizon narrows with it, and is handed over as the
-            // plain WINDOW rather than baseProps' `max(window, speed × 5 s)`.
-            // PrefetchPolicy already speed-scales on its own — its horizon is
-            // `max(prefetchAhead × prefetchSteps, speed × 8 real s)` — so a
-            // speed-scaled `prefetchAhead` gets multiplied by prefetchSteps (4)
-            // and double-counts speed into a 20-real-second lookahead. On this
-            // 1-minute-bucket overlay that planned 53 buckets ≈ 740 tiles of
-            // speculative load; passing the window lets the policy's own
-            // 8-real-second lookahead win, as it was designed to.
-            ...(selectedDataset.headsOverlayTimeWindow
-              ? {
-                  timeWindow: selectedDataset.headsOverlayTimeWindow,
-                  prefetchAhead: selectedDataset.headsOverlayTimeWindow,
-                }
-              : null),
-            // Exact zoom only. `best-available` (the default) also fetches up to
-            // PARENT_FALLBACK_LEVELS = 4 coarser levels as placeholders to show
-            // while the primary zoom streams in — and a moving DOT has no use
-            // for a coarse placeholder: a parent tile carries the same trip at a
-            // SIMPLIFIED position, so the fallback is not a lower-detail version
-            // of the answer, it's a wrong one. It is also the most expensive
-            // thing the overlay does: the placeholders are discarded the moment
-            // the primary tile lands, but on a 1-minute-bucket archive at ~159×
-            // real time the playhead enters a new bucket every ~0.4 s, so they
-            // are re-fetched and re-discarded continuously — and coarse tiles
-            // are BIGGER (z10 averages 61 KB here against z12's 16 KB).
-            // Measured on nyc-flow-and-riders: z10 + z11 were 1764 of 2186 tile
-            // decodes during 8 s of playback — 81% of all decode work on two
-            // zoom levels that never drew a pixel.
-            refinementStrategy: 'no-overlap' as const,
-            // Overlays never pin the storyboard preview tier (the primary does).
-            overviewPreload: false,
-            onOverviewPreload: undefined,
-            headColor: selectedDataset.headColor ?? [253, 128, 93, 255],
-            headRadiusPixels: selectedDataset.headRadiusPixels ?? 4,
-            sizeUnits: selectedDataset.headSizeUnits,
-            headRadius: selectedDataset.headRadius,
-            headRadiusMinPixels: selectedDataset.headRadiusMinPixels,
-            headRadiusMaxPixels: selectedDataset.headRadiusMaxPixels,
-          }),
+          trail
+            ? // Riders as fading TRAILS: the route each vehicle just took,
+              // which is the one thing the aggregate corridors underneath
+              // cannot show. Its own style props — the top-level trip*/width*
+              // ones belong to the corridor layer.
+              new AnimatedTripsLayer({
+                ...overlayProps,
+                id: `${selectedDataset.id}-heads`,
+                tripColor: trail.color ??
+                  selectedDataset.headColor ?? [253, 128, 93, 255],
+                trailLength: trail.trailLength,
+                fadeTrail: trail.fadeTrail ?? true,
+                tripWidth: trail.width ?? 6,
+                widthUnits: trail.widthUnits ?? 'meters',
+                widthMinPixels: trail.widthMinPixels ?? 1,
+                widthMaxPixels: trail.widthMaxPixels ?? 4,
+                capRounded: trail.capRounded ?? false,
+                jointRounded: trail.jointRounded ?? false,
+              })
+            : new AnimatedTripHeadsLayer({
+                ...overlayProps,
+                id: `${selectedDataset.id}-heads`,
+                headColor: selectedDataset.headColor ?? [253, 128, 93, 255],
+                headRadiusPixels: selectedDataset.headRadiusPixels ?? 4,
+                sizeUnits: selectedDataset.headSizeUnits,
+                headRadius: selectedDataset.headRadius,
+                headRadiusMinPixels: selectedDataset.headRadiusMinPixels,
+                headRadiusMaxPixels: selectedDataset.headRadiusMaxPixels,
+              }),
         );
       }
       return tripsLayers;
@@ -1096,7 +1126,7 @@ export function buildDemoLayers({
             tripColor: [31, 186, 214, 255],
             gradientProperty: rc.tripGradient.property,
             gradientDomain: rc.tripGradient.domain,
-            gradientColorRamp: rc.tripGradient.colors,
+            gradientColorRamp: rc.tripGradient.colors as unknown as Color[],
             ...(rc.colorMappingDefault && {
               colorMappingDefault: rc.colorMappingDefault,
             }),
@@ -2387,6 +2417,7 @@ export function buildDemoLayers({
             widthUnits: 'pixels',
             // Lift to the real per-contour height (numeric `z_layer` column);
             // slightly heavier lines read better terraced against the backdrop.
+            pathWidth: iso3d ? 2 : 1.6,
             ...(iso3d
               ? {
                   elevationProperty: 'z_layer',
@@ -2403,9 +2434,8 @@ export function buildDemoLayers({
                           selectedDataset.lidarIsoTopFade.far ?? 1,
                       }
                     : {}),
-                  pathWidth: 2,
                 }
-              : { pathWidth: 1.6 }),
+              : {}),
             widthMinPixels: 1,
             widthMaxPixels: 4,
             capRounded: true,

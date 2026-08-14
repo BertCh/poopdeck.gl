@@ -72,30 +72,21 @@ The Rust side is **behind**: crates.io `spatiotemporal-tiles` max_version is
 
 ## Open release defect — the lockstep is currently broken
 
-Not a shipped state; the thing to fix before the next release is announced.
-Tracked as **B3** in the [roadmap README](./README.md), which owns the sequencing;
-this section owns the diagnosis. Re-verified against both registries 2026-07-26.
+The current instance is **B3** in the [roadmap README](./README.md), which owns
+the numbers and the sequencing. What belongs here is the two _structural_ reasons
+the lockstep keeps breaking, both of which outlive any one release:
 
-- **npm 0.5.0 / crates.io 0.4.0.** crates.io has 0.1.0, 0.1.1, 0.3.0, 0.4.0 —
-  it never got a 0.2.0 either, so the "crate and npm versions stay in lockstep"
-  rule has been aspirational, not enforced.
-- **No `v0.5.0` tag exists** (origin has `v0.1.0`, `v0.1.1`, `v0.4.0` only).
-  cargo-dist builds binaries **on tag push**, so no 0.5.0 binaries or installer
-  scripts were ever produced — while `crates/spatiotemporal-tiles/README.md`
-  tells users "prebuilt binaries and a shell installer are on the releases
-  page". **Untagged release ⇒ the README's install path is a dead link.** Tag
-  the release or stop advertising the binaries; do not ship 0.6.0 with the
-  claim unbacked. (Same README, same pass: it says `cargo install` "installs
-  the four binaries" — defaults install five.)
-- **The next number is 0.6.0, not 0.5.1.** Three breaking changes are queued:
-  the `STT*` layer rename and the v1-format drop (both carrying changesets in
-  `.changeset/`), plus the 2026-07-26 payload byte break. A patch bump would
-  misdescribe all three.
-- **release-plz never ran, and is now deleted.** All commits in the repo are the
-  author's — not one bot commit, not one `chore: release` PR merge. The config it
-  described is gone (below); what has not changed is that **every publish so far
-  has been manual**, which is why the ritual has to end with a deliberate
-  `v{version}` tag push.
+- **An untagged release is a dead install path.** cargo-dist builds binaries **on
+  tag push**, and nothing else does. `crates/spatiotemporal-tiles/README.md` tells
+  users "prebuilt binaries and a shell installer are on the releases page", so a
+  version that ships without its `v{version}` tag turns that sentence into a 404.
+  Tag the release or stop advertising the binaries. (Same README, same pass: it
+  says `cargo install` "installs the four binaries" — defaults install five.)
+- **Every publish so far has been manual.** All commits in the repo are the
+  author's; not one bot commit, not one `chore: release` PR merge. The lockstep
+  rule ("crate and npm versions stay in step") has therefore always been
+  aspirational rather than enforced — crates.io never even got a 0.2.0 or 0.5.0.
+  Until CI can run, the ritual has to end with a deliberate tag push by hand.
 
 ## Release systems: three became two (the deletion happened)
 
@@ -134,6 +125,49 @@ not crates.io being down. **Publish the crate from a different network** (or
 from CI, once CI can run). Budget for this when planning a release; it has
 eaten a release window before.
 
+## Publishing the tile fleet to R2 — the ordering is the whole procedure
+
+The npm/crates half above ships code; this half ships the ~65 GiB of archives the
+code reads. It has its own release ritual, learned from the 2026-07-31 republish
+of the whole fleet (29.3 GiB, 1,324 objects, 68/68 manifests flipped).
+
+**The two halves are versioned against each other, so both naive orders break the
+live site:**
+
+- Push the frontend first and the new reader meets the old manifests →
+  `unsupported formatVersion 1`.
+- Flip the manifests first and the DEPLOYED older reader meets manifests declaring
+  a capability it lacks → `requires capabilities this reader does not implement`.
+  Measured at the break: **424 of 474** local manifests declared a post-break
+  capability, so this order is far the worse of the two.
+
+**The resolution is that packs are content-addressed.** The immutable pass writes
+them under names nothing references yet and is invisible to the live site; only
+`manifest.json` is the switch. So: **upload packs → push the frontend → flip the
+manifests the moment the Pages deploy goes live.** That puts the entire exposure
+inside the manifest pass — measured at **15 seconds**, affecting only the archives
+whose format actually changed.
+
+Three standing rules that fall out of it:
+
+- **`--no-prune` on any republish that shares nothing with the previous
+  manifest.** Prune grace is computed from the previously-deployed refs; a full
+  re-address shares none of them, so the grace rule does not cover it. Let the
+  retention window pass, then let a later default sync GC. Rollback until then =
+  re-upload the previous manifests **and** pin the previous reader.
+- ⚠️ **Never probe a URL before uploading it.** Probing not-yet-uploaded sidecars
+  cached a negative response at the edge under `cache-control: max-age=14400` — a
+  **4-hour 404 on an object that is present and correct in the bucket**. `HEAD`
+  bypasses the cache and returns 200, which makes the symptom look inconsistent;
+  `cf-cache-status: HIT` on the GET is the tell. Verify with a plain **GET**.
+  Neither token in `.env` carries the Cache Purge permission.
+- **A pass that matches nothing fails silently.** `r2-sync.sh` is a list of
+  filtered `rclone copy` passes, each ending in `- **`; a file that matches no
+  pass is simply never uploaded and nothing reports it. This has now bitten twice
+  on the same root-level-sidecar shape (L1 in the [roadmap README](./README.md)).
+  After adding any new non-packed artefact, probe its URL — after the upload, per
+  the rule above.
+
 ## Auth lifecycle (token → OIDC)
 
 Bootstrap tokens live in the gitignored root `.env` (`NPM_TOKEN`,
@@ -147,9 +181,11 @@ flips public.
 
 ## CI gates that keep publishability true
 
-> These gates exist **as config only and are UNVERIFIED** — GitHub Actions has
-> never run for this repo (zero bot commits), so the release automation is
-> unproven end-to-end and every publish so far has been manual.
+> These gates exist **as config only** — GitHub Actions has never run for this
+> repo (zero bot commits), so the release automation is unproven end-to-end
+> (**T2**). They are not untested, though: running every job by hand on
+> 2026-07-31 found four red and fixed them, which is how the feature lanes below
+> earned their keep — see [db-input-adaptors.md §5](./db-input-adaptors.md).
 
 - `smoke-pack` (a step in the `typescript` CI job, and the `release-npm`
   pre-publish gate — `scripts/smoke-pack.mjs`): packs every package tarball,

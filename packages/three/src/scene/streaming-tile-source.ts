@@ -38,7 +38,7 @@
  * the 2026-07 audit.
  */
 
-import { STTArchive } from '@poopdeck.gl/core';
+import { STTArchive, tileKey as coreTileKey } from '@poopdeck.gl/core';
 import type { ArchiveMetadata, BoundingBox, Tile } from '@poopdeck.gl/core';
 import {
   SpatioTemporalTileset,
@@ -161,13 +161,19 @@ export type StreamingLayerOptions = Omit<
 
 /**
  * Stable identity key for a {@link Tile} used by the resident-set diff. A tile's
- * `id` (`z/x/y/t`) is its address; two `getVisibleTiles` calls that return the
- * same addresses describe the same resident set even if the array order or the
+ * `id` is its address; two `getVisibleTiles` calls that return the same
+ * addresses describe the same resident set even if the array order or the
  * `Tile` object identities differ.
+ *
+ * Delegates to core's canonical `tileKey` rather than re-spelling
+ * `${z}/${x}/${y}/${t}`. This source wires a {@link
+ * StreamingTileSourceOptions.scrubLod} axis, so `bucketMs` is genuinely
+ * populated here — and the hand-spelled form made a scrub-preview tile and the
+ * base tile it shares an address with compare EQUAL, so the resident-set diff
+ * reported no change across a tier swap and the scene kept the old geometry.
  */
 export function tileKey(tile: Tile): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}`;
+  return coreTileKey(tile.id);
 }
 
 /** `true` when two tile arrays describe the same resident set (by address). */

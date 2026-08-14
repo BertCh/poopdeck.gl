@@ -49,7 +49,21 @@ export interface STTTripsLayerOptions {
   /** Full trail width in CSS pixels. @default 2 */
   widthPx?: number;
   opacity?: number;
-  /** Additive blending (glowing trails). @default true */
+  /**
+   * Additive blending (glowing trails) instead of normal alpha.
+   *
+   * OFF by default, matching deck's `AnimatedTripsLayer` — which sets no
+   * blending override at all, so it draws with deck's normal
+   * `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`. This layer used to default it ON, the one
+   * blend divergence among the three line layers (arc / flowmap / flow-corridor
+   * / path-geo all pass the caller's value straight through). Additive only
+   * flatters a DARK basemap: on a light one every track saturates its
+   * destination and clips to white regardless of the colour the shader
+   * computed, which is exactly what buried the ocean-drifters SST ramp on its
+   * cream globe. Opt in per demo when the glow is wanted.
+   *
+   * @default false
+   */
   additive?: boolean;
   depthWrite?: boolean;
   alphaCutoff?: number;
@@ -184,7 +198,7 @@ export class STTTripsLayer extends BaseSTTLayer implements STTIdPickable {
 
     this.bundle = createWideLineMaterial({
       mode: 'trail',
-      additive: this.opts.additive ?? true,
+      additive: this.opts.additive ?? false,
       depthWrite: this.opts.depthWrite,
       alphaCutoff: this.opts.alphaCutoff,
       dataFilter: !!this.opts.filterProperty,

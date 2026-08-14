@@ -28,7 +28,20 @@
 // uses (offsets/timestamps within 2^53, as elsewhere in the reader).
 
 /** Directory codec version the TS encoder emits (matches the Rust writer). */
-export const DIRECTORY_VERSION = 5;
+export const DIRECTORY_VERSION = 6;
+/**
+ * Oldest directory codec {@link decodeDirectory} accepts.
+ *
+ * v5 buffers carry no `variantId` column; every entry reads back as variant 0,
+ * which is exactly what those archives meant — the variant axis did not exist,
+ * so all payloads were raw.
+ *
+ * Read-only: {@link encodeDirectory} always writes {@link DIRECTORY_VERSION}, so
+ * no new pre-v6 bytes can be produced here. It exists because several published
+ * archives have no reproducible source, and a read-side cutover would strand
+ * them rather than migrate them.
+ */
+export const MIN_DIRECTORY_VERSION = 5;
 /**
  * Tag for the optional trailing covering section: one signed varint per entry
  * (in directory order) giving `coverTMin - timeStart`. Backward-compatible — a
@@ -44,7 +57,7 @@ const COVER_SECTION_TMIN = 1;
 // a fixed-width table of page descriptors carrying each leaf's byte range plus
 // its pruning bounds (geographic bbox, zoom range, temporal [t_min, t_max]).
 // The reader decodes the root, prunes leaves by viewport/zoom/time, and fetches
-// only the survivors. The leaf codec is the unchanged v5 directory below.
+// only the survivors. The leaf codec is the unchanged v6 directory below.
 // ----------------------------------------------------------------------------
 
 /** Root container version (first byte of the decoded root page). */
@@ -90,12 +103,36 @@ export interface PagedRoot {
   pages: PageDescriptor[];
 }
 
+export interface PagedRootValidation {
+  /** Total post-magic at-rest directory bytes (root frame + all leaves). */
+  payloadLength?: number;
+  /** At-rest root-frame length from the manifest. */
+  rootLength?: number;
+  /** Manifest-declared leaf count. */
+  pageCount?: number;
+  /** Manifest-declared nominal entries per page. */
+  pageEntries?: number;
+}
+
+function safeBigInt(value: bigint, field: string): number {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) {
+    throw new Error(
+      `STT directory: ${field} ${value} is outside JavaScript's safe integer range`,
+    );
+  }
+  return number;
+}
+
 /**
  * Decode the paged-directory root page from its raw (already-unframed) bytes.
  * Mirrors `directory_page::decode_root`. Throws on an unknown version /
  * descriptor kind or a truncated buffer.
  */
-export function decodePagedRoot(bytes: Uint8Array): PagedRoot {
+export function decodePagedRoot(
+  bytes: Uint8Array,
+  validation: PagedRootValidation = {},
+): PagedRoot {
   if (bytes.length < ROOT_HEADER_LEN) {
     throw new Error('STT paged root: truncated header');
   }
@@ -110,18 +147,50 @@ export function decodePagedRoot(bytes: Uint8Array): PagedRoot {
   if (kind !== DESCRIPTOR_GEO_BBOX) {
     throw new Error(`STT paged root: unsupported descriptor kind ${kind}`);
   }
+  if (dv.getUint16(2, true) !== 0) {
+    throw new Error('STT paged root: reserved header bytes must be zero');
+  }
   const pageCount = dv.getUint32(4, true);
   const pageEntries = dv.getUint32(8, true);
-  const need = ROOT_HEADER_LEN + pageCount * DESCRIPTOR_LEN;
-  if (bytes.length < need) {
+  const availableDescriptors = Math.floor(
+    (bytes.length - ROOT_HEADER_LEN) / DESCRIPTOR_LEN,
+  );
+  if (pageCount > availableDescriptors) {
+    const need = ROOT_HEADER_LEN + pageCount * DESCRIPTOR_LEN;
     throw new Error(
       `STT paged root: truncated (${bytes.length} B, need ${need} for ${pageCount} pages)`,
     );
   }
+  const need = ROOT_HEADER_LEN + pageCount * DESCRIPTOR_LEN;
+  if (bytes.length !== need) {
+    throw new Error(
+      `STT paged root: trailing bytes (${bytes.length} B, expected exactly ${need})`,
+    );
+  }
+  if (
+    validation.pageCount !== undefined &&
+    pageCount !== validation.pageCount
+  ) {
+    throw new Error(
+      `STT paged root: page count ${pageCount} disagrees with manifest ${validation.pageCount}`,
+    );
+  }
+  if (
+    validation.pageEntries !== undefined &&
+    pageEntries !== validation.pageEntries
+  ) {
+    throw new Error(
+      `STT paged root: pageEntries ${pageEntries} disagrees with manifest ${validation.pageEntries}`,
+    );
+  }
   const pages: PageDescriptor[] = new Array(pageCount);
+  let previousEnd = 0;
   for (let i = 0; i < pageCount; i++) {
     let o = ROOT_HEADER_LEN + i * DESCRIPTOR_LEN;
-    const relOffset = Number(dv.getBigUint64(o, true));
+    const relOffset = safeBigInt(
+      dv.getBigUint64(o, true),
+      `page ${i} relative offset`,
+    );
     o += 8;
     const length = dv.getUint32(o, true);
     o += 4;
@@ -131,7 +200,10 @@ export function decodePagedRoot(bytes: Uint8Array): PagedRoot {
     o += 1;
     const maxZoom = dv.getUint8(o);
     o += 1;
-    o += 2; // reserved
+    if (dv.getUint16(o, true) !== 0) {
+      throw new Error(`STT paged root: page ${i} reserved bytes must be zero`);
+    }
+    o += 2;
     const minLon = dv.getInt32(o, true) / 1e7;
     o += 4;
     const minLat = dv.getInt32(o, true) / 1e7;
@@ -140,9 +212,45 @@ export function decodePagedRoot(bytes: Uint8Array): PagedRoot {
     o += 4;
     const maxLat = dv.getInt32(o, true) / 1e7;
     o += 4;
-    const tMin = Number(dv.getBigInt64(o, true));
+    const tMin = safeBigInt(dv.getBigInt64(o, true), `page ${i} tMin`);
     o += 8;
-    const tMax = Number(dv.getBigInt64(o, true));
+    const tMax = safeBigInt(dv.getBigInt64(o, true), `page ${i} tMax`);
+    if (length === 0 || entryCount === 0) {
+      throw new Error(
+        `STT paged root: page ${i} must have non-zero length and entryCount`,
+      );
+    }
+    if (minZoom > maxZoom) {
+      throw new Error(
+        `STT paged root: page ${i} has inverted zoom range ${minZoom}..${maxZoom}`,
+      );
+    }
+    if (minLon > maxLon || minLat > maxLat) {
+      throw new Error(`STT paged root: page ${i} has inverted geographic bbox`);
+    }
+    if (tMin > tMax) {
+      throw new Error(`STT paged root: page ${i} has inverted time range`);
+    }
+    const end = relOffset + length;
+    if (!Number.isSafeInteger(end)) {
+      throw new Error(`STT paged root: page ${i} byte range overflows`);
+    }
+    if (relOffset < previousEnd) {
+      throw new Error(
+        `STT paged root: page ${i} overlaps or precedes the previous page`,
+      );
+    }
+    if (
+      validation.payloadLength !== undefined &&
+      validation.rootLength !== undefined &&
+      end > validation.payloadLength - validation.rootLength
+    ) {
+      throw new Error(
+        `STT paged root: page ${i} range ${relOffset}..${end} exceeds ` +
+          `directory leaf bytes ${validation.payloadLength - validation.rootLength}`,
+      );
+    }
+    previousEnd = end;
     pages[i] = {
       relOffset,
       length,
@@ -173,6 +281,8 @@ export interface DirectoryEntry {
   y: number;
   timeStart: number;
   timeEnd: number;
+  /** Independently addressable payload representation. */
+  variantId: number;
   /**
    * Packed-format pack index (`manifest.packs[packId]`) holding this blob.
    * `offset`/`length` are pack-relative.
@@ -244,23 +354,38 @@ class Cursor {
   }
 }
 
-/** Decode a v5 (packed) directory buffer into tile entries (in directory order). */
+/** Decode a v6 (packed) directory buffer into tile entries (in directory order). */
 export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   if (bytes.length === 0) {
     throw new Error('STT directory: empty buffer');
   }
   const version = bytes[0];
-  if (version !== DIRECTORY_VERSION) {
+  if (version < MIN_DIRECTORY_VERSION || version > DIRECTORY_VERSION) {
     throw new Error(
-      `STT directory: unsupported version ${version} (expected ${DIRECTORY_VERSION}; ` +
-        `retired single-file v4 directories are no longer read — the client is packed-only)`,
+      `STT directory: unsupported version ${version} ` +
+        `(expected ${MIN_DIRECTORY_VERSION}..${DIRECTORY_VERSION})`,
     );
   }
+  // The `variantId` column exists only from v6. Older buffers stop after
+  // `temporalBucketMs` and mean "raw".
+  const hasVariantColumn = version >= 6;
   const c = new Cursor(bytes);
   c.pos = 1;
 
-  const n = Number(c.uvarint());
-  const runCount = Number(c.uvarint());
+  const n = safeBigInt(c.uvarint(), 'entry count');
+  const runCount = safeBigInt(c.uvarint(), 'run count');
+  // Every key consumes at least eight one-byte varints. Reject an impossible
+  // count before allocating attacker-sized arrays.
+  if (n > Math.floor((bytes.length - c.pos) / 8)) {
+    throw new Error(
+      `STT directory: header claims ${n} entries but only ${bytes.length - c.pos} bytes remain`,
+    );
+  }
+  if (runCount > n || (n > 0 && runCount === 0)) {
+    throw new Error(
+      `STT directory: invalid run count ${runCount} for ${n} entries`,
+    );
+  }
 
   interface Key {
     zoom: number;
@@ -270,6 +395,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     timeEnd: bigint;
     featureCount: number;
     temporalBucketMs?: number;
+    variantId: number;
   }
   const keys: Key[] = new Array(n);
 
@@ -287,20 +413,32 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     py += c.ivarint();
     pt += c.ivarint();
     const duration = c.ivarint();
-    const featureCount = Number(c.uvarint());
+    const featureCount = safeBigInt(c.uvarint(), `entry ${i} featureCount`);
     const bucketPresent = c.uvarint();
     let temporalBucketMs: number | undefined;
     if (bucketPresent !== 0n) {
-      temporalBucketMs = Number(c.uvarint());
+      temporalBucketMs = safeBigInt(c.uvarint(), `entry ${i} temporalBucketMs`);
+    }
+    const variantId = hasVariantColumn
+      ? safeBigInt(c.uvarint(), `entry ${i} variantId`)
+      : 0;
+    const zoom = safeBigInt(pz, `entry ${i} zoom`);
+    const x = safeBigInt(px, `entry ${i} x`);
+    const y = safeBigInt(py, `entry ${i} y`);
+    const timeStart = safeBigInt(pt, `entry ${i} timeStart`);
+    const timeEnd = safeBigInt(pt + duration, `entry ${i} timeEnd`);
+    if (zoom < 0 || x < 0 || y < 0 || timeEnd < timeStart) {
+      throw new Error(`STT directory: entry ${i} has invalid coordinates/time`);
     }
     keys[i] = {
-      zoom: Number(pz),
-      x: Number(px),
-      y: Number(py),
+      zoom,
+      x,
+      y,
       timeStart: pt,
       timeEnd: pt + duration,
       featureCount,
       temporalBucketMs,
+      variantId,
     };
   }
 
@@ -309,7 +447,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   let expectedOffset = 0n;
   let prevPackId = 0n;
   for (let r = 0; r < runCount; r++) {
-    const runLen = Number(c.uvarint());
+    const runLen = safeBigInt(c.uvarint(), `run ${r} length`);
     // Δpack_id (zig-zag) precedes the offset sentinel. Reset the offset
     // contiguity expectation when the pack changes, so the first run of each
     // pack hits the cheap `0` sentinel (offsets are pack-relative).
@@ -320,24 +458,32 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     prevPackId = packId;
     const offFlag = c.uvarint();
     const offset = offFlag === 0n ? expectedOffset : c.uvarint();
-    const length = Number(c.uvarint());
-    const uncompressedSize = Number(c.uvarint());
+    const length = safeBigInt(c.uvarint(), `run ${r} length bytes`);
+    const uncompressedSize = safeBigInt(
+      c.uvarint(),
+      `run ${r} uncompressedSize`,
+    );
     const crc32c = c.u32le();
 
     if (cursor + runLen > n) {
       throw new Error('STT directory: run length exceeds entry count');
     }
-    const packIdNum = Number(packId);
+    const packIdNum = safeBigInt(packId, `run ${r} packId`);
+    const offsetNum = safeBigInt(offset, `run ${r} offset`);
+    if (packIdNum < 0 || length < 0 || uncompressedSize < 0 || offsetNum < 0) {
+      throw new Error(`STT directory: run ${r} has invalid blob fields`);
+    }
     for (let k = 0; k < runLen; k++) {
       const key = keys[cursor];
       entries[cursor] = {
         zoom: key.zoom,
         x: key.x,
         y: key.y,
-        timeStart: Number(key.timeStart),
-        timeEnd: Number(key.timeEnd),
+        timeStart: safeBigInt(key.timeStart, `entry ${cursor} timeStart`),
+        timeEnd: safeBigInt(key.timeEnd, `entry ${cursor} timeEnd`),
+        variantId: key.variantId,
         packId: packIdNum,
-        offset: Number(offset),
+        offset: offsetNum,
         length,
         uncompressedSize,
         featureCount: key.featureCount,
@@ -347,6 +493,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
       cursor++;
     }
     expectedOffset = offset + BigInt(length);
+    safeBigInt(expectedOffset, `run ${r} ending offset`);
   }
 
   if (cursor !== n) {
@@ -357,13 +504,27 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
 
   // Optional trailing covering section(s). A pre-covering archive's buffer ends
   // here; if bytes remain, read tagged sections (unknown tags stop the scan).
+  let parsedKnownTrailingSection = false;
   if (c.pos < bytes.length) {
     const tag = bytes[c.pos++];
     if (tag === COVER_SECTION_TMIN) {
+      parsedKnownTrailingSection = true;
       for (let i = 0; i < n; i++) {
-        entries[i].coverTMin = entries[i].timeStart + Number(c.ivarint());
+        const delta = safeBigInt(c.ivarint(), `entry ${i} coverTMin delta`);
+        const coverTMin = entries[i].timeStart + delta;
+        if (!Number.isSafeInteger(coverTMin)) {
+          throw new Error(
+            `STT directory: entry ${i} coverTMin is outside JavaScript's safe integer range`,
+          );
+        }
+        entries[i].coverTMin = coverTMin;
       }
     }
+  }
+  if (parsedKnownTrailingSection && c.pos !== bytes.length) {
+    throw new Error(
+      `STT directory: ${bytes.length - c.pos} trailing bytes after known sections`,
+    );
   }
   return entries;
 }
@@ -380,6 +541,8 @@ export interface DirectoryEncodeEntry {
   y: number;
   timeStart: number;
   timeEnd: number;
+  /** Independently addressable payload representation. Defaults to raw (0). */
+  variantId?: number;
   /** Packed-format pack index. Defaults to 0 (single implicit pack). */
   packId?: number;
   offset: number;
@@ -422,14 +585,15 @@ function putIvarint(out: number[], value: bigint): void {
   putUvarint(out, zigzag(value));
 }
 
-/** Encode tile entries into a v5 directory buffer. Round-trips with `decodeDirectory`. */
+/** Encode tile entries into a v6 directory buffer. Round-trips with `decodeDirectory`. */
 export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
   const sorted = [...entries].sort((a, b) => {
     if (a.zoom !== b.zoom) return a.zoom - b.zoom;
     const ah = a.hilbert ?? 0;
     const bh = b.hilbert ?? 0;
     if (ah !== bh) return ah < bh ? -1 : 1;
-    return a.timeStart < b.timeStart ? -1 : a.timeStart > b.timeStart ? 1 : 0;
+    if (a.timeStart !== b.timeStart) return a.timeStart < b.timeStart ? -1 : 1;
+    return (a.variantId ?? 0) - (b.variantId ?? 0);
   });
   const n = sorted.length;
 
@@ -526,6 +690,7 @@ export function encodeDirectory(entries: DirectoryEncodeEntry[]): Uint8Array {
     } else {
       putUvarint(out, 0n);
     }
+    putUvarint(out, BigInt(e.variantId ?? 0));
   }
 
   let expectedOffset = 0n;

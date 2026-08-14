@@ -172,7 +172,14 @@ describe('AnimatedTextLayer review fixes', () => {
   });
 
   const render = (layer: any, tiles: any[], time: number) => {
-    layer.state = { tiles };
+    // MUTATE state rather than replacing it. The render caches now live in a
+    // `stateSlot` bag on `this.state` so they survive deck's `_transferState`;
+    // deck itself never swaps the state object out from under a layer (it
+    // mutates via setState and hands the SAME object to the next instance), so
+    // replacing it here would wipe the caches every render and make the
+    // instance-reuse assertions below untestable.
+    layer.state ??= {};
+    layer.state.tiles = tiles;
     layer._currentTime = time;
     return layer.renderLayers();
   };
@@ -211,7 +218,7 @@ describe('AnimatedTextLayer review fixes', () => {
         { tileId: { z: 3, x: 1, y: 1, t: 0 } },
       );
       const sub = render(layer, [tile], 0)[0];
-      const decoded = layer.decodedCache.get('3/1/1/0:layer0');
+      const decoded = layer.decodedCache.get('3/1/1/0#0:layer0');
       expect(sub.props.data.attributes.getText.value.buffer).toBe(
         decoded.codePoints.buffer,
       );
@@ -228,7 +235,7 @@ describe('AnimatedTextLayer review fixes', () => {
       const sub = render(layer, [tile], 0)[0];
       expect(textsOf(sub)).toEqual(['aa', 'cc']);
       expect(Array.from(sub.props.data.startIndices)).toEqual([0, 2, 4]);
-      const decoded = layer.decodedCache.get('0/0/0/0:layer0');
+      const decoded = layer.decodedCache.get('0/0/0/0#0:layer0');
       expect(sub.props.data.attributes.getText.value.buffer).not.toBe(
         decoded.codePoints.buffer,
       );
@@ -272,7 +279,7 @@ describe('AnimatedTextLayer review fixes', () => {
         { t: 0, text: 'c' },
       ]);
       render(layer, [tile], 0);
-      const vis = layer.visibleCache.get('0/0/0/0:layer0');
+      const vis = layer.visibleCache.get('0/0/0/0#0:layer0');
       expect(vis.sig).toBe('r0:3');
       // Non-contiguous membership falls back to count/first/last + a hash — a
       // bounded primitive, never an O(rows) string.
@@ -283,7 +290,9 @@ describe('AnimatedTextLayer review fixes', () => {
       ]);
       const l2 = makeLayer();
       render(l2, [gappy], 0);
-      expect(l2.visibleCache.get('0/0/0/0:layer0').sig).toMatch(/^s2:0:2:\d+$/);
+      expect(l2.visibleCache.get('0/0/0/0#0:layer0').sig).toMatch(
+        /^s2:0:2:\d+$/,
+      );
     });
 
     it('rebuilds when membership actually changes', () => {

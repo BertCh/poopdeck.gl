@@ -171,7 +171,7 @@ describe('QuadbinSummaryLayer: cell decoding + sublayer wiring', () => {
     expect(typeof sub.props.data[0].quadkey).toBe('string');
     expect(sub.props.data[0].quadkey).toHaveLength(5); // z=5 → 5 digits
     // Per-tile sublayer ids stay unique + stable: parent-shortId-tileKey.
-    expect(sub.props.id).toBe('qb-quadbins-2/0/0/0:count');
+    expect(sub.props.id).toBe('qb-quadbins-2/0/0/0#0:count');
   });
 
   it('drives getFillColor from the weight column through colorRange/colorDomain', async () => {
@@ -210,7 +210,7 @@ describe('QuadbinSummaryLayer: cell decoding + sublayer wiring', () => {
   it('a non-default weightProperty drives the rows + the cache key', async () => {
     const layer = await makeQuadbinLayer({ weightProperty: 'mean_mag' });
     const [sub] = layer.renderLayers();
-    expect(sub.props.id).toBe('qb-quadbins-2/0/0/0:mean_mag');
+    expect(sub.props.id).toBe('qb-quadbins-2/0/0/0#0:mean_mag');
     // colorDomain stays [0,10]; weight 4.5 → bucket index from mean_mag.
     expect(sub.props.data[1].weight).toBe(4.5);
   });
@@ -440,7 +440,7 @@ describe('QuadbinSummaryLayer: sub-bucket animation within a tile', () => {
     restoreBase();
     // Cache keys stay sub-bucket-free so nothing churns.
     const [sub] = layer.renderLayers();
-    expect(sub.props.id).toBe('qb-quadbins-2/0/0/0:count');
+    expect(sub.props.id).toBe('qb-quadbins-2/0/0/0#0:count');
   });
 
   it('warns once and falls back when the tier declares sub-buckets the tiles lack', async () => {
@@ -472,13 +472,13 @@ describe('QuadbinSummaryLayer: cache pruning', () => {
   it('prunes the old-weight entries when only weightProperty changes', async () => {
     const layer = await makeQuadbinLayer({ weightProperty: 'count' });
     layer.renderLayers();
-    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0:count']);
+    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0#0:count']);
     // `state.tiles` keeps its identity, so a reference-only prune gate would
     // retain the count entry forever — one generation per column ever used.
     layer.props.weightProperty = 'mean_mag';
     layer.renderLayers();
-    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0:mean_mag']);
-    expect([...layer.sublayerCache.keys()]).toEqual(['2/0/0/0:mean_mag']);
+    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0#0:mean_mag']);
+    expect([...layer.sublayerCache.keys()]).toEqual(['2/0/0/0#0:mean_mag']);
   });
 });
 

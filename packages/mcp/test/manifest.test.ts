@@ -34,7 +34,7 @@ describe('scanDatasets', () => {
     expect(datasets[0].name).toBe('earthquakes');
     expect(datasets[0].path).toBe(path.join(root, 'earthquakes'));
     expect(datasets[0].format).toBe('stt-packed');
-    expect(datasets[0].formatVersion).toBe(2);
+    expect(datasets[0].formatVersion).toBe(3);
     expect(datasets[0].boundingBox).toEqual({
       minLon: -10,
       minLat: -20,
@@ -71,7 +71,12 @@ describe('scanDatasets', () => {
     const root = await fixtureRoot({
       quadbin: makeManifestJson({
         metadata: {
-          summary_tier: { scheme: 'quadbin', min_zoom: 8, max_zoom: 15 },
+          summary_tier: {
+            variant_id: 1,
+            scheme: 'quadbin',
+            min_zoom: 8,
+            max_zoom: 15,
+          },
         },
       }),
     });
@@ -104,7 +109,7 @@ describe('scanDatasets', () => {
     const root = await fixtureRoot({
       empty: makeManifestJson({
         packs: [],
-        directory: { key: 'index/aaaa.sttd', length: 0, directoryVersion: 5 },
+        directory: { key: 'index/aaaa.sttd', length: 0, directoryVersion: 6 },
         metadata: { feature_count: 0 },
       }),
     });
@@ -335,6 +340,7 @@ describe('describeDataset', () => {
       quadbin: makeManifestJson({
         metadata: {
           summary_tier: {
+            variant_id: 1,
             scheme: 'quadbin',
             min_zoom: 8,
             max_zoom: 15,
@@ -362,6 +368,7 @@ describe('describeDataset', () => {
             properties: [{ name: 'magnitude', min: 4, max: 8 }],
           },
           summary_tier: {
+            variant_id: 1,
             scheme: 'quadbin',
             min_zoom: 8,
             max_zoom: 15,

@@ -44,10 +44,10 @@ import {
   MercatorProjection,
   GlobeProjection,
   EARTH_RADIUS,
+  MAX_GROUND_PITCH_DEG,
   type BasemapLike,
   type GeoAnchor,
   type Projection,
-  threeBackend,
   type RGBA,
   type STTSourceRegistry,
 } from '@poopdeck.gl/three';
@@ -66,7 +66,6 @@ import {
   STTFlowCorridorLayer,
   STTPolygonLayer,
 } from '@poopdeck.gl/three/r3f';
-import { renderableDatasetTypes } from '../../lib/backendSupport';
 import type { Dataset } from '../../types';
 import { useReducedMotion } from '../../lib/reducedMotion';
 import Legend from '../Legend';
@@ -92,18 +91,10 @@ const BASEMAP_STYLE =
  * `flowmap` kind and degrades to the unbundled corridor); `av` has its own
  * {@link AvThreeViewer}, and `radar` / `weather` / `storm4d` stay on deck.
  */
-const THREE_GEO_TYPES = renderableDatasetTypes(threeBackend, [
-  'flowmap-bundled',
-]);
-
-/**
- * Whether a demo can be offered the Three.js backend. Both flat (Mercator +
- * maplibre basemap) and globe (`GlobeProjection` + `STTGlobeBasemap`) demos are
- * supported now; only the layer type needs to be one we can render.
- */
-export function datasetSupportsThree(dataset: Dataset): boolean {
-  return THREE_GEO_TYPES.has(dataset.type);
-}
+export {
+  datasetSupportsThree,
+  THREE_GEO_RENDERABLE_TYPES,
+} from '../../lib/rendererEligibility';
 
 /** categorical | ramp | constant — structurally identical to every Stt*Layer colorMode. */
 type GeoColorMode =
@@ -132,7 +123,12 @@ function featureColorMode(ds: Dataset, constFallback: RGBA): GeoColorMode {
       property: gradient.property,
       domain: gradient.domain,
       range: gradient.colors as RGBA[],
-      fallback: constFallback,
+      // A vertex with no reading (NaN — a drifter fix with no SST) takes
+      // `colorMappingDefault`, deck's documented gradient fallback (its own
+      // default is a neutral grey), NOT the constant track colour.
+      fallback:
+        (ds.colorMappingDefault as RGBA | undefined) ??
+        ([120, 120, 120, 255] as RGBA),
     };
   }
   if (ds.colorProperty && ds.colorMapping) {
@@ -244,21 +240,39 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
             opacity={ds.opacity ?? 0.85}
           />
         );
-      // Composite: moving head-dots from a SECOND (per-trip) archive on top of
-      // the corridors. Gating is policy-driven, same as the deck path: REQUIRED
-      // by DEFAULT so the shared clock waits for the riders too;
-      // overlayGatesPlayback: false opts into continue-and-degrade.
+      // Composite: riders from a SECOND (per-trip) archive on top of the
+      // corridors — fading trails when `overlayTrail` is set, else head-dots.
+      // Gating is policy-driven, same as the deck path: REQUIRED by DEFAULT so
+      // the shared clock waits for the riders too; overlayGatesPlayback: false
+      // opts into continue-and-degrade.
       if (ds.headsOverlayUrl) {
+        const trail = ds.overlayTrail;
         return (
           <>
             {primary}
-            <STTTripHeadsLayer
-              id={`${ds.id}-heads`}
-              url={ds.headsOverlayUrl}
-              sourceRequired={ds.overlayGatesPlayback ?? true}
-              headColor={asRGBA(ds.headColor) ?? [253, 128, 93, 255]}
-              headRadius={ds.headRadius ?? 6}
-            />
+            {trail ? (
+              <STTTripsLayer
+                id={`${ds.id}-heads`}
+                url={ds.headsOverlayUrl}
+                sourceRequired={ds.overlayGatesPlayback ?? true}
+                colorMode={{
+                  type: 'constant',
+                  color: asRGBA(trail.color) ??
+                    asRGBA(ds.headColor) ?? [253, 128, 93, 255],
+                }}
+                widthPx={trail.widthMaxPixels ?? 3}
+                trailLength={trail.trailLength}
+                trailFade={trail.fadeTrail === false ? 0 : 1}
+              />
+            ) : (
+              <STTTripHeadsLayer
+                id={`${ds.id}-heads`}
+                url={ds.headsOverlayUrl}
+                sourceRequired={ds.overlayGatesPlayback ?? true}
+                headColor={asRGBA(ds.headColor) ?? [253, 128, 93, 255]}
+                headRadius={ds.headRadius ?? 6}
+              />
+            )}
           </>
         );
       }
@@ -500,6 +514,12 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
       zoom: view.zoom,
       bearing: view.bearing,
       pitch: view.pitch,
+      // The camera drives this map, so its OWN limits must be at least as wide as
+      // the rig's or it clamps a `jumpTo` silently and the two canvases drift.
+      // The zoom range is handled from the other side (the rig clamps the dolly to
+      // maplibre's 0..20); pitch is not — the flat rig tilts to
+      // MAX_GROUND_PITCH_DEG (85) and maplibre's default ceiling is 60.
+      maxPitch: MAX_GROUND_PITCH_DEG,
       // maplibre-gl v5 dropped the boolean form; {} keeps the default control.
       attributionControl: {},
       // The Three camera drives the map every frame — no user interaction with

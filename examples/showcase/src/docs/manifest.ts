@@ -527,8 +527,27 @@ export const docSections: DocSection[] = [
  * Bundled-but-unrouted files: present in the content glob (or adjacent in
  * docs/) yet deliberately not published. The README is a link hub that
  * duplicates the sidebar.
+ *
+ * `architecture/archive-format-performance.md` is excluded rather than routed,
+ * for two independent reasons — either alone would be sufficient:
+ *
+ *  1. It self-describes as "the implementation record for the STT archive
+ *     audit". That is the internal decision-record genre this glob's own
+ *     docstring says must not ship as a published page, alongside roadmap/ and
+ *     the audit docs; the sibling `architecture/*.md` entries are reference
+ *     documentation for users, and this is not one.
+ *  2. Its stated contract is `formatVersion: 3` with "no v1/v2 archive reader",
+ *     which describes an IN-FLIGHT break, not what readers can open today: the
+ *     published fleet at tiles.poopdeck.gl is `formatVersion: 2`. Routing it
+ *     would publish, as current reference, a statement that contradicts the
+ *     shipped reader. It becomes routable once the v3 rebuild window lands and
+ *     the fleet is republished — at which point move it into the Architecture
+ *     section above and delete this entry.
  */
-export const EXCLUDED_DOC_FILES = ['README.md'];
+export const EXCLUDED_DOC_FILES = [
+  'README.md',
+  'architecture/archive-format-performance.md',
+];
 
 /** Flattened entry order for prev/next navigation. */
 export const flatDocEntries: DocEntry[] = docSections.flatMap((s) => s.entries);

@@ -54,6 +54,7 @@ import {
   type TSLNode,
   type UniformNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import {
   TimeFilterUniforms,
   windowAlphaNode,
@@ -317,7 +318,7 @@ export function createArcMaterial(
   const vEnd = varying(end);
   const alpha = windowAlphaNode(time, vStart, vEnd);
 
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   let opacityNode = vColor.a.mul(arc.opacity).mul(alpha);
   if (filter && filterValue) {
     // Soft fade from the column filter (varying the raw value; the alpha node is

@@ -55,12 +55,14 @@ function makeTrackTile(id: TileId, time: number): Tile {
 describe('tileLayerKey', () => {
   it('composes the canonical tile key with the layer name', () => {
     expect(tileLayerKey(BASE_ID, 'trips')).toBe(`${tileKey(BASE_ID)}:trips`);
-    expect(tileLayerKey(BASE_ID, 'trips')).toBe('6/17/24/1700000000000:trips');
+    expect(tileLayerKey(BASE_ID, 'trips')).toBe(
+      '6/17/24/1700000000000#0:trips',
+    );
   });
 
   it('separates a temporal-LOD tile from its base twin', () => {
     expect(tileLayerKey(LOD_ID, 'trips')).toBe(
-      '6/17/24/1700000000000@3600000:trips',
+      '6/17/24/1700000000000#0@3600000:trips',
     );
     expect(tileLayerKey(LOD_ID, 'trips')).not.toBe(
       tileLayerKey(BASE_ID, 'trips'),

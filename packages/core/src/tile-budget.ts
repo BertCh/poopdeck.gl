@@ -29,6 +29,41 @@
  * default), so the coarser tile holds the same data at a coarser geometry
  * simplification rather than holding less of it.
  *
+ * THAT PRIMITIVE HAS NOW LANDED (`geo/frustum-cover.ts`, FS-1), behind the
+ * chassis's default-off `selectionMode: 'frustum'` (FS-2). It does not retire
+ * this module, and FS-3 is explicit about why: the budget stays as the
+ * AABB-fallback BACKSTOP (docs/roadmap/tile-loading-3d-2026-07.md §4.4, "expect
+ * it to stay as the backstop"). Three live callers keep needing it — the
+ * default `'aabb'` selection mode, a foreign viewport whose common space is not
+ * web-mercator (the cover-space probe routes those to the box path), and any
+ * camera whose plane set the cover primitive refuses with `null`.
+ *
+ * What DID change is its standing on the frustum path, and it is worth stating
+ * exactly, because "inert" is easy to over-claim:
+ *
+ * - The budget cannot change WHICH CELLS the frustum path fetches. The cut is
+ *   derived from the camera's own fractional `viewport.zoom` and the frustum
+ *   planes; `fitZoomToCellBudget` never enters that derivation. It clamps a
+ *   scalar `zoom` that the cut path uses only for the scrub-LOD drop, the
+ *   prefetch planner and the readiness/coverage estimates.
+ * - Measured over the 432-camera pitch × bearing matrix at z9, the largest cut
+ *   is 92 cells against a budget of 256 — so fed the CUT's own count the budget
+ *   would never engage at any camera. That is the inertness assertion FS-3
+ *   requires, and {@link isCellBudgetInert} is how it is stated.
+ * - Over the same matrix the ground AABB reaches 3 481 cells at z9, so on the
+ *   fallback path the budget is emphatically not dead code. It is also the
+ *   reason the frustum path's headline "10–33× fewer tiles" shrinks to ~1.2–4.6×
+ *   when measured against the SHIPPED (budget-clamped) box rather than the
+ *   pre-budget one the 754-vs-47 figure was recorded on: the budget already
+ *   spends the blow-up as a coarser zoom. The cut's remaining win at high pitch
+ *   is therefore mostly DETAIL AT EQUAL COUNT — z8–z10 in the near field where
+ *   the budget-clamped box degrades the whole screen to z7 — not count alone.
+ *
+ * None of the constants below move on that evidence. §8.2 is subsumed by the
+ * frustum work, not re-tuned by it: `DEFAULT_VIEWPORT_CELL_BUDGET` and
+ * `DEFAULT_CELL_BUDGET_HYSTERESIS` are pinned, and re-fitting either needs new
+ * measurement, not this paragraph.
+ *
  * DELIBERATELY NOT a cap on the returned tile LIST. Truncating an enumeration
  * leaves on-screen tiles unfetched — the blank-region symptom this whole
  * roadmap exists to remove, only now behind a `console.warn` a user never
@@ -228,4 +263,43 @@ export function fitZoomToCellBudget(
   // Nothing cleared the band. Hold. This is never over budget: `held < z` and
   // the count at `z` already fits the cap, so the count at `held` does too.
   return held;
+}
+
+/**
+ * Could the budget have CHANGED a selection of `cellCount` cells?
+ *
+ * `false` means it could have — the count is over the cap, so
+ * {@link fitZoomToCellBudget} would have stepped the zoom down. `true` means it
+ * could not: the budget is inert for that selection, and whatever zoom the
+ * caller asked for is the zoom it gets.
+ *
+ * WHY THIS IS A FUNCTION AND NOT `n <= 256` AT THE CALL SITE. FS-3 makes budget
+ * inertness part of the frustum path's ACCEPTANCE, not a remark about it: the
+ * quadtree cut is admitted only once it is shown that the §8.2 stopgap can no
+ * longer reach it. An acceptance criterion that is re-derived by hand in a test
+ * is a criterion that drifts from the mechanism it is about — this reads the
+ * same `maxCells` default and applies the same `cells <= maxCells` comparison
+ * the descent loop breaks on, so the two cannot disagree.
+ *
+ * It answers the question about a CELL COUNT rather than about a cut, so it
+ * serves both sides: pass the frustum cut's length to assert inertness, or the
+ * AABB's {@link viewportCellCount} to show the backstop is still live on the
+ * fallback path. It is a predicate over one number and it fetches nothing.
+ *
+ * CONSERVATIVE ON UNCERTAINTY, in the direction this codebase always resolves
+ * it: a `NaN` or negative count is "no usable measurement", and the honest
+ * answer to "is the budget provably inert here?" is then `false` — the same
+ * stance {@link fitZoomToCellBudget} takes when `viewportCellCount` hands it a
+ * non-finite measurement. A non-finite or non-positive `maxCells` is the
+ * documented kill switch and reports inert, because with the budget off nothing
+ * it could do would change anything.
+ */
+export function isCellBudgetInert(
+  cellCount: number,
+  opts: Pick<CellBudgetOptions, 'maxCells'> = {},
+): boolean {
+  const maxCells = opts.maxCells ?? DEFAULT_VIEWPORT_CELL_BUDGET;
+  if (!Number.isFinite(maxCells) || maxCells <= 0) return true;
+  if (!Number.isFinite(cellCount) || cellCount < 0) return false;
+  return cellCount <= maxCells;
 }

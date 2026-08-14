@@ -39,6 +39,7 @@ import {
   select,
   positionGeometry,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import type { UniformNode } from './nodes.js';
 import {
   TimeFilterUniforms,
@@ -91,7 +92,7 @@ export function createIsoLineMaterial(
   material.positionNode = positionGeometry.mul(
     windowVisibleNode(time, start, end),
   );
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   material.opacityNode = vColor.a.mul(opacity).mul(alpha);
   material.transparent = true;
   material.depthTest = true;

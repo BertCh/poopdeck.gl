@@ -21,7 +21,52 @@
  * The suggested multiplier is clamped to [min, max] and snapped to the
  * nearest preset-like step before the asymmetry is applied, so Auto never
  * lands on speeds the UI cannot display.
+ *
+ * DISPERSION (M5/CO-3+CO-4). The upshift deadband is the consumer-side half of
+ * the same jitter re-fit the governor applies to its watermark and its
+ * auto-speed safety factor: on a link whose measured rate wobbles, one
+ * optimistic sample is worth less, so the deadband a rise must clear widens by
+ * {@link dispersionScale}. Pass the governor's
+ * `getThroughputDispersionCv()` as {@link AutoSpeedDecisionOptions.dispersionCv}
+ * to enable it. Omitted (or `0` — a steady link, or a producer with no variance
+ * channel at all) it is bit-for-bit the incumbent 0.25 policy.
  */
+
+/** Default sensitivity `k` of {@link dispersionScale}. */
+export const DISPERSION_SCALE_K = 2;
+/** Ceiling of {@link dispersionScale} — the bound on the jitter re-fit. */
+export const DISPERSION_SCALE_MAX = 3;
+
+/**
+ * The single jitter-response shape shared by every dispersion-sensitive knob in
+ * this package: `clamp(1 + k·cv, 1, 3)`, where `cv = stdDev / rate` is the
+ * measured coefficient of variation of the link's throughput.
+ *
+ * Defined once, here, because three call sites must move together or the tuning
+ * story falls apart: the governor's effective low watermark (a jittery link
+ * stalls EARLIER — `G_low_eff = lowWatermarkWallMs × dispersionScale(cv)`), the
+ * governor's auto-speed safety factor (`η_eff = 0.7 / dispersionScale(cv)` — a
+ * jittery link rises MORE slowly), and this module's upshift deadband (a
+ * jittery link needs a BIGGER move to justify rising).
+ *
+ * Properties the callers depend on:
+ * - `cv = 0` (a steady link) ⇒ exactly `1` ⇒ every knob keeps its configured
+ *   value bit-for-bit. This is the incumbent-behaviour fallback, and it is also
+ *   what a cold estimator, a missing `stdDev`, and a garbage input produce — a
+ *   non-finite cv is read as NO SIGNAL, never as infinite jitter, so bad input
+ *   can never silently move a threshold.
+ * - Monotone non-decreasing in `cv`, and clamped at
+ *   {@link DISPERSION_SCALE_MAX} so no amount of measured jitter can run a knob
+ *   away — the bounded-knob requirement.
+ */
+export function dispersionScale(
+  cv: number | null | undefined,
+  k: number = DISPERSION_SCALE_K,
+): number {
+  if (typeof cv !== 'number' || !Number.isFinite(cv) || cv <= 0) return 1;
+  const kk = Number.isFinite(k) && k > 0 ? k : 0;
+  return Math.min(DISPERSION_SCALE_MAX, Math.max(1, 1 + kk * cv));
+}
 
 /**
  * What triggered the re-evaluation:
@@ -41,6 +86,19 @@ export interface AutoSpeedDecisionOptions {
   maxMultiplier?: number;
   /** Relative deadband applied to UPSHIFTS only. @default 0.25 */
   upshiftDeadband?: number;
+  /**
+   * Measured coefficient of variation of the link's throughput
+   * (`stdDev / bytesPerMs`, from `PlaybackGovernor.getThroughputDispersionCv()`).
+   * Widens the UPSHIFT deadband by {@link dispersionScale} — a jittery link must
+   * clear a bigger relative move before Auto rises.
+   *
+   * Downshifts are untouched: the asymmetry is the whole point, and damping a
+   * downshift converts directly into a stall.
+   *
+   * @default 0 (steady link / no variance channel ⇒ the incumbent deadband
+   * exactly)
+   */
+  dispersionCv?: number;
 }
 
 /**
@@ -75,7 +133,11 @@ export function decideAutoSpeedMultiplier(
   const steps = opts.steps ?? DEFAULT_STEPS;
   const min = opts.minMultiplier ?? 0.25;
   const max = opts.maxMultiplier ?? 10;
-  const deadband = opts.upshiftDeadband ?? 0.25;
+  // The deadband is the only knob dispersion touches here (upshifts only), and
+  // `dispersionScale(0) === 1`, so an omitted cv reproduces the incumbent
+  // policy exactly.
+  const deadband =
+    (opts.upshiftDeadband ?? 0.25) * dispersionScale(opts.dispersionCv);
 
   const clamped = Math.min(max, Math.max(min, rawMultiplier));
   const snapped = steps.reduce((best, step) =>

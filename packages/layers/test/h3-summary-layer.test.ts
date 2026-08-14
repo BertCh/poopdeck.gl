@@ -414,7 +414,7 @@ describe('H3SummaryLayer: sub-bucket animation within a tile', () => {
   it('is inert on an archive without sub-buckets (cache key unchanged)', async () => {
     const layer = await makeH3Layer();
     const [sub] = layer.renderLayers() as CapturedLayer[];
-    expect(sub.props.id).toBe('h3-hexagons-2/0/0/0:count');
+    expect(sub.props.id).toBe('h3-hexagons-2/0/0/0#0:count');
     expect(sub.props.data).toHaveLength(2);
   });
 });
@@ -485,11 +485,11 @@ describe('H3SummaryLayer: cache pruning + trigger stability', () => {
       },
     );
     layer.renderLayers();
-    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0:count']);
+    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0#0:count']);
     layer.props.weightProperty = 'mean_mag';
     layer.renderLayers();
-    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0:mean_mag']);
-    expect([...layer.sublayerCache.keys()]).toEqual(['2/0/0/0:mean_mag']);
+    expect([...layer.preparedTileCache.keys()]).toEqual(['2/0/0/0#0:mean_mag']);
+    expect([...layer.sublayerCache.keys()]).toEqual(['2/0/0/0#0:mean_mag']);
   });
 
   it('keys getFillColor on the colorRange CONTENT, so an equal fresh array is a no-op', async () => {

@@ -16,6 +16,7 @@ import DeckGL from '@deck.gl/react';
 import { _GlobeView as GlobeView } from '@deck.gl/core';
 import { LineLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
 import type { BufferSource } from '@poopdeck.gl/playback';
 import type { Dataset, SummaryToggleOption } from '../../types';
 import Legend from '../Legend';
@@ -199,16 +200,38 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     ],
   );
 
-  // Cube overlay layers: the tile lattice and the rising now-plane. Kept in a
-  // SEPARATE memo from the data layers — these legitimately rebuild with the
-  // 20 Hz `currentTime` UI state and the squash slider (tiny geometry), while
-  // the data layers must NOT (their memo deliberately excludes currentTime).
-  const cubeLayers = useMemo(() => {
-    if (!timeHeight || timeHeightScale <= 0) return [];
+  // Cube overlay, part 1: the STT tile lattice and the ground extent it
+  // defines. Deliberately does NOT depend on `currentTime` — a loaded tile's
+  // box is fixed by its (x, y, t) address and the squash factor, so the
+  // wireframe only changes when the loaded set or the slider does.
+  //
+  // It used to share one memo with the now-plane below, which DID depend on
+  // `currentTime`. That rebuilt the whole `segments` array (12 edges per
+  // loaded tile) and constructed a fresh LineLayer 20×/sec; because `data` was
+  // a new array each time, deck.gl re-ran attribute generation and re-uploaded
+  // the lattice's vertex buffers on every UI tick, for geometry that had not
+  // moved. Splitting the memos keeps the LineLayer instance — and therefore
+  // its attributes — alive across ticks.
+  const cubeLattice = useMemo((): {
+    layer: any | null;
+    bounds: [number, number, number, number];
+  } => {
+    const fallback = (): [number, number, number, number] => {
+      // No tiles yet — seed the plane around the camera target.
+      const { longitude, latitude } = selectedDataset.initialViewState;
+      return [
+        longitude - 0.25,
+        latitude - 0.2,
+        longitude + 0.25,
+        latitude + 0.2,
+      ];
+    };
+    if (!timeHeight || timeHeightScale <= 0) {
+      return { layer: null, bounds: fallback() };
+    }
     const origin = selectedDataset.timeRange.start;
     const clampT = (t: number) =>
       Math.max(0, Math.min(rangeDurationMs, t - origin));
-    const out: any[] = [];
 
     // Union of loaded tile footprints — reused as the now-plane extent.
     let minLon = Infinity,
@@ -223,6 +246,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     const latticeZ = latticeTiles.reduce((m, t) => Math.max(m, t.id.z), 0);
     const viewTiles = latticeTiles.filter((t) => t.id.z === latticeZ);
 
+    let layer: any = null;
     if (viewTiles.length > 0) {
       const segments: {
         s: [number, number, number];
@@ -258,61 +282,80 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         }
       }
       if (segments.length > 0) {
-        out.push(
-          new LineLayer({
-            id: 'stt-tile-lattice',
-            data: segments,
-            getSourcePosition: (d: any) => d.s,
-            getTargetPosition: (d: any) => d.t,
-            getColor: [31, 186, 214, 100],
-            getWidth: 1,
-            widthUnits: 'pixels',
-            pickable: false,
-          }),
-        );
+        layer = new LineLayer({
+          id: 'stt-tile-lattice',
+          data: segments,
+          getSourcePosition: (d: any) => d.s,
+          getTargetPosition: (d: any) => d.t,
+          getColor: [31, 186, 214, 100],
+          getWidth: 1,
+          widthUnits: 'pixels',
+          pickable: false,
+        });
       }
     }
-    if (minLon > maxLon) {
-      // No tiles yet — seed the plane around the camera target.
-      const { longitude, latitude } = selectedDataset.initialViewState;
-      minLon = longitude - 0.25;
-      maxLon = longitude + 0.25;
-      minLat = latitude - 0.2;
-      maxLat = latitude + 0.2;
-    }
-
-    if (timeHeight.nowPlane !== false) {
-      const zNow = clampT(currentTime) * timeHeightScale;
-      const plane = [
-        [minLon, minLat, zNow],
-        [maxLon, minLat, zNow],
-        [maxLon, maxLat, zNow],
-        [minLon, maxLat, zNow],
-      ];
-      out.push(
-        new SolidPolygonLayer({
-          id: 'cube-now-plane',
-          data: [plane],
-          getPolygon: (d: any) => d,
-          filled: true,
-          getFillColor: [31, 186, 214, 22],
-          pickable: false,
-          // The plane is a reference surface — it must tint, not occlude, the
-          // threads it intersects.
-          parameters: { depthWriteEnabled: false } as any,
-        }),
-      );
-    }
-    return out;
+    return {
+      layer,
+      bounds: minLon > maxLon ? fallback() : [minLon, minLat, maxLon, maxLat],
+    };
   }, [
     selectedDataset,
     timeHeight,
     timeHeightScale,
     latticeTiles,
     showLattice,
+    rangeDurationMs,
+  ]);
+
+  // Cube overlay, part 2: the rising now-plane. This one genuinely rides the
+  // 10 Hz `currentTime` UI clock — but it is a single quad, so rebuilding it
+  // per tick is free.
+  const nowPlaneLayer = useMemo(() => {
+    if (!timeHeight || timeHeightScale <= 0) return null;
+    if (timeHeight.nowPlane === false) return null;
+    const origin = selectedDataset.timeRange.start;
+    const zNow =
+      Math.max(0, Math.min(rangeDurationMs, currentTime - origin)) *
+      timeHeightScale;
+    const [minLon, minLat, maxLon, maxLat] = cubeLattice.bounds;
+    return new SolidPolygonLayer({
+      id: 'cube-now-plane',
+      data: [
+        [
+          [minLon, minLat, zNow],
+          [maxLon, minLat, zNow],
+          [maxLon, maxLat, zNow],
+          [minLon, maxLat, zNow],
+        ],
+      ],
+      getPolygon: (d: any) => d,
+      filled: true,
+      getFillColor: [31, 186, 214, 22],
+      pickable: false,
+      // The plane is a reference surface — it must tint, not occlude, the
+      // threads it intersects.
+      parameters: { depthWriteEnabled: false } as any,
+    });
+  }, [
+    selectedDataset,
+    timeHeight,
+    timeHeightScale,
+    cubeLattice,
     currentTime,
     rangeDurationMs,
   ]);
+
+  // One stable array for deck. `layers` alone (the common case — no cube
+  // overlay) keeps its identity across UI ticks, and deck.gl's LayerManager
+  // short-circuits an identical `layers` reference entirely, so a non-cube
+  // demo does no layer matching at all on the 10 Hz UI clock.
+  const allLayers = useMemo(() => {
+    if (!cubeLattice.layer && !nowPlaneLayer) return layers;
+    const out = [...layers];
+    if (cubeLattice.layer) out.push(cubeLattice.layer);
+    if (nowPlaneLayer) out.push(nowPlaneLayer);
+    return out;
+  }, [layers, cubeLattice, nowPlaneLayer]);
 
   const views = useMemo(
     () =>
@@ -363,6 +406,10 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
     const DEG_PER_SEC = -1;
     const step = (now: number) => {
       if (rotateStoppedRef.current) return; // user took over — stop spinning
+      if (last != null && now - last < 33) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
       const dt = last == null ? 0 : (now - last) / 1000;
       last = now;
       setViewState((vs: any) => {
@@ -454,7 +501,7 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         onViewStateChange={handleViewStateChange}
         onResize={handleResize}
         controller={interactive}
-        layers={cubeLayers.length > 0 ? [...layers, ...cubeLayers] : layers}
+        layers={allLayers}
         views={views}
         parameters={useGlobe ? ({ cull: true } as any) : undefined}
       >

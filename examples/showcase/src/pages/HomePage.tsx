@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { navDatasets } from '../datasets';
 import { SourceLogo } from '../components/SourceLogo';
@@ -8,6 +8,31 @@ import { ClientOnly } from '../lib/ClientOnly';
 // only so the statically prerendered landing HTML stays deck-free (a poster
 // frame renders in its place at build time).
 const HomeGlobe = React.lazy(() => import('./home/HomeGlobe'));
+
+const DeferredHomeGlobe: React.FC = () => {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    // Leave hydration/LCP uncontended. Data-saver users keep the lightweight
+    // poster instead of downloading a WebGL renderer and live tile stream.
+    if ((navigator as any).connection?.saveData) return;
+    const win = window as typeof window & {
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number },
+      ) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (win.requestIdleCallback) {
+      const id = win.requestIdleCallback(() => setReady(true), {
+        timeout: 1_200,
+      });
+      return () => win.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => setReady(true), 250);
+    return () => window.clearTimeout(id);
+  }, []);
+  return ready ? <HomeGlobe /> : null;
+};
 
 const HomePage: React.FC = () => {
   // The curated demos for the quiet index below the hero.
@@ -102,7 +127,7 @@ const HomePage: React.FC = () => {
                     />
                   }
                 >
-                  <HomeGlobe />
+                  <DeferredHomeGlobe />
                 </Suspense>
               )}
             </ClientOnly>

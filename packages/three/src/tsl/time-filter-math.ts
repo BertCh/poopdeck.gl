@@ -29,7 +29,14 @@
  * exactly 0 while visible is 1 — that primitive rasterises at opacity 0, as
  * today.) These live here (not in the core kernel, which is out of this module's
  * edit lane) but MUST stay in lockstep with {@link timeFilterVisibleNode} in
- * `./time-filter.ts`; both are unit-tested against these functions.
+ * `./time-filter.ts`.
+ *
+ * Both halves are pinned by `three/test/tsl-time-filter-conformance.test.ts`:
+ * the `*Alpha` re-exports by FUNCTION IDENTITY against core (so they cannot
+ * fork), the three-local `*Visible` half by a dense sweep of the safe-collapse
+ * invariant against BOTH core's `time-filter.ts` and core's `shader-codegen.ts`
+ * `ALPHA_EXPR` AST, and the TSL graph by CPU execution against this file. Read
+ * that file's header for what is and is not enforceable without a GPU.
  */
 
 import type {

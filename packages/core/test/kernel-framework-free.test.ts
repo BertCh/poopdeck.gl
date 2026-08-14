@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -66,6 +66,53 @@ describe('core render kernel stays framework-free', () => {
     expect(
       violations,
       `core imported a renderer library:\n${violations.join('\n')}`,
+    ).toEqual([]);
+  });
+});
+
+/**
+ * `src/geo` is stricter than the rest of core: it is the projection kernel three
+ * and Cesium import directly (`@poopdeck.gl/core/geo`), and it currently has
+ * ZERO runtime dependencies of any kind — not just no renderer, no package at
+ * all. That is a property worth machine-enforcing rather than rediscovering: the
+ * frustum-cover walk in particular is specified as "no new runtime dependency in
+ * core", and a `@math.gl/culling` import is the natural, plausible, and
+ * contract-breaking way someone would implement the same thing next year.
+ */
+describe('the geo projection kernel carries no runtime dependency', () => {
+  const GEO = join(SRC, 'geo');
+  const files = walk(GEO);
+
+  /**
+   * Stricter than {@link SPECIFIER_RE}: anchored to an `import`/`export`
+   * STATEMENT. The loose form is fine for the banned-library scan above — prose
+   * does not accidentally spell `@deck.gl/` — but this test asserts a whitelist
+   * ("relative only"), so a doc comment containing the words `from "…"` would
+   * otherwise read as a dependency.
+   */
+  const IMPORT_STATEMENT_RE =
+    /^\s*(?:import|export)\b[^'"\n]*?\bfrom\s*['"]([^'"]+)['"]|^\s*import\s*\(?\s*['"]([^'"]+)['"]/gm;
+
+  it('finds the geo modules', () => {
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((f) => f.endsWith(`${sep}frustum-cover.ts`))).toBe(true);
+  });
+
+  it('imports nothing but sibling modules', () => {
+    const violations: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      for (const m of text.matchAll(IMPORT_STATEMENT_RE)) {
+        const spec = m[1] ?? m[2];
+        if (!spec) continue;
+        if (!spec.startsWith('./') && !spec.startsWith('../')) {
+          violations.push(`${relative(SRC, file)} → "${spec}"`);
+        }
+      }
+    }
+    expect(
+      violations,
+      `geo kernel took on a dependency:\n${violations.join('\n')}`,
     ).toEqual([]);
   });
 });

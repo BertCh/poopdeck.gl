@@ -771,6 +771,37 @@ function paletteFromMapping(
  * `pickable` flip REPLACES the sublayer rather than being matched onto the
  * other class's transferred GPU state.
  */
+
+/** One cached per-tile sublayer plus the keys it was built for. */
+interface CachedPathSublayer {
+  layer: PathLayer;
+  preparedKey: PreparedTile;
+  layerPropsKey: string;
+}
+
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link AnimatedPathLayer.pathCaches}.
+ */
+interface PathCaches {
+  prepared: Map<string, PreparedTile>;
+  sublayers: Map<string, CachedPathSublayer>;
+  layerPropsKey: string;
+  tilesRef: Tile[] | null;
+}
+
+const PATH_CACHE_SLOT = '_sttPathCaches';
+
+function freshPathCaches(): PathCaches {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    layerPropsKey: '',
+    tilesRef: null,
+  };
+}
+
 export class AnimatedPathLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedPathLayerProps>> {
@@ -864,20 +895,55 @@ export class AnimatedPathLayer<
     reducedMotion: false,
   };
 
-  private preparedTileCache = new Map<string, PreparedTile>();
   /**
-   * Per-tile sublayer-instance cache — see the matching field on
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render, while class-field initializers re-run
+   * on that instance. Held as fields these caches were silently emptied by any
+   * unmemoized `new AnimatedPathLayer({...})` inside a React render — the
+   * deck-documented idiom — so every visible tile got a fresh descriptor
+   * container and a full GPU re-upload on frames where the layer re-renders.
+   * `AnimatedTripsLayer` diagnosed and fixed exactly this; this is the port.
+   */
+  private get pathCaches(): PathCaches {
+    return this.stateSlot(PATH_CACHE_SLOT, freshPathCaches);
+  }
+
+  // Accessors keep the historical field NAMES (the shared harnesses and sibling
+  // layers speak them) while the storage lives on `state`.
+
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.pathCaches.prepared;
+  }
+  private set preparedTileCache(value: Map<string, PreparedTile>) {
+    this.pathCaches.prepared = value;
+  }
+  /**
+   * Per-tile sublayer-instance cache — see the matching entry on
    * AnimatedTripsLayer for the rationale. Returning the SAME PathLayer
    * reference across renderLayers() calls lets deck.gl short-circuit prop
    * diff for unchanged tiles.
    */
-  private sublayerCache = new Map<
-    string,
-    { layer: PathLayer; preparedKey: PreparedTile; layerPropsKey: string }
-  >();
-  private lastLayerPropsKey: string = '';
+  private get sublayerCache(): Map<string, CachedPathSublayer> {
+    return this.pathCaches.sublayers;
+  }
+  private set sublayerCache(value: Map<string, CachedPathSublayer>) {
+    this.pathCaches.sublayers = value;
+  }
+  private get lastLayerPropsKey(): string {
+    return this.pathCaches.layerPropsKey;
+  }
+  private set lastLayerPropsKey(value: string) {
+    this.pathCaches.layerPropsKey = value;
+  }
   /** Tile-array identity from the previous render — see AnimatedTripsLayer.lastTilesRef. */
-  private lastTilesRef: Tile[] | null = null;
+  private get lastTilesRef(): Tile[] | null {
+    return this.pathCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.pathCaches.tilesRef = value;
+  }
   /**
    * Single TimeFilterExtension shared by every sublayer. It registers all
    * three time attributes unconditionally (the `mode` option is a no-op —

@@ -75,3 +75,35 @@ export function zoomForWorldUnitsPerPixel(
       : WORLD_CIRCUMFERENCE;
   return Math.log2(base / (TILE_SIZE * wupp));
 }
+
+/**
+ * Distance from the view target at which `viewportHeight` px subtend
+ * `wupp · viewportHeight` world units, for a camera of vertical field-of-view
+ * `fovDeg`. The ONE zoom↔camera-distance conversion in the stack: the three
+ * camera bridge places/recovers cameras with it, and the flat rig's control
+ * clamps derive their `min`/`maxDistance` from it, so a distance clamp and the
+ * zoom the basemap is driven with can never disagree about what a zoom means.
+ */
+export function distanceForGroundResolution(
+  wupp: number,
+  viewportHeight: number,
+  fovDeg: number,
+): number {
+  return (viewportHeight * wupp) / (2 * Math.tan((fovDeg * DEG2RAD) / 2));
+}
+
+/** {@link distanceForGroundResolution} keyed by zoom — the inverse of the zoom
+ *  `cameraToViewState` recovers from a camera at this distance. */
+export function cameraDistanceForZoom(
+  proj: Projection,
+  zoom: number,
+  latitude: number,
+  viewportHeight: number,
+  fovDeg: number,
+): number {
+  return distanceForGroundResolution(
+    worldUnitsPerPixel(proj, zoom, latitude),
+    viewportHeight,
+    fovDeg,
+  );
+}

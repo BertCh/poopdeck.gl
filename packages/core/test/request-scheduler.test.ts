@@ -915,3 +915,603 @@ describe('SharedRequestScheduler', () => {
     });
   });
 });
+
+// ─── M6 / BH-1: the DRR currency is BYTES ──────────────────────────────────
+//
+// The constrained resource on the wire is bytes, not slots. Metering slots gave
+// a source whose coalesced range groups are 10× heavier 10× the link at equal
+// weight. Only the CURRENCY changes here: the crediting scheme (credit at most
+// once per round, clamp to one quantum, new round only when no credited source
+// can dispatch, top up so no slot idles) is preserved verbatim — it is a pinned
+// register entry, the prior variant being a recorded broken design.
+
+/** One scripted unit of work for the byte-DRR driver. */
+interface ByteJob {
+  sourceId: string;
+  costBytes?: number;
+  weight?: number;
+  priority?: number;
+  label?: string;
+}
+
+/**
+ * A serial (maxRequests: 1) driver: enqueue scripted work, then drain it one
+ * dispatch at a time, recording the dispatch order. No timers, no network.
+ */
+function byteDriver(s: SharedRequestScheduler) {
+  const ctrls: Array<Controllable & { label: string; done?: boolean }> = [];
+  const order: string[] = [];
+  const enqueue = (job: ByteJob): void => {
+    const c = controllable() as Controllable & {
+      label: string;
+      done?: boolean;
+    };
+    c.label = job.label ?? job.sourceId;
+    ctrls.push(c);
+    void s
+      .schedule({
+        sourceId: job.sourceId,
+        weight: job.weight,
+        costBytes: job.costBytes,
+        getPriority: () => job.priority ?? 0,
+        execute: (sig) => {
+          order.push(c.label);
+          return c.execute(sig);
+        },
+      })
+      .catch(() => {});
+  };
+  const drain = async (n: number): Promise<void> => {
+    for (let i = 0; i < n; i++) {
+      await flush();
+      const running = ctrls.find((c) => c.started() && !c.done);
+      if (!running) break;
+      running.done = true;
+      running.resolve(undefined);
+    }
+    await flush();
+  };
+  const drainAll = async (): Promise<void> => {
+    let guard = 0;
+    while (
+      s.getStats().active + s.getStats().queued > 0 &&
+      guard++ < ctrls.length + 10
+    ) {
+      await drain(1);
+    }
+  };
+  return { enqueue, drain, drainAll, order };
+}
+
+describe('SharedRequestScheduler — byte-metered DRR (M6 / BH-1)', () => {
+  it('(1) equal weights + 10× byte-skewed groups converge to ~1:1 BYTE share', async () => {
+    // 'light' groups are 100 B, 'heavy' groups 1000 B, quantum 1000 B. Per
+    // round each source earns 1000 credits, so light runs 10× and heavy once —
+    // equal BYTES. Under the old slot DRR they alternated 1:1 in slots, i.e.
+    // 1:10 in bytes, which is what the link actually cares about.
+    const s = new SharedRequestScheduler({
+      maxRequests: 1,
+      byteQuantum: 1000,
+    });
+    const d = byteDriver(s);
+    for (let i = 0; i < 60; i++)
+      d.enqueue({ sourceId: 'light', costBytes: 100 });
+    for (let i = 0; i < 20; i++)
+      d.enqueue({ sourceId: 'heavy', costBytes: 1000 });
+    await d.drain(22); // two full rounds (11 dispatches each)
+
+    const granted = s.getStats().dispatchedBytesBySource;
+    expect(granted.light).toBeGreaterThan(0);
+    expect(granted.heavy).toBeGreaterThan(0);
+    const ratio = granted.light / granted.heavy;
+    expect(ratio).toBeGreaterThan(0.8);
+    expect(ratio).toBeLessThan(1.25);
+
+    await d.drainAll();
+  });
+
+  it('(1b) the SAME script under the slot-semantics rollback is ~1:10 in bytes', async () => {
+    // The counterfactual, so the win in (1) is attributable and the rollback
+    // path is proven to still be the old behaviour.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: null });
+    const d = byteDriver(s);
+    for (let i = 0; i < 60; i++)
+      d.enqueue({ sourceId: 'light', costBytes: 100 });
+    for (let i = 0; i < 20; i++)
+      d.enqueue({ sourceId: 'heavy', costBytes: 1000 });
+    await d.drain(22);
+
+    // Under the rollback `costBytes` is ignored entirely (every entry costs one
+    // slot), so we count the granted bytes from the dispatch log ourselves.
+    const lightSlots = d.order.filter((x) => x === 'light').length;
+    const heavySlots = d.order.filter((x) => x === 'heavy').length;
+    const byteRatio = (lightSlots * 100) / (heavySlots * 1000);
+    expect(byteRatio).toBeLessThan(0.2); // ≈ 0.1 — the D3 gap, verbatim
+
+    await d.drainAll();
+  });
+
+  it('(2) PROGRESS GUARANTEE: a group larger than a quantum still dispatches', async () => {
+    // min(costBytes, quantum) is the admission threshold precisely so an
+    // over-quantum group is admissible once the source is topped up — without
+    // it the deficit clamp would make it permanently inadmissible.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    for (let i = 0; i < 3; i++)
+      d.enqueue({ sourceId: 'huge', costBytes: 50_000, label: `h${i}` });
+    await d.drainAll();
+    expect(d.order).toEqual(['h0', 'h1', 'h2']);
+  });
+
+  it('(2b) an over-quantum source still makes progress against a small-group rival', async () => {
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    for (let i = 0; i < 6; i++)
+      d.enqueue({ sourceId: 'huge', costBytes: 5000 });
+    for (let i = 0; i < 200; i++)
+      d.enqueue({ sourceId: 'tiny', costBytes: 100 });
+    await d.drain(80);
+    const huge = d.order.filter((x) => x === 'huge').length;
+    const tiny = d.order.filter((x) => x === 'tiny').length;
+    expect(huge).toBeGreaterThanOrEqual(2); // not deadlocked behind its own size
+    // …and it pays the arrears back: byte share stays roughly even.
+    const ratio = (huge * 5000) / (tiny * 100);
+    expect(ratio).toBeGreaterThan(0.5);
+    expect(ratio).toBeLessThan(2);
+    await d.drainAll();
+  });
+
+  it('(3) REGRESSION PIN: omitting costBytes reproduces slot DRR exactly', async () => {
+    // The `byteQuantum: null` scheduler IS the pre-BH-1 arithmetic, so it is the
+    // oracle. Every entry declares no cost ⇒ bills one quantum ⇒ a weight-w
+    // source gets w dispatches per round, exactly as before.
+    const script: ByteJob[] = [];
+    for (let i = 0; i < 12; i++) {
+      script.push({ sourceId: 'a', weight: 1, priority: 1, label: `a${i}` });
+      script.push({ sourceId: 'b', weight: 3, priority: 0, label: `b${i}` });
+      script.push({ sourceId: 'c', weight: 1, priority: 2, label: `c${i}` });
+    }
+    const run = async (
+      opts: { byteQuantum?: number | null } = {},
+    ): Promise<string[]> => {
+      const s = new SharedRequestScheduler({ maxRequests: 1, ...opts });
+      const d = byteDriver(s);
+      for (const job of script) d.enqueue(job);
+      await d.drainAll();
+      return d.order;
+    };
+    const metered = await run(); // default: 512 KiB byte quantum
+    const slots = await run({ byteQuantum: null }); // today's arithmetic
+    expect(metered).toEqual(slots);
+  });
+
+  it('(4) DEFICIT CLAMP: an idle-then-active source banks at most one quantum', async () => {
+    // 'busy' works for many rounds while 'late' has nothing queued. When 'late'
+    // shows up it must NOT be able to cash in the rounds it slept through: the
+    // clamp caps its deficit at one quantum, so its first uninterrupted run is
+    // at most quantum / costBytes = 10 dispatches.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    for (let i = 0; i < 200; i++)
+      d.enqueue({ sourceId: 'busy', costBytes: 100 });
+    await d.drain(40);
+    for (let i = 0; i < 40; i++)
+      d.enqueue({ sourceId: 'late', costBytes: 100 });
+    await d.drain(40);
+
+    const tail = d.order.slice(40);
+    const firstLate = tail.indexOf('late');
+    expect(firstLate).toBeGreaterThanOrEqual(0);
+    let run = 0;
+    for (let i = firstLate; i < tail.length && tail[i] === 'late'; i++) run++;
+    expect(run).toBeLessThanOrEqual(10); // one quantum's worth, never more
+    await d.drainAll();
+  });
+
+  it('(5) PROPERTY: weight-normalized BYTE share stays bounded, and beats slot metering', async () => {
+    // Deterministic LCG over random weights/sizes — no wall clock, no Math.random.
+    //
+    // THE PROPERTY. Under contention the byte share each source receives, once
+    // normalized by its weight, is equal across sources up to a bound that
+    // depends on the QUANTUM and not on the length of the interval. The
+    // measured quantity is therefore the RATIO max(gᵢ/wᵢ) / min(gᵢ/wᵢ), which
+    // is 1 for perfect weighted fairness.
+    //
+    // ⚠️ A ratio, not an absolute byte error, is the honest statement. DRR's
+    // crediting scheme (a PINNED register entry, reproduced verbatim here)
+    // CLAMPS the deficit at one quantum, which discards the intra-round
+    // leftover `quantum mod costBytes`. In the slot world that leftover was
+    // always 0; in the byte world it makes a source whose group size does not
+    // divide its quantum systematically under-served by up to costBytes per
+    // round — an O(interval) byte drift but an O(1) SHARE drift. The default
+    // 512 KiB quantum keeps costBytes/quantum small for ordinary groups; the
+    // deviation is also conservative (it throttles the heavy source, the one
+    // that used to be over-served 10×).
+    let seed = 20260810;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const QUANTUM = 4096;
+    const normalizedRatio = (
+      s: SharedRequestScheduler,
+      sources: Array<{ id: string; weight: number }>,
+    ): number => {
+      const g = s.getStats().dispatchedBytesBySource;
+      const norm = sources.map((src) => (g[src.id] ?? 0) / src.weight);
+      return Math.max(...norm) / Math.min(...norm);
+    };
+
+    for (let trial = 0; trial < 4; trial++) {
+      const sources = ['s0', 's1', 's2'].map((id) => ({
+        id,
+        weight: 1 + Math.floor(rand() * 3),
+        // Widely skewed group sizes — the whole point of byte metering.
+        cost: 1 + Math.floor(rand() * QUANTUM),
+      }));
+      const script = (s: SharedRequestScheduler) => {
+        const d = byteDriver(s);
+        // Deep backlogs so every source contends across the whole interval.
+        for (let i = 0; i < 300; i++) {
+          for (const src of sources) {
+            d.enqueue({
+              sourceId: src.id,
+              weight: src.weight,
+              costBytes: src.cost,
+            });
+          }
+        }
+        return d;
+      };
+
+      const metered = new SharedRequestScheduler({
+        maxRequests: 1,
+        byteQuantum: QUANTUM,
+      });
+      const dm = script(metered);
+      await dm.drain(60);
+      const short = normalizedRatio(metered, sources);
+      // Premise: still a contention interval, not work conservation.
+      for (const src of sources) {
+        expect(metered.getStats().queuedBySource[src.id] ?? 0).toBeGreaterThan(
+          0,
+        );
+      }
+      await dm.drain(120); // 3× the interval…
+      const long = normalizedRatio(metered, sources);
+      // …and the SAME constant bound holds (observed worst ≈ 1.9 across the
+      // seeded trials; it tightens as the interval grows).
+      expect(short).toBeLessThanOrEqual(2.5);
+      expect(long).toBeLessThanOrEqual(2.5);
+      metered.clear('trial over');
+
+      // THE COUNTERFACTUAL: slot metering gives every source the same number of
+      // DISPATCHES, so its byte share is proportional to its group size — the
+      // exact D3 defect. With skewed sizes it is far worse than byte metering.
+      const slots = new SharedRequestScheduler({
+        maxRequests: 1,
+        byteQuantum: null,
+      });
+      const ds = script(slots);
+      await ds.drain(180);
+      const bySize =
+        Math.max(...sources.map((x) => x.cost)) /
+        Math.min(...sources.map((x) => x.cost));
+      if (bySize > 3) {
+        // Recover granted BYTES from the dispatch log (the rollback scheduler
+        // meters slots, so its counter is in slots).
+        const grantedBytes = new Map(sources.map((x) => [x.id, 0]));
+        for (const label of ds.order) {
+          const src = sources.find((x) => x.id === label)!;
+          grantedBytes.set(src.id, grantedBytes.get(src.id)! + src.cost);
+        }
+        const norm = sources.map((x) => grantedBytes.get(x.id)! / x.weight);
+        const slotRatio = Math.max(...norm) / Math.min(...norm);
+        expect(slotRatio).toBeGreaterThan(long);
+      }
+      slots.clear('trial over');
+    }
+  }, 20_000);
+
+  it('(6) GUARD: the per-dispatch-crediting starvation bug stays dead in the byte world', async () => {
+    // The recorded broken variant credited every active source on EVERY
+    // dispatch, so a heavier source's deficit diverged and it monopolized the
+    // budget. Byte metering must not resurrect it: a source with 50× heavier
+    // groups must never lock the light one out.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    for (let i = 0; i < 40; i++)
+      d.enqueue({ sourceId: 'whale', costBytes: 50_000, weight: 3 });
+    for (let i = 0; i < 40; i++)
+      d.enqueue({ sourceId: 'minnow', costBytes: 100, weight: 1 });
+    await d.drain(40);
+
+    const firstMinnow = d.order.indexOf('minnow');
+    expect(firstMinnow).toBeGreaterThanOrEqual(0);
+    expect(firstMinnow).toBeLessThanOrEqual(4); // serviced almost immediately
+    // And it keeps getting turns throughout, not just once.
+    expect(
+      d.order.slice(20).filter((x) => x === 'minnow').length,
+    ).toBeGreaterThan(0);
+    await d.drainAll();
+  });
+
+  it('(7) DETERMINISM: two identical scripted runs dispatch identically', async () => {
+    const script: ByteJob[] = [
+      { sourceId: 'a', costBytes: 900, weight: 2, priority: 3, label: 'a0' },
+      { sourceId: 'b', costBytes: 100, weight: 1, priority: 1, label: 'b0' },
+      { sourceId: 'a', costBytes: 4000, weight: 2, priority: 1, label: 'a1' },
+      { sourceId: 'c', weight: 1, priority: 2, label: 'c0' },
+      { sourceId: 'b', costBytes: 100, weight: 1, priority: 0, label: 'b1' },
+      { sourceId: 'a', costBytes: 50, weight: 2, priority: 5, label: 'a2' },
+      { sourceId: 'c', costBytes: 2500, weight: 1, priority: 1, label: 'c1' },
+      { sourceId: 'b', costBytes: 700, weight: 1, priority: 4, label: 'b2' },
+    ];
+    const run = async (): Promise<string[]> => {
+      const s = new SharedRequestScheduler({
+        maxRequests: 1,
+        byteQuantum: 1000,
+      });
+      const d = byteDriver(s);
+      for (const job of script) d.enqueue(job);
+      await d.drainAll();
+      return d.order;
+    };
+    const first = await run();
+    const second = await run();
+    expect(second).toEqual(first);
+    expect(first).toHaveLength(script.length);
+  });
+
+  it('counts granted cost per source and omits sources that never dispatched', async () => {
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    d.enqueue({ sourceId: 'a', costBytes: 300 });
+    d.enqueue({ sourceId: 'a', costBytes: 700 });
+    d.enqueue({ sourceId: 'b' }); // no cost ⇒ bills one quantum
+    await d.drainAll();
+    const granted = s.getStats().dispatchedBytesBySource;
+    expect(granted.a).toBe(1000);
+    expect(granted.b).toBe(1000);
+    expect(granted.zzz).toBeUndefined();
+    // It is telemetry, not fair-share bookkeeping: draining reclaims the latter
+    // but must not reset the counter.
+    expect(s.getStats().trackedSources).toBe(0);
+    s.clear();
+    expect(s.getStats().dispatchedBytesBySource).toEqual({});
+  });
+
+  it('normalizes a bad or missing costBytes to exactly one quantum', async () => {
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    d.enqueue({ sourceId: 'nan', costBytes: Number.NaN });
+    d.enqueue({ sourceId: 'neg', costBytes: -5 });
+    d.enqueue({ sourceId: 'zero', costBytes: 0 });
+    d.enqueue({ sourceId: 'inf', costBytes: Number.POSITIVE_INFINITY });
+    await d.drainAll();
+    const granted = s.getStats().dispatchedBytesBySource;
+    expect(granted).toEqual({ nan: 1000, neg: 1000, zero: 1000, inf: 1000 });
+  });
+
+  it('falls back to the default quantum for a non-finite byteQuantum', async () => {
+    const s = new SharedRequestScheduler({
+      maxRequests: 1,
+      byteQuantum: Number.NaN,
+    });
+    const d = byteDriver(s);
+    d.enqueue({ sourceId: 'a' });
+    await d.drainAll();
+    expect(s.getStats().dispatchedBytesBySource.a).toBe(512 * 1024);
+  });
+});
+
+// ─── M6 / BH-1: the `byteQuantum: null` ROLLBACK is exact at every weight ────
+//
+// BH-1 advertises `byteQuantum: null` as the documented rollback to the
+// pre-BH-1 slot scheme. A rollback that is only equivalent for weights ≥ 1 is
+// not a rollback: §11.3's multi-source fairness controller sheds leaders to
+// `0.25 × base`, so SUB-1 WEIGHTS ARE THE PRODUCTION CASE the moment two
+// sources contend.
+//
+// The arithmetic that makes sub-1 weights special: `creditRound` clamps a
+// weight-`w` source's deficit to `w`, so a `w < 1` source can never reach the
+// slot scheme's flat `deficit ≥ 1` gate by crediting alone. The incumbent
+// therefore routes it exclusively through the TOP-UP path, which fires only
+// when no source at all is admissible — i.e. a shed source yields completely to
+// any unshed rival that still has work, and runs only once that rival drains.
+// Reading the admission threshold as `min(costBytes, weight × quantum)` under
+// the rollback would relax the gate to `w` and admit the shed source after a
+// single credit round, producing a DIFFERENT dispatch sequence.
+//
+// The expectations below are the pre-BH-1 implementation's dispatch sequences,
+// recorded by running the HEAD scheduler against these exact scripts. They are
+// the oracle; if a change moves them, the rollback claim in the module header,
+// in `SharedRequestSchedulerOptions.byteQuantum` and in
+// `SchedulerStats.dispatchedBytesBySource` has stopped being true.
+
+describe('SharedRequestScheduler — byteQuantum:null rollback exactness', () => {
+  it('a sub-1-weight source (0.25 — what §11.3 sheds to) reproduces slot DRR', async () => {
+    // 'shed' carries §11.3's exact shed factor and the MORE urgent priority, so
+    // any relaxation of the gate shows up immediately as it jumping the queue.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: null });
+    const d = byteDriver(s);
+    for (let i = 0; i < 8; i++) {
+      d.enqueue({
+        sourceId: 'shed',
+        weight: 0.25,
+        priority: 0,
+        // Declared cost must be ignored entirely under the rollback.
+        costBytes: 4096,
+        label: `s${i}`,
+      });
+      d.enqueue({
+        sourceId: 'base',
+        weight: 1,
+        priority: 1,
+        costBytes: 999_999,
+        label: `b${i}`,
+      });
+    }
+    await d.drainAll();
+
+    // HEAD's recorded order: the top-up admits 'shed' once (the scheduler was
+    // empty, so it was the only active source), then 'base' takes every slot
+    // until it drains — 'shed' cannot clear the flat `deficit ≥ 1` gate.
+    expect(d.order).toEqual([
+      's0',
+      'b0',
+      'b1',
+      'b2',
+      'b3',
+      'b4',
+      'b5',
+      'b6',
+      'b7',
+      's1',
+      's2',
+      's3',
+      's4',
+      's5',
+      's6',
+      's7',
+    ]);
+
+    // Rollback currency is slots: every entry is billed exactly 1 regardless of
+    // the `costBytes` each declared.
+    expect(s.getStats().dispatchedBytesBySource).toEqual({ shed: 8, base: 8 });
+  });
+
+  it('mixed sub-1 and super-1 weights reproduce slot DRR', async () => {
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: null });
+    const d = byteDriver(s);
+    for (let i = 0; i < 6; i++) {
+      d.enqueue({ sourceId: 'q', weight: 0.25, priority: 0, label: `q${i}` });
+      d.enqueue({ sourceId: 'h', weight: 0.5, priority: 1, label: `h${i}` });
+      d.enqueue({ sourceId: 'f', weight: 2, priority: 2, label: `f${i}` });
+    }
+    await d.drainAll();
+
+    // HEAD's recorded order: both sub-1 sources are shut out while 'f' (the
+    // only source that can bank a whole credit) has work, and they drain in
+    // priority order only afterwards.
+    expect(d.order).toEqual([
+      'q0',
+      'f0',
+      'f1',
+      'f2',
+      'f3',
+      'f4',
+      'f5',
+      'h0',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'q1',
+      'q2',
+      'q3',
+      'q4',
+      'q5',
+    ]);
+  });
+
+  it('all-sub-1 weights reproduce slot DRR (the top-up path carries every dispatch)', async () => {
+    // With no source able to bank a whole credit, EVERY dispatch goes through
+    // the top-up. Its iteration domain is all active sources, not just those
+    // holding a candidate — narrowing it changes the common amount added and
+    // therefore the sequence.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: null });
+    const d = byteDriver(s);
+    for (let i = 0; i < 5; i++) {
+      d.enqueue({ sourceId: 'x', weight: 0.25, priority: 1, label: `x${i}` });
+      d.enqueue({ sourceId: 'y', weight: 0.5, priority: 0, label: `y${i}` });
+    }
+    await d.drainAll();
+
+    expect(d.order).toEqual([
+      'x0',
+      'y0',
+      'y1',
+      'y2',
+      'y3',
+      'y4',
+      'x1',
+      'x2',
+      'x3',
+      'x4',
+    ]);
+  });
+
+  it('the sub-1 gate is unconditional: 0.9 is still shut out, 1.0 is not', async () => {
+    // A boundary pair, so the pin is not satisfiable by special-casing 0.25.
+    const run = async (weight: number): Promise<string[]> => {
+      const s = new SharedRequestScheduler({
+        maxRequests: 1,
+        byteQuantum: null,
+      });
+      const d = byteDriver(s);
+      // 'rival' goes first so the scheduler is never empty when 'probe' arrives
+      // — that removes the top-up's single free dispatch from the picture.
+      d.enqueue({ sourceId: 'rival', weight: 1, priority: 1, label: 'r0' });
+      for (let i = 0; i < 4; i++) {
+        d.enqueue({ sourceId: 'probe', weight, priority: 0, label: `p${i}` });
+        d.enqueue({
+          sourceId: 'rival',
+          weight: 1,
+          priority: 1,
+          label: `r${i + 1}`,
+        });
+      }
+      await d.drainAll();
+      return d.order;
+    };
+
+    // weight 0.9 < 1: clamped to 0.9, never clears the flat gate ⇒ every
+    // 'rival' request runs first even though 'probe' is more urgent.
+    expect(await run(0.9)).toEqual([
+      'r0',
+      'r1',
+      'r2',
+      'r3',
+      'r4',
+      'p0',
+      'p1',
+      'p2',
+      'p3',
+    ]);
+    // weight 1.0: clears the gate every round, so its better priority wins its
+    // share back and it interleaves with 'rival' instead of waiting it out.
+    expect(await run(1)).toEqual([
+      'r0',
+      'p0',
+      'p1',
+      'r1',
+      'p2',
+      'r2',
+      'p3',
+      'r3',
+      'r4',
+    ]);
+  });
+
+  it('byte metering keeps the WEIGHTED threshold (the rollback fix is scoped)', async () => {
+    // The `min(costBytes, weight × byteQuantum)` reading is REQUIRED once the
+    // quantum is bytes: `creditRound` caps a weight-0.25 source at 0.25 × 1000
+    // = 250 credits, so a flat threshold of one full quantum would deadlock it
+    // behind every group larger than 250 B. Scoping the rollback fix to
+    // `byteQuantum: null` must not disturb that.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    for (let i = 0; i < 4; i++) {
+      d.enqueue({
+        sourceId: 'shed',
+        weight: 0.25,
+        costBytes: 800,
+        label: `s${i}`,
+      });
+    }
+    await d.drainAll();
+    expect(d.order).toEqual(['s0', 's1', 's2', 's3']);
+  });
+});

@@ -19,6 +19,7 @@ export type {
   STTPosition2D,
   STTPosition3D,
   PropertyInfo,
+  SelectionCost,
   SpatialIndex,
   SttLoadOptions,
   SummaryColumn,
@@ -43,7 +44,12 @@ export { Compression, GeometryType } from './types.js';
 // format a persistence contract. `tileLayerKey` composes it with a layer name
 // for the in-memory per-(tile, layer) registries every renderer keeps, and is
 // exported so no backend re-derives that spelling and drifts from the rest.
-export { tileKey, tileEntryKey, tileCellKey } from './tile-key.js';
+export {
+  tileKey,
+  tileEntryKey,
+  tileCellKey,
+  parseTileKey,
+} from './tile-key.js';
 // Camera-derived viewport boxes are made safe in exactly ONE place, shared by
 // all four backends — see `docs/roadmap/tile-loading-3d-2026-07.md` §4.1.
 export {
@@ -53,6 +59,21 @@ export {
   type NormalizedViewportBounds,
   type ViewportBoundsIssue,
 } from './geo/viewport-bounds.js';
+// The frustum → quadtree-cut cover primitive (Wave 3/A1). Turns "one integer
+// zoom for the whole screen" into a per-branch cut; INERT until a chassis
+// consumes it. Returns `null` — never an empty list — whenever it cannot vouch
+// for the cover, which is the same fail-open discipline `normalizeViewportBounds`
+// established: the incumbent AABB path is a strict superset.
+export {
+  coverFrustumQuadtree,
+  lonLatToCoverPoint,
+  coverPointToLonLat,
+  DEFAULT_MAX_COVER_CELLS,
+  MAX_COVER_ZOOM,
+  MAX_WORLD_COPIES,
+  type FrustumPlane,
+  type FrustumCoverOptions,
+} from './geo/frustum-cover.js';
 export type { TileKey, TileEntryKey, TileCellKey } from './tile-key.js';
 export { tileLayerKey } from './render/track-kernel.js';
 
@@ -164,7 +185,7 @@ export {
 } from './archive.js';
 // Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at
 // docs/spec/manifest.schema.json). `ManifestSchemaTemplate` is the
-// formatVersion-2 `schemas` table entry (spec §3.2).
+// formatVersion-3 `schemas` table entry (spec §3.2).
 export type {
   PackedManifest,
   ManifestDirectoryRef,
@@ -179,6 +200,7 @@ export type {
   SpatioTemporalTilesetOptions,
   TileBatchHooks,
   TileTier,
+  TilesetCacheStats,
 } from './spatiotemporal-tileset.js';
 
 // ─── Deprecated spelling aliases (`Spatiotemporal*` → `SpatioTemporal*`) ─────
@@ -205,7 +227,7 @@ export type {
 } from './spatiotemporal-tileset.js';
 
 export { decodeTile, getFeatureProperties, toGeoArrowTable } from './tile.js';
-// Packed formatVersion-2 decode plumbing: the schema-template registry built
+// Packed formatVersion-3 decode plumbing: the schema-template registry built
 // from `manifest.schemas` at open (spec §3.2) and the decodeTile options that
 // carry it + the declared formatVersion (spec §5.2 authority rule).
 export type { TemplateRegistry, DecodeTileOptions } from './tile.js';
@@ -266,8 +288,27 @@ export {
 export {
   OpfsTileCache,
   isOpfsAvailable,
+  type OpfsIndexEntry,
   type OpfsTileCacheOptions,
 } from './opfs-cache.js';
+
+// ─── Probe telemetry (P0-2) ─────────────────────────────────────────────────
+// The `__sttProbe` shim and its channel/payload shapes. Exported so a harness
+// (the policy trace replayer, the scrub-cost driver) can type the samples it
+// reads instead of re-declaring them. Production paths never touch these: with
+// no probe bag installed every call is a single property read.
+export {
+  emit as emitProbeSample,
+  snapshot as publishProbeSnapshot,
+  isProbeEnabled,
+  probeNow,
+  recordDecodeWait,
+  type CoreProbeChannel,
+  type DecodeQueueSnapshot,
+  type EvictProbeSample,
+  type EvictionTier,
+  type RequestProbeSample,
+} from './telemetry.js';
 
 // ─── loaders.gl-conformant surfaces ─────────────────────────────────────────
 // Structural-only — `@poopdeck.gl/core` has no `@loaders.gl/*` runtime dep.

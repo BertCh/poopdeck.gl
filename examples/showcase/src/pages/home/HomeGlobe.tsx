@@ -123,6 +123,10 @@ const HomeGlobe: React.FC = () => {
     let raf = 0;
     let last: number | null = null;
     const step = (now: number) => {
+      if (last != null && now - last < 33) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
       const dt = last == null ? 0 : (now - last) / 1000;
       last = now;
       setViewState((vs: any) => {

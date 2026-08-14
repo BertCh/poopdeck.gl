@@ -76,6 +76,11 @@ function vertexTimesOf(layer: any, tile: any): Float32Array {
   return prepared.data.attributes.instanceVertexTime.value;
 }
 
+function nextVertexTimesOf(layer: any, tile: any): Float32Array | undefined {
+  const prepared = layer.prepareTile(tile, tile.layers[0]);
+  return prepared.data.attributes.instanceEndTime?.value;
+}
+
 describe('AnimatedTripsLayer vertex-time memoization', () => {
   it('reuses the synthesized vertex-time array across a sub-step re-prepare', () => {
     const layer = makeLayer();
@@ -100,5 +105,63 @@ describe('AnimatedTripsLayer vertex-time memoization', () => {
     const b = vertexTimesOf(makeLayer(), tripsTile(40, 8, 5));
     // Distinct tile objects ⇒ distinct memo entries, NOT one global array.
     expect(b).not.toBe(a);
+  });
+});
+
+describe('AnimatedTripsLayer per-segment trail times', () => {
+  it('binds the NEXT vertex time to the idle instanceEndTime slot', () => {
+    const layer = makeLayer();
+    const tile = tripsTile(3, 5);
+    const times = vertexTimesOf(layer, tile);
+    const next = nextVertexTimesOf(layer, tile)!;
+
+    expect(next).toBeInstanceOf(Float32Array);
+    expect(next.length).toBe(times.length);
+
+    // Per feature: every vertex reads its SUCCESSOR's time, except the last,
+    // which reads its own — it starts no segment, and taking the next feature's
+    // first vertex would interpolate the final quad across an arbitrary jump.
+    for (let f = 0; f < 3; f++) {
+      const v0 = f * 5;
+      for (let v = v0; v < v0 + 4; v++) expect(next[v]).toBe(times[v + 1]);
+      expect(next[v0 + 4]).toBe(times[v0 + 4]);
+    }
+    // Concretely: no value ever crosses a feature boundary.
+    expect(next[4]).not.toBe(times[5]);
+  });
+
+  it('memoizes the derived array per tile, like the vertex times themselves', () => {
+    const layer = makeLayer();
+    const tile = tripsTile(40, 8);
+    const first = nextVertexTimesOf(layer, tile);
+    layer.preparedTileCache.clear();
+    expect(nextVertexTimesOf(layer, tile)).toBe(first);
+  });
+
+  it('tells the shader about the reinterpretation via the segmentTime prop', () => {
+    // The buffer alone is inert: without this prop the trail branch still reads
+    // instanceEndTime as a feature end, so the two must be wired together.
+    const layer = makeLayer();
+    const tile = tripsTile(3, 5);
+    const on = layer.buildSublayer(layer.prepareTile(tile, tile.layers[0]));
+    expect(on.props.segmentTime).toBe(true);
+
+    const off = makeLayer();
+    off.usesSegmentVertexTimes = () => false;
+    const offTile = tripsTile(3, 5, 5);
+    expect(
+      off.buildSublayer(off.prepareTile(offTile, offTile.layers[0])).props
+        .segmentTime,
+    ).toBe(false);
+  });
+
+  it('is OFF for window-mode subclasses, which need the slot for feature bounds', () => {
+    // FlowCorridorLayer's contract: `timeBoundsForSublayer` feeds real feature
+    // bounds through instanceStartTime/instanceEndTime, so the slot is taken.
+    // Emulated here via the hook — instantiating the corridor layer would drag
+    // in the value-matrix machinery this test has no tile for.
+    const layer = makeLayer();
+    layer.usesSegmentVertexTimes = () => false;
+    expect(nextVertexTimesOf(layer, tripsTile(3, 5))).toBeUndefined();
   });
 });

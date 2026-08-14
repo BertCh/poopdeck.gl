@@ -138,7 +138,7 @@ function twoCornerBounds(v: any) {
 }
 
 /**
- * Tiles that deck's own frustum would DRAW, sampled on a pixel grid.
+ * Ground samples deck's own frustum would DRAW, on a pixel grid.
  *
  * The filter is the clip-space test, not a `project(unproject(px))` round trip:
  * a ground point behind the camera flips the sign of both the numerator and the
@@ -147,10 +147,15 @@ function twoCornerBounds(v: any) {
  * reading sky). `w > 0` rejects those; `-w <= z <= w` additionally drops
  * samples past the far plane, which deck does not draw either — so this is
  * "what is on screen" in the only sense a tile selector can be held to.
+ *
+ * The POINT form is the primitive because the frustum path (FS-2) selects a
+ * MIXED-ZOOM cut: "which z9 tiles are drawn" cannot say whether a cut that
+ * refines to z11 in the near field covers a z9 cell, and rounding the oracle up
+ * to z9 first would answer that question by throwing the evidence away.
  */
-function drawnTiles(v: any, zoom: number, samples = 21): Set<string> {
+function drawnSamples(v: any, samples = 21): Array<[number, number]> {
   const m = v.viewProjectionMatrix;
-  const out = new Set<string>();
+  const out: Array<[number, number]> = [];
   for (let i = 0; i < samples; i++) {
     for (let j = 0; j < samples; j++) {
       const px = [
@@ -164,8 +169,17 @@ function drawnTiles(v: any, zoom: number, samples = 21): Set<string> {
       const z = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14];
       const w = m[3] * c[0] + m[7] * c[1] + m[11] * c[2] + m[15];
       if (!(w > 0) || z < -w || z > w) continue;
-      out.add(tileKeyAt(p[0], p[1], zoom));
+      out.push([p[0], p[1]]);
     }
+  }
+  return out;
+}
+
+/** The same samples, rounded to tile cells at one zoom — the AABB oracle. */
+function drawnTiles(v: any, zoom: number, samples = 21): Set<string> {
+  const out = new Set<string>();
+  for (const [lon, lat] of drawnSamples(v, samples)) {
+    out.add(tileKeyAt(lon, lat, zoom));
   }
   return out;
 }
@@ -751,5 +765,458 @@ describe('zRange (the altitude slab)', () => {
     const bounds = layer.getViewportBounds(makeViewport(-74.2, -73.7, 11));
     expect(bounds.minLon).toBeCloseTo(-74.2);
     expect(bounds.maxLon).toBeCloseTo(-73.7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FS-2 — `selectionMode: 'frustum'`, the quadtree cut
+//
+// Everything below runs against the SAME 432 real cameras as the matrix above,
+// because the risk is the same risk. A tile selector does not fail loudly: it
+// fails as a map that says "no data here". The 2026-07-26 audit found selection
+// correct only at `pitch === 0 && bearing === 0` and shipped 3-D demos missing
+// 20–44 % of their data, and this file is what caught it. So the frustum path
+// is admitted only on the identical one-sided terms: EVERY drawn ground sample
+// is covered by the cut, at every camera. Extra cells are never a finding.
+//
+// The oracle probes at the archive's MAX zoom rather than at Z. A cut is
+// mixed-zoom by construction — near-field branches refine past the camera zoom —
+// so "is this z9 tile in the cut" is the wrong question; "is the cell under this
+// drawn point covered by the cut or one of its ancestors" is the right one.
+// ---------------------------------------------------------------------------
+
+const CUT_MIN_ZOOM = 0;
+const CUT_MAX_ZOOM = 12;
+
+/** A layer with an archive attached — `getViewportTileCells` needs its zooms. */
+function makeFrustumLayer(props: Record<string, unknown> = {}) {
+  const layer: any = Object.create((SpatioTemporalLayer as any).prototype);
+  layer.props = {
+    id: 'stl',
+    useGlobalBounds: false,
+    zoomOverride: null,
+    selectionMode: 'frustum',
+    ...props,
+  };
+  layer.state = {
+    metadata: { minZoom: CUT_MIN_ZOOM, maxZoom: CUT_MAX_ZOOM },
+  };
+  return layer;
+}
+
+function cutKeys(cut: Array<{ z: number; x: number; y: number }>): Set<string> {
+  return new Set(cut.map((c) => `${c.z}/${c.x}/${c.y}`));
+}
+
+/** Is the cell under `(lon, lat)` at `probeZoom` covered by the cut? */
+function cutCoversPoint(
+  keys: Set<string>,
+  lon: number,
+  lat: number,
+  probeZoom: number,
+): boolean {
+  const n = 2 ** probeZoom;
+  const x = ((lonToTileX(lon, probeZoom) % n) + n) % n;
+  const y = latToTileY(lat, probeZoom);
+  for (let z = probeZoom; z >= CUT_MIN_ZOOM; z--) {
+    const shift = 2 ** (probeZoom - z);
+    if (keys.has(`${z}/${Math.floor(x / shift)}/${Math.floor(y / shift)}`))
+      return true;
+  }
+  return false;
+}
+
+describe('selectionMode: frustum — coverage soundness over the 432-camera matrix', () => {
+  const cases: Array<[number, number]> = [];
+  for (const bearing of BEARINGS)
+    for (const pitch of PITCHES) cases.push([pitch, bearing]);
+
+  it('produces a cut at every one of the 432 cameras', () => {
+    // A `null` here is not a bug — it routes to the box path, which is a strict
+    // superset — but it WOULD mean the measured win never materialises on an
+    // ordinary camera. Pin that the adapter actually engages.
+    const missing: string[] = [];
+    for (const [pitch, bearing] of cases) {
+      const cut = makeFrustumLayer().getViewportTileCells(
+        matrixViewport(pitch, bearing),
+      );
+      if (!cut || cut.length === 0) missing.push(`p${pitch}/b${bearing}`);
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it('covers EVERY drawn ground sample, at all 432 cameras — the gate', () => {
+    const misses: string[] = [];
+    for (const [pitch, bearing] of cases) {
+      const v = matrixViewport(pitch, bearing);
+      const cut = makeFrustumLayer().getViewportTileCells(v);
+      expect(cut).not.toBeNull();
+      const keys = cutKeys(cut!);
+      for (const [lon, lat] of drawnSamples(v)) {
+        if (!cutCoversPoint(keys, lon, lat, CUT_MAX_ZOOM)) {
+          misses.push(`p${pitch}/b${bearing} missed ${lon},${lat}`);
+          break;
+        }
+      }
+    }
+    expect(misses).toEqual([]);
+  });
+
+  it('never misses a z9 cell the incumbent AABB path found AND deck draws', () => {
+    // The direct anti-regression statement: whatever the box selects and the
+    // camera actually draws must still be covered. (The converse is the point
+    // of the item — the cut drops the box's near-horizon padding.)
+    const lost: string[] = [];
+    for (const [pitch, bearing] of cases) {
+      const v = matrixViewport(pitch, bearing);
+      const box = tilesFor(makeLayer().getViewportBounds(v), Z);
+      const keys = cutKeys(makeFrustumLayer().getViewportTileCells(v)!);
+      for (const [lon, lat] of drawnSamples(v)) {
+        if (!box.has(tileKeyAt(lon, lat, Z))) continue;
+        if (!cutCoversPoint(keys, lon, lat, CUT_MAX_ZOOM))
+          lost.push(`p${pitch}/b${bearing} lost ${lon},${lat}`);
+      }
+    }
+    expect(lost).toEqual([]);
+  });
+
+  it('emits an ANTICHAIN — no cell is an ancestor of another', () => {
+    // §8.3's delivery contract: each visible cell reaches the renderer under at
+    // most one cover. A violated antichain is the 2026-07-29 double-draw.
+    const nested: string[] = [];
+    for (const [pitch, bearing] of cases) {
+      const cut = makeFrustumLayer().getViewportTileCells(
+        matrixViewport(pitch, bearing),
+      )!;
+      const keys = cutKeys(cut);
+      for (const c of cut) {
+        for (let z = c.z - 1; z >= CUT_MIN_ZOOM; z--) {
+          const shift = 2 ** (c.z - z);
+          if (
+            keys.has(
+              `${z}/${Math.floor(c.x / shift)}/${Math.floor(c.y / shift)}`,
+            )
+          ) {
+            nested.push(`p${pitch}/b${bearing} ${c.z}/${c.x}/${c.y}`);
+          }
+        }
+      }
+    }
+    expect(nested).toEqual([]);
+  });
+
+  it('stays inside the archive zoom range and emits in-world addresses', () => {
+    const bad: string[] = [];
+    for (const [pitch, bearing] of cases) {
+      for (const c of makeFrustumLayer().getViewportTileCells(
+        matrixViewport(pitch, bearing),
+      )!) {
+        const world = 2 ** c.z;
+        if (
+          c.z < CUT_MIN_ZOOM ||
+          c.z > CUT_MAX_ZOOM ||
+          c.x < 0 ||
+          c.x >= world ||
+          c.y < 0 ||
+          c.y >= world
+        ) {
+          bad.push(`p${pitch}/b${bearing} ${c.z}/${c.x}/${c.y}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('is deterministic — the same camera yields the same cut', () => {
+    for (const [pitch, bearing] of [
+      [0, 0],
+      [62, 20],
+      [85, 195],
+    ]) {
+      const a = makeFrustumLayer().getViewportTileCells(
+        matrixViewport(pitch, bearing),
+      );
+      const b = makeFrustumLayer().getViewportTileCells(
+        matrixViewport(pitch, bearing),
+      );
+      expect(a).toEqual(b);
+    }
+  });
+});
+
+describe('selectionMode: frustum — the prize, measured', () => {
+  /** Cells the cut emits vs cells the incumbent box enumerates, one camera. */
+  function counts(pitch: number, bearing: number) {
+    const v = matrixViewport(pitch, bearing);
+    return {
+      cut: makeFrustumLayer().getViewportTileCells(v)!.length,
+      aabb: tilesFor(makeLayer().getViewportBounds(v), Z).size,
+    };
+  }
+
+  it('degenerates to EXACTLY the box enumeration on a flat unrotated camera', () => {
+    // The property that makes the cut safe to adopt at all: with no pitch and
+    // no bearing there is nothing for a frustum walk to be cleverer about, and
+    // the two derivations must agree cell for cell at the camera's own zoom.
+    // Any disagreement here would be a convention bug, not an optimisation.
+    const v = matrixViewport(0, 0);
+    const cut = makeFrustumLayer().getViewportTileCells(v)!;
+    expect(new Set(cut.map((c) => `${c.z}/${c.x}/${c.y}`))).toEqual(
+      new Set(
+        [...tilesFor(makeLayer().getViewportBounds(v), Z)].map(
+          (k) => `${Z}/${k}`,
+        ),
+      ),
+    );
+  });
+
+  it('collapses the horizon band: ≥8× fewer cells above the horizon', () => {
+    // This is where the recorded prize lives. Past `pitch + fovy/2 > 90°` the
+    // ground box stops bounding the frame and starts bounding the HORIZON:
+    // 832 cells at pitch 85/z8 against ~12 for a flat camera, and 754 at z8
+    // where the cut needs 47 across z5–z8 (tile-loading-3d-2026-07 §4.4, Wave
+    // 3/A1). Measured here at z9: the ratio runs 9.25× (p85/b15, 620 → 67) to
+    // 23.1× (p70), so 8× is a floor with headroom rather than a fitted number.
+    const short: string[] = [];
+    for (const bearing of BEARINGS) {
+      for (const pitch of PITCHES) {
+        if (pitch < 70) continue;
+        const c = counts(pitch, bearing);
+        if (c.cut * 8 > c.aabb)
+          short.push(`p${pitch}/b${bearing} cut=${c.cut} aabb=${c.aabb}`);
+      }
+    }
+    expect(short).toEqual([]);
+  });
+
+  it('stays BOUNDED below the horizon — never a blow-up, sometimes a little more', () => {
+    // Honest accounting, and deliberately not asserted as "always fewer": below
+    // the horizon the box is already tight, and the cut spends some of its
+    // budget REFINING the near field (a pitched frame's foreground deserves a
+    // deeper zoom than its background). Worst case across all 432 cameras is
+    // 1.33× the box's cell count, at a shallow rotated camera (p15/b330,
+    // 9 → 12). Cell count is not the metric that matters there — those extra
+    // cells are one zoom deeper and correspondingly smaller — but it must not
+    // be free to grow, so it is pinned at 2×.
+    const blowUp: string[] = [];
+    for (const bearing of BEARINGS) {
+      for (const pitch of PITCHES) {
+        const c = counts(pitch, bearing);
+        if (c.cut > c.aabb * 2)
+          blowUp.push(`p${pitch}/b${bearing} cut=${c.cut} aabb=${c.aabb}`);
+      }
+    }
+    expect(blowUp).toEqual([]);
+  });
+
+  it.each([
+    ['storm-4d-isolines: pitch 62 / bearing 20', 62, 20],
+    ['earthquake-columns: pitch 55 / bearing 15', 55, 15],
+  ])('%s — the shipped pitched cameras', (_name, pitch, bearing) => {
+    // Both shipped cameras sit BELOW the horizon, where the recorded 10–16×
+    // figure does not apply: measured at z9 the cut is 30 vs 56 cells
+    // (storm-4d-isolines) and 25 vs 30 (earthquake-columns). Recorded here so
+    // FS-3's acceptance run starts from the truth rather than from the
+    // above-horizon headline.
+    const c = counts(pitch, bearing);
+    expect(c.cut).toBeLessThanOrEqual(c.aabb);
+    // ... and the reduction is real coverage, not a truncation: every drawn
+    // sample is still covered.
+    const v = matrixViewport(pitch, bearing);
+    const keys = cutKeys(makeFrustumLayer().getViewportTileCells(v)!);
+    const misses = drawnSamples(v).filter(
+      ([lon, lat]) => !cutCoversPoint(keys, lon, lat, CUT_MAX_ZOOM),
+    );
+    expect(misses).toEqual([]);
+  });
+});
+
+describe('selectionMode: the default-off pin and the fallbacks', () => {
+  it('DEFAULT is aabb: no cut is produced unless the app asks', () => {
+    // The regression pin the item names: flag off must behave exactly as today.
+    // `getViewportTileCells` returning null is what makes the tileset take the
+    // incumbent path verbatim.
+    const layer: any = Object.create((SpatioTemporalLayer as any).prototype);
+    layer.props = { id: 'stl', useGlobalBounds: false, zoomOverride: null };
+    layer.state = { metadata: { minZoom: 0, maxZoom: 12 } };
+    expect(SpatioTemporalLayer.defaultProps.selectionMode).toBe('aabb');
+    expect(layer.getViewportTileCells(matrixViewport(62, 20))).toBeNull();
+    // ... and the box it derives is untouched by the new code path.
+    expect(layer.getViewportBounds(matrixViewport(62, 20))).toEqual(
+      makeLayer().getViewportBounds(matrixViewport(62, 20)),
+    );
+  });
+
+  it('falls back (null) before the archive metadata is known', () => {
+    const layer = makeFrustumLayer();
+    layer.state = {};
+    expect(layer.getViewportTileCells(matrixViewport(45, 30))).toBeNull();
+  });
+
+  it('falls back (null) for useGlobalBounds and for a viewport with no planes', () => {
+    expect(
+      makeFrustumLayer({ useGlobalBounds: true }).getViewportTileCells(
+        matrixViewport(45, 30),
+      ),
+    ).toBeNull();
+    // A hand-rolled host viewport: no `getFrustumPlanes`, so no cut.
+    expect(
+      makeFrustumLayer().getViewportTileCells(makeViewport(-74.2, -73.7, 11)),
+    ).toBeNull();
+  });
+
+  it('REFUSES a viewport whose common space is not web-mercator', () => {
+    // The cover-space probe is the guard that keeps a convention mismatch from
+    // presenting as systematic under-cover. A globe / orthographic / custom
+    // viewport projects into a different space entirely, and a cut built from
+    // its planes would be quietly wrong rather than obviously broken.
+    const real = matrixViewport(45, 30);
+    const cartesian: any = {
+      id: 'globe-ish',
+      width: 1000,
+      height: 1000,
+      zoom: 9,
+      longitude: -74,
+      latitude: 40.7,
+      pitch: 45,
+      bearing: 30,
+      isGeospatial: true,
+      cameraPosition: real.cameraPosition,
+      center: real.center,
+      getFrustumPlanes: () => real.getFrustumPlanes(),
+      // Cartesian metres-from-earth-centre, deck's GlobeViewport convention.
+      projectPosition: ([lon, lat]: number[]) => [
+        6378137 * Math.cos((lat * Math.PI) / 180),
+        6378137 * Math.sin((lon * Math.PI) / 180),
+        0,
+      ],
+    };
+    expect(makeFrustumLayer().getViewportTileCells(cartesian)).toBeNull();
+
+    // Same viewport with the mercator convention restored: the cut comes back,
+    // so the probe is rejecting the SPACE and not the object shape.
+    cartesian.id = 'mercator-ish';
+    cartesian.projectPosition = (p: number[]) => real.projectPosition(p);
+    expect(makeFrustumLayer().getViewportTileCells(cartesian)).not.toBeNull();
+  });
+
+  it('REFUSES a plane set with a non-finite half-space', () => {
+    const real = matrixViewport(45, 30);
+    const broken: any = {
+      ...real,
+      id: 'broken-planes',
+      getFrustumPlanes: () => {
+        const planes = real.getFrustumPlanes();
+        return {
+          ...planes,
+          far: { distance: NaN, normal: planes.far.normal },
+        };
+      },
+      projectPosition: (p: number[]) => real.projectPosition(p),
+      cameraPosition: real.cameraPosition,
+      center: real.center,
+    };
+    expect(makeFrustumLayer().getViewportTileCells(broken)).toBeNull();
+  });
+
+  it('memoises per camera and re-derives when the camera or zRange moves', () => {
+    const layer = makeFrustumLayer();
+    const v = matrixViewport(45, 30);
+    const first = layer.getViewportTileCells(v);
+    expect(layer.getViewportTileCells(v)).toBe(first); // same reference
+    expect(layer.getViewportTileCells(matrixViewport(45, 45))).not.toBe(first);
+
+    // `zRange` widens the cut (the A3 slab) and is a prop, so it must be part
+    // of the memo key or a volumetric layer would keep serving the flat cut.
+    layer.props = { ...layer.props, zRange: [0, 15000] };
+    expect(layer.getViewportTileCells(v)).not.toBe(first);
+  });
+});
+
+describe('selectionMode: frustum — zRange (the A3 altitude slab)', () => {
+  const CAMERA_3D = new WebMercatorViewport({
+    id: 'slab',
+    width: 1000,
+    height: 1000,
+    longitude: -74,
+    latitude: 40.7,
+    zoom: 8,
+    pitch: 60,
+    bearing: 20,
+  });
+
+  /**
+   * Samples on the plane `altitude` metres up that the camera actually draws.
+   * `unproject({targetZ})` solves the pixel ray against THAT plane; the clip
+   * test then runs at the same altitude, so this is "what an extruded column's
+   * roof shows on screen", which is the A3 case the slab exists for.
+   */
+  function drawnSamplesAt(
+    v: any,
+    altitude: number,
+    samples = 15,
+  ): Array<[number, number]> {
+    const m = v.viewProjectionMatrix;
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < samples; i++) {
+      for (let j = 0; j < samples; j++) {
+        const p = v.unproject(
+          [(v.width * i) / (samples - 1), (v.height * j) / (samples - 1)],
+          { targetZ: altitude },
+        );
+        if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) continue;
+        if (Math.abs(p[1]) > 85.05) continue;
+        const c = v.projectPosition([p[0], p[1], altitude]);
+        const z = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14];
+        const w = m[3] * c[0] + m[7] * c[1] + m[11] * c[2] + m[15];
+        if (!(w > 0) || z < -w || z > w) continue;
+        out.push([p[0], p[1]]);
+      }
+    }
+    return out;
+  }
+
+  it('covers samples on the TOP of the slab, not just on the ground', () => {
+    // A column 15 km tall whose base is off the bottom of a pitched frame can
+    // still have its roof on screen; the cut has to own the tile that column
+    // stands in. Without the slab those tiles are simply not selected — the
+    // near edge of a pitched frame loses about half a tile row of anvil.
+    const slabKeys = cutKeys(
+      makeFrustumLayer({ zRange: [0, 15000] }).getViewportTileCells(CAMERA_3D)!,
+    );
+    const misses = drawnSamplesAt(CAMERA_3D, 15000).filter(
+      ([lon, lat]) => !cutCoversPoint(slabKeys, lon, lat, CUT_MAX_ZOOM),
+    );
+    expect(misses).toEqual([]);
+  });
+
+  it('still covers the ground, and widens rather than shifts', () => {
+    const groundOnly = makeFrustumLayer();
+    const withSlab = makeFrustumLayer({ zRange: [0, 15000] });
+    const slabKeys = cutKeys(withSlab.getViewportTileCells(CAMERA_3D)!);
+    const misses = drawnSamples(CAMERA_3D).filter(
+      ([lon, lat]) => !cutCoversPoint(slabKeys, lon, lat, CUT_MAX_ZOOM),
+    );
+    expect(misses).toEqual([]);
+    expect(withSlab.getViewportTileCells(CAMERA_3D)!.length).toBeGreaterThan(
+      groundOnly.getViewportTileCells(CAMERA_3D)!.length,
+    );
+  });
+
+  it('tolerates a reversed or non-finite range exactly as the box path does', () => {
+    const ground = makeFrustumLayer().getViewportTileCells(CAMERA_3D);
+    expect(
+      makeFrustumLayer({ zRange: null }).getViewportTileCells(CAMERA_3D),
+    ).toEqual(ground);
+    expect(
+      makeFrustumLayer({ zRange: [NaN, 15000] }).getViewportTileCells(
+        CAMERA_3D,
+      ),
+    ).toEqual(ground);
+    expect(
+      makeFrustumLayer({ zRange: [15000, 0] }).getViewportTileCells(CAMERA_3D),
+    ).toEqual(
+      makeFrustumLayer({ zRange: [0, 15000] }).getViewportTileCells(CAMERA_3D),
+    );
   });
 });

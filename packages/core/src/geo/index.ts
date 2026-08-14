@@ -35,6 +35,8 @@ export {
   WORLD_CIRCUMFERENCE,
   worldUnitsPerPixel,
   zoomForWorldUnitsPerPixel,
+  distanceForGroundResolution,
+  cameraDistanceForZoom,
   type ViewState,
 } from './view-state.js';
 export {

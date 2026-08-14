@@ -232,12 +232,13 @@ function buildArchive(tiles: SynthTile[]): InMemoryPackedDataset {
     new TextEncoder().encode(
       JSON.stringify({
         format: 'stt-packed',
-        formatVersion: 2,
+        formatVersion: 3,
+        variants: [{ id: 0, kind: 'raw' }],
         compression: 'none',
         directory: {
           key: 'index/dir.sttd',
           length: dirObject.byteLength,
-          directoryVersion: 5,
+          directoryVersion: 6,
         },
         packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],
         metadata: {
@@ -468,12 +469,13 @@ describe('paged directory across the antimeridian', () => {
       new TextEncoder().encode(
         JSON.stringify({
           format: 'stt-packed',
-          formatVersion: 2,
+          formatVersion: 3,
+          variants: [{ id: 0, kind: 'raw' }],
           compression: 'none',
           directory: {
             key: 'index/dir.sttd',
             length: dirObject.byteLength,
-            directoryVersion: 5,
+            directoryVersion: 6,
             layout: 'paged',
             rootLength: root.length,
             pageCount: 2,

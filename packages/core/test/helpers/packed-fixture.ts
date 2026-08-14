@@ -13,10 +13,12 @@
 
 import { readFileSync } from 'node:fs';
 import { unzstdSync } from '../../src/compression';
+import { blake3Hex128 } from '../../src/blake3';
 import { fileURLToPath } from 'node:url';
 
 import {
   decodeDirectory,
+  decodePagedRoot,
   encodeDirectory,
   type DirectoryEncodeEntry,
 } from '../../src/directory';
@@ -32,11 +34,11 @@ export const OBJECT_MAGIC_LEN = 8;
 const PACK_MAGIC = 'STTP';
 const DIRECTORY_MAGIC = 'STTD';
 
-/** `"STTP"`/`"STTD"` + u8 version(2) + 3 zero bytes (packed spec §9.2). */
+/** `"STTP"`/`"STTD"` + u8 version(3) + 3 zero bytes (packed spec §9.2). */
 function objectMagic(tag: string): Uint8Array {
   const out = new Uint8Array(OBJECT_MAGIC_LEN);
   out.set(new TextEncoder().encode(tag), 0);
-  out[4] = 2;
+  out[4] = 3;
   return out;
 }
 
@@ -45,6 +47,44 @@ export interface InMemoryPackedDataset {
   objects: Map<string, Uint8Array>;
   /** The manifest URL a reader should be pointed at. */
   manifestUrl: string;
+}
+
+/** Production-shaped content-addressed test object keys. */
+export function directoryKey(bytes: Uint8Array): string {
+  return `index/${blake3Hex128(bytes)}.sttd`;
+}
+
+export function packKey(bytes: Uint8Array): string {
+  return `packs/${blake3Hex128(bytes)}.sttp`;
+}
+
+function addPagedFrameHashes(
+  manifest: any,
+  directoryBytes: Uint8Array,
+): boolean {
+  if (
+    manifest.directory?.layout !== 'paged' ||
+    manifest.directory.rootHash !== undefined ||
+    typeof manifest.directory.rootLength !== 'number'
+  ) {
+    return false;
+  }
+  const rootLength = manifest.directory.rootLength;
+  const payload = directoryBytes.subarray(OBJECT_MAGIC_LEN);
+  const rootFrame = payload.subarray(0, rootLength);
+  const rootRaw =
+    manifest.directory.encoding === 'zstd' ? unzstdSync(rootFrame) : rootFrame;
+  const root = decodePagedRoot(rootRaw);
+  manifest.directory.rootHash = blake3Hex128(rootFrame);
+  manifest.directory.pageHashes = root.pages.map((page) =>
+    blake3Hex128(
+      payload.subarray(
+        rootLength + page.relOffset,
+        rootLength + page.relOffset + page.length,
+      ),
+    ),
+  );
+  return true;
 }
 
 /**
@@ -272,12 +312,12 @@ export function packedFromSingleFile(
       buf.set(b, o);
       o += b.length;
     }
-    const key = `packs/pack-${p}.sttp`;
+    const key = packKey(buf);
     objects.set(key, buf);
     packRefs.push({ key, length: buf.length });
   }
 
-  // Encode the v5 directory with pack ids + pack-relative offsets.
+  // Encode the v6 directory with pack ids + pack-relative offsets.
   const encEntries: DirectoryEncodeEntry[] = entries.map((e) => {
     const pl = placement.get(blobKey(e))!;
     return {
@@ -304,16 +344,17 @@ export function packedFromSingleFile(
   // The directory key is content-addressed in production; tests can override it
   // to simulate a redeploy whose tiles changed (→ a new directory hash → a
   // distinct OPFS namespace).
-  const dirKey = opts.directoryKey ?? 'index/directory.sttd';
+  const dirKey = opts.directoryKey ?? directoryKey(dirBytes);
   objects.set(dirKey, dirBytes);
 
   const compression =
     compressionByte === 0 ? 'none' : compressionByte === 1 ? 'gzip' : 'zstd';
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: [{ id: 0, kind: 'raw' }],
     compression,
-    directory: { key: dirKey, length: dirBytes.length, directoryVersion: 5 },
+    directory: { key: dirKey, length: dirBytes.length, directoryVersion: 6 },
     packs: packRefs,
     metadata: metadataJson,
   };
@@ -339,13 +380,22 @@ export function loadPackedDatasetFromDisk(
 ): InMemoryPackedDataset {
   const objects = new Map<string, Uint8Array>();
   const manifestBytes = new Uint8Array(fs.readFileSync(`${dir}/manifest.json`));
-  objects.set('manifest.json', manifestBytes);
   const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
-  const add = (key: string): void => {
-    objects.set(key, new Uint8Array(fs.readFileSync(`${dir}/${key}`)));
-  };
-  add(manifest.directory.key);
-  for (const p of manifest.packs) add(p.key);
+  const directoryBytes = new Uint8Array(
+    fs.readFileSync(`${dir}/${manifest.directory.key}`),
+  );
+  manifest.directory.key = directoryKey(directoryBytes);
+  objects.set(manifest.directory.key, directoryBytes);
+  addPagedFrameHashes(manifest, directoryBytes);
+  for (const p of manifest.packs) {
+    const bytes = new Uint8Array(fs.readFileSync(`${dir}/${p.key}`));
+    p.key = packKey(bytes);
+    objects.set(p.key, bytes);
+  }
+  objects.set(
+    'manifest.json',
+    new TextEncoder().encode(JSON.stringify(manifest)),
+  );
   return { objects, manifestUrl };
 }
 
@@ -358,6 +408,47 @@ export interface PackedFetchLog {
 }
 
 /**
+ * Upgrade hand-built synthetic datasets to the production content-addressed
+ * key grammar before the strict reader sees them. This is test infrastructure,
+ * not a reader escape hatch.
+ */
+function normalizeContentAddressedKeys(ds: InMemoryPackedDataset): void {
+  const manifestBytes = ds.objects.get('manifest.json');
+  if (!manifestBytes) return;
+  const manifest = JSON.parse(new TextDecoder().decode(manifestBytes));
+  let changed = false;
+  const oldDirectoryKey = manifest.directory?.key;
+  const directoryBytes = ds.objects.get(oldDirectoryKey);
+  if (directoryBytes && !/^index\/[0-9a-f]{32}\.sttd$/.test(oldDirectoryKey)) {
+    const key = directoryKey(directoryBytes);
+    ds.objects.set(key, directoryBytes);
+    ds.objects.delete(oldDirectoryKey);
+    manifest.directory.key = key;
+    changed = true;
+  }
+  if (directoryBytes && addPagedFrameHashes(manifest, directoryBytes)) {
+    changed = true;
+  }
+  for (const pack of manifest.packs ?? []) {
+    const oldKey = pack.key;
+    const bytes = ds.objects.get(oldKey);
+    if (bytes && !/^packs\/[0-9a-f]{32}\.sttp$/.test(oldKey)) {
+      const key = packKey(bytes);
+      ds.objects.set(key, bytes);
+      ds.objects.delete(oldKey);
+      pack.key = key;
+      changed = true;
+    }
+  }
+  if (changed) {
+    ds.objects.set(
+      'manifest.json',
+      new TextEncoder().encode(JSON.stringify(manifest)),
+    );
+  }
+}
+
+/**
  * A `fetch` shim that serves an in-memory packed dataset. The base is the
  * manifest URL minus its final path segment; a requested URL's tail after that
  * base is the object key. Whole GET → 200, Range → 206 via Uint8Array slicing.
@@ -366,6 +457,7 @@ export function packedFetch(
   ds: InMemoryPackedDataset,
   log?: PackedFetchLog,
 ): typeof fetch {
+  normalizeContentAddressedKeys(ds);
   const slash = ds.manifestUrl.lastIndexOf('/');
   const base = slash >= 0 ? ds.manifestUrl.slice(0, slash + 1) : '';
   return (async (url: string, init?: RequestInit) => {
@@ -555,7 +647,7 @@ export function packedFromGolden(
   const packRefs: Array<{ key: string; length: number }> = [];
   for (let p = 0; p < packKeys.length; p++) {
     const { bytes } = packObject(packKeys[p].map((k) => bytesByKey.get(k)!));
-    const key = `packs/pack-${p}.sttp`;
+    const key = packKey(bytes);
     objects.set(key, bytes);
     packRefs.push({ key, length: bytes.byteLength });
   }
@@ -580,7 +672,7 @@ export function packedFromGolden(
     };
   });
   const dirObject = directoryObject(encodeDirectory(encEntries));
-  const dirKey = opts.directoryKey ?? 'index/directory.sttd';
+  const dirKey = opts.directoryKey ?? directoryKey(dirObject);
   objects.set(dirKey, dirObject);
 
   objects.set(
@@ -588,12 +680,13 @@ export function packedFromGolden(
     new TextEncoder().encode(
       JSON.stringify({
         format: 'stt-packed',
-        formatVersion: 2,
+        formatVersion: 3,
+        variants: [{ id: 0, kind: 'raw' }],
         compression: src.compressionByte === 0 ? 'none' : 'zstd',
         directory: {
           key: dirKey,
           length: dirObject.byteLength,
-          directoryVersion: 5,
+          directoryVersion: 6,
         },
         packs: packRefs,
         metadata: src.metadataJson,

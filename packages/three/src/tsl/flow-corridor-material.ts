@@ -43,6 +43,7 @@ import {
   cameraProjectionMatrix,
   type UniformNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import {
   TimeFilterUniforms,
   windowAlphaNode,
@@ -191,7 +192,7 @@ export function createFlowCorridorMaterial(
     alpha = windowAlphaNode(time, vStart, vEnd);
   }
 
-  material.colorNode = ramp.xyz;
+  material.colorNode = srgbToWorking(ramp.xyz);
   material.opacityNode = ramp.a.mul(flow.opacity).mul(alpha);
   material.transparent = true;
   material.depthTest = true;

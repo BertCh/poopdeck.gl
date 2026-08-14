@@ -128,7 +128,7 @@ import type {
   TrackPickRow,
   TrackFieldConfig,
 } from '../../lib/track-kernel.js';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, tileLayerKey } from '@poopdeck.gl/core';
 import type { Tile, STTTileLayer as TileLayer } from '@poopdeck.gl/core';
 
 const DEBUG = false;
@@ -621,10 +621,14 @@ class QuatIndex {
     const dirty = new Set<string>();
 
     for (const tile of tiles) {
-      const { z, x, y, t } = tile.id;
       for (const tileLayer of tile.layers) {
         if (tileLayer.features.featureCount === 0) continue;
-        const key = `${z}/${x}/${y}/${t}:${tileLayer.name}`;
+        // `tileLayerKey`, never a hand-spelled `${z}/${x}/${y}/${t}:${name}`.
+        // The canonical key folds in `bucketMs`, so a temporal-LOD
+        // (scrub-preview) tile does not alias its base twin — the pool
+        // short-circuits on `this.pools.has(key)`, so a collision served the
+        // previous tier's quaternions for a different span of time.
+        const key = tileLayerKey(tile.id, tileLayer.name);
         if (incoming.has(key)) continue;
         incoming.add(key);
         orderedKeys.push(key);

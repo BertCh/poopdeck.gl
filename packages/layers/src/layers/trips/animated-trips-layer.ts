@@ -59,38 +59,46 @@
  * combination warns once (see `buildSublayer`). Trail semantics also diverge
  * from upstream `TripsLayer` under `fadeTrail: false` — see that prop's doc.
  *
- * KNOWN PARITY GAP — per-SEGMENT trail time (deferred, attribute-budget bound)
- * ---------------------------------------------------------------------------
+ * PER-SEGMENT TRAIL TIME — how the trail glides instead of stepping
+ * ------------------------------------------------------------------
  * Upstream `TripsLayer` registers its `timestamps` attribute with TWO shader
  * views of the same buffer — `instanceTimestamps {vertexOffset: 0}` and
  * `instanceNextTimestamps {vertexOffset: 1}` — and interpolates along the
  * segment quad:
  *   `vTime = instanceTimestamps + (next - instanceTimestamps)
  *            * vPathPosition.y / vPathLength;`
- * STT's {@link TimeFilterExtension} registers ONE view (`instanceVertexTime`,
- * no `shaderAttributes`), so each segment instance reads only its START
- * vertex's time and `vTimeAlpha` is CONSTANT across the quad: the trail head
- * advances one whole segment at a time and the fade is a staircase, not a
- * glide. On sparse geometry (bridges, highways, coarse-sampled trips) that
- * reads as popping — which is precisely why {@link AnimatedTripHeadsLayer}
- * exists (its dot is a CPU-interpolated position, so it glides).
+ * Without the second view a segment instance reads only its START vertex's
+ * time, `vTimeAlpha` is CONSTANT across the quad, and the head advances one
+ * whole segment at a time: on OSRM-routed city trips (a shape point every
+ * ~10-30 s of sim time, against a `trailLength` often shorter than that) whole
+ * segments blink on and off, and a trip can go fully dark mid-segment.
  *
- * Closing it costs ONE more vertex-attribute slot (a second `in` declaration
- * gets its own slot even though it shares the GL buffer), and the budget has
- * none free: NoPickingPathLayer 12 + TimeFilterExtension 3 = 15, and
- * CategoryColorExtension's `instanceCategoryIndex` — installed by default on
- * this layer — takes it to WebGL2's guaranteed 16-slot floor. A twin view
- * would be 17: a fatal link failure (blank trips) on GPUs that report exactly
- * 16. Freeing a slot means dropping `instanceStartTime`/`instanceEndTime` from
- * the shader inject for trail-only pipelines, but this layer's single
- * `TimeFilterExtension({mode:'trail'})` singleton is ALSO what
- * {@link FlowCorridorLayer} runs in WINDOW mode (it feeds those very
- * attributes via `timeBoundsForSublayer`), so the drop has to be a genuine
- * per-mode shader variant, not a registration tweak. That is an extension-side
- * change with real link-failure blast radius, so it is deferred rather than
- * half-landed here; there is no layer-side wiring to do in the meantime (the
- * twin view is derived from the SAME buffer via `vertexOffset`, so no new tile
- * attribute is involved).
+ * The twin view is not affordable here — a second `in` declaration gets its own
+ * slot even sharing the GL buffer, and NoPickingPathLayer 12 +
+ * TimeFilterExtension 3 + CategoryColorExtension's `instanceCategoryIndex` is
+ * already 16, WebGL2's guaranteed floor. Slot 17 is a fatal link failure (blank
+ * trips) on GPUs that report exactly 16.
+ *
+ * So we buy the interpolation with a slot we already own. `instanceEndTime` is
+ * dead weight in trail mode — the shader's trail branch never reads it — so a
+ * trail layer re-points it at the NEXT VERTEX's time
+ * ({@link TimeFilterExtension}'s `segmentTime` prop) and the extension
+ * interpolates between the two in its `pathSegmentTime` shader variant.
+ * Attribute count is UNCHANGED at 16; the cost is one varying, one uniform and
+ * a `Float32Array(totalVerts)` per tile. {@link FlowCorridorLayer} opts out via
+ * {@link AnimatedTripsLayer.usesSegmentVertexTimes} — it runs the same
+ * extension in WINDOW mode and feeds those very attributes real feature bounds
+ * through `timeBoundsForSublayer`.
+ *
+ * The fade also moves to the FRAGMENT stage (upstream does this too), which is
+ * what makes it continuous rather than one alpha per segment. In exchange the
+ * vertex stage can now collapse whole segments again — under `segmentTime`
+ * `vTimeAlpha` is a per-SEGMENT visibility flag derived from both endpoints, so
+ * everything outside the trail costs zero fragments, which a staircase trail
+ * could not do safely.
+ *
+ * {@link AnimatedTripHeadsLayer} still exists for the "one dot per vehicle"
+ * read; it is no longer the only way to avoid popping.
  */
 
 import { PathLayer } from '@deck.gl/layers';
@@ -631,6 +639,53 @@ function synthesizeVertexTimesMemo(binary: BinaryFeatures): Float32Array {
   return cached;
 }
 
+/**
+ * Per-vertex "time at the NEXT vertex", aligned 1:1 with `vertexTimes` — the
+ * far end of the segment each PathLayer instance draws. Bound to the otherwise
+ * idle `instanceEndTime` slot so the trail can interpolate across a segment
+ * without a 17th vertex attribute (see the module docstring).
+ *
+ * A feature's LAST vertex gets its own time back, not the first vertex of the
+ * next feature: it starts no segment, and letting a neighbouring trip's time
+ * bleed in would make the final quad interpolate across an arbitrary time jump.
+ * The resulting zero-length span is exactly what the shader's min/max cull and
+ * `mix()` expect for a degenerate segment.
+ */
+export function nextVertexTimes(
+  binary: BinaryFeatures,
+  vertexTimes: Float32Array,
+): Float32Array {
+  const startIndices = binary.startIndices!;
+  const featureCount = binary.featureCount;
+  const out = new Float32Array(startIndices[featureCount]);
+  for (let f = 0; f < featureCount; f++) {
+    const v0 = startIndices[f];
+    const v1 = startIndices[f + 1];
+    if (v1 <= v0) continue;
+    for (let v = v0; v < v1 - 1; v++) out[v] = vertexTimes[v + 1];
+    out[v1 - 1] = vertexTimes[v1 - 1];
+  }
+  return out;
+}
+
+// Memoized on the SOURCE array, not the tile: `vertexTimes` is either the
+// tile's own zero-copy `vertexTimestamps` or the memoized synthesized fallback,
+// so both are stable for the life of a loaded tile and both are already
+// per-tile — keying on them lands one derived array per tile-LOAD without a
+// second lookup path for the two cases.
+const nextVertexTimeMemo = new WeakMap<Float32Array, Float32Array>();
+function nextVertexTimesMemo(
+  binary: BinaryFeatures,
+  vertexTimes: Float32Array,
+): Float32Array {
+  let cached = nextVertexTimeMemo.get(vertexTimes);
+  if (!cached) {
+    cached = nextVertexTimes(binary, vertexTimes);
+    nextVertexTimeMemo.set(vertexTimes, cached);
+  }
+  return cached;
+}
+
 const staticWidthMemo = new WeakMap<
   BinaryFeatures,
   { prop: string; value: Float32Array }
@@ -933,9 +988,16 @@ export class AnimatedTripsLayer<
    * time at draw. What keeps PathLayer's fp64 split + time + category combo
    * under WebGL2's 16-attribute floor is NoPickingPathLayer freeing the
    * `instancePickingColors` slot — not attribute pruning here.
+   *
+   * `pathSegmentTime` is NOT a no-op: it injects the per-segment time
+   * interpolation that makes the trail glide (see the module docstring). It is
+   * safe for every subclass — the injection reads PathLayer varyings, and every
+   * sublayer this family builds is a PathLayer — and inert unless a sublayer
+   * also sets the `segmentTime` PROP, which only the trail path does.
    */
   private readonly timeFilterExtension = new TimeFilterExtension({
     mode: 'trail',
+    pathSegmentTime: true,
   });
 
   /**
@@ -1276,6 +1338,26 @@ export class AnimatedTripsLayer<
   }
 
   /**
+   * Whether this layer re-points `instanceEndTime` at the NEXT VERTEX's time so
+   * the trail can interpolate along each segment (see the module docstring).
+   * Base: true — trail trips leave the feature-bounds attributes unused, so the
+   * slot is free and the glide is free with it.
+   *
+   * The MUTUAL EXCLUSION with {@link timeBoundsForSublayer} is the invariant to
+   * preserve: a subclass that feeds real feature bounds through that hook is
+   * running the time filter in WINDOW mode and needs `instanceEndTime` to mean
+   * what it says, so it must return false here.
+   * {@link FlowCorridorLayer} does exactly that.
+   *
+   * Must be constant per instance: it decides which binary attributes
+   * `prepareTile` bakes, and prepared tiles are cached by a style key that
+   * (deliberately) does not include it.
+   */
+  protected usesSegmentVertexTimes(): boolean {
+    return true;
+  }
+
+  /**
    * PER-VERTEX width override (length `totalVerts`, aligned 1:1 with `positions`
    * exactly like the gradient `getColor` buffer — PathLayer's `instanceStrokeWidths`
    * is per-SEGMENT-instanced, so a shorter per-feature buffer under-sizes the draw).
@@ -1569,14 +1651,22 @@ export class AnimatedTripsLayer<
       // attribute name `instanceVertexTime` (see TimeFilterExtension
       // .initializeState). The accessor name `getInstanceVertexTime` does
       // NOT work for the binary interface.
-      attributes.instanceVertexTime = {
-        value:
-          binary.vertexTimestamps &&
-          binary.vertexTimestamps.length >= totalVerts
-            ? binary.vertexTimestamps
-            : synthesizeVertexTimesMemo(binary),
-        size: 1,
-      };
+      const vertexTimes =
+        binary.vertexTimestamps && binary.vertexTimestamps.length >= totalVerts
+          ? binary.vertexTimestamps
+          : synthesizeVertexTimesMemo(binary);
+      attributes.instanceVertexTime = { value: vertexTimes, size: 1 };
+      // The far end of each segment, on the idle `instanceEndTime` slot — what
+      // lets the trail glide across a segment instead of stepping vertex to
+      // vertex (module docstring). Only where the layer isn't using that slot
+      // for real feature bounds: `usesSegmentVertexTimes()` and
+      // `timeBoundsForSublayer()` are mutually exclusive by contract.
+      if (this.usesSegmentVertexTimes()) {
+        attributes.instanceEndTime = {
+          value: nextVertexTimesMemo(binary, vertexTimes),
+          size: 1,
+        };
+      }
     }
 
     // Property-driven categorical color — playhead-INDEPENDENT, so it only
@@ -1863,6 +1953,14 @@ export class AnimatedTripsLayer<
         getInstanceStartTime: timeBounds.start,
         getInstanceEndTime: timeBounds.end,
       }),
+      // Tells the shader that `instanceEndTime` holds the NEXT VERTEX's time
+      // rather than the feature's end, which arms the per-segment interpolation
+      // (module docstring). Gated on the tile actually having baked the buffer,
+      // so a tile that fell through the attribute path renders as before rather
+      // than interpolating against the NEVER_ENDS constant.
+      segmentTime:
+        this.usesSegmentVertexTimes() &&
+        !!prepared.data.attributes.instanceEndTime,
 
       // TileLayer convention: the source tile rides on the sublayer so the
       // base getPickingInfo can enrich info.tile / decode the picked trip.

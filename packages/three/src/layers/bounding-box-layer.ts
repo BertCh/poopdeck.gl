@@ -34,7 +34,7 @@ import {
 } from './box-tracks.js';
 import { writeBoxEdges, FLOATS_PER_BOX } from '../geometry/box-edges.js';
 import type { Projection } from '../projection/local-enu.js';
-import type { RGBA } from '../lib/color.js';
+import { srgbToLinear, type RGBA } from '../lib/color.js';
 import type { STTPickable, PickBox } from '../lib/box-pick.js';
 
 export interface STTBoundingBoxLayerOptions {
@@ -245,11 +245,14 @@ export class STTBoundingBoxLayer extends BaseSTTLayer implements STTPickable {
         s.width * ss,
         s.height * ss,
       );
-      // Fade premultiplied into RGB (LineBasicMaterial has no per-vertex alpha).
+      // Fade premultiplied into RGB (LineBasicMaterial has no per-vertex alpha),
+      // then sRGB→linear once per box — a classic `vertexColors` material has no
+      // colour node to convert in, and the faded value IS what should land on
+      // screen (see `srgbToLinear`).
       const a = s.alpha;
-      const r = (s.track.color[0] / 255) * a;
-      const g = (s.track.color[1] / 255) * a;
-      const b = (s.track.color[2] / 255) * a;
+      const r = srgbToLinear((s.track.color[0] / 255) * a);
+      const g = srgbToLinear((s.track.color[1] / 255) * a);
+      const b = srgbToLinear((s.track.color[2] / 255) * a);
       for (let v = start; v < o; v += 3) {
         col[v] = r;
         col[v + 1] = g;
@@ -298,9 +301,9 @@ export class STTBoundingBoxLayer extends BaseSTTLayer implements STTPickable {
       pos[o + 3] = cx + c * len;
       pos[o + 4] = cy + sn * len;
       pos[o + 5] = z;
-      const r = (vc[0] / 255) * s.alpha;
-      const g = (vc[1] / 255) * s.alpha;
-      const b = (vc[2] / 255) * s.alpha;
+      const r = srgbToLinear((vc[0] / 255) * s.alpha);
+      const g = srgbToLinear((vc[1] / 255) * s.alpha);
+      const b = srgbToLinear((vc[2] / 255) * s.alpha);
       for (let k = 0; k < 6; k += 3) {
         col[o + k] = r;
         col[o + k + 1] = g;

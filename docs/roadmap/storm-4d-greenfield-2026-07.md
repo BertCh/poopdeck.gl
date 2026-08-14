@@ -457,10 +457,9 @@ between `dbz_level` and `alt_band` in place.
 
 ### 10.5 Open
 
-- `storm4d-isolines` is **local-only** (`LOCAL_ONLY_DATASETS`) until r2-sync
-  lands it — it is the composite's governor, so an un-gated deploy 404-stalls
-  the whole demo. Rides the fleet republish (**B2** in the
-  [roadmap README](./README.md)); the gate is holding correctly meanwhile.
+- `storm4d-isolines` is **synced and un-gated** as of 2026-07-31 (it was
+  local-only until then because it is the composite's governor, so an un-gated
+  deploy would 404-stall the whole demo — the gate held correctly meanwhile).
 - Browser verify (aesthetics: sheet density, whether the cloud-top canopy fights
   the thin lines, the fade timing at 288× playback) — part of **L2**.
 - Counted out for v1: **velocity iso-lines**. Contouring dealiased velocity on
@@ -608,9 +607,10 @@ per-bucket column then and coarsen if it overshoots.
 
 ### 11.5 Open
 
-- `storm4d-volume` was rebuilt LOCALLY with the new ladder. R2 republish rides
-  the fleet republish (**B2** in the [roadmap README](./README.md)) — the
-  archive on R2 still carries the old, temporally incoherent pyramid.
+- `storm4d-volume` was rebuilt with the new ladder and **is live on R2** as of
+  the 2026-07-31 republish. What is still open is the sibling: `mrms_volume.py`
+  keeps the pre-fix cell sizes (§11.4), so `mrms-storm3d-volume` carries the same
+  defect until its next rebuild.
 - Browser verify (aesthetics): county outline weight against the basemap,
   whether the wireframe cages read as structure or as clutter at 288×
   playback, and whether z8 now looks like the storm rather than a sample.

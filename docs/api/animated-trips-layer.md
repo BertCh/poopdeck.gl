@@ -119,23 +119,40 @@ The `widthMaxPixels` cap is the one that bites: a caller who switches to
 `widthUnits: 'meters'` and scales up silently clamps at 10 px. That combination
 warns once.
 
-## Known parity gap: per-segment trail time
+## Per-segment trail time
 
 Upstream `TripsLayer` registers its `timestamps` attribute with **two** shader
 views of the same buffer (`instanceTimestamps {vertexOffset: 0}` and
 `instanceNextTimestamps {vertexOffset: 1}`) and interpolates the trail time
-along each segment quad. STT's `TimeFilterExtension` registers **one** view
-(`instanceVertexTime`), so each segment instance reads only its start vertex's
-time and the alpha is constant across the quad: the trail head advances one
-whole segment at a time and the fade is a staircase, not a glide. On sparse
-geometry (bridges, highways, coarse-sampled trips) that reads as popping.
+along each segment quad. Without the second view, a segment instance reads only
+its start vertex's time, the alpha is constant across the quad, and the head
+advances one whole segment at a time — a staircase, not a glide. On sparse
+geometry (bridges, highways, coarse-sampled trips) that reads as popping, and
+when `trailLength` is shorter than the gap between shape points a trip goes
+fully dark between vertices.
 
-Closing it costs one more vertex-attribute slot — a second `in` declaration
-gets its own slot even though it shares the GL buffer — and the WebGL2 budget
-has none free (`NoPickingPathLayer` 12 + `TimeFilterExtension` 3 = 15). It is
-**deferred on those grounds**, which is precisely why
-[`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md) exists: its dot is a
-CPU-interpolated position, so it glides.
+STT gets the interpolation **without** a second attribute. The WebGL2 budget has
+no slot free (`NoPickingPathLayer` 12 + `TimeFilterExtension` 3 +
+`CategoryColorExtension` 1 = 16, the guaranteed floor), so instead the layer
+re-points a slot it already owns: `instanceEndTime` is dead weight in trail mode
+— the trail branch never reads it — so it is loaded with the **next vertex's**
+time and `TimeFilterExtension` interpolates between the two. The trail fade then
+runs per **fragment** rather than per segment, which is what makes it
+continuous. Window-mode users of the same extension (notably
+`FlowCorridorLayer`, which feeds real feature bounds through those attributes)
+opt out and are unaffected.
+
+Two consequences worth knowing:
+
+- **Size `trailLength` above the archive's vertex spacing.** The interpolation
+  removes the blinking, but a trail shorter than one segment is still just a
+  short dash.
+- Off-trail segments are now collapsed in the **vertex** stage (they can be:
+  visibility is decided from both endpoints), so a long trail over a dense tile
+  no longer pays fragment cost for the parts of the route that are dark.
+
+[`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md) remains the layer for
+a "one dot per vehicle" read; it is no longer the only way to avoid popping.
 
 ## Tile loading window
 

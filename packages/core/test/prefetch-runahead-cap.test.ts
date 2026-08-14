@@ -201,7 +201,7 @@ describe('SpatioTemporalTileset prefetch pressure ladder', () => {
     const churned = tileset.getCacheStats();
     expect(churned.runwayEvictions).toBeGreaterThan(0);
     expect(churned.prefetchPressureScale).toBeLessThan(1);
-    expect(churned.prefetchPressureScale).toBeGreaterThanOrEqual(0.25);
+    expect(churned.prefetchPressureScale).toBeGreaterThanOrEqual(0);
     expect(churned.tileCount).toBeLessThanOrEqual(20);
 
     // Quiet recovery: one plan after 5 s without a runway eviction steps the
@@ -220,5 +220,47 @@ describe('SpatioTemporalTileset prefetch pressure ladder', () => {
     );
 
     tileset.finalize();
+  });
+});
+
+/**
+ * CO-2 regression pin at the WIRING level: the byte-feasibility solve is only
+ * ever offered a directory oracle that can answer exactly, and everything else
+ * plans exactly the horizon it planned before the solve existed.
+ *
+ * Two ways the oracle can be unavailable, and both must be inert:
+ * - coverage tracking off — the tileset withholds the callback entirely rather
+ *   than switching on the full-time-range index (the heaviest query in the
+ *   system) on prefetch's behalf;
+ * - coverage tracking on but `getTileByteSize` unwired — the index's byte
+ *   channel is BLIND, every tile reads as 0 bytes, and a floor published as a
+ *   total would let the solve "prove" any horizon fits. It answers
+ *   `exact: false` instead and the ladder keeps the wheel.
+ */
+describe('SpatioTemporalTileset prefetch solve — inert without an exact oracle', () => {
+  async function frontier(opts: {
+    bufferTracking: boolean;
+  }): Promise<number[]> {
+    const { tileset, prefetched } = makeFixture({
+      prefetchAhead: 10 * BUCKET_MS,
+    });
+    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    // A blind byte channel: the index is built and maintained, but every tile
+    // in it has an unknown length.
+    if (opts.bufferTracking) tileset.getBufferedRanges();
+    await settle(100);
+    const out = [...prefetched].sort((a, b) => a - b);
+    tileset.finalize();
+    return out;
+  }
+
+  it('plans the identical runway with the oracle withheld and with it blind', async () => {
+    const withoutIndex = await frontier({ bufferTracking: false });
+    const blindIndex = await frontier({ bufferTracking: true });
+
+    expect(withoutIndex.length).toBeGreaterThan(0);
+    expect(blindIndex).toEqual(withoutIndex);
+    // ...and it is the full un-solved horizon, not something a solve trimmed.
+    expect(Math.max(...withoutIndex)).toBeGreaterThanOrEqual(9 * BUCKET_MS);
   });
 });

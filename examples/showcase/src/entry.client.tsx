@@ -1,23 +1,31 @@
 import { startTransition, StrictMode } from 'react';
 import { hydrateRoot } from 'react-dom/client';
 import { HydratedRouter } from 'react-router/dom';
-import { datasets } from './datasets';
-
 // Expose a JSON-safe dataset manifest on `window` so the render-test runner
 // (tools/render-test) can enumerate every demo without re-parsing the TS
 // source. Only includes fields the runner needs; deliberately drops
 // React/function props so the object is structured-clone-safe. Lives in the
 // browser entry so it never runs during the Node prerender pass.
-(window as unknown as { __STT_DATASETS?: unknown }).__STT_DATASETS =
-  datasets.map((d) => ({
-    id: d.id,
-    name: d.name,
-    type: d.type,
-    url: d.url,
-    timeRange: d.timeRange,
-    targetPlaybackSeconds: d.targetPlaybackSeconds,
-    useGlobe: d.useGlobe ?? false,
-  }));
+// Production visitors do not need this 5k-line catalog in the global entry.
+// The render harness opts in with `?render-test=1`, which keeps the catalog in
+// a separate async chunk and out of every route's modulepreload list.
+if (
+  import.meta.env.DEV ||
+  new URLSearchParams(window.location.search).has('render-test')
+) {
+  void import('./datasets').then(({ datasets }) => {
+    (window as unknown as { __STT_DATASETS?: unknown }).__STT_DATASETS =
+      datasets.map((d) => ({
+        id: d.id,
+        name: d.name,
+        type: d.type,
+        url: d.url,
+        timeRange: d.timeRange,
+        targetPlaybackSeconds: d.targetPlaybackSeconds,
+        useGlobe: d.useGlobe ?? false,
+      }));
+  });
+}
 
 // Silence the known non-fatal luma.gl link warning that fires on deck.gl
 // ≤ 9.3 for the per-tile sublayer demos:

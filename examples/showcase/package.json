@@ -6,7 +6,8 @@
   "description": "Interactive showcase for SpatioTemporal Tiles",
   "scripts": {
     "dev": "react-router dev",
-    "build": "NODE_OPTIONS=--max-old-space-size=6144 react-router typegen && NODE_OPTIONS=--max-old-space-size=6144 tsc --noEmit && NODE_OPTIONS=--max-old-space-size=6144 react-router build",
+    "build": "NODE_OPTIONS=--max-old-space-size=6144 react-router typegen && NODE_OPTIONS=--max-old-space-size=6144 tsc --noEmit && NODE_OPTIONS=--max-old-space-size=6144 react-router build && node scripts/check-bundle-size.mjs",
+    "perf:budget": "node scripts/check-bundle-size.mjs",
     "preview": "vite preview --outDir build/client",
     "test": "vitest run",
     "typecheck": "react-router typegen && tsc --noEmit",

@@ -76,6 +76,7 @@ import { warnOnce } from '../../lib/log.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type { WeightAccessorValue } from '../../lib/accessor-alias.js';
 import { buildConsolidatedChannelData } from './heatmap-layer.js';
+import { tileKey } from '@poopdeck.gl/core';
 import type { Tile } from '@poopdeck.gl/core';
 
 /**
@@ -297,6 +298,23 @@ const defaultProps: DefaultProps<AnimatedHexagonLayerProps> = {
  * `_subLayerProps: { hexbin: { type, ...props } }` swaps the sublayer class /
  * overrides sublayer props (deck's CompositeLayer contract).
  */
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link AnimatedHexagonLayer.hexagonCaches}.
+ */
+interface HexagonCaches {
+  consolidated: { key: string; data: HexagonData } | null;
+  window: { key: string; data: HexagonData } | null;
+  lastFilterUpdateWall: number;
+}
+
+const HEXAGON_CACHE_SLOT = '_sttHexagonCaches';
+
+function freshHexagonCaches(): HexagonCaches {
+  return { consolidated: null, window: null, lastFilterUpdateWall: 0 };
+}
+
 export class AnimatedHexagonLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<
@@ -309,18 +327,51 @@ export class AnimatedHexagonLayer<
   /** Shared filter extension across the sublayer. */
   private _dataFilter = new DataFilterExtension({ filterSize: 1 });
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, every unmemoized
+   * `new AnimatedHexagonLayer({...})` in a React render re-packed every visible
+   * tile's consolidated buffers from scratch. `AnimatedTripsLayer` fixed this
+   * first. (`_dataFilter` stays a field on purpose: it is stateless config, and
+   * a fresh instance compares equal under `LayerExtension.equals`.)
+   */
+  private get hexagonCaches(): HexagonCaches {
+    return this.stateSlot(HEXAGON_CACHE_SLOT, freshHexagonCaches);
+  }
+
+  // The accessors below keep the historical field NAMES while the storage lives
+  // on `state`.
+
   /** Consolidated binary buffers, keyed for cache reuse across renders. */
-  private _cache: { key: string; data: HexagonData } | null = null;
+  private get _cache(): { key: string; data: HexagonData } | null {
+    return this.hexagonCaches.consolidated;
+  }
+  private set _cache(value: { key: string; data: HexagonData } | null) {
+    this.hexagonCaches.consolidated = value;
+  }
 
   /**
    * Per-WINDOW `data` wrapper (fresh attribute wrappers over the cached
    * consolidated buffers). Keyed by (tile set + window center) so a sliding
    * window hands the aggregator a re-bindable input — see {@link _windowData}.
    */
-  private _windowCache: { key: string; data: HexagonData } | null = null;
+  private get _windowCache(): { key: string; data: HexagonData } | null {
+    return this.hexagonCaches.window;
+  }
+  private set _windowCache(value: { key: string; data: HexagonData } | null) {
+    this.hexagonCaches.window = value;
+  }
 
   /** Wall-clock floor for the filterRange (re-aggregation) cadence. */
-  private _lastFilterUpdateWall = 0;
+  private get _lastFilterUpdateWall(): number {
+    return this.hexagonCaches.lastFilterUpdateWall;
+  }
+  private set _lastFilterUpdateWall(value: number) {
+    this.hexagonCaches.lastFilterUpdateWall = value;
+  }
 
   finalizeState(context: LayerContext): void {
     this._cache = null;
@@ -394,7 +445,15 @@ export class AnimatedHexagonLayer<
     if (!tiles || tiles.length === 0) return [];
 
     const layerTimeOffset = pickLayerTimeOffset(tiles);
-    const tileSetKey = tiles.map(tileKey).sort().join('|');
+    // Canonical `tileKey` (folds in the temporal-LOD `bucketMs`), not the
+    // local `${z}/${x}/${y}/${t}` shadow this file used to define. That
+    // shadow made a scrub-preview tile and its base twin share one key, so
+    // the consolidated-data cache gate below returned the PREVIOUS tier's
+    // points — a payload covering a different span of time.
+    const tileSetKey = tiles
+      .map((tile) => tileKey(tile.id))
+      .sort()
+      .join('|');
 
     const consolidated = this._getConsolidatedData(
       tiles,
@@ -487,8 +546,22 @@ export class AnimatedHexagonLayer<
       gpuAggregation,
       // Auto-ranged domain callbacks — the only handle on the DEFAULT
       // (`colorDomain: null`) domain, which the aggregator derives per window.
-      onSetColorDomain: this.props.onSetColorDomain ?? undefined,
-      onSetElevationDomain: this.props.onSetElevationDomain ?? undefined,
+      //
+      // SPREAD-GUARDED, not `?? undefined`. Both props default to `null`, and an
+      // explicitly-`undefined` key is an OWN property that SHADOWS the
+      // prototype-chained defaultProps deck built (create-props.ts copies with
+      // `for (const key in props)`), so `onSetColorDomain: undefined` beats
+      // HexagonLayer's `onSetColorDomain: noop` default. deck then calls it
+      // unguarded from `_onAggregationUpdate` and the first aggregation pass
+      // throws `props.onSetColorDomain is not a function` inside the draw pass —
+      // in the DEFAULT configuration, i.e. for every caller who does not supply
+      // a domain callback. Omitting the key entirely is the only safe form.
+      ...(this.props.onSetColorDomain
+        ? { onSetColorDomain: this.props.onSetColorDomain }
+        : {}),
+      ...(this.props.onSetElevationDomain
+        ? { onSetElevationDomain: this.props.onSetElevationDomain }
+        : {}),
       // The DataFilterExtension is what animates the hexbin (filterRange); user
       // extensions from the top-level prop are appended.
       extensions: this.composeExtensions([this._dataFilter]),
@@ -601,11 +674,6 @@ export class AnimatedHexagonLayer<
     this._cache = { key, data };
     return data;
   }
-}
-
-function tileKey(tile: Tile): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}`;
 }
 
 function pickLayerTimeOffset(tiles: Tile[]): number {

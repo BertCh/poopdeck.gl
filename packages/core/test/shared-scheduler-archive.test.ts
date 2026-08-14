@@ -13,7 +13,7 @@
  * scheduler's slot allocation precisely (no real timers, deterministic).
  */
 
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { STTArchive } from '../src/archive';
 import { crc32c } from '../src/crc32c';
 import { encodeDirectory } from '../src/directory';
@@ -24,7 +24,9 @@ import {
 } from '../src/shared-scheduler';
 import {
   OBJECT_MAGIC_LEN,
+  directoryKey,
   packObject,
+  packKey,
   directoryObject,
   packedFromGolden,
 } from './helpers/packed-fixture';
@@ -69,8 +71,11 @@ function makeDataset(
   const packRefs: Array<{ key: string; length: number }> = [];
   const entries: any[] = [];
   for (let i = 0; i < k; i++) {
-    const key = `packs/p${i}.sttp`;
-    const { bytes: packBytes } = packObject([blob]);
+    const { bytes: basePack } = packObject([blob]);
+    const packBytes = new Uint8Array(basePack.length + 1);
+    packBytes.set(basePack);
+    packBytes[basePack.length] = i;
+    const key = packKey(packBytes);
     objects.set(key, packBytes);
     packRefs.push({ key, length: packBytes.length });
     entries.push({
@@ -92,15 +97,17 @@ function makeDataset(
   }
   const dir = encodeDirectory(entries);
   const dirObject = directoryObject(dir);
-  objects.set('index/dir.sttd', dirObject);
+  const dKey = directoryKey(dirObject);
+  objects.set(dKey, dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: [{ id: 0, kind: 'raw' }],
     compression: 'zstd',
     directory: {
-      key: 'index/dir.sttd',
+      key: dKey,
       length: dirObject.length,
-      directoryVersion: 5,
+      directoryVersion: 6,
     },
     packs: packRefs,
     metadata: meta,
@@ -689,5 +696,146 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const stats = scheduler.getStats();
     expect(stats.active).toBe(0);
     expect(stats.queued).toBe(0);
+  });
+
+  // ─── M6 / BH-1: the archive prices every group in BYTES ────────────────────
+  //
+  // A coalesced range's size is known EXACTLY at enqueue (`end - start + 1`),
+  // so byte-metered fair share needs no estimate anywhere. These pin the
+  // producer half of the seam: what the archive actually hands the scheduler.
+
+  /**
+   * Build a dataset whose `n` blobs live in ONE pack object, contiguous, so the
+   * default coalesce gap fuses them into a single range group.
+   */
+  function makeSinglePackDataset(
+    n: number,
+    blob: Uint8Array,
+    meta: any,
+    e: any,
+  ): { objects: Map<string, Uint8Array>; groupBytes: number } {
+    const { bytes: packBytes, offsets } = packObject(
+      Array.from({ length: n }, () => blob),
+    );
+    const objects = new Map<string, Uint8Array>();
+    const pKey = packKey(packBytes);
+    objects.set(pKey, packBytes);
+    const entries = offsets.map((offset, i) => ({
+      zoom: e.zoom,
+      x: e.x,
+      y: e.y,
+      timeStart: i,
+      timeEnd: i,
+      packId: 0,
+      offset,
+      length: blob.length,
+      uncompressedSize: e.uncompressedSize,
+      featureCount: e.featureCount,
+      hilbert: i,
+      crc32c: crc32c(blob),
+      temporalBucketMs: e.temporalBucketMs,
+    }));
+    const dirObject = directoryObject(encodeDirectory(entries));
+    const dKey = directoryKey(dirObject);
+    objects.set(dKey, dirObject);
+    objects.set(
+      'manifest.json',
+      new TextEncoder().encode(
+        JSON.stringify({
+          format: 'stt-packed',
+          formatVersion: 3,
+          variants: [{ id: 0, kind: 'raw' }],
+          compression: 'zstd',
+          directory: {
+            key: dKey,
+            length: dirObject.length,
+            directoryVersion: 6,
+          },
+          packs: [{ key: pKey, length: packBytes.length }],
+          metadata: meta,
+        }),
+      ),
+    );
+    const last = offsets[offsets.length - 1] + blob.length - 1;
+    return { objects, groupBytes: last - offsets[0] + 1 };
+  }
+
+  it('prices an UNCOALESCED group at exactly its blob length', async () => {
+    const { blob, meta, e } = await fixtureBlobAndMeta();
+    const K = 4;
+    const url = 'mem://cost1/manifest.json';
+    const obj = makeDataset(K, blob, meta, e);
+    const archive = new STTArchive({
+      url,
+      fetch: memFetch(obj, url),
+      coalesceGapBytes: 0, // one blob per pack ⇒ one group per tile
+    });
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
+    const spy = vi.spyOn(getSharedScheduler(), 'scheduleRequest');
+    const tiles = await archive.getTiles(ids);
+    expect(tiles.every((t) => t !== null)).toBe(true);
+
+    const costs = spy.mock.calls.map((c) => (c[0] as any).costBytes);
+    expect(costs).toHaveLength(K);
+    for (const cost of costs) expect(cost).toBe(blob.length);
+    spy.mockRestore();
+  });
+
+  it('prices a COALESCED group at end − start + 1 (the bytes the wire carries)', async () => {
+    const { blob, meta, e } = await fixtureBlobAndMeta();
+    const N = 3;
+    const { objects, groupBytes } = makeSinglePackDataset(N, blob, meta, e);
+    const url = 'mem://cost2/manifest.json';
+    const archive = new STTArchive({ url, fetch: memFetch(objects, url) });
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
+    const spy = vi.spyOn(getSharedScheduler(), 'scheduleRequest');
+    const tiles = await archive.getTiles(ids);
+    expect(tiles.every((t) => t !== null)).toBe(true);
+
+    const costs = spy.mock.calls.map((c) => (c[0] as any).costBytes);
+    // One fused group covering all three blobs — priced as the whole range, not
+    // as one tile and not as a flat quantum.
+    expect(costs).toEqual([groupBytes]);
+    expect(groupBytes).toBeGreaterThan(blob.length);
+    spy.mockRestore();
+  });
+
+  it('keeps costBytes independent of the probe (a decision field, not a label)', async () => {
+    // `bytes` is OBSERVATION ONLY and is only computed when a probe bag is
+    // installed; `costBytes` must be there either way, or dispatch order would
+    // depend on whether someone is watching.
+    const { blob, meta, e } = await fixtureBlobAndMeta();
+    const url = 'mem://cost3/manifest.json';
+    const obj = makeDataset(2, blob, meta, e);
+    const archive = new STTArchive({
+      url,
+      fetch: memFetch(obj, url),
+      coalesceGapBytes: 0,
+    });
+    const ids = (await archive.getIndex()).tiles.map((t) => ({
+      z: t.zoom,
+      x: t.x,
+      y: t.y,
+      t: t.timeStart,
+    }));
+    expect((globalThis as any).__sttProbe).toBeUndefined(); // probe OFF
+    const spy = vi.spyOn(getSharedScheduler(), 'scheduleRequest');
+    await archive.getTiles(ids);
+    for (const call of spy.mock.calls) {
+      const opts = call[0] as any;
+      expect(opts.costBytes).toBe(blob.length);
+      expect(opts.bytes).toBeUndefined(); // the probe label really is absent
+    }
+    spy.mockRestore();
   });
 });

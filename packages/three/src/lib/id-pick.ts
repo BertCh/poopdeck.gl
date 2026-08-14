@@ -29,7 +29,7 @@
  */
 
 import type { BinaryFeatures, TileId } from '@poopdeck.gl/core';
-import { getFeatureProperties } from '@poopdeck.gl/core';
+import { getFeatureProperties, tileKey, parseTileKey } from '@poopdeck.gl/core';
 import type { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { GpuPicker } from './gpu-pick.js';
 import type { STTPickInfoBase } from './box-pick.js';
@@ -111,27 +111,25 @@ export function isIdPickable(layer: unknown): layer is STTIdPickable {
 }
 
 /**
- * Stable key for a source `(tile, layer)`: `z/x/y/t::layerName` — the identity a
+ * Stable key for a source `(tile, layer)`: the canonical {@link tileKey}
+ * (`z/x/y/t#variant`, plus `@<bucketMs>` on a temporal-LOD tile) then
+ * `::layerName` — the identity a
  * merged-buffer provenance records per instance. Shared by every id-pickable
  * builder so keys line up with {@link parseIdTileKey}. (Mirrors
  * `point-buffers.ts`'s `pointTileKey`, which predates this module.)
  */
 export function featureTileKey(id: TileId, layerName: string): string {
-  return `${id.z}/${id.x}/${id.y}/${id.t}::${layerName}`;
+  return `${tileKey(id)}::${layerName}`;
 }
 
 /**
  * Parse a {@link featureTileKey} back into its {@link TileId}, or `undefined` if
  * the shape is unexpected (so a malformed key never fabricates a bogus tile).
  */
-export function parseIdTileKey(tileKey: string): TileId | undefined {
-  const sep = tileKey.indexOf('::');
-  const coords = sep >= 0 ? tileKey.slice(0, sep) : tileKey;
-  const p = coords.split('/');
-  if (p.length !== 4) return undefined;
-  const [z, x, y, t] = p.map(Number);
-  if (![z, x, y, t].every((n) => Number.isFinite(n))) return undefined;
-  return { z, x, y, t };
+export function parseIdTileKey(key: string): TileId | undefined {
+  // Delegates to core so the `@<bucketMs>` suffix the canonical key appends for
+  // temporal-LOD tiles round-trips instead of parsing as NaN.
+  return parseTileKey(key);
 }
 
 export interface ResolveIdPickParams {

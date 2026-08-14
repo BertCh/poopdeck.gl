@@ -64,8 +64,12 @@ const OPTS = {
 // 2,3,4). total = 5. A carries BOTH categorical columns the two seams read back
 // (`seg_class` for provenance, `cls` for hover); B carries both numeric columns
 // (`mag` for provenance, `intensity` for hover) plus explicit featureIds.
-const idA: TileId = { z: 16, x: 5, y: 6, t: 0 };
-const idB: TileId = { z: 16, x: 7, y: 8, t: 500 };
+// `variantId` is spelled out because these ids are BOTH inputs to
+// `pointTileKey` and the expected output of parsing it back: the canonical key
+// always carries a variant (raw = 0), so a parse reports one. Stating it here
+// keeps every `toEqual(idA)` below a whole-object comparison.
+const idA: TileId = { z: 16, x: 5, y: 6, t: 0, variantId: 0 };
+const idB: TileId = { z: 16, x: 7, y: 8, t: 500, variantId: 0 };
 const tileA = pointTile(
   idA,
   'lidar',

@@ -60,6 +60,11 @@ function drawUniforms(props: Record<string, unknown>, id = 'root') {
     id,
     root: undefined as any,
     props,
+    // `draw()` reads the model set to decide whether a partial uniform push is
+    // safe (a freshly-rebuilt model has to be handed the whole block). A stub
+    // with no models never caches, so every call here takes the full-push path
+    // and captures the complete uniform block — which is what these tests read.
+    getModels: () => [],
     setShaderModuleProps: (u: any) => {
       captured = u;
     },
@@ -286,6 +291,7 @@ describe('assertRelTimeInRange warn key is per-layer, not global', () => {
             id: tileId,
             root,
             props: { currentTime: TILE_OFFSET, timeOffset: 0 },
+            getModels: () => [],
             setShaderModuleProps: () => {},
           },
           {},

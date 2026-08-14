@@ -3,22 +3,45 @@
 // Copyright (c) @poopdeck.gl/core contributors
 
 /**
- * STT shader codegen — the scalar time-filter alpha authored ONCE as an
- * expression AST and machine-emitted to each backend's shading dialect, so the
- * GPU math has no hand-maintained copy to drift (see
- * docs/roadmap/renderer-architecture.md). `evalExpr` is the
- * CPU oracle and MUST equal `./time-filter`'s `timeFilterAlpha` numerically (a
- * conformance test pins this); `emitGLSL100` / `emitGLSL300` are pure string
- * emitters that produce deck's inject snippet and maplibre's GLSL; `emitTSL`
- * lives in `@poopdeck.gl/three` (it needs `three/tsl`) and consumes the same
- * `Expr` data.
+ * The SECOND ORACLE for the scalar time-filter alpha.
+ *
+ * `./time-filter`'s `timeFilterAlpha` is THE oracle: the single framework-free
+ * definition of the alpha math, written with `if`/early-return control flow.
+ * This module states the same four mode formulas a second time, independently
+ * derived, as a BRANCHLESS expression AST (`ALPHA_EXPR`) over a frozen op-set,
+ * plus a CPU evaluator (`evalExpr`). The two must agree numerically — a 2000-
+ * sample randomized sweep in `../../test/shader-codegen.test.ts` pins them.
+ *
+ * WHY a second implementation rather than one: two independent derivations
+ * disagree where the SPECIFICATION is ambiguous, which a single implementation
+ * can never reveal. `packages/maplibre/test/time-modes.test.ts` documents two
+ * real out-of-contract inputs (`wakeLength <= 0`, negative `fadeIn`) found
+ * exactly this way and pins them explicitly. Every renderer backend hand-writes
+ * its own shader in its own dialect and is held to BOTH oracles by a conformance
+ * test — see docs/spec/render-spec.json for the per-backend obligations, and
+ * docs/api/render-kernel.md for the architecture.
+ *
+ * NOT a shader compiler, and no longer pretends to be one. This module emits no
+ * GLSL at all: the `emitGLSL300` string emitter and its sole caller,
+ * `@poopdeck.gl/cesium`'s `timeFilterAlphaGlsl`, were removed at the 0.6.0 cut
+ * because no shipped shader was ever generated from them (`emitGLSL100` had
+ * gone the same way earlier, for the same reason). Every backend hand-writes
+ * its shader in its own dialect. What survives is the load-bearing half — the
+ * AST and `evalExpr` — because its VALUE, not its text, is what the conformance
+ * tests compare against each backend.
+ *
+ * Re-adding an emitter is a small, mechanical job (walk the frozen op-set,
+ * emitting `step`/`min`/`max`/`clamp`/ternary, which is valid in GLSL ES 1.00
+ * and 3.00 alike). Do it when something actually compiles the output — not
+ * before, since an emitter nothing calls cannot be wrong in any way a test
+ * would notice.
  *
  * SCOPE: LINEAR alpha modes only — `window`, `wake`, `cumulative`, `trail`. The
  * surfel/splat temporal-Gaussian weight (`exp(dt²·-0.5)`) and radial falloff
  * (`exp(-falloff·r²)`), plus the `wakeSizeScale` VERTEX-stage multiplier, use
- * transcendentals OUTSIDE this frozen op-set and are DELIBERATELY excluded — they
- * stay per-backend, pinned to the CPU oracle by parity tests. Adding an op to the
- * set is gated on all three emitters compiling it.
+ * transcendentals OUTSIDE this frozen op-set and are DELIBERATELY excluded —
+ * they stay per-backend, pinned to the CPU oracle by parity tests. Widening the
+ * op-set requires the spec edit + the conformance-obligation gate it documents.
  *
  * The frozen op-set: uniform, attr, const, add, sub, mul, div, min, max, step,
  * clamp01, select. `select(c,t,f)` is `c != 0 ? t : f` and is emitted as a GLSL
@@ -166,57 +189,4 @@ export function evalExpr(e: Expr, env: Record<string, number>): number {
     case 'select':
       return evalExpr(e.c, env) !== 0 ? evalExpr(e.t, env) : evalExpr(e.f, env);
   }
-}
-
-// ─── GLSL emitters ─────────────────────────────────────────────────────────────
-
-/** Format a JS number as a GLSL float literal (always with a decimal point). */
-function glslFloat(v: number): string {
-  if (!Number.isFinite(v)) throw new Error(`cannot emit non-finite const ${v}`);
-  return Number.isInteger(v) ? `${v}.0` : String(v);
-}
-
-/**
- * Emit a GLSL expression string for an {@link Expr}. `nameMap` optionally rewrites
- * the canonical uniform/attr identifiers to the host shader's actual variable
- * names. The emitted subset (step/min/max/clamp/ternary) is valid in BOTH GLSL ES
- * 1.00 and 3.00, so {@link emitGLSL100} and {@link emitGLSL300} share it today;
- * they stay separate entry points so a future op can diverge per dialect.
- */
-function emitGLSLExpr(e: Expr, nameMap?: Record<string, string>): string {
-  const name = (n: string) => nameMap?.[n] ?? n;
-  const go = (x: Expr): string => emitGLSLExpr(x, nameMap);
-  switch (e.op) {
-    case 'uniform':
-    case 'attr':
-      return name(e.name);
-    case 'const':
-      return glslFloat(e.value);
-    case 'add':
-      return `(${go(e.a)} + ${go(e.b)})`;
-    case 'sub':
-      return `(${go(e.a)} - ${go(e.b)})`;
-    case 'mul':
-      return `(${go(e.a)} * ${go(e.b)})`;
-    case 'div':
-      return `(${go(e.a)} / ${go(e.b)})`;
-    case 'min':
-      return `min(${go(e.a)}, ${go(e.b)})`;
-    case 'max':
-      return `max(${go(e.a)}, ${go(e.b)})`;
-    case 'step':
-      return `step(${go(e.a)}, ${go(e.b)})`;
-    case 'clamp01':
-      return `clamp(${go(e.a)}, 0.0, 1.0)`;
-    case 'select':
-      return `((${go(e.c)}) != 0.0 ? ${go(e.t)} : ${go(e.f)})`;
-  }
-}
-
-export function emitGLSL300(e: Expr, nameMap?: Record<string, string>): string {
-  return emitGLSLExpr(e, nameMap);
-}
-
-export function emitGLSL100(e: Expr, nameMap?: Record<string, string>): string {
-  return emitGLSLExpr(e, nameMap);
 }

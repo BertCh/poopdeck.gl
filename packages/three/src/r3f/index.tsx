@@ -83,7 +83,11 @@ import {
 import { makeGround, type GroundOptions } from '../scene/ground.js';
 import { frameBox } from '../scene/camera.js';
 import { frameGlobe } from '../scene/globe-camera.js';
-import { viewStateToCamera, type ViewState } from '../projection/view-state.js';
+import {
+  updateCameraClip,
+  viewStateToCamera,
+  type ViewState,
+} from '../projection/view-state.js';
 import {
   isGlobeProjection,
   resolveCanvasProjection,
@@ -1356,6 +1360,12 @@ function CameraRig(props: {
   // Globe scenes orbit the earth centre with a per-anchor north up; every planar
   // projection (ENU, mercator) uses the flat Z-up ground rig below.
   const globe = isGlobeProjection(projection) ? projection : null;
+  // GEO rigs (web-mercator ground, globe) are framed by `viewStateToCamera`,
+  // whose near/far bracket the distance it framed AT — so they need re-bracketing
+  // as the controls dolly (see `updateCameraClip`). An ENU/AV scene is framed by
+  // `frameBox` against real layer bounds inside a tight distance clamp; leave it.
+  const syncClip =
+    projection.kind === 'mercator' || projection.kind === 'globe';
 
   // Z-up world — flat projections only. On the globe there is no single world-up;
   // `frameGlobe` sets `camera.up` to the anchor's north, so leave it be.
@@ -1376,7 +1386,17 @@ function CameraRig(props: {
       const controls = get().controls as {
         target: Vector3;
         update: () => void;
+        enabled?: boolean;
       } | null;
+
+      // Once framed, the controls own the camera and NOTHING else revisits the
+      // clip planes — so a wheel-out eventually pushes the ground past the far
+      // plane it was framed with. Re-bracket every frame on the geo rigs. Skipped
+      // while `<STTTiles3D globeControls>` drives navigation: it manages near/far
+      // itself, and disables these controls to say so.
+      if (framed.current && syncClip && controls?.enabled !== false) {
+        updateCameraClip(projection, camera);
+      }
 
       // Geo demos supply an explicit initial view state (lng/lat/zoom/pitch/bearing).
       // Place the camera via the projection-aware bridge — correct at web-mercator AND
@@ -1467,6 +1487,58 @@ function CameraRig(props: {
   });
 
   return null;
+}
+
+/**
+ * The flat-rig `MapControls`, with the tilt clamp AND (mercator scenes) the
+ * dolly clamps that hold the camera inside the map zoom range. Its own component
+ * because the zoom→distance conversion needs the LIVE viewport height and camera
+ * FOV, which only exist inside the Canvas — and must be recomputed on resize, or
+ * the clamp would encode the scale of a stale viewport.
+ *
+ * Why clamp at all: nothing else bounds the dolly. `MapControls` defaults to
+ * `maxDistance: Infinity`, so a scene could be wheeled out to zoom −5 while the
+ * maplibre basemap under it — whose own `minZoom` is 0 — silently ignored every
+ * `jumpTo` past its floor and froze. Past that point the data kept shrinking over
+ * a fixed basemap: same camera, two scales.
+ */
+function GroundControls(props: {
+  projection: Projection;
+  reducedMotion: boolean;
+  minZoom?: number;
+  maxZoom?: number;
+}): React.ReactElement {
+  const { projection, reducedMotion, minZoom, maxZoom } = props;
+  const camera = useThree((s) => s.camera) as PerspectiveCamera;
+  const height = useThree((s) => s.size.height);
+  const limits = React.useMemo(
+    () =>
+      groundControlLimits({
+        projection,
+        viewportHeight: height,
+        fovDeg: camera.fov,
+        minZoom,
+        maxZoom,
+      }),
+    [projection, height, camera.fov, minZoom, maxZoom],
+  );
+  return (
+    /* MapControls (not OrbitControls) so left-drag PANS across the ground plane —
+       a map-style gesture matching the deck cockpit's MapController — instead of
+       orbiting a point. Right-drag still rotates; wheel zooms. Panning is in the
+       XY plane because the camera up is Z.
+
+       `maxPolarAngle`: without it the default is π and a right-drag can swing the
+       camera THROUGH the ground and out the other side — at which point no camera
+       ray reaches the surface at all and tile selection has nothing to select
+       against. */
+    <MapControls
+      makeDefault
+      enableDamping={!reducedMotion}
+      dampingFactor={0.12}
+      {...limits}
+    />
+  );
 }
 
 // ─── WebGPU device disposal ─────────────────────────────────────────────────────
@@ -2137,6 +2209,18 @@ export interface STTCanvasProps {
    */
   initialViewState?: ViewState;
   /**
+   * Zoom-OUT floor for a flat web-mercator scene, as a map zoom. The camera
+   * cannot dolly past it. Defaults to {@link MIN_MERCATOR_ZOOM} (0) — where every
+   * basemap host stops, so a stacked basemap can always follow the camera.
+   * Raise it to keep a scene inside a tighter range. Ignored on ENU/globe scenes.
+   */
+  minZoom?: number;
+  /**
+   * Zoom-IN ceiling for a flat web-mercator scene, as a map zoom.
+   * @default {@link MAX_MERCATOR_ZOOM} (20 — deck's `MapState` ceiling)
+   */
+  maxZoom?: number;
+  /**
    * Device pixel ratio cap. Lower (e.g. 1) for fill-bound clouds on retina — the
    * single biggest perf lever. @default clamped device ratio [1, 2].
    */
@@ -2195,6 +2279,8 @@ export function STTCanvas(props: STTCanvasProps): React.ReactElement {
     pitchDeg,
     headingDeg,
     initialViewState,
+    minZoom,
+    maxZoom,
     pixelRatio,
     reducedMotion = false,
     atmosphere,
@@ -2307,19 +2393,11 @@ export function STTCanvas(props: STTCanvasProps): React.ReactElement {
               {...globeControlLimits(globe)}
             />
           ) : (
-            /* MapControls (not OrbitControls) so left-drag PANS across the ground
-               plane — a map-style gesture matching the deck cockpit's MapController
-               — instead of orbiting a point. Right-drag still rotates; wheel zooms.
-               Panning is in the XY plane because the camera up is Z. */
-            <MapControls
-              makeDefault
-              enableDamping={!reducedMotion}
-              dampingFactor={0.12}
-              /* Without this the default `maxPolarAngle` is π and a right-drag
-                 swings the camera THROUGH the ground and out the other side —
-                 at which point no camera ray reaches the surface at all and tile
-                 selection has nothing to select against. */
-              {...groundControlLimits()}
+            <GroundControls
+              projection={projection}
+              reducedMotion={reducedMotion}
+              minZoom={minZoom}
+              maxZoom={maxZoom}
             />
           )}
           <RenderPump />

@@ -11,8 +11,9 @@
  * ---------------
  * The archive (`STTArchive.getMetadata()`) already knows the facts the
  * frontend used to hand-type: the real `timeRange`, the native
- * `temporalBucketMs` timestep, the fitted `bounds`, the zoom span and a
- * build-time-measured `suggestedPlaybackSeconds`. Historically the showcase
+ * `temporalBucketMs` timestep, the fitted `bounds`, the zoom span and the
+ * build-time-measured `suggestedPlaybackSeconds` / `suggestedTimeWindowMs`
+ * style hints. Historically the showcase
  * re-declared those facts in `datasets.ts` and derived playback with TWO
  * divergent formulas (`calculateAnimationSpeed` ÷30 vs `buildDemoLayers` ÷60),
  * which silently drift from the archive and each other. This module pins the
@@ -65,8 +66,31 @@ export interface PlaybackMetadataInput {
   summaryTier?: { subBuckets?: number };
   /** Temporal LOD pyramid — only `bucketMs` per level is read. */
   temporalLod?: { bucketMs: number }[];
-  /** Build-time style hints — only `suggestedPlaybackSeconds` is read. */
-  styleHints?: { suggestedPlaybackSeconds?: number };
+  /**
+   * Build-time style hints. Only the two derived playback params are read:
+   * `suggestedPlaybackSeconds` (play-through duration) and
+   * `suggestedTimeWindowMs` (resident loader window). Both are DEFAULTS —
+   * the matching {@link PlaybackOverrides} field always beats them — and an
+   * absent/nonsensical value falls through to the pre-hint default, so an
+   * archive that carries neither resolves exactly as it did before hints
+   * existed.
+   *
+   * These are the CAMELCASE names, which is what `@poopdeck.gl/core`'s
+   * `parseStyleHints` produces from the writer's snake_case
+   * `style_hints` block. This resolver reads those two names and no others: it
+   * is deliberately NOT tolerant of the wire spellings
+   * (`suggested_time_window_ms`), because two accepted spellings of one field
+   * is two answers to one question. If a hint is not applying, the break is in
+   * the parser hop, not here.
+   *
+   * `suggestedTimeWindowMs` is usually ABSENT in practice — only `stt-build
+   * --derived-playback-params` emits it, and no published archive is built
+   * with the flag yet, so the bucket-derived default is still the live path.
+   */
+  styleHints?: {
+    suggestedPlaybackSeconds?: number;
+    suggestedTimeWindowMs?: number;
+  };
 }
 
 /**
@@ -77,7 +101,7 @@ export interface PlaybackMetadataInput {
 export interface PlaybackOverrides {
   /** Wall-clock seconds for one full play-through (beats `suggestedPlaybackSeconds`). */
   targetPlaybackSeconds?: number;
-  /** Resident/rolling loader window in ms (beats the bucket-derived default). */
+  /** Resident/rolling loader window in ms (beats the archive hint AND the bucket-derived default). */
   timeWindow?: number;
   /** Trip trail length in ms — passed through verbatim (never invented). */
   trailLength?: number;
@@ -296,10 +320,13 @@ export function deriveViewStateFromBounds(
  *    ?? {@link DEFAULT_TARGET_PLAYBACK_SECONDS}` (non-positive candidates are
  *    skipped so `baseSpeed` never goes infinite).
  *  - `baseSpeed = span / targetPlaybackSeconds / 1000` (sim-ms per wall-ms).
- *  - `timeWindow`: `overrides.timeWindow ?? min(temporalBucketMs *
- *    {@link DEFAULT_TIME_WINDOW_BUCKETS}, span)`, then RAISED to `2 *
- *    wakeLength` (with a warning) if a `wakeLength` override would otherwise
- *    let the trailing half of the wake evict.
+ *  - `timeWindow`: `overrides.timeWindow ?? min(styleHints.suggestedTimeWindowMs
+ *    ?? temporalBucketMs * {@link DEFAULT_TIME_WINDOW_BUCKETS}, span)`, then
+ *    RAISED to `2 * wakeLength` (with a warning) if a `wakeLength` override
+ *    would otherwise let the trailing half of the wake evict. The build-time
+ *    hint is a DEFAULT: it substitutes for the bucket-derived raw window (and
+ *    is span-clamped identically), so it never beats an authored window and an
+ *    absent hint resolves exactly as before.
  *  - `trailLength`: passed through from overrides only (never invented).
  */
 export function resolvePlaybackParams(
@@ -373,16 +400,26 @@ export function resolvePlaybackParams(
     ) ?? DEFAULT_TARGET_PLAYBACK_SECONDS;
   const baseSpeed = span / targetPlaybackSeconds / 1000;
 
-  // 3. timeWindow — bucket-derived default, then wake-invariant enforcement.
+  // 3. timeWindow — authored override, else the archive's build-time hint,
+  //    else the bucket-derived default; then wake-invariant enforcement.
+  //
+  //    The hint sits on the DEFAULT side of the fence: it substitutes for the
+  //    bucket-derived raw window and is span-clamped identically, so it can
+  //    never widen the window past the data and never beats an authored
+  //    `overrides.timeWindow`. A `firstPositive` guard means a 0 / negative /
+  //    NaN / Infinite hint falls through to the bucket default exactly as an
+  //    absent one would — which is what makes an archive with no hint resolve
+  //    bit-for-bit as it did before this field existed.
   let timeWindow: number;
   if (overrides.timeWindow != null && overrides.timeWindow > 0) {
     timeWindow = overrides.timeWindow;
   } else {
     const bucket = metadata.temporalBucketMs;
     const rawWindow =
-      bucket != null && bucket > 0
+      firstPositive(metadata.styleHints?.suggestedTimeWindowMs) ??
+      (bucket != null && bucket > 0
         ? bucket * DEFAULT_TIME_WINDOW_BUCKETS
-        : DEFAULT_TIME_WINDOW_MS;
+        : DEFAULT_TIME_WINDOW_MS);
     timeWindow = span > 0 ? Math.min(rawWindow, span) : rawWindow;
   }
 

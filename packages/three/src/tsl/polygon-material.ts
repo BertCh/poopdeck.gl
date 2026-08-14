@@ -41,6 +41,7 @@ import {
   positionGeometry,
   type TSLNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import type { UniformNode } from './nodes.js';
 import {
   TimeFilterUniforms,
@@ -170,7 +171,7 @@ export function createPolygonMaterial(
   if (posGate) material.positionNode = basePos.mul(posGate);
   else if (height) material.positionNode = basePos;
 
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   material.opacityNode = vColor.a.mul(opacity).mul(alpha);
   material.transparent = true;
   material.side = DoubleSide;

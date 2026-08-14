@@ -438,6 +438,38 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
  * sublayer class (default `H3HexagonLayer`) / overrides sublayer props
  * (deck's CompositeLayer contract).
  */
+/** One cached per-tile H3HexagonLayer plus the keys it was built for. */
+interface CachedH3Sublayer {
+  layer: H3HexagonLayer<PreparedHexRow>;
+  preparedKey: PreparedTile;
+  styleKey: string;
+}
+
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link H3SummaryLayer.h3Caches}.
+ */
+interface H3Caches {
+  prepared: Map<string, PreparedTile>;
+  sublayers: Map<string, CachedH3Sublayer>;
+  tilesRef: Tile[] | null;
+  pruneKey: string | null;
+  subBucketTick: number | null;
+}
+
+const H3_CACHE_SLOT = '_sttH3Caches';
+
+function freshH3Caches(): H3Caches {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    tilesRef: null,
+    pruneKey: null,
+    subBucketTick: null,
+  };
+}
+
 export class H3SummaryLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<ExtraPropsT & Required<_H3SummaryLayerProps>> {
@@ -445,8 +477,32 @@ export class H3SummaryLayer<
 
   static defaultProps = defaultProps;
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, every unmemoized `new H3SummaryLayer({...})`
+   * in a React render discarded the whole per-tile cache — re-running the
+   * O(cells) `splitLongToH3Index` decode and re-allocating one JS row object
+   * per cell for every visible tile, plus constructing a fresh H3HexagonLayer
+   * per tile: exactly the cost the {@link sublayerCache} note below calls the
+   * dominant steady-state expense. `AnimatedTripsLayer` fixed this first.
+   */
+  private get h3Caches(): H3Caches {
+    return this.stateSlot(H3_CACHE_SLOT, freshH3Caches);
+  }
+
+  // The accessors below keep the historical field NAMES (the shared harnesses
+  // and sibling layers speak them) while the storage lives on `state`.
+
   /** Per-tile prepared-data cache. Pruned to the live tile set every render. */
-  private preparedTileCache = new Map<string, PreparedTile>();
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.h3Caches.prepared;
+  }
+  private set preparedTileCache(value: Map<string, PreparedTile>) {
+    this.h3Caches.prepared = value;
+  }
 
   /**
    * Per-tile H3HexagonLayer instance cache. Same idea as the animated layers'
@@ -462,15 +518,18 @@ export class H3SummaryLayer<
    *  - `styleKey`: layer-level style props that we bake into the H3HexagonLayer
    *    at construction time (extruded, coverage, opacity, domain, etc.).
    */
-  private sublayerCache = new Map<
-    string,
-    {
-      layer: H3HexagonLayer<PreparedHexRow>;
-      preparedKey: PreparedTile;
-      styleKey: string;
-    }
-  >();
-  private lastTilesRef: Tile[] | null = null;
+  private get sublayerCache(): Map<string, CachedH3Sublayer> {
+    return this.h3Caches.sublayers;
+  }
+  private set sublayerCache(value: Map<string, CachedH3Sublayer>) {
+    this.h3Caches.sublayers = value;
+  }
+  private get lastTilesRef(): Tile[] | null {
+    return this.h3Caches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.h3Caches.tilesRef = value;
+  }
 
   /**
    * Weight column + active sub-bucket at the last prune. Both are baked into
@@ -479,13 +538,23 @@ export class H3SummaryLayer<
    * value — bounded only by `#tiles × #weight-columns-ever-used`, which defeats
    * the byte budget under a column-cycling UI.
    */
-  private lastPruneKey: string | null = null;
+  private get lastPruneKey(): string | null {
+    return this.h3Caches.pruneKey;
+  }
+  private set lastPruneKey(value: string | null) {
+    this.h3Caches.pruneKey = value;
+  }
 
   /**
    * Global sub-bucket index at the last tick that forced a re-render. Only
    * meaningful when the tier declares sub-buckets; `null` otherwise.
    */
-  private lastSubBucketTick: number | null = null;
+  private get lastSubBucketTick(): number | null {
+    return this.h3Caches.subBucketTick;
+  }
+  private set lastSubBucketTick(value: number | null) {
+    this.h3Caches.subBucketTick = value;
+  }
 
   finalizeState(context: LayerContext): void {
     // Base handles controller unsubscribe, the pending tile-load rAF, and

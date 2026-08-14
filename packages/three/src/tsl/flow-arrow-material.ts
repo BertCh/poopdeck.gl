@@ -56,6 +56,7 @@ import {
   cameraProjectionMatrix,
   type UniformNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 
 export interface FlowArrowMaterialOptions {
   /** Additive blending (glowing flows) vs normal alpha. @default false */
@@ -155,7 +156,7 @@ export function createFlowArrowMaterial(
 
   // ── FRAGMENT: gradient colour source→target (mix is varying-safe) ───────────
   const vColor = varying(mix(arrow.sourceColor, arrow.targetColor, mixT));
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   material.opacityNode = vColor.a.mul(arrow.opacity);
   material.transparent = true;
   material.depthTest = true;

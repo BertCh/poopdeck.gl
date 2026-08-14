@@ -52,6 +52,12 @@ const PEERS = [
   '@deck.gl/geo-layers@9.3.2',
   '@deck.gl/mesh-layers@9.3.2',
   '@deck.gl/react@9.3.2',
+  // Not imported by anything here, but `@deck.gl/react` peer-depends on it at
+  // `~9.3.0`. Left unpinned, npm resolves the NEWEST patch in that range
+  // (9.3.10), which peer-wants `@luma.gl/core@~9.3.5` and ERESOLVEs against the
+  // 9.3.3 pinned below — a gate failure caused purely by an upstream release,
+  // with nothing in this repo changing. Pinned like every other peer.
+  '@deck.gl/widgets@9.3.2',
   '@luma.gl/core@9.3.3',
   '@luma.gl/engine@9.3.3',
   'three@0.184.0',

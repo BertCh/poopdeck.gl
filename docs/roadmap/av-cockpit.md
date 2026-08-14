@@ -174,6 +174,18 @@ default (`common.rs::run_stt_build_with_full_options`): coord quantization
   example was DELETED on 2026-07-28: it walked point coordinates at a hardcoded 2-wide stride,
   so a 3D-folded `xyz` leaf was read at the wrong offset — it flattened and scrambled 106 AV
   archives before anyone noticed. Re-optimizing now means a from-source rebuild, full stop.
+  Every variant that shipped elevation as a numeric COLUMN (`-surfel`, `-world`, `-stage`,
+  `-iso`, `-iso3d`, all nuScenes, all Cosmos) came through the same sweep untouched — the
+  measured case for the standing rule that depth is a renderer prop over a column, never
+  baked into geometry.
+
+⚠️ **How to verify a re-encode, cheaply.** `stt-validate` **passes on scrambled coordinates**
+— it never checks coords-in-tile — so it is the wrong tool. The bbox from `stt-optimize export`
+works but needs a decode. The cheap positive proof is the directory alone
+(`stt-optimize inspect --sample 0`): in a correct single-scene AV archive the **z14 entry count
+exactly equals its temporal-bucket count**, i.e. one z14 tile for the whole scene. Scrambled
+coordinates cannot produce that — points thrown to ±180/±90 scatter z14 tiles across the planet
+— so a single coarse tile is positive proof of spatial coherence, with no decode.
 
 **Deferred levers (measured, declined — revisit only on a concrete trigger):**
 
@@ -194,6 +206,10 @@ default (`common.rs::run_stt_build_with_full_options`): coord quantization
 
 ## 4. Remaining work
 
-The remaining work is the SHARED user-run ops gate — fleet republish → R2 sync →
-in-browser verify — tracked once in the [roadmap README](./README.md) rather than restated
-per-doc. The §3 deferred levers stay counted out unless their triggers fire.
+The republish and R2 sync halves of the shared ops gate landed on 2026-07-31, including the
+rebuilt argoverse/waymo bundles. What is left for `/drive` is **in-browser verify** (the
+re-linked route, and `AnimatedBoundingBoxLayer` boxes now actually rotating to heading and
+scaling to dimensions where they were silently identity), tracked once as **L2** in the
+[roadmap README](./README.md) rather than restated per-doc. The one structural defect this
+doc owns is **K6** — the render-mode set declared in four-plus drifting places. The §3
+deferred levers stay counted out unless their triggers fire.

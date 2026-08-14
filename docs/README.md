@@ -19,6 +19,9 @@ cockpit at `/drive`, and an ocean-drifter data story at `/story/drifters`.
 - [System overview](./architecture/system-overview.md) — the Rust build tools and
   the TypeScript reader + render stack that streams tiles into deck.gl, Three.js,
   MapLibre, or Cesium.
+- [Archive format and generation performance](./architecture/archive-format-performance.md)
+  — audit decisions for variants, adaptive directory paging, categorical
+  encoding, and lossless generation defaults.
 - [Packed format](./spec/stt-packed-format.md) — the canonical container:
   `manifest.json`, content-addressed packs, the directory, and the
   immutable-object caching model. Schema:
@@ -150,6 +153,8 @@ a deck.gl sublayer.
 - [Render kernel](./api/render-kernel.md) — the framework-free `core/*` sub-paths
   every renderer backend imports instead of hand-forking: time-filter,
   shader-codegen, style, geometry, geo, picking, tileset-adapter, capabilities.
+  (Shaders are the exception: each backend hand-writes its own dialect and is
+  pinned to the shared alpha math by a conformance test.)
 
 ### Renderer backends
 

@@ -49,6 +49,7 @@ import {
   type UniformNode,
   type TSLNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import { PaletteUniforms, paletteColorNode } from './palette.js';
 
 /** Ambient floor of the baked self-lit shade (shadowed faces stay readable). */
@@ -200,9 +201,11 @@ export function createColumnMaterial(
   const ndl = saturate(vWorldN.normalize().dot(vec3(0.32, 0.4, 0.86)));
   const shade = float(COLUMN_AMBIENT).add(ndl.mul(1 - COLUMN_AMBIENT));
 
-  // Per-instance albedo × baked shade.
+  // Per-instance albedo × baked shade, then sRGB→working (see ./color-space.ts).
+  // The shade multiplies INSIDE the conversion because deck darkens the 0–255
+  // colour the same way — converting first would change the falloff curve.
   const vColor = varying(color);
-  material.colorNode = vColor.xyz.mul(shade);
+  material.colorNode = srgbToWorking(vColor.xyz.mul(shade));
 
   // Time window → opacity (vary raw start/end; recompute the select() alpha here).
   const vStart = varying(start);

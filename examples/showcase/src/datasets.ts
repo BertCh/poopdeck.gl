@@ -2476,15 +2476,16 @@ const rawDatasets: Dataset[] = [
     name: 'NYC Taxi — Flow & Riders',
     sources: ['tlc'],
     description:
-      'Two layers on one clock: the street grid colored by aggregate taxi volume underneath (15-minute corridor flows) and every cab as a moving dot on its real route on top. Source: NYC TLC + OpenStreetMap (via OSRM).',
+      'Two layers on one clock: the street grid colored by aggregate taxi volume underneath (15-minute corridor flows) and every cab drawing the route it just took on top. Source: NYC TLC + OpenStreetMap (via OSRM).',
     // COMPOSITE (mirrors bixi-live "Flow & Riders"): primary = the pre-aggregated
     // flow-corridor archive (nyc-taxi-flows, static geometry + per-vertex × per-
     // 15-min-bin value matrix → FlowCorridorLayer, the DIM base); overlay = the
-    // per-trip OSRM paths as moving heads (nyc-taxi-paths → AnimatedTripHeadsLayer,
-    // the BRIGHT riders). Both archives cover the same Jan 1–2 2015 window and both
-    // standalone demos already play exactly this range, so aggregate flow and
-    // individual cabs stay locked to the same instant. Non-directional archive, so
-    // no chevrons — just pulsing corridors + streaming dots.
+    // per-trip OSRM paths as fading TRAILS (nyc-taxi-paths → AnimatedTripsLayer,
+    // the BRIGHT riders — see `overlayTrail`). Both archives cover the same
+    // Jan 1–2 2015 window and both standalone demos already play exactly this
+    // range, so aggregate flow and individual cabs stay locked to the same
+    // instant. Non-directional archive, so no chevrons — just pulsing corridors
+    // + streaming trails.
     url: '/data/nyc-taxi-flows/manifest.json',
     type: 'trips',
     headsOverlayUrl: '/data/nyc-taxi-paths/manifest.json',
@@ -2564,21 +2565,38 @@ const rawDatasets: Dataset[] = [
     //    washed out over the white-hot busy streets — exactly where cabs cluster
     //    most — so it read worst where it mattered most. Magenta sits opposite the
     //    cyan ramp in hue and stays saturated on both the bright arteries and the
-    //    dark side streets. World-space (meters) so a dot grows on zoom-in. ──
+    //    dark side streets. World-space (meters) so a trail thickens on zoom-in.
+    //
+    //    Drawn as TRAILS, not dots. The corridors underneath already say how
+    //    busy a street is; what they cannot say is which way an individual cab
+    //    went, and a 6 m dot is sub-pixel at this framing (23.5 m/px at z12.3)
+    //    so it was carrying that story on almost no ink. A trail spends its ink
+    //    on the route.
+    //
+    //    trailLength 90 s ≈ 500 m ≈ 21 px of tail at the default view. It has to
+    //    stay under HALF of headsOverlayTimeWindow (tile selection covers
+    //    `[t − w/2, t + w/2]`), i.e. under 120 s here — a longer trail would
+    //    force AnimatedTripsLayer to widen the loader window to 2 × trailLength
+    //    and undo the residency fix above. ──
     headColor: [255, 46, 154, 255], // #FF2E9A neon magenta
-    headSizeUnits: 'meters',
-    headRadius: 6, // metres
-    headRadiusMinPixels: 0,
-    headRadiusMaxPixels: 6,
+    overlayTrail: {
+      color: [255, 46, 154, 255],
+      trailLength: 90000,
+      width: 20, // metres
+      widthUnits: 'meters',
+      widthMinPixels: 1.5,
+      widthMaxPixels: 5,
+      fadeTrail: true,
+    },
     legend: {
-      title: 'Corridor brightness = taxi volume / 15 min · dots = live cabs',
+      title: 'Corridor brightness = taxi volume / 15 min · trails = live cabs',
       ramps: [
         {
           label: '0 → 50+ trips',
           colors: ['#16204E', '#1A4E8C', '#228CC3', '#5AC8E6', '#E1F8FF'],
         },
       ],
-      items: [{ color: '#FF2E9A', label: 'Active cab' }],
+      items: [{ color: '#FF2E9A', label: 'Cab route, last 90 s' }],
     },
   },
   {
@@ -2674,9 +2692,13 @@ const rawDatasets: Dataset[] = [
       start: 1420070400000, // 2015-01-01 00:00:00 UTC
       end: 1420213385000, // 2015-01-02 13:43:05 UTC
     },
-    // Tile-load window: trail is 10s, so 20s comfortably covers the trail plus
-    // a margin for tiles arriving slightly ahead of the playhead.
-    timeWindow: 20000,
+    // Tile-load window: tile selection covers `[t − w/2, t + w/2]`, so the PAST
+    // half is what has to reach `trailLength` — 120 s gives the 45 s trail a
+    // 60 s reach plus margin for tiles arriving slightly ahead of the playhead.
+    // (Under-size it and AnimatedTripsLayer.getEffectiveTimeWindow widens to
+    // 2 × trailLength anyway; the literal is kept correct so datasets.ts is
+    // self-consistent.) The archive buckets at 60 s, so this is 2 buckets.
+    timeWindow: 120000,
     // Longer than the 1-min default: this ~40h archive blurs past too fast to
     // read individual cabs at 60s, so play it slower (~30 min full range).
     targetPlaybackSeconds: 1800,
@@ -2698,7 +2720,17 @@ const rawDatasets: Dataset[] = [
     // width. The trail still alpha-fades toward its tail. Rounded caps/joints
     // off — the dominant fragment cost on dense Manhattan at small widths.
     tripColor: [31, 186, 214, 255],
-    trailLength: 12500,
+    // 45 s ≈ 250 m ≈ 35 px of tail at the z14 view (7.24 m/px).
+    //
+    // It used to be 12.5 s, which was SHORTER than the gap between consecutive
+    // shape points on these OSRM routes — so a cab regularly had no vertex
+    // inside its own trail and the whole trip blanked until the next one
+    // arrived. That is half of why this demo read as "segments popping in and
+    // out"; the other half was the trail being evaluated once per segment
+    // rather than per fragment, fixed in AnimatedTripsLayer (see its
+    // "PER-SEGMENT TRAIL TIME" note). Sizing the trail above the vertex spacing
+    // is the config half: it wants to be a ribbon, not a dash.
+    trailLength: 45000,
     widthUnits: 'meters',
     tripWidth: 10, // metres
     widthMinPixels: 0,

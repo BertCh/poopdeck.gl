@@ -52,6 +52,7 @@ import {
   type UniformNode,
   type TSLNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
@@ -266,7 +267,10 @@ export function createIconMaterial(
     a = a.mul(dataFilterAlphaNode(filterU, varying(filterValue)));
   }
 
-  material.colorNode = rgb;
+  // sRGB→working LAST, on the atlas × tint product (see ./color-space.ts): both
+  // the sprite texture and the tint are authored sRGB, and deck multiplies them
+  // in that space too, so converting the product is the parity-exact order.
+  material.colorNode = srgbToWorking(rgb);
   material.opacityNode = a;
   material.transparent = true;
   material.depthWrite = false;

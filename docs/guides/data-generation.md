@@ -136,7 +136,7 @@ stt-generate ais \
 **Options:**
 
 - `--input`: Input CSV file (or pass `--date` / `--start-date`+`--end-date` to download from NOAA directly)
-- `--sample-minutes`: Temporal sampling (1 position per vessel per N minutes)
+- `--sample-minutes`: Explicit temporal sampling (default `0`, disabled; every usable row is preserved)
 - `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
 - `--max-vessels`: Limit number of vessels (0 = unlimited)
 
@@ -159,7 +159,7 @@ stt-generate flights \
 - `--date`: Date to download (YYYY-MM-DD, must be a Monday)
 - `--hours`: Hours to download (e.g., "0-23" for full day)
 - `--bounds`: Geographic filter
-- `--sample-seconds`: Temporal sampling interval
+- `--sample-seconds`: Explicit temporal sampling interval (default `0`, disabled; every usable row is preserved)
 - `--paths`: Output LineString trajectories instead of points
 - `--min-points`: Path mode — drop flights with fewer points, default: 5
 - `--max-gap-seconds`: Path mode — split a track at gaps longer than this, default: 300
@@ -694,17 +694,16 @@ parsed as ISO 8601. An Int64 column under the default `iso8601` logs a
 warning and is interpreted as unix-ms; pass `unix-ms`/`unix-sec` to make
 the intent explicit.
 
-Pass `--strict-times` to fail the build on any null or unparseable
-timestamp instead of coercing it to epoch with a warning. Pre-1970
-(negative) timestamps always fail the build in both modes — the temporal
-index stores unsigned ms-since-epoch and cannot represent them.
+The build fails on a null or unparseable timestamp by default. The explicit
+`--salvage-invalid-times` mode instead coerces those values to epoch and reports
+the affected count. Pre-1970 (negative) timestamps always fail in both modes —
+the temporal index stores unsigned ms-since-epoch and cannot represent them.
 
 ### Bad geometry
 
-Rows with null or unparseable geometry are **skipped** with a count
-warning (they have no position to tile at — they are never placed at
-(0,0)). Pass `--strict-geometry` to fail the build on the first such row
-instead.
+The build fails on the first null or unparseable geometry by default. Pass
+`--salvage-invalid-geometry` to skip such rows with a count warning; they have
+no position to tile at and are never placed at (0,0).
 
 ## AV Scene Bundles (Python extractors)
 

@@ -23,7 +23,13 @@
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { STTArchive } from '../src/archive';
-import { OBJECT_MAGIC_LEN, directoryObject } from './helpers/packed-fixture';
+import {
+  OBJECT_MAGIC_LEN,
+  directoryKey,
+  directoryObject,
+  packKey,
+} from './helpers/packed-fixture';
+import { blake3Hex128 } from '../src/blake3';
 import { encodeDirectory, type DirectoryEncodeEntry } from '../src/directory';
 import {
   configureSharedScheduler,
@@ -153,23 +159,30 @@ function makePagedDataset(
 
   const objects = new Map<string, Uint8Array>();
   const dirObject = directoryObject(dir);
-  objects.set('index/dir.sttd', dirObject);
+  const dKey = directoryKey(dirObject);
+  objects.set(dKey, dirObject);
   // A trivial pack object so the manifest references something (unused here —
   // we only exercise the directory page fetches).
-  objects.set('packs/p0.sttp', new Uint8Array([0]));
+  const pack = new Uint8Array(OBJECT_MAGIC_LEN);
+  const pKey = packKey(pack);
+  objects.set(pKey, pack);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: [{ id: 0, kind: 'raw' }],
     compression: 'none',
     directory: {
-      key: 'index/dir.sttd',
+      key: dKey,
       length: dirObject.length,
-      directoryVersion: 5,
+      directoryVersion: 6,
       layout: 'paged',
       rootLength,
       pageCount,
+      pageEntries: pageCount,
+      rootHash: blake3Hex128(root),
+      pageHashes: leafFrames.map((frame) => blake3Hex128(frame)),
     },
-    packs: [{ key: 'packs/p0.sttp', length: 1 }],
+    packs: [{ key: pKey, length: pack.length }],
     metadata: { temporalBucketMs: 1 },
   };
   objects.set(
@@ -219,7 +232,11 @@ function gatedFetch(
     const start = Number(m[1]);
     const end = Math.min(Number(m[2]), bytes.length - 1);
     // Gate only the leaf-page fetches (range starts past the root prefix).
-    if (key === 'index/dir.sttd' && start >= rootLength) {
+    if (
+      key.startsWith('index/') &&
+      key.endsWith('.sttd') &&
+      start >= rootLength
+    ) {
       shared.inFlight++;
       shared.peak = Math.max(shared.peak, shared.inFlight);
       await new Promise<void>((resolve) => shared.gates.push(resolve));

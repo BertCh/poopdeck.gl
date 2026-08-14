@@ -243,19 +243,16 @@ machine and this network and do not.
 
 ## 8. Datasets probed and dropped
 
-`gtfs-ch`, `rainfall-2019`, `storm4d-isolines`, `wpc-fronts` and
-`wpc-fronts-pips` return **404** on `tiles.poopdeck.gl` (5 of the 64 dataset
-URLs registered in `examples/showcase/src/datasets.ts`, probed 2026-07-24).
-The first three are deliberate — their demo ids sit in the showcase's
-`LOCAL_ONLY_DATASETS` gate. The last two are **not** gated: they belong to the
-ungated `severe-weather-2024` composite, which will 404-stall its fronts
-overlay until they are r2-synced. Still true on 2026-07-26; carried as **L1** in
-the [roadmap README](./README.md).
+At capture time (2026-07-24/26) five of the 64 registered dataset URLs returned
+**404** and a `formatVersion` sweep found **35 v2 / 24 v1 / 5 × 404** — so a
+quarter of the fleet was unopenable by the post-`e084ccd` reader and could not be
+measured. The 2026-07-31 republish closed that: all 68 registered manifests now
+return `formatVersion: 2`.
 
-A second sweep on 2026-07-26 probed all 64 registered manifest URLs for
-`formatVersion` as well as reachability: **35 v2, 24 v1, 5 404**. The 24 v1
-archives predate packed-v2 and are unopenable by the post-`e084ccd` reader —
-the fleet republish (**B2**).
+⚠️ **These figures therefore predate the republish, and the republish changed the
+layout they measure** — the 2026-07-26 payload byte break re-addressed every pack.
+Re-running the capture is the open half; the method, the harness and the cameras
+below are unaffected and stand as written.
 
 No dataset was included in this file on the strength of an assumption; every row
 was measured against a manifest that returned 200.

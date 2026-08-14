@@ -182,3 +182,45 @@ const heatmapProps: AnimatedHeatmapLayerProps = {
 };
 new AnimatedHeatmapLayer(heatmapProps);
 new MyHeatmapLayer({ ...heatmapProps, a: 1 });
+
+// ---------------------------------------------------------------------------
+// 4. Construction-site prop typing is NOT erased
+// ---------------------------------------------------------------------------
+//
+// REGRESSION. The chassis constructor was `(...propObjects: any[])`, and
+// because every layer in the catalog descends from `SpatioTemporalLayer` that
+// widened signature was inherited by all 23 classes and emitted into the
+// published `.d.ts` — so a wrong-TYPED prop compiled clean everywhere, where
+// the deck primitive each layer wraps would have raised TS2322.
+//
+// deck's own `Component.constructor(...propObjects: Partial<PropsT>[])` is the
+// contract being restored here.
+//
+// Note what this does NOT claim: unknown/misspelled keys still compile,
+// because `ExtraPropsT extends {} = {}` is INFERRED from the constructor
+// literal and absorbs them. Stock `new ScatterplotLayer({raduisScale: 3})`
+// compiles clean for the same reason, so that is deck parity, not a gap.
+
+// @ts-expect-error currentTime is a number, not a string
+new AnimatedPointLayer({ id: 'p', data: '', currentTime: 'nope' });
+
+// @ts-expect-error timeWindow is a number
+new AnimatedPathLayer({ id: 'p', data: '', timeWindow: 'wide' });
+
+// @ts-expect-error tier is a union of string literals, not an arbitrary string
+new AnimatedTripsLayer({ id: 't', data: '', tier: 'not-a-tier' });
+
+// @ts-expect-error radiusScale is a number
+new AnimatedPointLayer({ id: 'p', data: '', radiusScale: [] });
+
+// @ts-expect-error the chassis itself is typed too
+new SpatioTemporalLayer({ id: 's', data: '', currentTime: {} });
+
+// …and the correctly-typed forms still compile.
+new AnimatedPointLayer({
+  id: 'p',
+  data: '',
+  currentTime: 0,
+  radiusScale: 2,
+  tier: 'raw',
+});

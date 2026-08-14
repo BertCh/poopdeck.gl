@@ -17,6 +17,11 @@ export interface TileId {
   /** Timestamp (Unix milliseconds) */
   t: number;
   /**
+   * Independently addressable payload representation. `0`/absent is raw;
+   * summary tiles use `1`. Variant is part of tile identity.
+   */
+  variantId?: number;
+  /**
    * Temporal-LOD bucket width (ms) this id addresses, for archives that
    * carry a temporal-LOD pyramid. Set by
    * `STTArchive.getTileIdsInBoundsForTemporalLod` on the ids it returns;
@@ -98,6 +103,14 @@ export interface ArchiveMetadata {
   /** Optional temporal LOD pyramid (orthogonal to the summary tier). */
   temporalLod?: TemporalLodLevel[];
   /**
+   * How base-tier features are distributed across zooms (DT-1). Absent =
+   * `'replicated'` = today's behaviour. `'home-zoom'` archives MUST also
+   * declare the `additive-partition` capability, so a reader that does not
+   * understand the partition refuses at open rather than silently rendering a
+   * sparse per-zoom slice as if it were complete.
+   */
+  partition?: ArchivePartition;
+  /**
    * Optional bake-time HeatmapLayer intensity-domain entries. When set,
    * the deck.gl/maplibre HeatmapLayer skips its [0, 1] default and uses
    * these per-class domains — vital for weighted heatmaps where the
@@ -128,6 +141,8 @@ export interface SummaryColumn {
 
 /** Server-aggregated low-zoom tier. */
 export interface SummaryTier {
+  /** Directory/manifest variant that stores this summary representation. */
+  variantId: number;
   scheme: SummaryScheme;
   minZoom: number;
   maxZoom: number;
@@ -144,10 +159,31 @@ export interface SummaryTier {
   subBuckets: number;
 }
 
+/** What a reader may assume a declared tier's tiles CONTAIN (DT-1). */
+export type TierContract = 'union' | 'reduced';
+
+/** How a `reduced` tier was derived (DT-1). */
+export type ReductionMethod = 'm4' | 'minmaxlttb';
+
+/** How base-tier features are distributed across zooms (DT-1). */
+export type ArchivePartition = 'replicated' | 'home-zoom';
+
 /** One level of a temporal LOD pyramid. */
 export interface TemporalLodLevel {
   bucketMs: number;
   maxZoomLevel: number;
+  /**
+   * Absent = `'union'` = the normative default: exactly the base features,
+   * re-bucketed, with no reduction, aggregation or thinning.
+   *
+   * ⚠️ Normative reader rule (DT-1): a reader MUST NOT substitute a non-base
+   * tier for base content unless it understands the declared `contract` (and
+   * `method`, if reduced). An unrecognized value means "never substitute",
+   * which keeps conservative-superset soundness.
+   */
+  contract?: TierContract;
+  /** Reduction method; present only when `contract === 'reduced'`. */
+  method?: ReductionMethod;
 }
 
 /**
@@ -222,8 +258,35 @@ export interface StyleHints {
   /**
    * Suggested duration (seconds) for one full playback of the dataset's
    * time range, derived from its temporal bucket count. A DEFAULT only.
+   *
+   * The archive does not record WHICH formula produced the number, and a
+   * reader must not care — two are in circulation. Today's default emission is
+   * the legacy `clamp(round(sqrt(K)), 20, 90)`; `stt-build
+   * --derived-playback-params` emits the frame-rate refit
+   * `clamp(K/20, K/30, K/12)` clamped to `[5, 300]` instead (`K` = bucket
+   * count). So the same dataset can legitimately carry different values across
+   * two builds — that is a build-recipe difference, not drift.
    */
   suggestedPlaybackSeconds?: number;
+  /**
+   * Suggested resident/rolling loader window in MILLISECONDS: the widest
+   * window the writer measured as affordable against a reference client byte
+   * budget (256 MiB), capped at 24 native buckets and floored at one. On the
+   * wire this is `suggested_time_window_ms` inside the `style_hints` block;
+   * `parseStyleHints` (archive.ts) is the one hop that renames it.
+   *
+   * NOT emitted by default. Only `stt-build --derived-playback-params`
+   * produces it, and only on the in-memory pipeline (a `--streaming` build
+   * totals no payload bytes, so it has no `β̄` to measure). Every archive in
+   * the published fleet predates the flag, so treat this as usually-absent and
+   * never make a reader path depend on its presence.
+   *
+   * A DEFAULT only, and specifically a *default*, not an override — an
+   * authored `timeWindow` still beats it (see
+   * `@poopdeck.gl/playback`'s `resolvePlaybackParams`). Archives without the
+   * field keep the bucket-derived default exactly as before.
+   */
+  suggestedTimeWindowMs?: number;
   /** Suggested primary layer kind for the dataset. A DEFAULT only. */
   layerHint?: 'points' | 'paths' | 'trips' | 'polygons';
 }
@@ -506,7 +569,7 @@ export interface BinaryFeatures {
 
   /**
    * True when this tile's rows are stable-sorted by `start_time` — declared
-   * by the packed formatVersion-2 frame's `TILE_META.sorted` flag (spec
+   * by the packed formatVersion-3 frame's `TILE_META.sorted` flag (spec
    * §5.2.3), enabling window slicing / future partial decode. `undefined`
    * for v1 tiles and synthetic fixtures: per the spec, readers MUST NOT
    * assume sortedness without the flag.
@@ -570,6 +633,19 @@ export interface TileMetaJson {
   vq?: Record<string, [number, number]>;
   /** `[origin_ms, step_ms]` (v1 `stt:vertex_time_origin_ms`/`_step_ms`). */
   vt?: [number, number];
+  /**
+   * `step_ms` for the FEATURE-ANCHORED per-vertex time form (TB-11 extension
+   * 2, `stt:vertex_time_feature_step_ms`): deltas measured from each feature's
+   * own `start_time` rather than a layer-wide origin, which keeps trip-shaped
+   * layers in `UInt16` at exact millisecond precision.
+   *
+   * There is no companion origin — the anchor is the `start_time` column. A
+   * distinct key rather than a reshaped {@link vt} so a reader lacking the
+   * branch refuses the archive on the `vertex-time-feature-anchor` capability
+   * instead of resolving the deltas against an origin it invented. Mutually
+   * exclusive with `vt`.
+   */
+  vtf?: number;
 }
 
 /**
@@ -621,7 +697,7 @@ export interface STTTileLayer {
    */
   arrowIpc?: Uint8Array;
   /**
-   * packed formatVersion 2 only: the layer's spliced PROPS Arrow IPC stream
+   * packed formatVersion 3 only: the layer's spliced PROPS Arrow IPC stream
    * (property columns ride their own schema/template in a v2 frame — spec
    * §5.2). Present iff the layer has property columns; {@link arrowIpc} then
    * holds the spliced CORE stream and `toGeoArrowTable()` re-merges the two
@@ -630,7 +706,7 @@ export interface STTTileLayer {
    */
   arrowIpcProps?: Uint8Array;
   /**
-   * packed formatVersion 2 only: the layer's parsed `TILE_META` section
+   * packed formatVersion 3 only: the layer's parsed `TILE_META` section
    * (spec §5.2.2). Plain JSON — unlike {@link arrowTable} it survives the
    * worker→main postMessage boundary — so `toGeoArrowTable()` can re-inject
    * the hoisted per-tile metadata (`stt:qa` / `stt:time_offset_ms` /
@@ -670,6 +746,8 @@ export interface TileEntry {
   y: number;
   timeStart: number;
   timeEnd: number;
+  /** Independently addressable payload representation. */
+  variantId: number;
   /**
    * Which packed-format object (`manifest.packs[packId]`) holds this tile's
    * blob. `offset`/`length` are relative to that pack. Always `0` for an
@@ -707,6 +785,47 @@ export interface TileEntry {
    * `timeStart`.
    */
   coverTMin?: number;
+}
+
+/**
+ * Exact directory-priced cost of a tile selection — what
+ * `STTArchive.estimateSelectionCost` answers for one
+ * (bounds × zoom × time-window × tier) query.
+ *
+ * `unknownTiles` is the HONESTY CHANNEL, and it rides in the return type
+ * precisely so a caller cannot forget to look at it. The reader knows a tile's
+ * compressed length only once the directory leaf holding it is resident; on a
+ * paged archive a leaf whose root descriptor intersects the query but has not
+ * been fetched CANNOT be priced. Those entries are counted here — never
+ * estimated, never extrapolated from the priced ones. So:
+ *
+ *   - `unknownTiles === 0` → `bytes` is exact for the queried selection.
+ *   - `unknownTiles > 0`   → `bytes` is a LOWER BOUND. Treat the answer as
+ *     unusable for gating and fall back to whatever the caller did before it
+ *     could ask (the same abstention the playback governor applies to blind
+ *     byte totals).
+ *
+ * This mirrors, at the directory level, the rule the whole reader follows:
+ * an unknown quantity is reported as unknown, not guessed at.
+ */
+export interface SelectionCost {
+  /**
+   * Σ compressed `length` over every matching directory entry the reader can
+   * actually see. Never includes a guess for a non-resident leaf.
+   */
+  bytes: number;
+  /** How many matching entries were priced into {@link bytes}. */
+  tiles: number;
+  /**
+   * Entries the query could not price, as an UPPER bound: the sum of
+   * `entryCount` over every non-resident leaf page whose descriptor intersects
+   * the query. Descriptors carry no per-entry time/variant detail, so some of
+   * those entries would not have matched the query's filters — hence an upper
+   * bound rather than an exact count. `Infinity` when the directory itself is
+   * not open yet (the count of unknowns is then itself unknown), and `0` for
+   * every fully-resident (single or whole-loaded) directory.
+   */
+  unknownTiles: number;
 }
 
 /** Archive index */
@@ -782,6 +901,18 @@ export interface ArchiveOptions {
    * option.
    */
   retainArrowIpc?: boolean | 'auto';
+  /**
+   * Maximum compressed tile payloads retained by this archive in memory.
+   * Defaults device-adaptively to 100–500. Pass `0` to disable the compressed
+   * cache when a decoded tileset cache already owns the working set.
+   */
+  maxCacheTiles?: number;
+  /**
+   * Maximum compressed bytes retained by this archive. Defaults to 256 MiB on
+   * constrained/mobile devices and 512 MiB otherwise. A process-wide budget
+   * applies across all archives as an additional ceiling. Pass `0` to disable.
+   */
+  maxCacheBytes?: number;
   /**
    * Enable the OPFS-backed persistent tile cache.
    *

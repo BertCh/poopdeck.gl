@@ -22,7 +22,7 @@ export interface DatasetManifestEntry {
 export async function loadManifest(
   page: Page,
 ): Promise<DatasetManifestEntry[]> {
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto('/?render-test=1', { waitUntil: 'domcontentloaded' });
   return await page
     .waitForFunction(
       () =>

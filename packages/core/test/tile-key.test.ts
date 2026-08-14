@@ -45,8 +45,18 @@ describe('tileKey', () => {
 
   it('holds the persisted OPFS spelling', () => {
     // Changing either string orphans every tile already cached in OPFS.
-    expect(tileKey(BASE)).toBe('8/12/34/1700000000000');
-    expect(tileKey(LOD)).toBe('8/12/34/1700000000000@21600000');
+    expect(tileKey(BASE)).toBe('8/12/34/1700000000000#0');
+    expect(tileKey(LOD)).toBe('8/12/34/1700000000000#0@21600000');
+  });
+
+  it('separates raw and summary at the exact same space/time address', () => {
+    const summary = { ...BASE, variantId: 1 };
+    expect(tileKey(summary)).not.toBe(tileKey(BASE));
+    const cache = new Map([
+      [tileKey(BASE), 'raw'],
+      [tileKey(summary), 'summary'],
+    ]);
+    expect(cache.size).toBe(2);
   });
 
   it('distinguishes ids that differ in exactly one coordinate', () => {
@@ -76,26 +86,32 @@ describe('tileEntryKey', () => {
     // A directory entry with no `temporal_bucket_ms` column is a third
     // state: it satisfies a base-tier lookup, but the resolver probes for
     // it separately, so it must not collide with the base bucket width.
-    const untagged = tileEntryKey(8, 12, 34, BASE.t, undefined);
-    const tagged = tileEntryKey(8, 12, 34, BASE.t, 3600 * 1000);
+    const untagged = tileEntryKey(8, 12, 34, BASE.t, 0, undefined);
+    const tagged = tileEntryKey(8, 12, 34, BASE.t, 0, 3600 * 1000);
     expect(untagged).not.toBe(tagged);
   });
 
   it('separates tiers sharing an address', () => {
-    expect(tileEntryKey(8, 12, 34, BASE.t, 3600 * 1000)).not.toBe(
-      tileEntryKey(8, 12, 34, BASE.t, 6 * 3600 * 1000),
+    expect(tileEntryKey(8, 12, 34, BASE.t, 0, 3600 * 1000)).not.toBe(
+      tileEntryKey(8, 12, 34, BASE.t, 0, 6 * 3600 * 1000),
     );
   });
 
   it('is stable for the same arguments', () => {
-    expect(tileEntryKey(8, 12, 34, BASE.t, 3600 * 1000)).toBe(
-      tileEntryKey(8, 12, 34, BASE.t, 3600 * 1000),
+    expect(tileEntryKey(8, 12, 34, BASE.t, 0, 3600 * 1000)).toBe(
+      tileEntryKey(8, 12, 34, BASE.t, 0, 3600 * 1000),
     );
   });
 
   it('cannot be confused with a tileKey for the same tile', () => {
-    expect(tileEntryKey(LOD.z, LOD.x, LOD.y, LOD.t, LOD.bucketMs)).not.toBe(
+    expect(tileEntryKey(LOD.z, LOD.x, LOD.y, LOD.t, 0, LOD.bucketMs)).not.toBe(
       tileKey(LOD),
+    );
+  });
+
+  it('separates raw and summary entries with identical bucket widths', () => {
+    expect(tileEntryKey(8, 12, 34, BASE.t, 0, 3_600_000)).not.toBe(
+      tileEntryKey(8, 12, 34, BASE.t, 1, 3_600_000),
     );
   });
 });

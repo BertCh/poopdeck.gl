@@ -3,7 +3,7 @@
  *
  * Two Rust-produced fixtures hold the SAME 252-tile grid dataset in both
  * container shapes: `paged-golden/` (root page + 32 leaf pages) and
- * `paged-golden-single/` (one whole-load v5 directory). Because the two builds
+ * `paged-golden-single/` (one whole-load v6 directory). Because the two builds
  * share byte-identical blobs, the only difference is the `.sttd` container — so
  * the single build is an exact oracle for the paged build's query results.
  *
@@ -30,12 +30,15 @@ import {
   type PageDescriptor,
 } from '../src/directory';
 import { unzstdSync } from '../src/compression';
+import { blake3Hex128 } from '../src/blake3';
 import type { BoundingBox, TimeRange } from '../src/types';
 import {
+  directoryKey,
   directoryObject,
   loadPackedDatasetFromDisk,
   OBJECT_MAGIC_LEN,
   packObject,
+  packKey,
   packedFetch,
   packedFromGolden,
   type InMemoryPackedDataset,
@@ -291,6 +294,162 @@ describe('paged directory: cross-impl + differential', () => {
   });
 });
 
+/**
+ * The paged half of the CO-1 cost oracle's honesty contract (the synthetic and
+ * tileset halves live in cost-oracle.test.ts).
+ *
+ * `estimateSelectionCost` is SYNCHRONOUS, so on a paged directory it can only
+ * price leaves that are already resident. The temptation — and the thing this
+ * pins shut — is to let the unpriced remainder disappear into a confident-
+ * looking total: a partial answer reported as exact is worse than no answer,
+ * because every consumer downstream (prefetch horizon, governor gate, tier
+ * pick) would gate on it. Non-resident intersecting leaves are therefore
+ * COUNTED into `unknownTiles` and never estimated.
+ */
+describe('paged directory: selection-cost honesty', () => {
+  it('counts non-resident intersecting leaves instead of pricing them', async () => {
+    const s = singleArchive();
+    const p = pagedArchive();
+
+    // The complete z10 selection, from the whole-load oracle.
+    const oracleIds = await s.getTileIdsInBounds(ALL_DATA, 10, FULL_TIME);
+    expect(oracleIds.length).toBeGreaterThan(100);
+    const oracleBytes = oracleIds.reduce(
+      (n, id) => n + s.getTileByteSize(id)!,
+      0,
+    );
+
+    // Fault in only the leaves a small sub-viewport needs (proven a strict
+    // subset by the "fraction of the directory" test above).
+    await p.getTileIdsInBounds(
+      { minLon: 3, minLat: 39, maxLon: 5, maxLat: 41 },
+      10,
+      FULL_TIME,
+    );
+
+    // `getTileByteSize` is the per-tile resident/blind probe, and it never
+    // faults a page in — so it tells us exactly which of the oracle's tiles
+    // the paged reader can currently see.
+    const resident = oracleIds.filter(
+      (id) => p.getTileByteSize(id) !== undefined,
+    );
+    expect(resident.length).toBeGreaterThan(0);
+    expect(resident.length).toBeLessThan(oracleIds.length); // genuinely partial
+    const residentBytes = resident.reduce(
+      (n, id) => n + p.getTileByteSize(id)!,
+      0,
+    );
+
+    const before = p.estimateSelectionCost(ALL_DATA, 10, FULL_TIME);
+    // Exact over what is resident — a partial answer, but not a fuzzy one.
+    expect(before.bytes).toBe(residentBytes);
+    expect(before.tiles).toBe(resident.length);
+    // ...and loud about the rest. The count comes from the root descriptors'
+    // own `entryCount`, so it is an upper bound the directory states, not an
+    // extrapolation from the priced entries.
+    expect(before.unknownTiles).toBeGreaterThan(0);
+    expect(before.bytes).toBeLessThan(oracleBytes);
+
+    // Fault the remaining z10 leaves in; the blind spot closes.
+    await p.getTileIdsInBounds(ALL_DATA, 10, FULL_TIME);
+    const after = p.estimateSelectionCost(ALL_DATA, 10, FULL_TIME);
+    expect(after.unknownTiles).toBe(0);
+    expect(after.bytes).toBe(oracleBytes);
+    expect(after.tiles).toBe(oracleIds.length);
+    // Bytes grew by exactly the newly-resident entries' lengths — nothing was
+    // double-counted and nothing was invented in between.
+    expect(after.bytes - before.bytes).toBe(oracleBytes - residentBytes);
+  });
+
+  it('prunes unknown leaves by the same predicate the fetcher prunes by', async () => {
+    const p = pagedArchive();
+    await p.getIndex(); // root page only: NOTHING is resident yet
+
+    // A region with no data: every leaf is pruned by the descriptor test, so
+    // there is nothing to price AND nothing unknown — the same conclusion
+    // `getTileIdsInBounds` reaches without fetching a single leaf.
+    const empty = { minLon: -50, minLat: -30, maxLon: -40, maxLat: -20 };
+    expect(p.estimateSelectionCost(empty, 10, FULL_TIME)).toEqual({
+      bytes: 0,
+      tiles: 0,
+      unknownTiles: 0,
+    });
+
+    // Over the data, with no leaf resident: everything is unknown and nothing
+    // is priced. A zero here must never read as "this selection is free".
+    const cold = p.estimateSelectionCost(ALL_DATA, 10, FULL_TIME);
+    expect(cold.bytes).toBe(0);
+    expect(cold.tiles).toBe(0);
+    expect(cold.unknownTiles).toBeGreaterThan(0);
+
+    // A time window outside the dataset prunes temporally, exactly as
+    // ensurePagesForBounds would.
+    const future = { start: 10 * HOUR, end: 11 * HOUR };
+    expect(p.estimateSelectionCost(ALL_DATA, 10, future).unknownTiles).toBe(0);
+  });
+});
+
+describe('paged directory frame integrity', () => {
+  it('rejects a tampered root frame before decompression', async () => {
+    const ds = loadPackedDatasetFromDisk(
+      nodeFs,
+      PAGED_DIR,
+      'mem://paged-root-tamper/manifest.json',
+    );
+    const manifest = JSON.parse(
+      new TextDecoder().decode(ds.objects.get('manifest.json')!),
+    );
+    ds.objects.get(manifest.directory.key)![OBJECT_MAGIC_LEN + 1] ^= 0x01;
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+      directoryPageThresholdBytes: 0,
+    });
+    await expect(archive.getIndex()).rejects.toThrow(
+      /paged directory root: content hash .* does not match/i,
+    );
+  });
+
+  it('rejects a tampered leaf frame before decoding it', async () => {
+    const ds = loadPackedDatasetFromDisk(
+      nodeFs,
+      PAGED_DIR,
+      'mem://paged-leaf-tamper/manifest.json',
+    );
+    const manifest = JSON.parse(
+      new TextDecoder().decode(ds.objects.get('manifest.json')!),
+    );
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: packedFetch(ds),
+      directoryPageThresholdBytes: 0,
+    });
+    await archive.getIndex();
+    const dref = manifest.directory;
+    const object = ds.objects.get(dref.key)!;
+    const rootFrame = object.subarray(
+      OBJECT_MAGIC_LEN,
+      OBJECT_MAGIC_LEN + dref.rootLength,
+    );
+    const root = decodePagedRoot(
+      dref.encoding === 'zstd' ? unzstdSync(rootFrame) : rootFrame,
+    );
+    const page = root.pages[0];
+    object[
+      OBJECT_MAGIC_LEN + dref.rootLength + page.relOffset + (page.length >> 1)
+    ] ^= 0x01;
+    await expect(
+      (
+        archive as unknown as {
+          fetchAndMergePages: (indices: number[]) => Promise<void>;
+        }
+      ).fetchAndMergePages([0]),
+    ).rejects.toThrow(
+      /paged directory page 0: content hash .* does not match/i,
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Regression: point-query leaf selection vs a covering-derived tMin
 // ---------------------------------------------------------------------------
@@ -358,14 +517,16 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
   } {
     // A real decodable blob (+ its directory facts) from the sample fixture.
     const sample = packedFromGolden();
-    const e = decodeDirectory(
-      sample.objects.get('index/directory.sttd')!.subarray(OBJECT_MAGIC_LEN),
-    )[0];
-    const srcPack = sample.objects.get('packs/pack-0.sttp')!;
-    const blob = srcPack.subarray(e.offset, e.offset + e.length);
     const sampleManifest = JSON.parse(
       new TextDecoder().decode(sample.objects.get('manifest.json')!),
     );
+    const e = decodeDirectory(
+      sample.objects
+        .get(sampleManifest.directory.key)!
+        .subarray(OBJECT_MAGIC_LEN),
+    )[0];
+    const srcPack = sample.objects.get(sampleManifest.packs[0].key)!;
+    const blob = srcPack.subarray(e.offset, e.offset + e.length);
 
     const blobFields = {
       packId: 0,
@@ -430,26 +591,30 @@ describe('paged directory: point query with coverTMin > timeStart', () => {
     sttd.set(leaf0, root.length);
     sttd.set(leaf1, root.length + leaf0.length);
 
-    const dirKey = 'index/dir.sttd';
     const objects = new Map<string, Uint8Array>();
     const sttdObject = directoryObject(sttd);
     const { bytes: packBytes } = packObject([blob]);
+    const dirKey = directoryKey(sttdObject);
+    const pKey = packKey(packBytes);
     objects.set(dirKey, sttdObject);
-    objects.set('packs/p0.sttp', packBytes);
+    objects.set(pKey, packBytes);
     const manifest = {
       format: 'stt-packed',
-      formatVersion: 2,
+      formatVersion: 3,
+      variants: [{ id: 0, kind: 'raw' }],
       compression: sampleManifest.compression,
       directory: {
         key: dirKey,
         length: sttdObject.length,
-        directoryVersion: 5,
+        directoryVersion: 6,
         layout: 'paged',
         rootLength: root.length,
         pageCount: 2,
         pageEntries: 1,
+        rootHash: blake3Hex128(root),
+        pageHashes: [blake3Hex128(leaf0), blake3Hex128(leaf1)],
       },
-      packs: [{ key: 'packs/p0.sttp', length: packBytes.length }],
+      packs: [{ key: pKey, length: packBytes.length }],
       metadata: sampleManifest.metadata,
     };
     objects.set(
@@ -528,14 +693,16 @@ describe('paged directory: point query near the dataset start does not fetch eve
     leafOffsets: number[]; // rel offsets of each leaf (root-relative)
   } {
     const sample = packedFromGolden();
-    const e = decodeDirectory(
-      sample.objects.get('index/directory.sttd')!.subarray(OBJECT_MAGIC_LEN),
-    )[0];
-    const srcPack = sample.objects.get('packs/pack-0.sttp')!;
-    const blob = srcPack.subarray(e.offset, e.offset + e.length);
     const sampleManifest = JSON.parse(
       new TextDecoder().decode(sample.objects.get('manifest.json')!),
     );
+    const e = decodeDirectory(
+      sample.objects
+        .get(sampleManifest.directory.key)!
+        .subarray(OBJECT_MAGIC_LEN),
+    )[0];
+    const srcPack = sample.objects.get(sampleManifest.packs[0].key)!;
+    const blob = srcPack.subarray(e.offset, e.offset + e.length);
 
     const leaves: Uint8Array[] = [];
     const pages: PageDescriptor[] = [];
@@ -585,26 +752,30 @@ describe('paged directory: point query near the dataset start does not fetch eve
     for (let i = 0; i < N_LEAVES; i++)
       sttd.set(leaves[i], root.length + leafOffsets[i]);
 
-    const dirKey = 'index/dir.sttd';
     const objects = new Map<string, Uint8Array>();
     const sttdObject = directoryObject(sttd);
     const { bytes: packBytes } = packObject([blob]);
+    const dirKey = directoryKey(sttdObject);
+    const pKey = packKey(packBytes);
     objects.set(dirKey, sttdObject);
-    objects.set('packs/p0.sttp', packBytes);
+    objects.set(pKey, packBytes);
     const manifest = {
       format: 'stt-packed',
-      formatVersion: 2,
+      formatVersion: 3,
+      variants: [{ id: 0, kind: 'raw' }],
       compression: sampleManifest.compression,
       directory: {
         key: dirKey,
         length: sttdObject.length,
-        directoryVersion: 5,
+        directoryVersion: 6,
         layout: 'paged',
         rootLength: root.length,
         pageCount: N_LEAVES,
         pageEntries: 1,
+        rootHash: blake3Hex128(root),
+        pageHashes: leaves.map((leaf) => blake3Hex128(leaf)),
       },
-      packs: [{ key: 'packs/p0.sttp', length: packBytes.length }],
+      packs: [{ key: pKey, length: packBytes.length }],
       // Base bucket = 1 s (and no temporal-LOD tiers), so the sound upper
       // prune is `tMin <= id.t + 1000`.
       metadata: { ...sampleManifest.metadata, temporal_bucket_ms: BUCKET },

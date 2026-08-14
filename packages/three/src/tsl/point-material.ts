@@ -38,6 +38,7 @@ import {
   type TSLNode,
   type UniformNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import {
   TimeFilterUniforms,
   timeFilterAlphaNode,
@@ -198,7 +199,7 @@ export function createPointMaterial(
     vColor.a.mul(point.opacity).mul(fragAlpha).mul(soft),
   );
 
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   material.opacityNode = a;
   material.transparent = true;
   material.depthWrite = true;

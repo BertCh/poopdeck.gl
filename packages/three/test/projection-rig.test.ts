@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PerspectiveCamera } from 'three';
 import {
   isGlobeProjection,
   rigModeFor,
@@ -6,7 +7,10 @@ import {
   globeControlLimits,
   groundControlLimits,
   MAX_GROUND_PITCH_DEG,
+  MIN_MERCATOR_ZOOM,
+  MAX_MERCATOR_ZOOM,
 } from '../src/scene/projection-rig';
+import { cameraToViewState } from '../src/projection/view-state';
 import { LocalEnuProjection, EARTH_RADIUS } from '../src/projection/local-enu';
 import { MercatorProjection } from '../src/projection/mercator';
 import { GlobeProjection } from '../src/projection/globe';
@@ -81,5 +85,92 @@ describe('groundControlLimits (flat-rig polar clamp)', () => {
     expect(maxPolarAngle).toBeCloseTo((85 * Math.PI) / 180, 12);
     expect(maxPolarAngle).toBeLessThan(Math.PI / 2);
     expect(MAX_GROUND_PITCH_DEG).toBe(85);
+  });
+});
+
+describe('groundControlLimits (flat-rig dolly clamp)', () => {
+  const merc = new MercatorProjection(ANCHOR);
+  const VIEWPORT_H = 800;
+  const FOV = 50;
+  const limits = (
+    extra: { minZoom?: number; maxZoom?: number } = {},
+  ): ReturnType<typeof groundControlLimits> =>
+    groundControlLimits({
+      projection: merc,
+      viewportHeight: VIEWPORT_H,
+      fovDeg: FOV,
+      ...extra,
+    });
+
+  it('clamps the dolly to the mercator zoom range, near ↔ high zoom', () => {
+    const { minDistance, maxDistance } = limits();
+    expect(minDistance).toBeGreaterThan(0);
+    // Zooming IN moves the camera closer, so the zoom CEILING is the distance FLOOR.
+    expect(minDistance!).toBeLessThan(maxDistance!);
+    expect(MIN_MERCATOR_ZOOM).toBe(0);
+    expect(MAX_MERCATOR_ZOOM).toBe(20);
+  });
+
+  it('is the exact inverse of the zoom the basemap is driven with', () => {
+    // The whole point of the clamp: a camera parked at `maxDistance` must read
+    // back as EXACTLY `minZoom` through `cameraToViewState` — the same function
+    // `BasemapOverlay.sync` pushes to the host map's `jumpTo`. If these two ever
+    // disagreed, the camera could sit at a zoom the basemap refuses to follow.
+    const { minDistance, maxDistance } = limits();
+    const cam = new PerspectiveCamera(FOV, 1.6, 0.1, 1e9);
+    for (const [distance, zoom] of [
+      [maxDistance!, MIN_MERCATOR_ZOOM],
+      [minDistance!, MAX_MERCATOR_ZOOM],
+    ] as const) {
+      // Top-down at the anchor, `distance` above the ground plane.
+      const [tx, ty] = merc.project(ANCHOR.longitude, ANCHOR.latitude, 0);
+      cam.up.set(0, 1, 0);
+      cam.position.set(tx, ty, distance);
+      cam.lookAt(tx, ty, 0);
+      cam.updateMatrixWorld();
+      const view = cameraToViewState(merc, cam, { viewportHeight: VIEWPORT_H });
+      expect(view.zoom).toBeCloseTo(zoom, 9);
+    }
+  });
+
+  it('honours an explicit zoom range (and tolerates an inverted one)', () => {
+    const tight = limits({ minZoom: 8, maxZoom: 14 });
+    const wide = limits();
+    // A tighter range sits strictly inside the default clamp on both ends.
+    expect(tight.maxDistance!).toBeLessThan(wide.maxDistance!);
+    expect(tight.minDistance!).toBeGreaterThan(wide.minDistance!);
+    // Swapped bounds describe the same range — never an inverted clamp, which
+    // `OrbitControls` would resolve by pinning the camera at one distance.
+    const swapped = limits({ minZoom: 14, maxZoom: 8 });
+    expect(swapped.minDistance).toBeCloseTo(tight.minDistance!, 9);
+    expect(swapped.maxDistance).toBeCloseTo(tight.maxDistance!, 9);
+  });
+
+  it('leaves non-mercator scenes and incomplete inputs unclamped', () => {
+    // A metric ENU/AV scene has no slippy-map zoom to clamp against — it is framed
+    // by `frameBox` inside its own distance clamp — and a globe scene uses
+    // `globeControlLimits`. Nor can a clamp be derived without a viewport/FOV.
+    for (const opts of [
+      {
+        projection: new LocalEnuProjection(ANCHOR),
+        viewportHeight: VIEWPORT_H,
+        fovDeg: FOV,
+      },
+      {
+        projection: new GlobeProjection(ANCHOR),
+        viewportHeight: VIEWPORT_H,
+        fovDeg: FOV,
+      },
+      { projection: merc, viewportHeight: 0, fovDeg: FOV },
+      { projection: merc, viewportHeight: VIEWPORT_H, fovDeg: 0 },
+      // A canvas that has not been laid out / a camera with no FOV yet.
+      { projection: merc, viewportHeight: VIEWPORT_H },
+      {},
+    ]) {
+      const l = groundControlLimits(opts);
+      expect(l.minDistance).toBeUndefined();
+      expect(l.maxDistance).toBeUndefined();
+      expect(l.maxPolarAngle).toBeCloseTo((85 * Math.PI) / 180, 12);
+    }
   });
 });

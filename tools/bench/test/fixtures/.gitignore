@@ -1,0 +1,6 @@
+# The repo root ignores `*.jsonl` because that extension is otherwise only
+# ever a bulk DATA file (see the data-format block in /.gitignore). The traces
+# in here are the opposite: hand-written, tiny, and load-bearing — the
+# policy-replay determinism test and the pinned incumbent baseline both read
+# them, so they must be committed. Scoped to this directory only.
+!*.jsonl

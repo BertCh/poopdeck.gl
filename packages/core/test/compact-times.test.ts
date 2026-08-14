@@ -21,6 +21,7 @@ import {
   Schema,
   Struct,
   Table,
+  Uint16,
   Uint32,
   Uint64,
   makeData,
@@ -72,7 +73,12 @@ function buildTimeTile(opts: {
   start: { kind: 'i64' | 'u32'; values: number[] };
   end: { kind: 'i64' | 'u32'; values: number[] } | null;
   tileMeta: Record<string, unknown>;
-  vertexTime?: { deltas: number[]; perFeature: number };
+  vertexTime?: {
+    deltas: number[];
+    perFeature: number;
+    /** Wire width of the list child. Defaults to `u32` (the original harness). */
+    width?: 'u16' | 'u32';
+  };
 }): Uint8Array {
   const n = opts.start.values.length;
   const fields: Field[] = [
@@ -121,8 +127,9 @@ function buildTimeTile(opts: {
   children.push(pointGeometry(n));
 
   if (opts.vertexTime) {
-    const { deltas, perFeature } = opts.vertexTime;
-    const item = new Field('item', new Uint32(), true);
+    const { deltas, perFeature, width } = opts.vertexTime;
+    const narrow = width === 'u16';
+    const item = new Field('item', narrow ? new Uint16() : new Uint32(), true);
     const vtData = makeData({
       type: new List(item),
       length: n,
@@ -131,7 +138,9 @@ function buildTimeTile(opts: {
         { length: n + 1 },
         (_, i) => i * perFeature,
       ),
-      child: makeData({ type: new Uint32(), data: Uint32Array.from(deltas) }),
+      child: narrow
+        ? makeData({ type: new Uint16(), data: Uint16Array.from(deltas) })
+        : makeData({ type: new Uint32(), data: Uint32Array.from(deltas) }),
     });
     fields.push(new Field('vertex_time', vtData.type, true));
     children.push(vtData);
@@ -321,5 +330,87 @@ describe('vertex_time List<UInt32> delta tier', () => {
     expect(Array.from(vt).map((v) => Math.round(T0 + v))).toEqual(
       deltas.map((d) => T0 + d * step),
     );
+  });
+});
+
+// ── TB-11 extension 2 — feature-anchored vertex times (`TILE_META.vtf`) ──────
+
+describe('vertex_time feature-anchored tier (vtf)', () => {
+  it('anchors each feature run to its own start_time', () => {
+    // Two features 12 hours apart — far past the u16 tier's 65.5 s reach from a
+    // layer-wide origin — each holding a 60 s trip that fits u16 at step 1.
+    const twelveHours = 12 * 3600_000;
+    const deltas = [0, 30_000, 60_000, 0, 30_000, 60_000];
+    const tile = decodeTile(
+      buildTimeTile({
+        start: { kind: 'i64', values: [T0, T0 + twelveHours] },
+        end: null,
+        tileMeta: { sorted: true, et: 'zero', t0: T0, vtf: 1 },
+        vertexTime: { deltas, perFeature: 3, width: 'u16' },
+      }),
+      tileId,
+    );
+    const f = tile.layers[0].features;
+    const absolute = Array.from(f.vertexTimestamps!).map((v) =>
+      Math.round(f.timeOffset + v),
+    );
+    expect(absolute).toEqual([
+      T0,
+      T0 + 30_000,
+      T0 + 60_000,
+      T0 + twelveHours,
+      T0 + twelveHours + 30_000,
+      T0 + twelveHours + 60_000,
+    ]);
+  });
+
+  it('applies the step, and never a layer origin', () => {
+    // With `vtf` present there is no origin to apply. If the decoder fell back
+    // to the layer-anchored arm it would add `vertexTimeOrigin` (0 here) and
+    // every second feature's times would collapse onto the first's — which is
+    // exactly the silent misdecode the capability exists to prevent.
+    const step = 4;
+    const deltas = [0, 10, 25, 0, 10, 25];
+    const tile = decodeTile(
+      buildTimeTile({
+        start: { kind: 'i64', values: [T0, T0 + 900_000] },
+        end: null,
+        tileMeta: { sorted: true, et: 'zero', t0: T0, vtf: step },
+        vertexTime: { deltas, perFeature: 3, width: 'u16' },
+      }),
+      tileId,
+    );
+    const f = tile.layers[0].features;
+    const absolute = Array.from(f.vertexTimestamps!).map((v) =>
+      Math.round(f.timeOffset + v),
+    );
+    expect(absolute).toEqual([
+      T0,
+      T0 + 40,
+      T0 + 100,
+      T0 + 900_000,
+      T0 + 900_000 + 40,
+      T0 + 900_000 + 100,
+    ]);
+  });
+
+  it('leaves the layer-anchored form untouched when vtf is absent', () => {
+    // The same bytes, read as the incumbent form: both features resolve
+    // against ONE origin. Pins that the new branch is entered only on `vtf`.
+    const deltas = [0, 10, 25, 0, 10, 25];
+    const tile = decodeTile(
+      buildTimeTile({
+        start: { kind: 'i64', values: [T0, T0 + 900_000] },
+        end: null,
+        tileMeta: { sorted: true, et: 'zero', t0: T0, vt: [T0, 4] },
+        vertexTime: { deltas, perFeature: 3, width: 'u16' },
+      }),
+      tileId,
+    );
+    const f = tile.layers[0].features;
+    const absolute = Array.from(f.vertexTimestamps!).map((v) =>
+      Math.round(f.timeOffset + v),
+    );
+    expect(absolute).toEqual([T0, T0 + 40, T0 + 100, T0, T0 + 40, T0 + 100]);
   });
 });

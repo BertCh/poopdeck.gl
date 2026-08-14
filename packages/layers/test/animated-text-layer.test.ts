@@ -679,7 +679,7 @@ describe('AnimatedTextLayer', () => {
     layer.state = { tiles: [tile] };
     layer._currentTime = 0;
     (layer as any).renderLayers();
-    const key = `16/1/2/0:layer0`;
+    const key = `16/1/2/0#0:layer0`;
     const firstDecoded = layer.decodedCache.get(key);
     expect(firstDecoded).toBeDefined();
     (layer as any).renderLayers();

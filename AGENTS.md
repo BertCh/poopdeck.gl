@@ -41,12 +41,14 @@ Arrow IPC with GeoArrow-encoded geometry.
 
 ## Ground rules (read before recommending anything)
 
-- **NO THINNING.** Never thin, sample, or aggregate data just to hit a byte
-  budget — STT's whole philosophy is comprehensive data. To manage size, **clamp
-  the zoom range** (keep `--max-zoom` honest) and use **temporal bucketing**
-  (`--temporal-bucket`). The **summary** (H3/Quadbin) and **raster** tiers are
-  _opt-in coarse-zoom aids_ for very large datasets, **not** a substitute for the
-  raw tier.
+- **NO DEFAULT THINNING.** Default and `--auto` builds preserve every usable
+  feature; never recommend thinning, sampling, or aggregation merely to hit a
+  byte budget. To manage size, first **clamp the zoom range** (keep
+  `--max-zoom` honest) and use **temporal bucketing** (`--temporal-bucket`).
+  Expert users may explicitly opt into the documented per-tile budget controls,
+  but those controls must remain off by default and report what they remove.
+  The **summary** (H3/Quadbin) and **raster** tiers are _opt-in coarse-zoom aids_
+  for very large datasets, **not** a substitute for the raw tier.
 - **The archive/manifest is the contract.** `manifest.json` carries capabilities,
   the temporal block, the pack table, and (if built with `--style-hints`)
   per-property percentiles. Read it before guessing (`describe_dataset`, or open

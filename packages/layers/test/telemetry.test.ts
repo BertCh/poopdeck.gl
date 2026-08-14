@@ -14,6 +14,7 @@ import {
   getSnapshot,
   isProbeEnabled,
   enableProbe,
+  acquireProbe,
 } from '../src/lib/telemetry';
 
 interface ProbeBag {
@@ -112,6 +113,31 @@ describe('telemetry', () => {
     // Oldest sample dropped → last entry is the most recently pushed.
     const last = bag.renderLayers?.at(-1) as { ms: number };
     expect(last.ms).toBe(5999);
+  });
+
+  it('a snapshot-only scoped consumer does not allocate sample channels', () => {
+    const release = acquireProbe({ samples: false });
+    snapshot('fps', 60);
+    emit('renderLayers', { ms: 1, tiles: 1, layer: 'x' });
+    const bag = (globalThis as unknown as { __sttProbe: ProbeBag }).__sttProbe;
+    expect(getSnapshot('fps')).toBe(60);
+    expect(bag.renderLayers).toBeUndefined();
+    release();
+    expect(isProbeEnabled()).toBe(false);
+  });
+
+  it('scoped consumers compose and release independently', () => {
+    const releaseSnapshots = acquireProbe({ samples: false });
+    const releaseSamples = acquireProbe({ samples: true });
+    emit('renderLayers', { ms: 1, tiles: 1, layer: 'x' });
+    const bag = (globalThis as unknown as { __sttProbe: ProbeBag }).__sttProbe;
+    expect(bag.renderLayers).toHaveLength(1);
+    releaseSamples();
+    expect(isProbeEnabled()).toBe(true);
+    emit('renderLayers', { ms: 2, tiles: 2, layer: 'x' });
+    expect(bag.renderLayers).toHaveLength(1);
+    releaseSnapshots();
+    expect(isProbeEnabled()).toBe(false);
   });
 
   it('measure() rethrows exceptions and still emits the sample', () => {

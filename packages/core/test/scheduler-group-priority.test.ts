@@ -23,7 +23,9 @@ import { STTArchive } from '../src/archive';
 import {
   packedFromGolden,
   OBJECT_MAGIC_LEN,
+  directoryKey,
   directoryObject,
+  packKey,
   packObject,
   packedFetch,
   type InMemoryPackedDataset,
@@ -73,8 +75,11 @@ function makeDataset(
   const objects = new Map<string, Uint8Array>();
   const packRefs: Array<{ key: string; length: number }> = [];
   const entries = buckets.map((timeStart, i) => {
-    const key = `packs/t${timeStart}.sttp`;
-    const { bytes } = packObject([blob]);
+    const { bytes: basePack } = packObject([blob]);
+    const bytes = new Uint8Array(basePack.length + 1);
+    bytes.set(basePack);
+    bytes[basePack.length] = i;
+    const key = packKey(bytes);
     objects.set(key, bytes);
     packRefs.push({ key, length: bytes.length });
     return {
@@ -93,18 +98,20 @@ function makeDataset(
     };
   });
   const dirObject = directoryObject(encodeDirectory(entries));
-  objects.set('index/dir.sttd', dirObject);
+  const dKey = directoryKey(dirObject);
+  objects.set(dKey, dirObject);
   objects.set(
     'manifest.json',
     new TextEncoder().encode(
       JSON.stringify({
         format: 'stt-packed',
-        formatVersion: 2,
+        formatVersion: 3,
+        variants: [{ id: 0, kind: 'raw' }],
         compression: 'zstd',
         directory: {
-          key: 'index/dir.sttd',
+          key: dKey,
           length: dirObject.length,
-          directoryVersion: 5,
+          directoryVersion: 6,
         },
         packs: packRefs,
         metadata: meta,
@@ -120,12 +127,22 @@ function tracingFetch(
   dispatched: string[],
 ): typeof fetch {
   const inner = packedFetch(ds);
+  const manifest = JSON.parse(
+    new TextDecoder().decode(ds.objects.get('manifest.json')!),
+  );
+  const labels = new Map<string, string>(
+    manifest.packs.map((p: { key: string }, i: number) => [
+      p.key,
+      `packs/t${BUCKETS[i]}.sttp`,
+    ]),
+  );
   const slash = ds.manifestUrl.lastIndexOf('/');
   const base = ds.manifestUrl.slice(0, slash + 1);
   return (async (url: string, init?: RequestInit) => {
     const headers = init?.headers as Record<string, string> | undefined;
     if (headers?.Range) {
-      dispatched.push(url.startsWith(base) ? url.slice(base.length) : url);
+      const key = url.startsWith(base) ? url.slice(base.length) : url;
+      dispatched.push(labels.get(key) ?? key);
     }
     return inner(url as never, init as never);
   }) as unknown as typeof fetch;

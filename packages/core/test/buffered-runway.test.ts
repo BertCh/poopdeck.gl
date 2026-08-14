@@ -234,6 +234,106 @@ describe('SpatioTemporalTileset.estimateCost', () => {
   });
 });
 
+/**
+ * The per-bucket byte columns CO-1 adds beside `estimateCost`. `estimateCost`
+ * answers "how many bytes", which is the question a controller reasoning about
+ * TIME cannot use — the same total is comfortable spread over a minute and
+ * fatal as a wall two seconds out. These two APIs expose the distribution
+ * without changing what `estimateCost` counts, and the identity between them
+ * is pinned below so the two can never drift into two different truths.
+ */
+describe('SpatioTemporalTileset byte-density profile', () => {
+  it('splits per-bucket totals from what is still missing', async () => {
+    const { tileset, loadBucket } = makeHarness();
+    await loadBucket(0);
+    await loadBucket(1);
+    await primeCoverage(tileset);
+
+    const profile = tileset.getByteDensityProfile({ start: 0, end: 4999 });
+    expect(profile).not.toBeNull();
+    expect(profile!.bucketStarts).toEqual([0, 1000, 2000, 3000, 4000]);
+    // Totals are a property of the data and do not move as tiles load...
+    expect(profile!.totalBytes).toEqual([0, 1, 2, 3, 4].map(bytesAt));
+    // ...while the missing column drains behind the play head.
+    expect(profile!.missingBytes).toEqual([
+      0,
+      0,
+      bytesAt(2),
+      bytesAt(3),
+      bytesAt(4),
+    ]);
+
+    tileset.finalize();
+  });
+
+  it('sums missing bytes to exactly estimateCost over the same range', async () => {
+    const { tileset, loadBucket } = makeHarness();
+    for (const i of [0, 1, 4, 5]) await loadBucket(i);
+    await primeCoverage(tileset);
+
+    const ranges = [
+      { start: 0, end: 999 }, // one bucket, fully loaded
+      { start: 0, end: 2999 },
+      { start: 1500, end: 6500 }, // straddles bucket edges both ends
+      { start: 3000, end: 3000 }, // degenerate point range
+      { start: 0, end: 100_000 }, // past the end of the data
+      { start: 50_000, end: 60_000 }, // entirely past the data
+      { start: -5000, end: -1000 }, // entirely before the data
+    ];
+    for (const range of ranges) {
+      const profile = tileset.getByteDensityProfile(range)!;
+      const missing = profile.missingBytes.reduce((n, b) => n + b, 0);
+      const cost = tileset.estimateCost(range);
+      expect(missing, `range ${range.start}..${range.end}`).toBe(cost.bytes);
+      // Same bucket set on both sides: the walk and the columns agree about
+      // WHICH buckets a range touches, not just about the total.
+      const tiles = profile.missingBytes.filter((b) => b > 0).length;
+      expect(tiles, `tiles ${range.start}..${range.end}`).toBe(cost.tiles);
+    }
+
+    tileset.finalize();
+  });
+
+  it('prices a horizon off the prefix sums (totals, and honest when blind)', async () => {
+    const { tileset, loadBucket } = makeHarness();
+    await loadBucket(0);
+    await primeCoverage(tileset);
+
+    // Residency cost of the next 5 buckets: TOTAL bytes, including the one
+    // already loaded — a cache budget is about what must be held, not fetched.
+    let expected = 0;
+    for (let i = 0; i <= 4; i++) expected += bytesAt(i);
+    expect(tileset.bytesForHorizon(0, 1, 4999)).toEqual({
+      bytes: expected,
+      exact: true,
+    });
+
+    // Identical answer through the walking API's bucket rule.
+    const profile = tileset.getByteDensityProfile({ start: 0, end: 4999 })!;
+    expect(profile.totalBytes.reduce((n, b) => n + b, 0)).toBe(expected);
+
+    // A horizon past the end of the data does not keep growing.
+    const all = tileset.bytesForHorizon(0, 1, 1e9).bytes;
+    let everything = 0;
+    for (let i = 0; i < N_BUCKETS; i++) everything += bytesAt(i);
+    expect(all).toBe(everything);
+    expect(tileset.bytesForHorizon(0, 1, 1e12).bytes).toBe(all);
+
+    tileset.finalize();
+  });
+
+  it('abstains until the coverage index exists', async () => {
+    const { tileset } = makeHarness();
+    // No viewport yet → no index → no profile, and the horizon says so.
+    expect(tileset.getByteDensityProfile({ start: 0, end: 5000 })).toBe(null);
+    expect(tileset.bytesForHorizon(0, 1, 5000)).toEqual({
+      bytes: 0,
+      exact: false,
+    });
+    tileset.finalize();
+  });
+});
+
 describe('SpatioTemporalTileset.estimateTimeToReadyMs', () => {
   it('divides pending bytes by measured throughput, null without a signal', async () => {
     let bytesPerMs: number | null = null;

@@ -27,7 +27,9 @@ import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
   resolveCategoryColor,
-  rampColorAt,
+  rampOrFallback,
+  vertexRampValues,
+  writeVertexRampColor,
   type RGBA,
   type CategoricalColorSpec,
   type RampColorSpec,
@@ -118,7 +120,9 @@ function featureColor(b: BinaryFeatures, f: number, mode: LineColorMode): RGBA {
   if (mode.type === 'constant') return mode.color;
   if (mode.type === 'ramp') {
     const col = b.numericProps[mode.property];
-    return col ? rampColorAt(col[f], mode.domain, mode.range) : mode.fallback;
+    return col
+      ? rampOrFallback(col[f], mode.domain, mode.range, mode.fallback)
+      : mode.fallback;
   }
   const cat = b.categoricalProps[mode.property];
   const label =
@@ -241,6 +245,19 @@ export function buildLineSegmentBuffers(
         ? b.vertexTimestamps
         : synthesizeVertexTimes(b)
       : null;
+    // ALONG-PATH gradient (deck `gradientProperty: 'vertexValues'`): the ramp
+    // scalar is per-VERTEX, so each segment's endpoints get their own colour and
+    // the wide-line material interpolates A→B. Null for a per-feature ramp / a
+    // tile without the channel — those keep the flat per-feature colour below.
+    const vertexRamp =
+      opts.colorMode.type === 'ramp'
+        ? vertexRampValues(
+            b,
+            opts.colorMode.property,
+            startIndices[b.featureCount],
+          )
+        : null;
+    const ramp = opts.colorMode.type === 'ramp' ? opts.colorMode : null;
     for (let f = 0; f < b.featureCount; f++) {
       const rgba = featureColor(b, f, opts.colorMode);
       const cr = rgba[0] / 255,
@@ -288,14 +305,19 @@ export function buildLineSegmentBuffers(
         posB[s * 3] = bx;
         posB[s * 3 + 1] = by;
         posB[s * 3 + 2] = bz;
-        colorA[s * 4] = cr;
-        colorA[s * 4 + 1] = cg;
-        colorA[s * 4 + 2] = cb;
-        colorA[s * 4 + 3] = ca;
-        colorB[s * 4] = cr;
-        colorB[s * 4 + 1] = cg;
-        colorB[s * 4 + 2] = cb;
-        colorB[s * 4 + 3] = ca;
+        if (vertexRamp && ramp) {
+          writeVertexRampColor(colorA, s, vertexRamp[v], ramp);
+          writeVertexRampColor(colorB, s, vertexRamp[v + 1], ramp);
+        } else {
+          colorA[s * 4] = cr;
+          colorA[s * 4 + 1] = cg;
+          colorA[s * 4 + 2] = cb;
+          colorA[s * 4 + 3] = ca;
+          colorB[s * 4] = cr;
+          colorB[s * 4 + 1] = cg;
+          colorB[s * 4 + 2] = cb;
+          colorB[s * 4 + 3] = ca;
+        }
         starts[s] = start;
         ends[s] = end;
         // Window mode ignores timeA/timeB; reveal mode reads them as the

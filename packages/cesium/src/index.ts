@@ -6,9 +6,9 @@
  * @poopdeck.gl/cesium — a CesiumJS backend for SpatioTemporal Tiles, the first
  * green-field consumer of the render kernel (docs/roadmap/renderer-architecture.md
  * §6). It renders STT on a real WGS84 globe and is built almost entirely from
- * `@poopdeck.gl/core` sub-paths (geo / style / time-filter / shader-codegen /
- * tileset-adapter / picking / capabilities) — the proof that adding a backend is
- * thin: a `SttRenderNode` + a `BackendDescriptor` + a camera bridge.
+ * `@poopdeck.gl/core` sub-paths (geo / style / time-filter / tileset-adapter /
+ * picking / capabilities) — the proof that adding a backend is thin: a
+ * `SttRenderNode` + a `BackendDescriptor` + a camera bridge.
  *
  * Streaming: wire a `SpatioTemporalTileset(makeTilesetCallbacks(archive))` from
  * `@poopdeck.gl/core` and feed its `onTileLoad` tiles to `STTPointLayer.setTiles`.
@@ -97,6 +97,3 @@ export {
   type PlayheadClock,
   type AttachCesiumClockOptions,
 } from './cesium-clock.js';
-
-// Generated GLSL time-filter alpha for a future Cesium GPU-appearance path.
-export { timeFilterAlphaGlsl } from './shaders.js';

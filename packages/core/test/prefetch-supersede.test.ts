@@ -236,6 +236,100 @@ describe('speed-aware seek detection', () => {
   });
 });
 
+/**
+ * BH-2 guard. The enqueue budget is now denominated in BYTES as well as tiles,
+ * which changes HOW MUCH of the runway one pass commits — and must change
+ * nothing whatsoever about WHO may cancel it. Both halves of the pinned
+ * exemption are re-asserted here with the byte budget live and binding (heavy
+ * tiles against a small byte cache, so the runway is byte-truncated):
+ *
+ *  - prefetch work is exempt from per-selection supersession, and
+ *  - a priority batch dies only when EVERY member is superseded.
+ */
+describe('BH-2 — the byte budget leaves supersession semantics alone', () => {
+  /** 1 MiB tiles against an 8 MiB cache ⇒ a 4 MiB (4-tile) runway. */
+  function makeByteBudgetedTileset(batches: GatedBatch[]) {
+    return new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      maxCacheSize: 300, // count budget 150 — deliberately NOT the binding one
+      maxCacheByteSize: 8 * 1024 * 1024,
+      getTileByteSize: () => 1024 * 1024,
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: gatedBatchFn(batches),
+    });
+  }
+
+  it('an ordinary playback step still does NOT abort a byte-truncated prefetch batch', async () => {
+    const batches: GatedBatch[] = [];
+    const tileset = makeByteBudgetedTileset(batches);
+
+    tileset.setAnimationState(true, 10);
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS },
+      true,
+    );
+    await settle();
+    batches[0].resolve();
+    await settle(300);
+
+    const prefetchBatches = batches
+      .slice(1)
+      .filter((b) => b.ids.every((id) => id.t > 0));
+    expect(prefetchBatches.length).toBeGreaterThan(0);
+    // The byte budget is genuinely binding: the runway is a handful of heavy
+    // tiles, not the 150 the count budget would have allowed.
+    const runwayTiles = new Set(
+      prefetchBatches.flatMap((b) => b.ids.map((id) => id.t)),
+    );
+    expect(runwayTiles.size).toBeLessThanOrEqual(8);
+
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 500, timeWindow: BUCKET_MS },
+      true,
+    );
+    await settle();
+    expect(prefetchBatches.every((b) => !b.signal?.aborted)).toBe(true);
+
+    tileset.finalize();
+  });
+
+  it('still aborts a priority batch only when EVERY member is superseded', async () => {
+    const batches: GatedBatch[] = [];
+    const tileset = makeByteBudgetedTileset(batches);
+
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 1500, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
+    await settle();
+    const priorityBatch = batches[0];
+    expect(priorityBatch.ids.length).toBeGreaterThan(1);
+
+    // Trailing edge only — survives.
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 2500, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
+    await settle();
+    expect(priorityBatch.signal?.aborted).toBe(false);
+
+    // Every member superseded (a seek) — dies.
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time: 100_000, timeWindow: 3 * BUCKET_MS },
+      true,
+    );
+    await settle();
+    expect(priorityBatch.signal?.aborted).toBe(true);
+
+    tileset.finalize();
+  });
+});
+
 describe('per-batch dispatch accounting', () => {
   it('priority work dispatches while a LARGE batch is still in flight', async () => {
     const batches: GatedBatch[] = [];

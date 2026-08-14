@@ -29,6 +29,7 @@ interface TileDecoder {
     timeRange: TimeRange;
     compressed: ArrayBuffer;
     compression: Compression;
+    expectedUncompressedSize: number;
   }): Promise<Tile>;
 
   /** Release worker resources, if any. */
@@ -41,15 +42,19 @@ Implementations:
 - **`InlineTileDecoder`** — synchronous decode on the calling thread.
   Used in Node tests and as the fallback in browsers when module workers
   fail to construct.
-- **`WorkerTileDecoder`** — pool of 2–4 module workers (sized from
+- **`WorkerTileDecoder`** — pool of 1–4 module workers (sized from
   `navigator.hardwareConcurrency - 1`, capped at 4; override via the
   constructor's `{ poolSize?, workerUrl? }`) that runs
   decompression, Arrow IPC parsing, and binary-feature extraction off the
-  main thread. Requests dispatch to the least-pending worker; decoded
-  typed-array buffers transfer (zero copy) back to the main thread.
+  main thread. Each worker receives one active request while later work stays
+  in a host-side queue, so an aborted queued tile is removed before it consumes
+  worker CPU or copies its compressed payload. Decoded typed-array buffers
+  transfer (zero copy) back to the main thread.
   Workers that crash are replaced; their in-flight requests are rejected.
 - **`createDefaultTileDecoder()`** — picks `WorkerTileDecoder` when the
-  environment supports module workers, otherwise falls back to inline.
+  environment supports module workers, otherwise falls back to inline. Browser
+  archives receive lightweight leases over one process-shared pool; the pool is
+  finalized when its final archive lease is released.
 
 The worker path is the only way to sustain 60 fps while streaming a
 many-thousand-tile dataset — inline decode of one tile is ~5–20 ms of
@@ -71,8 +76,9 @@ Decodes an **uncompressed** tile payload (the layer frame) into a `Tile`.
 `timeRange` is optional — when omitted it defaults to a zero-width range at
 the tile's own `t` (the worker / loaders.gl paths have no directory at hand).
 
-The reader understands two frame shapes, discriminated by
-`manifest.formatVersion` (see [Packed format versions](#packed-format-versions-v1--v2)):
+The current archive reader opens only packed `formatVersion: 3`, whose tile
+payload uses the v2 sectioned layer frame. The standalone decoder can also
+sniff the historical v1 layer-frame shape when no archive manifest is involved:
 
 - **v1** — `[u16 layerCount | flags]` followed by, per layer,
   `[u16 nameLen][name][u32 ipcLen][pad][Arrow IPC stream]`. The leading u16's
@@ -88,12 +94,12 @@ The reader understands two frame shapes, discriminated by
   manifest (where the registry is built and validated). Calling `decodeTile`
   on a raw v2 payload without it throws a descriptive error.
 
-`options` is `DecodeTileOptions` (both fields optional — v1 decoding needs none):
+`options` is `DecodeTileOptions` (both fields optional for standalone decoding):
 
-| Field           | Type               | Description                                                                                                                                                                                                                     |
-| :-------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `templates`     | `TemplateRegistry` | The `hash → template bytes` map built from `manifest.schemas` at archive open. Required to decode v2 frames that reference a template by hash; v1 and self-contained (inline-schema) v2 frames decode without it.               |
-| `formatVersion` | `number`           | The manifest's declared version. When set, it is enforced against the payload (spec §5.2 authority rule): a v2 frame reached through a v1-declared manifest — or vice versa — is a hard error. Omitted, the payload is sniffed. |
+| Field           | Type               | Description                                                                                                                                                                                                       |
+| :-------------- | :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `templates`     | `TemplateRegistry` | The `hash → template bytes` map built from `manifest.schemas` at archive open. Required to decode v2 frames that reference a template by hash; v1 and self-contained (inline-schema) v2 frames decode without it. |
+| `formatVersion` | `number`           | The manifest's declared packed version. Current archives pass `3`, which requires the v2 sectioned frame. Omit it only for standalone frame sniffing.                                                             |
 
 `TemplateRegistry` is `Map<string, Uint8Array>`.
 
@@ -175,16 +181,11 @@ exactly-representable integer range. The
 to its `currentTime` shader uniform. If you build a custom layer, pass
 `features.timeOffset` through unchanged.
 
-## Packed format versions (v1 / v2)
+## Packed archive version
 
-The reader is transparent across both packed layouts and discriminates on
-`manifest.formatVersion`:
-
-- **1** — the frozen 0.3.x layout: v1 layer frames, no object magic.
-- **2** — the 2026-07 byte break: `STTD`/`STTP` object magic and the
-  sectioned, template-referencing v2 layer frame.
-
-A v2 dataset MUST be opened through its `manifest.json` — both the schema
+The archive reader accepts exactly **`formatVersion: 3`** with directory v6.
+There is no legacy archive-reader branch; earlier archives must be rebuilt
+from source. A v3 dataset MUST be opened through its `manifest.json` — both the schema
 template registry (built from `manifest.schemas`) and the declared
 `formatVersion` live there, and every decode forwards them (see
 [`decodeTile`'s options](#decodetile)). At open the reader:
@@ -197,7 +198,7 @@ template registry (built from `manifest.schemas`) and the declared
   unimplemented one would silently misdecode rather than fail — the reader
   rejects at open instead. The implemented set is exported as
   `KNOWN_MANIFEST_CAPABILITIES` (currently `'coord-quant'`, `'attr-quant'`,
-  `'elevation-fold'`).
+  `'elevation-fold'`, `'time-delta'`, and `'vertex-value-quant'`).
 - rejects any unrecognized `formatVersion` or `directoryVersion`.
 
 ## Archive options: integrity & memory
@@ -206,13 +207,15 @@ template registry (built from `manifest.schemas`) and the declared
 accepts these `ArchiveOptions` fields governing checksum verification and the
 raw-IPC memory trade-off. All are optional.
 
-| Option            | Type                | Default  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| :---------------- | :------------------ | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verifyChecksums` | `boolean`           | `true`   | Verify each fetched blob's CRC-32C (from the directory) over its **compressed** bytes BEFORE decompression, on both the worker and inline decode paths. A mismatch rejects that tile's decode with a distinctive `crc32c mismatch` error through the normal per-tile error surface. Entries whose directory CRC is `0`/absent (synthetic archives) and OPFS-decompressed warm hits (no compressed bytes to check) skip verification. Pass `false` as a kill switch (the CRC cost is trivial next to zstd). |
-| `retainArrowIpc`  | `boolean \| 'auto'` | `'auto'` | Whether decoded layers keep their raw Arrow IPC bytes (`arrowIpc` / `arrowTable`) for lazy `toGeoArrowTable()`. `'auto'` drops the reference only for coordinate-quantized (`stt:quant`) layers — whose tables are not literal GeoArrow anyway — and keeps it everywhere `toGeoArrowTable()` is valid. `true` always keeps; `false` always drops (smallest memory). `toGeoArrowTable()` on a dropped layer throws an error naming this option.                                                             |
-| `opfsCache`       | `boolean`           | `false`  | Enable the OPFS-backed persistent tile cache. **Now defaults to `false` everywhere** (including browsers exposing `navigator.storage.getDirectory`) — persistence is strictly opt-in. On the cold path it costs a duplicate main-thread zstd decompress per tile, so leave it off unless the archive fits in `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.                                                                                                                       |
-| `cache`           | `boolean`           | —        | **Deprecated, never read.** The in-memory compressed-byte cache is always on and device-aware.                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `maxCacheSize`    | `number`            | —        | **Deprecated, never read.** The byte-cache budget is device-aware (512 MB desktop / 256 MB low-memory) and not configurable through this field.                                                                                                                                                                                                                                                                                                                                                            |
+| Option            | Type                | Default                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| :---------------- | :------------------ | :----------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verifyChecksums` | `boolean`           | `true`                               | Verify each fetched blob's CRC-32C (from the directory) over its **compressed** bytes BEFORE decompression, on both the worker and inline decode paths. A mismatch rejects that tile's decode with a distinctive `crc32c mismatch` error through the normal per-tile error surface. Entries whose directory CRC is `0`/absent (synthetic archives) and OPFS-decompressed warm hits (no compressed bytes to check) skip verification. Pass `false` as a kill switch (the CRC cost is trivial next to zstd). |
+| `retainArrowIpc`  | `boolean \| 'auto'` | `'auto'`                             | Whether decoded layers keep their raw Arrow IPC bytes (`arrowIpc` / `arrowTable`) for lazy `toGeoArrowTable()`. `'auto'` drops the reference only for coordinate-quantized (`stt:quant`) layers — whose tables are not literal GeoArrow anyway — and keeps it everywhere `toGeoArrowTable()` is valid. `true` always keeps; `false` always drops (smallest memory). `toGeoArrowTable()` on a dropped layer throws an error naming this option.                                                             |
+| `maxCacheTiles`   | `number`            | 2,000 desktop / 1,000 low-memory     | Maximum compressed tile entries retained by this archive. The cache is insertion-ordered LRU; pass `0` to disable it.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `maxCacheBytes`   | `number`            | 512 MiB desktop / 256 MiB low-memory | Maximum compressed bytes retained by this archive. A process-wide LRU applies the same device-aware byte ceiling across all archives, so multi-source maps cannot multiply it. Pass `0` to disable the compressed cache.                                                                                                                                                                                                                                                                                   |
+| `opfsCache`       | `boolean`           | `false`                              | Enable the OPFS-backed persistent tile cache. **Now defaults to `false` everywhere** (including browsers exposing `navigator.storage.getDirectory`) — persistence is strictly opt-in. On the cold path it costs a duplicate main-thread zstd decompress per tile, so leave it off unless the archive fits in `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.                                                                                                                       |
+| `cache`           | `boolean`           | —                                    | **Deprecated, never read.** Use `maxCacheTiles: 0` or `maxCacheBytes: 0` to disable the in-memory compressed cache.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `maxCacheSize`    | `number`            | —                                    | **Deprecated, never read.** Use `maxCacheTiles` and `maxCacheBytes`.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## Integrity & content-addressing primitives
 

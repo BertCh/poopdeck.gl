@@ -216,6 +216,34 @@ belongs in the decision record is the _design stance_:
 - STT stores **unsigned** epoch-ms, so pre-1970 timestamps are rejected by a
   shared guard on every path — filter them in `--where`/`--sql`.
 
+### ⚠️ The default test suite cannot see either adaptor
+
+**Both DB readers sit behind non-default features, so `cargo test --workspace`
+will never tell you when a shared type changes under them.** This is not
+hypothetical — it is the mechanism behind the four red CI jobs found on
+2026-07-31, and it is the single most useful thing to know before touching
+anything both adaptors share:
+
+- The columnar property refactor ported `postgres_input.rs` to
+  `FeatureProperties` and **never touched its DuckDB twin**, which still called
+  `props.keys()` and passed the old `shared_properties` shape. The default suite
+  compiled and passed around it; three of six feature lanes, `rust-all-features`
+  and the full-CLI build were red. `cargo install --features cli` could not have
+  compiled.
+- Fixing the lanes then exposed a real behavioural divergence no default-feature
+  run could reach: `source_parity::duckdb_matches_file_parsed_features`.
+  `FeatureProperties::to_map()` cloned the owned map verbatim while every other
+  accessor (`get`, `iter`, `len`) treats a null as absent — so a feature read
+  through the DB path compared unequal to the identical feature read columnar,
+  which is the exact comparison `to_map` exists to make. The DB readers really do
+  produce nulls, mapping a non-finite float to `Value::Null` via
+  `json_number_or_null`. `to_map` now drops nulls in both arms.
+
+**The rule:** any change to a type shared by the file path and a DB path must be
+run through `cargo test --all-features` (or the `serve-postgres` / `serve-duckdb`
+/ `cli` lanes) in the same pass. A green default suite proves nothing about
+either adaptor.
+
 ## 6. Benchmark (IBTrACS hurricanes)
 
 Source in both cases = NOAA IBTrACS best-track observations (Point/4326):

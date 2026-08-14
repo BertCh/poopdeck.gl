@@ -9,7 +9,7 @@
 //     requestRenderMode:true (render on demand → zero idle renders when paused),
 //     drop 4× MSAA, and strip the sky/atmosphere/sun passes. The blue globe stays.
 //  2. Cesium-time hook — the playhead is applied on every DRAWN frame via
-//     scene.preRender (attachCesiumClock), off React's 20 Hz UI clock, and the
+//     scene.preRender (attachCesiumClock), off React's 10 Hz UI clock, and the
 //     clock pumps scene.requestRender() so requestRenderMode still animates while
 //     playing. requestRenderMode + that pump are an ATOMIC pair.
 //  3. Streaming — SpatioTemporalTileset loads only the tiles in the camera

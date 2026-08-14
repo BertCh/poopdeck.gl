@@ -42,6 +42,7 @@ export { GlobeProjection } from './projection/globe.js';
 export {
   viewStateToCamera,
   cameraToViewState,
+  updateCameraClip,
   intersectSurface,
   surfaceRadius,
   type ViewState,
@@ -192,6 +193,9 @@ export {
   globeControlLimits,
   groundControlLimits,
   MAX_GROUND_PITCH_DEG,
+  MIN_MERCATOR_ZOOM,
+  MAX_MERCATOR_ZOOM,
+  type GroundControlLimitOptions,
   type RigMode,
 } from './scene/projection-rig.js';
 // The layer CONTRACT. `BaseSTTLayer`, the class you extend to implement it, is
@@ -242,10 +246,14 @@ export {
   expandRgbColumns,
   rampColorAt,
   expandRampColors,
+  srgbToLinear,
   type RGBA,
   type CategoricalColorSpec,
   type RampColorSpec,
 } from './lib/color.js';
+/** sRGB→working colour-space node — every layer material's colour goes through
+ *  it so Three's sRGB output pass round-trips the authored byte (deck parity). */
+export { srgbToWorking } from './tsl/color-space.js';
 
 // ─── Objects (bounding boxes) + maps + ego ────────────────────────────────────
 export {

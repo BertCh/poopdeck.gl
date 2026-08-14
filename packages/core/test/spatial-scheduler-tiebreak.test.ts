@@ -22,7 +22,9 @@ import { STTArchive } from '../src/archive';
 import {
   packedFromGolden,
   OBJECT_MAGIC_LEN,
+  directoryKey,
   directoryObject,
+  packKey,
   packObject,
 } from './helpers/packed-fixture';
 import { crc32c } from '../src/crc32c';
@@ -87,8 +89,11 @@ function makeSpatialDataset(
   const packRefs: Array<{ key: string; length: number }> = [];
   const entries: any[] = [];
   tiles.forEach((t, i) => {
-    const key = `packs/x${t.x}.sttp`;
-    const { bytes: packBytes } = packObject([blob]);
+    const { bytes: basePack } = packObject([blob]);
+    const packBytes = new Uint8Array(basePack.length + 1);
+    packBytes.set(basePack);
+    packBytes[basePack.length] = t.x;
+    const key = packKey(packBytes);
 
     objects.set(key, packBytes);
     packRefs.push({ key, length: packBytes.length });
@@ -110,15 +115,17 @@ function makeSpatialDataset(
   });
   const dir = encodeDirectory(entries);
   const dirObject = directoryObject(dir);
-  objects.set('index/dir.sttd', dirObject);
+  const dKey = directoryKey(dirObject);
+  objects.set(dKey, dirObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: [{ id: 0, kind: 'raw' }],
     compression: 'zstd',
     directory: {
-      key: 'index/dir.sttd',
+      key: dKey,
       length: dirObject.length,
-      directoryVersion: 5,
+      directoryVersion: 6,
     },
     packs: packRefs,
     metadata: meta,
@@ -157,7 +164,9 @@ function gatedFetchByPath(
         arrayBuffer: async () => bufferToArrayBuffer(bytes),
       };
     }
-    gate.dispatchOrder.push(key);
+    gate.dispatchOrder.push(
+      key.startsWith('packs/') ? `packs/x${bytes[bytes.length - 1]}.sttp` : key,
+    );
     gate.inFlight++;
     await new Promise<void>((resolve) => gate.gates.push(resolve));
     gate.inFlight--;

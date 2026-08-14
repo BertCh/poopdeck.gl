@@ -36,6 +36,15 @@
  * The CPU functions in `./time-filter-math.ts` are the unit-tested source of
  * truth for BOTH the alpha and the visibility math; keep the two in lockstep
  * (the `*Visible` mirror lives there alongside the `*Alpha` mirror).
+ *
+ * That lockstep is ENFORCED, not merely asked for: `three/test/
+ * tsl-time-filter-conformance.test.ts` builds each graph below once, binds the
+ * per-instance attributes to uniform nodes, and EXECUTES the node graph on the
+ * CPU (three's nodes are plain-old-data introspectable), pinning it numerically
+ * to `./time-filter-math.ts`, to core's `time-filter.ts` oracle and to core's
+ * `shader-codegen.ts` `ALPHA_EXPR` AST — plus a structural lock that the
+ * visibility graphs stay branch-free. What that CANNOT cover is three's
+ * WGSL/GLSL code generator and f32 behaviour; those stay browser-verified.
  */
 
 import { uniform, float, select, saturate, max, mix, step } from './nodes.js';

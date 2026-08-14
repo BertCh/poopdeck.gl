@@ -257,6 +257,35 @@ describe('AnimatedHexagonLayer composite', () => {
     expect(p.onSetElevationDomain).toBe(onSetElevationDomain);
   });
 
+  it('OMITS the domain callbacks at default props (never passes undefined)', () => {
+    // REGRESSION. These props default to `null`, and the old spelling was
+    // `onSetColorDomain: this.props.onSetColorDomain ?? undefined`. deck copies
+    // props with `for (const key in props)`, so an explicitly-undefined key
+    // becomes an OWN property that shadows the prototype-chained defaultProps —
+    // here HexagonLayer's `onSetColorDomain: noop`. deck then calls
+    // `props.onSetColorDomain(...)` UNGUARDED from `_onAggregationUpdate`, so
+    // the first aggregation pass threw `TypeError: props.onSetColorDomain is
+    // not a function` inside the draw pass for every caller who did not supply
+    // a domain callback — i.e. the default configuration.
+    //
+    // The key must be ABSENT, not undefined: `toBeUndefined()` would pass on
+    // the broken code too.
+    const layer = makeLayer();
+    layer.state = { tiles: [bigPointTile(4)] };
+    const p = layer.renderLayers()[0].props;
+    expect(Object.hasOwn(p, 'onSetColorDomain')).toBe(false);
+    expect(Object.hasOwn(p, 'onSetElevationDomain')).toBe(false);
+  });
+
+  it('omits a callback that is explicitly null', () => {
+    const onSetColorDomain = () => {};
+    const layer = makeLayer({ onSetColorDomain, onSetElevationDomain: null });
+    layer.state = { tiles: [bigPointTile(4)] };
+    const p = layer.renderLayers()[0].props;
+    expect(p.onSetColorDomain).toBe(onSetColorDomain);
+    expect(Object.hasOwn(p, 'onSetElevationDomain')).toBe(false);
+  });
+
   it("keeps the caller's updateTriggers instead of replacing them", () => {
     // getSubLayerProps rebuilds updateTriggers as
     // `{all, ...sublayerProps.updateTriggers, ...overrides}` — everything but

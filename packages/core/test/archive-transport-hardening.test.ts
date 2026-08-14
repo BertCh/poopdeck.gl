@@ -41,6 +41,17 @@ function hangForever<T>(): Promise<T> {
   return new Promise<T>(() => {});
 }
 
+async function waitForSignal(
+  read: () => AbortSignal | undefined,
+): Promise<AbortSignal> {
+  for (let i = 0; i < 50; i++) {
+    const signal = read();
+    if (signal) return signal;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error('transport was not reached');
+}
+
 /** Every tile id in the fixture's directory. */
 async function allTileIds(archive: STTArchive): Promise<TileId[]> {
   const index = await archive.getIndex();
@@ -392,5 +403,82 @@ describe('STTArchive abort-path rejection hygiene', () => {
       process.off('unhandledRejection', onUnhandled);
     }
     expect(unhandled).toEqual([]);
+  });
+});
+
+describe('STTArchive lifetime cancellation', () => {
+  it('finalize aborts an in-flight manifest fetch and is idempotent', async () => {
+    let transportSignal: AbortSignal | undefined;
+    const archive = new STTArchive({
+      url: DATASET.manifestUrl,
+      fetch: (async (_url: string, init?: RequestInit) => {
+        transportSignal = init?.signal ?? undefined;
+        return hangForever();
+      }) as unknown as typeof fetch,
+      transferTimeoutMs: 60_000,
+      retryDelaysMs: [1000],
+    });
+
+    const pending = archive.getMetadata();
+    const signal = await waitForSignal(() => transportSignal);
+    expect(signal.aborted).toBe(false);
+    archive.finalize();
+    archive.finalize();
+    expect(signal.aborted).toBe(true);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(archive.getMetadata()).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it('finalize aborts an in-flight directory fetch', async () => {
+    const inner = packedFetch(packedFromGolden());
+    let directorySignal: AbortSignal | undefined;
+    const archive = new STTArchive({
+      url: DATASET.manifestUrl,
+      fetch: (async (url: string, init?: RequestInit) => {
+        if (url.includes('index/')) {
+          directorySignal = init?.signal ?? undefined;
+          return hangForever();
+        }
+        return inner(url, init);
+      }) as unknown as typeof fetch,
+      transferTimeoutMs: 60_000,
+      retryDelaysMs: [],
+    });
+
+    const pending = archive.getIndex();
+    const signal = await waitForSignal(() => directorySignal);
+    archive.finalize();
+    expect(signal.aborted).toBe(true);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('composes caller and lifetime signals for pack ranges', async () => {
+    const ds = packedFromGolden();
+    const inner = packedFetch(ds);
+    let rangeSignal: AbortSignal | undefined;
+    const archive = new STTArchive({
+      url: ds.manifestUrl,
+      fetch: (async (url: string, init?: RequestInit) => {
+        if (isPackRange(url, init)) {
+          rangeSignal = init?.signal ?? undefined;
+          return hangForever();
+        }
+        return inner(url, init);
+      }) as unknown as typeof fetch,
+      transferTimeoutMs: 60_000,
+      retryDelaysMs: [],
+    });
+    const ids = await allTileIds(archive);
+    const caller = new AbortController();
+    const pending = archive.getTile(ids[0], { signal: caller.signal });
+    const signal = await waitForSignal(() => rangeSignal);
+    expect(signal).not.toBe(caller.signal);
+    expect(signal.aborted).toBe(false);
+    archive.finalize();
+    expect(caller.signal.aborted).toBe(false);
+    expect(signal.aborted).toBe(true);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

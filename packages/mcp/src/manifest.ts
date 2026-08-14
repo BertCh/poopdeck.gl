@@ -28,6 +28,11 @@ import * as path from 'node:path';
 export interface RawManifest {
   format: string;
   formatVersion: number;
+  variants: Array<{
+    id: number;
+    kind: 'raw' | 'summary';
+    layer_name?: string;
+  }>;
   capabilities?: string[];
   compression: string;
   blobOrdering?: string;
@@ -66,6 +71,7 @@ export interface RawManifest {
     properties?: Record<string, string>;
     temporal_bucket_ms?: number;
     summary_tier?: {
+      variant_id: number;
       scheme: string;
       min_zoom: number;
       max_zoom: number;
@@ -193,14 +199,14 @@ export interface DatasetDescription extends DatasetSummary {
    * is a summary tier. The packed format does NOT carry a first-class
    * per-column type schema at the manifest layer (only `metadata.layers`,
    * layer names) — the Arrow IPC
-   * `schemas` table (formatVersion 2) has the real column types but is a
+   * `schemas` table (formatVersion 3) has the real column types but is a
    * base64-encoded Arrow IPC prefix, not decoded here (would require an
    * Arrow JS dependency this package deliberately avoids). Absent when the
    * archive was built without `--style-hints` and carries no schema
    * templates a human/agent would find legible without a schema decoder.
    */
   columns?: DatasetColumnSummary[];
-  /** Number of formatVersion-2 Arrow schema templates in the manifest, if any (not decoded — see `columns`). */
+  /** Number of formatVersion-3 Arrow schema templates in the manifest, if any (not decoded — see `columns`). */
   schemaTemplateCount?: number;
 }
 

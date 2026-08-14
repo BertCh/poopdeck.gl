@@ -12,8 +12,8 @@
  *  - an inverted LATITUDE box made `boundsToTiles`' row loop never execute —
  *    zero tiles, while every readiness signal reported settled and buffered;
  *  - a whole-world box at a zoom CLAMPED up into a regional archive's range
- *    enumerated ~1e6 cells per pass, at display refresh during playback,
- *    to find the handful of tiles the archive actually has.
+ *    used to enumerate ~1e6 cells per pass, at display refresh during
+ *    playback, to find the handful of tiles the archive actually has.
  *
  * The latitude half of the seam contract lives in `antimeridian-bounds.test.ts`
  * (which owns the longitude half, including the crossing-vs-inversion split).
@@ -94,12 +94,13 @@ function buildArchive(
     new TextEncoder().encode(
       JSON.stringify({
         format: 'stt-packed',
-        formatVersion: 2,
+        formatVersion: 3,
+        variants: [{ id: 0, kind: 'raw' }],
         compression: 'none',
         directory: {
           key: 'index/dir.sttd',
           length: dirObject.byteLength,
-          directoryVersion: 5,
+          directoryVersion: 6,
         },
         packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],
         metadata: {
@@ -331,12 +332,13 @@ describe('the scan cell cap', () => {
     expect(message).toContain('mem://degenerate-');
     expect(message).toContain('z10');
     expect(message).toContain('8192'); // the cap
-    expect(message).toMatch(/enumerated \d{6,} cells/); // the count
-    // The warning must NOT claim tiles were dropped — it is a frame-time
-    // warning. An earlier revision truncated the scan here, which turned a
-    // performance problem into a silent blank-region problem.
+    expect(message).toMatch(/covers \d{6,} cells/); // theoretical count
+    expect(message).toContain('occupied-cell index');
+    // The warning must NOT claim tiles were dropped. An earlier revision
+    // truncated the scan here, turning a performance problem into a silent
+    // blank-region problem.
     expect(message).not.toContain('TRUNCATED');
-    expect(message).toContain('does not drop tiles');
+    expect(message).toContain('no tiles are dropped');
 
     // A camera does not move much between frames; a warning per frame would
     // bury the console it is meant to inform.
@@ -355,8 +357,13 @@ describe('the scan cell cap', () => {
       // (y=0 is deliberately NOT used: at z10 it sits above lat 85, so it is
       // outside WORLD's own latitude span and its absence proves nothing.)
     ]);
+    // Build before spying: the oversized query must filter occupied cells,
+    // not issue one Map.get for every theoretical cell in the world grid.
+    await archive.getIndex();
+    const cellGet = vi.spyOn((archive as any).tileEntryIndex, 'get');
     const ids = await archive.getTileIdsInBounds(WORLD, 10, RANGE);
     expect(cells(ids)).toEqual(['0/512', '512/512']);
+    expect(cellGet).not.toHaveBeenCalled();
   });
 
   it('leaves an ordinary viewport scan untouched and unwarned', async () => {

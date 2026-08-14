@@ -20,10 +20,16 @@
  * windows so each update addresses exactly one base bucket.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { ScrubLodOptions } from '../src/spatiotemporal-tileset';
-import type { BoundingBox, TemporalLodLevel, TileId } from '../src/types';
+import type { EvictProbeSample } from '../src/telemetry';
+import type {
+  BoundingBox,
+  SelectionCost,
+  TemporalLodLevel,
+  TileId,
+} from '../src/types';
 import {
   BOUNDS,
   BUCKET_MS,
@@ -65,6 +71,16 @@ interface HarnessOptions {
   withLod?: boolean;
   /** Enable coverage tracking from the first update (the G7 probes). */
   trackBuffer?: boolean;
+  /** CO-5 tier-pick policy (default = the option's own default). */
+  temporalTierPolicy?: 'zoom-threshold' | 'cost-argmin';
+  /**
+   * CO-1 oracle stand-in: per-tier `SelectionCost`, keyed by bucket width.
+   * `undefined` leaves the oracle UNWIRED (capability detection), which must
+   * route the pick straight back to the zoom threshold.
+   */
+  tierCosts?: Record<number, SelectionCost>;
+  /** CO-7 exchange rate stand-in (bytes per request). @default 0 */
+  requestOverheadBytes?: number;
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -73,6 +89,8 @@ function makeHarness(opts: HarnessOptions = {}) {
     range: { start: number; end: number };
   }> = [];
   const lodCalls: Array<{ zoom: number; bucketMs: number }> = [];
+  /** Every tier the cost oracle was asked to price, in ask order. */
+  const pricedTiers: number[] = [];
   const tileset = new SpatioTemporalTileset({
     minZoom: 0,
     maxZoom: 12,
@@ -87,6 +105,23 @@ function makeHarness(opts: HarnessOptions = {}) {
           lodCalls.push({ zoom: z, bucketMs });
           return lodTiles(b, z, r, bucketMs);
         }
+      : undefined,
+    temporalTierPolicy: opts.temporalTierPolicy,
+    estimateSelectionCost: opts.tierCosts
+      ? (_b, _z, _r, o) => {
+          const bucketMs = o?.bucketMs ?? BUCKET_MS;
+          pricedTiers.push(bucketMs);
+          return (
+            opts.tierCosts![bucketMs] ?? {
+              bytes: 0,
+              tiles: 0,
+              unknownTiles: 0,
+            }
+          );
+        }
+      : undefined,
+    getRequestOverheadBytes: opts.tierCosts
+      ? () => opts.requestOverheadBytes ?? 0
       : undefined,
     getAvailableTiles: async (b, z, r) => {
       baseCalls.push({ zoom: z, range: { ...r } });
@@ -110,7 +145,7 @@ function makeHarness(opts: HarnessOptions = {}) {
       .getVisibleTiles()
       .map((t) => `${t.id.z}/${t.id.x}/${t.id.y}/${t.id.t}`)
       .sort();
-  return { tileset, baseCalls, lodCalls, update, visibleKeys };
+  return { tileset, baseCalls, lodCalls, pricedTiers, update, visibleKeys };
 }
 
 describe('scrub-LOD kill switch (P0 contract: bit only, zero behavior change)', () => {
@@ -315,6 +350,389 @@ describe('scrub-LOD G7 contract (preview-only: readiness stays on the fine tier)
     const runway = tileset.getBufferedRunway(4000, 1, 3000);
     expect(runway.simMs).toBe(0);
     expect(runway.complete).toBe(false);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * P0-2 — the CORE half of the scrub instrumentation, over a synthetic drag.
+ *
+ * The five-field `ScrubQoeStats` itself lives on the PlaybackGovernor
+ * (`@poopdeck.gl/playback`), because it is accumulated between the governor's
+ * `scrubstart`/`scrubend` events; `@poopdeck.gl/core` has no dependency on the
+ * playback engine and cannot import the type, so that accumulation is pinned
+ * in `packages/playback/test/playback-governor.test.ts`. What core owns — and
+ * what P0-5's byte-during-scrub metric is windowed against — is the eviction
+ * accounting under the drag, asserted here.
+ */
+describe('scrub drag — core-side eviction accounting (P0-2)', () => {
+  interface ProbeBag {
+    enabled?: boolean;
+    evict?: EvictProbeSample[];
+    [k: string]: unknown;
+  }
+  const readBag = (): ProbeBag | undefined =>
+    (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+  const setBag = (bag: ProbeBag | undefined): void => {
+    if (bag === undefined) {
+      delete (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+    } else {
+      (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe = bag;
+    }
+  };
+
+  let original: ProbeBag | undefined;
+  beforeEach(() => {
+    original = readBag();
+    setBag(undefined);
+  });
+  afterEach(() => {
+    setBag(original);
+  });
+
+  /** Grab → 8 preview positions → release, against a 2-tile cache ceiling. */
+  async function synthDrag(
+    tileset: SpatioTemporalTileset,
+    update: (bucketIndex: number, zoom?: number) => void,
+  ): Promise<void> {
+    tileset.setInteractive(true);
+    await settle();
+    for (let bucket = 6; bucket <= 13; bucket++) {
+      update(bucket);
+      await settle();
+    }
+    tileset.setInteractive(false);
+    await settle();
+  }
+
+  it('emits one `evict` sample per eviction, and bytesEvicted agrees with them', async () => {
+    const { tileset, update } = makeHarness({
+      scrubLod: { spatial: true, spatialZoomDrop: 2 },
+      trackBuffer: true,
+    });
+    update(5);
+    await settle();
+    tileset.options.maxCacheSize = 2; // force the drag to churn the cache
+
+    setBag({ enabled: true });
+    const before = tileset.getCacheStats();
+    await synthDrag(tileset, update);
+    const after = tileset.getCacheStats();
+
+    const samples = readBag()!.evict!;
+    // The drag really did evict, and the channel accounts for EVERY eviction
+    // — a per-tier attribution with holes in it would silently under-report.
+    expect(samples.length).toBeGreaterThan(0);
+    expect(samples.length).toBe(after.evictions - before.evictions);
+    expect(after.bytesEvicted - before.bytesEvicted).toBe(
+      samples.reduce((sum, s) => sum + s.bytes, 0),
+    );
+    // Every sample is attributed to a real tier and stamped with the playhead
+    // it was judged against — that stamp is what lets P0-5 window the drag.
+    for (const s of samples) {
+      expect(['a', 'b', 'c', 'd']).toContain(s.tier);
+      expect(typeof s.playheadMs).toBe('number');
+    }
+    // The tier counters only ever count the playhead-relative tiers.
+    const byTier = after.evictionsByTier;
+    expect(byTier.b + byTier.c + byTier.d).toBe(
+      samples.filter((s) => s.tier !== 'a').length,
+    );
+
+    // G7 / the restore invariant is untouched by the instrumentation: the
+    // fine tier is back the moment the thumb lifts.
+    expect(tileset.isInteractive).toBe(false);
+
+    tileset.finalize();
+  });
+
+  it('is a no-op across the whole drag when the probe is off', async () => {
+    const { tileset, update } = makeHarness({
+      scrubLod: { spatial: true, spatialZoomDrop: 2 },
+      trackBuffer: true,
+    });
+    update(5);
+    await settle();
+    tileset.options.maxCacheSize = 2;
+
+    await synthDrag(tileset, update);
+
+    // Not merely "no samples" — the bag was never created, so no probe
+    // payload was ever allocated on the eviction path.
+    expect(readBag()).toBeUndefined();
+    // The plain counters still accumulate: they are fields, not probe state.
+    expect(tileset.getCacheStats().evictions).toBeGreaterThan(0);
+    expect(tileset.getCacheStats().bytesEvicted).toBeGreaterThan(0);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * CO-5 — the temporal-tier pick as a 1-D argmin, on the tileset's scrub path.
+ *
+ * Two gates, both binding: the outer one is `scrubLod.temporal` (unchanged —
+ * the axis is still what turns temporal-LOD selection on at all), the inner
+ * one is `temporalTierPolicy`, whose DEFAULT is the incumbent zoom threshold.
+ * So the first thing asserted here is that nothing moves by default; only
+ * then does the cost path get to be interesting.
+ *
+ * The tier costs are injected rather than measured: what is under test is the
+ * DECISION (which tier, and when it abstains), not CO-1's arithmetic, which
+ * has its own suite.
+ */
+describe('CO-5: temporalTierPolicy on the scrub path', () => {
+  /** Prices that make the BASE tier the cheapest (the over-fetch case). */
+  const BASE_CHEAPEST: Record<number, SelectionCost> = {
+    [BUCKET_MS]: { bytes: 10, tiles: 1, unknownTiles: 0 },
+    [2 * BUCKET_MS]: { bytes: 900, tiles: 1, unknownTiles: 0 },
+    [LOD_BUCKET_MS]: { bytes: 4000, tiles: 1, unknownTiles: 0 },
+  };
+  /** Prices that make the MIDDLE tier the cheapest — not the coarsest. */
+  const MIDDLE_CHEAPEST: Record<number, SelectionCost> = {
+    [BUCKET_MS]: { bytes: 900, tiles: 1, unknownTiles: 0 },
+    [2 * BUCKET_MS]: { bytes: 50, tiles: 1, unknownTiles: 0 },
+    [LOD_BUCKET_MS]: { bytes: 5000, tiles: 1, unknownTiles: 0 },
+  };
+
+  it('DEFAULT policy: the pick is the incumbent snap and the oracle is never consulted', async () => {
+    const { tileset, lodCalls, pricedTiers, update } = makeHarness({
+      scrubLod: { temporal: true },
+      withLod: true,
+      // Oracles wired, policy left at its default. This is the regression pin:
+      // wiring the oracle must not, by itself, change a single selection.
+      tierCosts: BASE_CHEAPEST,
+    });
+
+    update(5);
+    await settle();
+    tileset.setInteractive(true);
+    await settle();
+
+    expect(lodCalls).toEqual([{ zoom: 10, bucketMs: LOD_BUCKET_MS }]);
+    expect(pricedTiers).toEqual([]);
+    tileset.finalize();
+  });
+
+  it('cost-argmin: a cheaper BASE tier keeps selection on the base tier', async () => {
+    const { tileset, baseCalls, lodCalls, pricedTiers, update, visibleKeys } =
+      makeHarness({
+        scrubLod: { temporal: true },
+        withLod: true,
+        temporalTierPolicy: 'cost-argmin',
+        tierCosts: BASE_CHEAPEST,
+      });
+
+    update(5);
+    await settle();
+    const before = visibleKeys();
+
+    tileset.setInteractive(true);
+    await settle();
+
+    // Every addressable tier was priced — base included, coarsest first.
+    expect(pricedTiers.slice(0, 3)).toEqual([
+      LOD_BUCKET_MS,
+      2 * BUCKET_MS,
+      BUCKET_MS,
+    ]);
+    // ...and the base tier won, so the LOD enumeration was never called and
+    // the fine tiles stay on screen. The zoom threshold would have bought the
+    // 4 s tile here.
+    expect(lodCalls).toEqual([]);
+    expect(baseCalls.every((c) => c.zoom === 10)).toBe(true);
+    expect(visibleKeys()).toEqual(before);
+
+    tileset.setInteractive(false);
+    await settle();
+    tileset.finalize();
+  });
+
+  it('cost-argmin: picks the cheapest tier even when it is not the coarsest', async () => {
+    const { tileset, lodCalls, update } = makeHarness({
+      scrubLod: { temporal: true },
+      withLod: true,
+      temporalTierPolicy: 'cost-argmin',
+      tierCosts: MIDDLE_CHEAPEST,
+    });
+
+    update(5);
+    await settle();
+    tileset.setInteractive(true);
+    await settle();
+
+    // The zoom threshold snaps to the coarsest applicable level (4 s); the
+    // argmin buys the 2 s tier because it is genuinely cheaper.
+    expect(lodCalls).toEqual([{ zoom: 10, bucketMs: 2 * BUCKET_MS }]);
+    expect(tileset.getVisibleTiles().map((t) => t.id.bucketMs)).toEqual([
+      2 * BUCKET_MS,
+    ]);
+
+    tileset.finalize();
+  });
+
+  it('cost-argmin: the request price can make a coarse tier win on tile COUNT alone', async () => {
+    const { tileset, lodCalls, update } = makeHarness({
+      scrubLod: { temporal: true },
+      withLod: true,
+      temporalTierPolicy: 'cost-argmin',
+      // Identical bytes at every tier — only the number of separately
+      // addressed tiles differs, which is exactly what L̂·θ̂ prices.
+      tierCosts: {
+        [BUCKET_MS]: { bytes: 2400, tiles: 24, unknownTiles: 0 },
+        [2 * BUCKET_MS]: { bytes: 2400, tiles: 12, unknownTiles: 0 },
+        [LOD_BUCKET_MS]: { bytes: 2400, tiles: 6, unknownTiles: 0 },
+      },
+      requestOverheadBytes: 1000,
+    });
+
+    update(5);
+    await settle();
+    tileset.setInteractive(true);
+    await settle();
+
+    expect(lodCalls).toEqual([{ zoom: 10, bucketMs: LOD_BUCKET_MS }]);
+    tileset.finalize();
+  });
+
+  it('cost-argmin: an unpriced tier abstains back to the zoom threshold', async () => {
+    const { tileset, lodCalls, update } = makeHarness({
+      scrubLod: { temporal: true },
+      withLod: true,
+      temporalTierPolicy: 'cost-argmin',
+      tierCosts: {
+        // The base tier LOOKS cheapest — but its answer is a lower bound
+        // (a non-resident directory leaf), so it must not be acted on.
+        [BUCKET_MS]: { bytes: 10, tiles: 1, unknownTiles: 7 },
+        [2 * BUCKET_MS]: { bytes: 900, tiles: 1, unknownTiles: 0 },
+        [LOD_BUCKET_MS]: { bytes: 4000, tiles: 1, unknownTiles: 0 },
+      },
+    });
+
+    update(5);
+    await settle();
+    tileset.setInteractive(true);
+    await settle();
+
+    // The incumbent answers: coarsest applicable level.
+    expect(lodCalls).toEqual([{ zoom: 10, bucketMs: LOD_BUCKET_MS }]);
+    tileset.finalize();
+  });
+
+  it('cost-argmin with the oracles unwired is the zoom threshold (capability detection)', async () => {
+    const { tileset, lodCalls, update } = makeHarness({
+      scrubLod: { temporal: true },
+      withLod: true,
+      temporalTierPolicy: 'cost-argmin',
+      // tierCosts omitted ⇒ neither oracle is wired.
+    });
+
+    update(5);
+    await settle();
+    tileset.setInteractive(true);
+    await settle();
+
+    expect(lodCalls).toEqual([{ zoom: 10, bucketMs: LOD_BUCKET_MS }]);
+    tileset.finalize();
+  });
+
+  it('cost-argmin is inert while the scrubLod.temporal axis is off (the outer kill switch)', async () => {
+    const { tileset, lodCalls, pricedTiers, update } = makeHarness({
+      scrubLod: { spatial: true, spatialZoomDrop: 2 },
+      withLod: true,
+      temporalTierPolicy: 'cost-argmin',
+      tierCosts: BASE_CHEAPEST,
+    });
+
+    update(5);
+    await settle();
+    tileset.setInteractive(true);
+    await settle();
+
+    // The spatial axis degrades as before; the tier oracle is not even asked.
+    expect(lodCalls).toEqual([]);
+    expect(pricedTiers).toEqual([]);
+    tileset.finalize();
+  });
+
+  it('is deterministic: the same scripted drag yields the same tier sequence', async () => {
+    const run = async (): Promise<
+      Array<{ zoom: number; bucketMs: number }>
+    > => {
+      const { tileset, lodCalls, update } = makeHarness({
+        scrubLod: { temporal: true },
+        withLod: true,
+        temporalTierPolicy: 'cost-argmin',
+        tierCosts: MIDDLE_CHEAPEST,
+      });
+      update(5);
+      await settle();
+      tileset.setInteractive(true);
+      await settle();
+      for (let bucket = 6; bucket <= 9; bucket++) {
+        update(bucket);
+        await settle();
+      }
+      tileset.setInteractive(false);
+      await settle();
+      tileset.finalize();
+      return lodCalls;
+    };
+    expect(await run()).toEqual(await run());
+  });
+});
+
+/**
+ * CO-5 readiness isolation — the structural half of preview-never-gates.
+ *
+ * The tier pick moves SELECTION. It must not move readiness: the coverage
+ * index is built from the base-tier enumeration at the undegraded primary
+ * zoom, and every tile it keys is a base-tier `tileKey`. A coarse-tier tile is
+ * keyed with its `bucketMs` folded in, so it cannot satisfy a base bucket even
+ * when it spans one — which is what lets a gate re-arm against full detail on
+ * scrub release rather than against the preview it just showed.
+ */
+describe('CO-5: readiness stays pinned to the fine base tier', () => {
+  it('getBufferedRunway / getBufferedRanges never report the coarse tier', async () => {
+    const { tileset, update } = makeHarness({
+      scrubLod: { temporal: true },
+      withLod: true,
+      temporalTierPolicy: 'cost-argmin',
+      // The coarse 4 s tier wins, so the drag really does load a coarse tile
+      // spanning base buckets 4..7.
+      tierCosts: {
+        [BUCKET_MS]: { bytes: 9000, tiles: 4, unknownTiles: 0 },
+        [2 * BUCKET_MS]: { bytes: 4000, tiles: 2, unknownTiles: 0 },
+        [LOD_BUCKET_MS]: { bytes: 100, tiles: 1, unknownTiles: 0 },
+      },
+      trackBuffer: true,
+    });
+
+    update(5);
+    await settle();
+    // At rest, exactly base bucket 5 is buffered.
+    expect(tileset.getBufferedRanges()).toEqual([{ start: 5000, end: 6000 }]);
+
+    tileset.setInteractive(true);
+    await settle();
+    // The coarse tile IS resident and IS what renders.
+    expect(tileset.getVisibleTiles().map((t) => t.id.bucketMs)).toEqual([
+      LOD_BUCKET_MS,
+    ]);
+
+    // ...and it buys the readiness APIs nothing. Buckets 4, 6 and 7 lie under
+    // the coarse tile's span and stay unbuffered; the runway probed from the
+    // coarse tile's own start is zero.
+    expect(tileset.getBufferedRanges()).toEqual([{ start: 5000, end: 6000 }]);
+    const runway = tileset.getBufferedRunway(4000, 1, 3000);
+    expect(runway.simMs).toBe(0);
+    expect(runway.complete).toBe(false);
+
+    // Release restores the fine tier; readiness is unchanged by the round trip.
+    tileset.setInteractive(false);
+    await settle();
+    expect(tileset.getBufferedRanges()).toEqual([{ start: 5000, end: 6000 }]);
 
     tileset.finalize();
   });

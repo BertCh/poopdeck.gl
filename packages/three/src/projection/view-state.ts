@@ -19,6 +19,7 @@
 import { MathUtils, PerspectiveCamera, Vector3 } from 'three';
 import {
   EARTH_RADIUS,
+  distanceForGroundResolution,
   worldUnitsPerPixel,
   zoomForWorldUnitsPerPixel,
   type Projection,
@@ -51,14 +52,14 @@ function v3(t: [number, number, number]): Vector3 {
 }
 
 /** Distance from the target so `viewportHeight` px subtend `wupp·viewportHeight`
- *  world units at the target depth, for the camera's vertical FOV. */
+ *  world units at the target depth, for the camera's vertical FOV. Thin binding
+ *  over the shared kernel conversion the rig's distance clamps also use. */
 function distanceForScale(
   camera: PerspectiveCamera,
   wupp: number,
   viewportHeight: number,
 ): number {
-  const halfFov = MathUtils.degToRad(camera.fov) / 2;
-  return (viewportHeight * wupp) / (2 * Math.tan(halfFov));
+  return distanceForGroundResolution(wupp, viewportHeight, camera.fov);
 }
 
 /** Place `camera` at `distance` from `target`, tilted by deck `pitch`/`bearing`
@@ -193,6 +194,29 @@ export function intersectSurface(
   // point that is actually 180° away.
   if (!Number.isFinite(t) || t <= 0) return null;
   return origin.clone().addScaledVector(dir, t);
+}
+
+/**
+ * Re-bracket `camera.near`/`far` around its CURRENT distance to the reference
+ * surface — the dolly-time counterpart of the one-shot {@link viewStateToCamera}
+ * framing, and required for the same reason the clamps in `groundControlLimits`
+ * are: controls own the camera after the first frame, and nothing else touches
+ * the clip planes. Without this a scene framed at zoom z keeps the far plane it
+ * was born with (`6·distance`), so wheeling out ~2.6 levels pushes the ground —
+ * data and all — behind `far` and the viewport empties out while the basemap
+ * underneath carries on. Cheap: one ray-surface solve per frame.
+ *
+ * No-op when the camera distance is degenerate (a camera sitting exactly on the
+ * surface), so a bad frame cannot write a zero/NaN projection matrix.
+ */
+export function updateCameraClip(
+  proj: Projection,
+  camera: PerspectiveCamera,
+): void {
+  const target = recoverTarget(proj, camera);
+  const distance = camera.position.distanceTo(target);
+  if (!Number.isFinite(distance) || distance <= 0) return;
+  setClip(proj, camera, distance);
 }
 
 /** Intersect the camera's forward ray with the ground plane (mercator) or sphere

@@ -1,5 +1,5 @@
 /**
- * Test helpers for the packed formatVersion-2 **layer frame** (spec §5.2):
+ * Test helpers for the packed-v3 **layer-frame-v2** payload (spec §5.2):
  * split an Arrow IPC stream into its schema template + tail at the exact
  * boundary the Rust writer uses, and assemble sectioned v2 frames — inline
  * or hash-referencing — so the unit suite can exercise the TS reader's

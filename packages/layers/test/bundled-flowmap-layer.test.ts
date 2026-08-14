@@ -206,24 +206,14 @@ describe('BundledFlowmapLayer', () => {
         visible: true,
         ...opts,
       };
-      layer.geomCache = new Map();
-      layer.bundle = null;
-      layer.bundleSig = '';
-      layer.bundledLayer = null;
-      layer.bundledLayerKey = '';
-      layer.fallbackCache = new Map();
-      layer.lastTilesRef = null;
-      layer.lastPropsKey = '';
-      layer.tileSetKey = '';
-      layer.nodeTable = null;
-      layer.pendingSig = '';
-      layer._rebuildTimer = null;
-      layer._bundleEpoch = 0;
-      layer._bundleRafId = null;
-      layer._bucket0Abs = 0;
-      layer._bucketWidth = 0;
-      layer._numBuckets = 0;
-      layer._lastStep = -1;
+      // The render caches (including the GPU-owning `bundle`) now live in a
+      // single `stateSlot` bag rather than class fields, so `_transferState`
+      // carries them and an unmemoized re-instantiation cannot orphan the
+      // EdgeBundler's textures/FBOs/models. `stateSlot` lazily builds the bag
+      // — with the same zero values this block used to assign by hand — and
+      // works before `state` exists via the chassis's detached-slot fallback,
+      // so Object.create'd harness instances need no priming.
+      layer.state = {};
       layer.context = { device: fakeDevice };
       layer.getCurrentTime = () => time;
       // Avoid scheduling real rAF timers in the test harness.
@@ -256,7 +246,7 @@ describe('BundledFlowmapLayer', () => {
 
   it('renders one merged GPU BundledFlowLinesLayer for the visible set + a node overlay', () => {
     const layer = makeLayer(0);
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const sublayers = layer.renderLayers();
     expect(sublayers.length).toBe(2);
     const flow = sublayers[0];
@@ -275,7 +265,7 @@ describe('BundledFlowmapLayer', () => {
 
   it('builds a per-edge flow-matrix texture spanning ALL buckets (GPU width animation)', () => {
     const layer = makeLayer(0);
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     layer.renderLayers();
     const matrixTex = createdTextures.find((t) => t.format === 'r32float');
     expect(matrixTex).toBeTruthy();
@@ -294,7 +284,7 @@ describe('BundledFlowmapLayer', () => {
       bundlingIterations: 20,
       smoothingStrength: 0.7,
     });
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     layer.renderLayers();
     const b = h.bundlers[0];
     expect(b.opts.pointCount).toBe(16);
@@ -320,7 +310,7 @@ describe('BundledFlowmapLayer', () => {
     h.supported = false;
     h.staticSupported = true;
     const layer = makeLayer(0, { preBundled: true });
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const sublayers = layer.renderLayers();
     expect(sublayers.length).toBe(2);
     // Chose the static bundle, not a live EdgeBundler.
@@ -343,7 +333,7 @@ describe('BundledFlowmapLayer', () => {
     h.supported = false;
     h.staticSupported = false;
     const layer = makeLayer(0, { preBundled: true });
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const flow = layer.renderLayers()[0];
     expect(h.staticBundles.length).toBe(0);
     expect(layer.bundle.status).toBe('fallback');
@@ -355,7 +345,7 @@ describe('BundledFlowmapLayer', () => {
   it('falls back to straight FlowLinesLayer arrows (CPU widths) when bundling is unsupported', () => {
     h.supported = false;
     const layer = makeLayer(0);
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const flow = layer.renderLayers()[0];
     // Straight-arrow path carries the CPU width buffer; no bundler.
     expect(flow.props.data.attributes.getWidth.size).toBe(1);
@@ -369,7 +359,7 @@ describe('BundledFlowmapLayer', () => {
 
   it('falls back when a tile exceeds maxBundledEdges', () => {
     const layer = makeLayer(0, { maxBundledEdges: 1 });
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const flow = layer.renderLayers()[0];
     expect(flow.props.data.attributes.getWidth).toBeTruthy();
     expect(h.bundlers.length).toBe(0);
@@ -377,7 +367,7 @@ describe('BundledFlowmapLayer', () => {
 
   it('builds the bundle once and reuses the sublayer across renders', () => {
     const layer = makeLayer(0);
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const first = layer.renderLayers();
     const second = layer.renderLayers();
     expect(second[0]).toBe(first[0]); // cached bundled sublayer reused
@@ -386,7 +376,7 @@ describe('BundledFlowmapLayer', () => {
 
   it('aggregates incident flow into node circles (CPU path unchanged)', () => {
     const layer = makeLayer(0); // bucket 0: only edge 0 active at flow 10
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     const nodes = nodeRows(layer.renderLayers()[1]);
     expect(nodes.length).toBe(2);
     // f32 attribute — compare with tolerance, not bit equality.
@@ -399,7 +389,7 @@ describe('BundledFlowmapLayer', () => {
     const layer = makeLayer(0);
     const a = odMatrixTile(TWO_PAIRS, { z: 12, x: 1, y: 1, t: 0 });
     const b = odMatrixTile(TWO_PAIRS, { z: 12, x: 2, y: 2, t: 0 });
-    layer.state = { tiles: [a, b] };
+    layer.state.tiles = [a, b];
     const sublayers = layer.renderLayers();
     // ONE merged bundle (2 tiles × 2 edges = 4) + node overlay — NOT one per tile.
     expect(h.bundlers.length).toBe(1);
@@ -412,7 +402,7 @@ describe('BundledFlowmapLayer', () => {
     // DEBOUNCED (see below), so the old bundle keeps rendering until the set
     // has been quiet — then it rebuilds for {b} (2 edges) and disposes the old
     // bundle's GPU resources.
-    layer.state = { tiles: [b] };
+    layer.state.tiles = [b];
     layer.renderLayers();
     expect(bundlerA.destroyed).toBe(false);
     vi.advanceTimersByTime(200);
@@ -422,9 +412,45 @@ describe('BundledFlowmapLayer', () => {
     expect(h.bundlers[1].edgeCount).toBe(2);
   });
 
+  it('a simulated _transferState carries the GPU bundle to the new instance', () => {
+    // REGRESSION. `bundle` (an EdgeBundler owning 3 textures + 3 framebuffers
+    // + 4 Models, plus the r32float matrix texture) used to be a class FIELD.
+    // deck's `_transferState` moves only `state`/`internalState` onto the
+    // instance React hands it, and `_finalizeOldLayers` never sees a MATCHED
+    // old layer — so `finalizeState`, the only caller of `disposeBundle`,
+    // never ran on it. Under the deck-documented inline-construction idiom
+    // (`layers={[new BundledFlowmapLayer({...})]}`) every re-render that
+    // reached renderLayers therefore leaked a complete GPU bundle, while the
+    // fresh instance saw `bundle === null` and rebuilt it synchronously inside
+    // deck's render callback.
+    const older = makeLayer(0);
+    older.state.tiles = [odMatrixTile(TWO_PAIRS)];
+    older.renderLayers();
+    expect(h.bundlers.length).toBe(1);
+    const bundler = h.bundlers[0];
+
+    const newer = makeLayer(0);
+    newer.state = older.state; // what _transferState does
+
+    // The handle followed the state, so nothing was orphaned…
+    expect(newer.bundle).toBe(older.bundle);
+    expect(newer.bundle.bundler).toBe(bundler);
+    expect(bundler.destroyed).toBe(false);
+
+    // …and the next render reuses it instead of building a second one.
+    newer.renderLayers();
+    expect(h.bundlers.length).toBe(1);
+
+    // The single dispose path still owns teardown, and it now runs against the
+    // instance that actually holds the resources.
+    newer.disposeBundle();
+    expect(bundler.destroyed).toBe(true);
+    expect(older.bundle).toBeNull();
+  });
+
   it('returns [] when there are no tiles', () => {
     const layer = makeLayer(0);
-    layer.state = { tiles: [] };
+    layer.state.tiles = [];
     expect(layer.renderLayers()).toEqual([]);
   });
 
@@ -436,7 +462,7 @@ describe('BundledFlowmapLayer', () => {
       // blanked the whole layer tree (after a ~23 MB Float64Array).
       h.textureLimit = 1;
       const layer = makeLayer(0);
-      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
       const flow = layer.renderLayers()[0];
       expect(layer.bundle.status).toBe('fallback');
       expect(h.bundlers.length).toBe(0);
@@ -448,7 +474,7 @@ describe('BundledFlowmapLayer', () => {
       // `preBundled: true` walked straight into createTexture.
       h.textureLimit = 1;
       const layer = makeLayer(0, { preBundled: true });
-      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
       const flow = layer.renderLayers()[0];
       expect(h.staticBundles.length).toBe(0);
       expect(layer.bundle.status).toBe('fallback');
@@ -459,7 +485,7 @@ describe('BundledFlowmapLayer', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       h.textureLimit = 1;
       const layer = makeLayer(0);
-      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
       layer.renderLayers();
       expect(warn.mock.calls[0][0]).toMatch(/hardware ceiling/);
       expect(warn.mock.calls[0][0]).not.toMatch(/Raise maxBundledEdges/);
@@ -478,7 +504,7 @@ describe('BundledFlowmapLayer', () => {
           },
         },
       };
-      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
       const sublayers = layer.renderLayers();
       expect(layer.bundle.status).toBe('fallback');
       expect(sublayers[0].props.data.attributes.getWidth.size).toBe(1);
@@ -495,14 +521,14 @@ describe('BundledFlowmapLayer', () => {
       // while panning.
       const layer = makeLayer(0);
       const tiles = [odMatrixTile(TWO_PAIRS, { z: 12, x: 0, y: 0, t: 0 })];
-      layer.state = { tiles };
+      layer.state.tiles = tiles;
       layer.renderLayers();
       expect(h.bundlers.length).toBe(1); // first bundle is inline
 
       // Five tiles stream in over 5 × 50 ms — well inside the settle window.
       for (let i = 1; i <= 5; i++) {
         tiles.push(odMatrixTile(TWO_PAIRS, { z: 12, x: i, y: 0, t: 0 }));
-        layer.state = { tiles: [...tiles] };
+        layer.state.tiles = [...tiles];
         layer.renderLayers();
         vi.advanceTimersByTime(50);
       }
@@ -516,7 +542,7 @@ describe('BundledFlowmapLayer', () => {
 
     it('does NOT rebuild on a playhead tick (the signature excludes time)', () => {
       const layer = makeLayer(0);
-      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
       layer.renderLayers();
       expect(h.bundlers.length).toBe(1);
       for (const t of [500, 1000, 1500, 2000]) {
@@ -533,7 +559,7 @@ describe('BundledFlowmapLayer', () => {
   describe('sublayer cache invalidation', () => {
     const rebuildsOn = (mutate: (props: any) => void): boolean => {
       const layer = makeLayer(0);
-      layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+      layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
       const first = layer.renderLayers();
       mutate(layer.props);
       const second = layer.renderLayers();
@@ -569,12 +595,12 @@ describe('BundledFlowmapLayer', () => {
         },
       );
       const layer = makeLayer(0);
-      layer.state = { tiles: [a] };
+      layer.state.tiles = [a];
       const alone = layer.renderLayers();
       const insetAlone = alone[0].props.data.attributes.getEndpointOffsets
         .value[0] as number;
 
-      layer.state = { tiles: [a, b] };
+      layer.state.tiles = [a, b];
       const together = layer.renderLayers();
       expect(together[0]).not.toBe(alone[0]);
       expect(
@@ -587,17 +613,15 @@ describe('BundledFlowmapLayer', () => {
     // No bucket axis → no GPU bundle (nothing to sample); the straight-arrow
     // fallback must still show the corridors rather than an all-zero blank map.
     const layer = makeLayer(0);
-    layer.state = {
-      tiles: [
-        odStaticTile(
-          [
-            { source: [0, 0], target: [1, 1] },
-            { source: [2, 2], target: [3, 3] },
-          ],
-          [16, 0],
-        ),
-      ],
-    };
+    layer.state.tiles = [
+      odStaticTile(
+        [
+          { source: [0, 0], target: [1, 1] },
+          { source: [2, 2], target: [3, 3] },
+        ],
+        [16, 0],
+      ),
+    ];
     const sublayers = layer.renderLayers();
     expect(layer.bundle.status).toBe('fallback');
     const w = sublayers[0].props.data.attributes.getWidth.value as Float32Array;
@@ -610,7 +634,7 @@ describe('BundledFlowmapLayer', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     class FakeDataFilterExtension {}
     const layer = makeLayer(0, { extensions: [new FakeDataFilterExtension()] });
-    layer.state = { tiles: [odMatrixTile(TWO_PAIRS)] };
+    layer.state.tiles = [odMatrixTile(TWO_PAIRS)];
     expect(layer.renderLayers()[0].props.extensions).toEqual([]);
     expect(warn.mock.calls[0][0]).toMatch(/FakeDataFilterExtension/);
     warn.mockRestore();

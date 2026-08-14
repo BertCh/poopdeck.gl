@@ -29,6 +29,7 @@ import React, {
 import DeckGL from '@deck.gl/react';
 import { SolidPolygonLayer } from '@deck.gl/layers';
 import { Map } from 'react-map-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
 import type { TimeController } from '@poopdeck.gl/playback';
 import type { SourceRegistry } from '@poopdeck.gl/react';
 import { buildDemoLayers } from '../demo/buildDemoLayers';
@@ -370,6 +371,10 @@ const AvDeck: React.FC<AvDeckProps> = ({
     let first = true; // first frame snaps, so enabling follow centres at once
     const step = () => {
       const now = performance.now();
+      if (!first && now - last < 33) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
       // Clamp dt so a backgrounded tab (or a stale `last`) can't snap-jump.
       const dt = Math.min((now - last) / 1000, 0.1);
       last = now;

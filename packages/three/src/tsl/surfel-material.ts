@@ -48,6 +48,7 @@ import {
   type TSLNode,
   type UniformNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 
 /** Per-frame / per-config surfel uniforms. The layer sets `.value` each tick. */
 export class SurfelUniforms {
@@ -201,7 +202,7 @@ export function createSurfelMaterial(
     vColor.a.mul(u.opacity).mul(vWeight).mul(g),
   );
 
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   material.opacityNode = alpha;
 
   // Surface splatting: depth-test + depth-WRITE on, std src-over, two-sided.

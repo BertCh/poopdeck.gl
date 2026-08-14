@@ -745,6 +745,55 @@ interface PreparedTile {
  * `_subLayerProps: { icons: { type: MyLayer, ...props } }` swaps the sublayer
  * class / overrides sublayer props (deck's CompositeLayer contract).
  */
+/** One cached per-tile sublayer plus the keys it was built for. */
+interface CachedIconSublayer {
+  layer: IconLayer;
+  preparedKey: PreparedTile;
+  layerPropsKey: string;
+}
+
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link AnimatedIconLayer.iconCaches}.
+ */
+interface IconCaches {
+  prepared: Map<string, PreparedTile>;
+  sublayers: Map<string, CachedIconSublayer>;
+  layerPropsKey: string;
+  tilesRef: Tile[] | null;
+  /* Glide (motion-interpolation) state — only the `interpolate` path. */
+  trackIndex: Map<string, Track> | null;
+  trackIndexKey: string;
+  maintainer: TrackIndexMaintainer | null;
+  pickRows: Map<string, Record<string, unknown>> | null;
+  pickRowsScanned: Set<string> | null;
+  interpFrameTime: number;
+  posBuf: Float64Array | null;
+  angBuf: Float32Array | null;
+  colBuf: Uint8Array | null;
+}
+
+const ICON_CACHE_SLOT = '_sttIconCaches';
+
+function freshIconCaches(): IconCaches {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    layerPropsKey: '',
+    tilesRef: null,
+    trackIndex: null,
+    trackIndexKey: '',
+    maintainer: null,
+    pickRows: null,
+    pickRowsScanned: null,
+    interpFrameTime: NaN,
+    posBuf: null,
+    angBuf: null,
+    colBuf: null,
+  };
+}
+
 export class AnimatedIconLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedIconLayerProps>> {
@@ -870,51 +919,133 @@ export class AnimatedIconLayer<
     reducedMotion: false,
   };
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, every unmemoized `new AnimatedIconLayer(...)`
+   * in a React render started from empty maps and re-ran `buildIconDefs` +
+   * `categoryIndicesToFloat32` for every resident tile, plus a full glide
+   * track-index rebuild — exactly the per-frame work these caches exist to
+   * avoid. `AnimatedPointLayer` fixed this first; this is the port.
+   */
+  private get iconCaches(): IconCaches {
+    return this.stateSlot(ICON_CACHE_SLOT, freshIconCaches);
+  }
+
+  // The accessors below keep the historical field NAMES (the shared harnesses
+  // and sibling layers speak them) while the storage lives on `state`.
+
   /** Per-tile prepared-data cache. Pruned to the live tile set each render. */
-  private preparedTileCache = new Map<string, PreparedTile>();
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.iconCaches.prepared;
+  }
+  private set preparedTileCache(value: Map<string, PreparedTile>) {
+    this.iconCaches.prepared = value;
+  }
 
   /**
    * Per-tile sublayer-instance cache. Returning the SAME IconLayer reference
    * across renderLayers() calls lets deck.gl short-circuit the prop diff
    * entirely — the same cache-storm avoidance as AnimatedPointLayer.
    */
-  private sublayerCache = new Map<
-    string,
-    { layer: IconLayer; preparedKey: PreparedTile; layerPropsKey: string }
-  >();
+  private get sublayerCache(): Map<string, CachedIconSublayer> {
+    return this.iconCaches.sublayers;
+  }
+  private set sublayerCache(value: Map<string, CachedIconSublayer>) {
+    this.iconCaches.sublayers = value;
+  }
 
   /** Digest of every prop baked into a sublayer at construction time. */
-  private lastLayerPropsKey: string = '';
+  private get lastLayerPropsKey(): string {
+    return this.iconCaches.layerPropsKey;
+  }
+  private set lastLayerPropsKey(value: string) {
+    this.iconCaches.layerPropsKey = value;
+  }
   /** Tile-array identity from the previous render — see AnimatedPointLayer.lastTilesRef. */
-  private lastTilesRef: Tile[] | null = null;
+  private get lastTilesRef(): Tile[] | null {
+    return this.iconCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.iconCaches.tilesRef = value;
+  }
 
   /* ── Glide (motion-interpolation) state — only the `interpolate` path ─────
    * Pool the loaded tiles' samples into one id-keyed track index (rebuilt only
    * when the tile SET or a feeding prop changes), then re-interpolate one pose
    * (position + heading) per active entity every frame. */
-  private interpTrackIndex: Map<string, Track> | null = null;
-  private interpTrackIndexKey = '';
+  private get interpTrackIndex(): Map<string, Track> | null {
+    return this.iconCaches.trackIndex;
+  }
+  private set interpTrackIndex(value: Map<string, Track> | null) {
+    this.iconCaches.trackIndex = value;
+  }
+  private get interpTrackIndexKey(): string {
+    return this.iconCaches.trackIndexKey;
+  }
+  private set interpTrackIndexKey(value: string) {
+    this.iconCaches.trackIndexKey = value;
+  }
   /**
    * Incremental maintainer of {@link interpTrackIndex}: re-pools only ADDED
    * tiles and re-sorts only AFFECTED tracks across tile churn, instead of the
    * O(all snapshots) full rebuild that spiked frame time. Lazily created (the
    * test harness bypasses field initializers via Object.create).
    */
-  private interpMaintainer: TrackIndexMaintainer | null = null;
+  private get interpMaintainer(): TrackIndexMaintainer | null {
+    return this.iconCaches.maintainer;
+  }
+  private set interpMaintainer(value: TrackIndexMaintainer | null) {
+    this.iconCaches.maintainer = value;
+  }
   /**
    * Per-track representative decoded source feature, for glide picking. Pruned
    * to the RESIDENT track set on every tile-set change — see
    * {@link scanInterpPickRows}.
    */
-  private interpPickRows: Map<string, Record<string, unknown>> | null = null;
+  private get interpPickRows(): Map<string, Record<string, unknown>> | null {
+    return this.iconCaches.pickRows;
+  }
+  private set interpPickRows(
+    value: Map<string, Record<string, unknown>> | null,
+  ) {
+    this.iconCaches.pickRows = value;
+  }
   /** Tile keys already scanned for {@link interpPickRows}; pruned to the live tile set. */
-  private interpPickRowsScanned: Set<string> | null = null;
+  private get interpPickRowsScanned(): Set<string> | null {
+    return this.iconCaches.pickRowsScanned;
+  }
+  private set interpPickRowsScanned(value: Set<string> | null) {
+    this.iconCaches.pickRowsScanned = value;
+  }
   /** Sim-time of the last glide re-interpolation; skips redundant ticks. */
-  private lastInterpFrameTime = NaN;
+  private get lastInterpFrameTime(): number {
+    return this.iconCaches.interpFrameTime;
+  }
+  private set lastInterpFrameTime(value: number) {
+    this.iconCaches.interpFrameTime = value;
+  }
   /** Grow-only per-frame output buffers (avoid a fresh alloc every glide frame). */
-  private interpPosBuf: Float64Array | null = null;
-  private interpAngBuf: Float32Array | null = null;
-  private interpColBuf: Uint8Array | null = null;
+  private get interpPosBuf(): Float64Array | null {
+    return this.iconCaches.posBuf;
+  }
+  private set interpPosBuf(value: Float64Array | null) {
+    this.iconCaches.posBuf = value;
+  }
+  private get interpAngBuf(): Float32Array | null {
+    return this.iconCaches.angBuf;
+  }
+  private set interpAngBuf(value: Float32Array | null) {
+    this.iconCaches.angBuf = value;
+  }
+  private get interpColBuf(): Uint8Array | null {
+    return this.iconCaches.colBuf;
+  }
+  private set interpColBuf(value: Uint8Array | null) {
+    this.iconCaches.colBuf = value;
+  }
 
   /**
    * Singleton TimeFilterExtension reused by every sublayer. Window-mode

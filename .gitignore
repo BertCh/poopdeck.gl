@@ -66,6 +66,11 @@ temp_eval/
 .env.r2
 rclone.conf
 
+# Benchmark output — frame-cost.mjs writes a JSON report and a screenshot per
+# run. They are per-machine measurements; the numbers worth keeping get written
+# up in docs/roadmap/measurements-*.md instead.
+tools/bench/out/
+
 # Tile files
 *.stt
 # Exception: the tiny bench fixture is checked in so CI can run regression

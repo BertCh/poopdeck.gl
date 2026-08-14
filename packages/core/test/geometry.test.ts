@@ -140,6 +140,159 @@ describe('tessellateFeature', () => {
     ).toBe(6); // earcut, not the 3-index prebaked
   });
 
+  // TB-12 — decoder-side backfill of an EMPTY baked list. The boundary these
+  // tests defend: single-ring is backfilled; holed and multi-part are NOT,
+  // because earcutting their rings as one loop fills the holes silently.
+  describe('empty-baked-list backfill (triangles-partial)', () => {
+    // A unit square, as one ring, with the boundary columns a partial-triangle
+    // builder is required to emit.
+    const square = (partial: Partial<BinaryFeatures> = {}): BinaryFeatures =>
+      polyBf({
+        featureCount: 1,
+        positionDimensions: 2,
+        positions: new Float64Array([0, 0, 1, 0, 1, 1, 0, 1]),
+        startIndices: new Uint32Array([0, 4]),
+        ringIndices: new Uint32Array([0, 4]),
+        triangles: new Uint32Array(0),
+        triangleOffsets: new Uint32Array([0, 0]),
+        ...partial,
+      });
+
+    it('earcuts a single-ring feature whose baked list is empty', () => {
+      const idx = tessellateFeature(square(), 0)!;
+      expect(idx.length).toBe(6);
+      // ...and it agrees exactly with the un-baked tessellation.
+      const reference = tessellateFeature(square(), 0, {
+        preferPrebaked: false,
+      })!;
+      expect(Array.from(idx)).toEqual(Array.from(reference));
+    });
+
+    it('leaves a HOLED feature empty rather than filling its hole', () => {
+      // One feature, two rings: outer square + inner square hole.
+      const holed = polyBf({
+        featureCount: 1,
+        positionDimensions: 2,
+        positions: new Float64Array([
+          0,
+          0,
+          4,
+          0,
+          4,
+          4,
+          0,
+          4, // outer
+          1,
+          1,
+          2,
+          1,
+          2,
+          2,
+          1,
+          2, // hole
+        ]),
+        startIndices: new Uint32Array([0, 8]),
+        ringIndices: new Uint32Array([0, 4, 8]),
+        triangles: new Uint32Array(0),
+        triangleOffsets: new Uint32Array([0, 0]),
+      });
+      expect(tessellateFeature(holed, 0)!.length).toBe(0);
+    });
+
+    it('leaves a MULTI-PART feature empty', () => {
+      const multi = polyBf({
+        featureCount: 1,
+        positionDimensions: 2,
+        positions: new Float64Array([
+          0,
+          0,
+          1,
+          0,
+          1,
+          1,
+          0,
+          1, // part 0
+          5,
+          5,
+          6,
+          5,
+          6,
+          6,
+          5,
+          6, // part 1
+        ]),
+        startIndices: new Uint32Array([0, 8]),
+        ringIndices: new Uint32Array([0, 4, 8]),
+        partIndices: new Uint32Array([0, 4, 8]),
+        triangles: new Uint32Array(0),
+        triangleOffsets: new Uint32Array([0, 0]),
+      });
+      expect(tessellateFeature(multi, 0)!.length).toBe(0);
+    });
+
+    it('refuses to backfill when ringIndices is absent (cannot prove one ring)', () => {
+      const unprovable = square({ ringIndices: undefined });
+      expect(tessellateFeature(unprovable, 0)!.length).toBe(0);
+    });
+
+    it('backfills only the empty entries of a MIXED layer', () => {
+      // feature 0: baked (a holed polygon's real indices). feature 1: empty,
+      // single ring -> backfilled. feature 2: empty, holed -> stays empty.
+      const mixed = polyBf({
+        featureCount: 3,
+        positionDimensions: 2,
+        positions: new Float64Array([
+          0,
+          0,
+          1,
+          0,
+          1,
+          1,
+          0,
+          1, // f0 ring        [0,4)
+          2,
+          0,
+          3,
+          0,
+          3,
+          1,
+          2,
+          1, // f1 ring        [4,8)
+          5,
+          0,
+          9,
+          0,
+          9,
+          4,
+          5,
+          4, // f2 outer       [8,12)
+          6,
+          1,
+          7,
+          1,
+          7,
+          2,
+          6,
+          2, // f2 hole        [12,16)
+        ]),
+        startIndices: new Uint32Array([0, 4, 8, 16]),
+        ringIndices: new Uint32Array([0, 4, 8, 12, 16]),
+        triangles: new Uint32Array([0, 1, 2, 0, 2, 3]),
+        triangleOffsets: new Uint32Array([0, 6, 6, 6]),
+      });
+      expect(Array.from(tessellateFeature(mixed, 0)!)).toEqual([
+        0, 1, 2, 0, 2, 3,
+      ]);
+      const backfilled = tessellateFeature(mixed, 1)!;
+      expect(backfilled.length).toBe(6);
+      for (const i of backfilled) {
+        expect(i).toBeGreaterThanOrEqual(4);
+        expect(i).toBeLessThan(8);
+      }
+      expect(tessellateFeature(mixed, 2)!.length).toBe(0);
+    });
+  });
+
   it('returns null for degenerate / non-polygon features', () => {
     expect(tessellateFeature(polyBf({ featureCount: 1 }), 0)).toBeNull(); // no startIndices, no triangles
     const twoVert = polyBf({

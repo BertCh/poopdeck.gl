@@ -104,7 +104,11 @@ import { warnOnce } from '../../lib/log.js';
 import { updateTriggersDigest } from '../../lib/style-digest.js';
 import { resolveAccessorAlias } from '../../lib/accessor-alias.js';
 import type { WeightAccessorValue } from '../../lib/accessor-alias.js';
-import { DEFAULT_HEATMAP_COLOR_RANGE, GeometryType } from '@poopdeck.gl/core';
+import {
+  DEFAULT_HEATMAP_COLOR_RANGE,
+  GeometryType,
+  tileKey,
+} from '@poopdeck.gl/core';
 import type { Tile } from '@poopdeck.gl/core';
 import { expectGeometry } from '../../lib/geometry-guard.js';
 
@@ -319,6 +323,29 @@ const defaultProps: DefaultProps<AnimatedHeatmapLayerProps> = {
  * swaps the sublayer class / overrides sublayer props (deck's CompositeLayer
  * contract).
  */
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link AnimatedHeatmapLayer.heatmapCaches}.
+ */
+interface HeatmapCaches {
+  channels: Map<number, { key: string; data: ChannelData }>;
+  lastFilterUpdateWall: number;
+  filterRange: [number, number] | null;
+  filterSoftRange: [number, number] | null;
+}
+
+const HEATMAP_CACHE_SLOT = '_sttHeatmapCaches';
+
+function freshHeatmapCaches(): HeatmapCaches {
+  return {
+    channels: new Map(),
+    lastFilterUpdateWall: 0,
+    filterRange: null,
+    filterSoftRange: null,
+  };
+}
+
 export class AnimatedHeatmapLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<
@@ -331,19 +358,60 @@ export class AnimatedHeatmapLayer<
   /** Shared filter extension — one instance across every channel sublayer. */
   private _dataFilter = new DataFilterExtension({ filterSize: 1 });
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, every unmemoized
+   * `new AnimatedHeatmapLayer({...})` in a React render re-packed every visible
+   * tile's consolidated Float64/Float32 buffers from scratch and lost the
+   * stable-array-reference optimization below. `AnimatedTripsLayer` fixed this
+   * first. (`_dataFilter` stays a field on purpose: it is stateless config, and
+   * a fresh instance compares equal under `LayerExtension.equals`.)
+   */
+  private get heatmapCaches(): HeatmapCaches {
+    return this.stateSlot(HEATMAP_CACHE_SLOT, freshHeatmapCaches);
+  }
+
+  // The accessors below keep the historical field NAMES while the storage lives
+  // on `state`.
+
   /** Consolidated binary buffers per channel index, keyed for cache reuse. */
-  private _channelCache = new Map<number, { key: string; data: ChannelData }>();
+  private get _channelCache(): Map<number, { key: string; data: ChannelData }> {
+    return this.heatmapCaches.channels;
+  }
+  private set _channelCache(
+    value: Map<number, { key: string; data: ChannelData }>,
+  ) {
+    this.heatmapCaches.channels = value;
+  }
 
   /** Wall-clock floor for the filterRange (re-aggregation) cadence. */
-  private _lastFilterUpdateWall = 0;
+  private get _lastFilterUpdateWall(): number {
+    return this.heatmapCaches.lastFilterUpdateWall;
+  }
+  private set _lastFilterUpdateWall(value: number) {
+    this.heatmapCaches.lastFilterUpdateWall = value;
+  }
 
   /**
    * Last emitted `filterRange` / `filterSoftRange`, kept so an unchanged window
    * hands the sublayers back the SAME array reference. See {@link stableRange}
    * and the "cost of a window move" note in the module doc.
    */
-  private _filterRange: [number, number] | null = null;
-  private _filterSoftRange: [number, number] | null = null;
+  private get _filterRange(): [number, number] | null {
+    return this.heatmapCaches.filterRange;
+  }
+  private set _filterRange(value: [number, number] | null) {
+    this.heatmapCaches.filterRange = value;
+  }
+  private get _filterSoftRange(): [number, number] | null {
+    return this.heatmapCaches.filterSoftRange;
+  }
+  private set _filterSoftRange(value: [number, number] | null) {
+    this.heatmapCaches.filterSoftRange = value;
+  }
 
   finalizeState(context: LayerContext): void {
     this._channelCache.clear();
@@ -411,7 +479,15 @@ export class AnimatedHeatmapLayer<
     if (channels.length === 0) return [];
 
     const layerTimeOffset = pickLayerTimeOffset(tiles);
-    const tileSetKey = tiles.map(tileKey).sort().join('|');
+    // Canonical `tileKey` (folds in the temporal-LOD `bucketMs`), not the
+    // local `${z}/${x}/${y}/${t}` shadow this file used to define. That
+    // shadow made a scrub-preview tile and its base twin share one key, so
+    // the consolidated-data cache gate below returned the PREVIOUS tier's
+    // points — a payload covering a different span of time.
+    const tileSetKey = tiles
+      .map((tile) => tileKey(tile.id))
+      .sort()
+      .join('|');
 
     // Time window, relativized against the layer offset so it sits in the same
     // small-number f32 space as the per-point filter values. The array is
@@ -661,11 +737,6 @@ function stableRange(
   // subclass that skips the field initializers) leave `last` undefined.
   if (last && last[0] === lo && last[1] === hi) return last;
   return [lo, hi];
-}
-
-function tileKey(tile: Tile): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}`;
 }
 
 function pickLayerTimeOffset(tiles: Tile[]): number {

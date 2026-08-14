@@ -206,9 +206,15 @@ hand-maintaining forks (see
 - **`core/time-filter`** — the CPU time-filter alpha (window/wake/cumulative/trail),
   `relativizeTime` + the `MAX_RELATIVE_TIME_MS` f32 guard, `resolveTimeFilterParams`
   (full-width `timeWindow` ⇄ half-width vocabulary), and `DEFAULT_WAKE_TAIL_SCALE`.
-- **`core/shader-codegen`** — the scalar alpha authored ONCE as an `Expr` AST
-  (`ALPHA_EXPR`); `evalExpr` is the CPU oracle and `emitGLSL100`/`emitGLSL300`
-  machine-emit each backend's shader snippet (no hand-copied GPU math).
+- **`core/shader-codegen`** — the scalar alpha authored a SECOND time as an
+  `Expr` AST (`ALPHA_EXPR`), independently of `core/time-filter`. Despite the
+  name, no shipped shader is generated from it: all four backends hand-write
+  their own dialect (deck GLSL ES 3.00, maplibre GLSL ES 1.00, three TSL;
+  Cesium has no time-filter shader at all and filters on the CPU). Its value
+  is `evalExpr` as a SECOND ORACLE — each backend's shader math is pinned by
+  a conformance test to both it and `timeFilterAlpha`. The GLSL emitters were
+  removed at 0.6.0 (nothing compiled their output); the AST and evaluator are
+  the load-bearing half and stayed.
 - **`core/style`** — categorical / ramp / RGB color expansion (`'u8'`|`'f32'`).
 - **`core/geometry`** — OD endpoint derivation + pre-baked-aware `tessellateFeature`.
 - **`core/geo`** — pluggable `Projection` (`LocalEnu`/`Mercator`/`Globe` with a
@@ -282,7 +288,7 @@ A CesiumJS backend that renders STT on a real **WGS84 globe** (CesiumJS is
 Apache-2.0; no Cesium ion token needed). The first green-field consumer of the
 render kernel — a `CesiumPointLayer` (`SttRenderNode`) + a `BackendDescriptor` +
 a `ViewState`⇄Cesium camera bridge, built entirely from `core/{geo,style,
-time-filter,shader-codegen,tileset-adapter,picking}` with no new shared code. A
+time-filter,tileset-adapter,picking}` with no new shared code. A
 worked `point` scaffold today (rendering is browser-verified). See
 [stt-cesium.md](../api/stt-cesium.md).
 

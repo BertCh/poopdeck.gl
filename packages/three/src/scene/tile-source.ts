@@ -17,7 +17,7 @@
  * small.)
  */
 
-import { STTArchive } from '@poopdeck.gl/core';
+import { STTArchive, tileKey } from '@poopdeck.gl/core';
 import type { ArchiveMetadata, Tile, TileId } from '@poopdeck.gl/core';
 
 export interface STTTileSourceOptions {
@@ -84,7 +84,9 @@ export class STTTileSource {
           metadata.timeRange,
         );
         for (const id of levelIds) {
-          const key = `${id.z}/${id.x}/${id.y}/${id.t}`;
+          // Canonical key — folds in the temporal-LOD tier, so a preview id
+          // does not dedupe away its base twin.
+          const key = tileKey(id);
           if (seen.has(key)) continue;
           seen.add(key);
           ids.push(id);

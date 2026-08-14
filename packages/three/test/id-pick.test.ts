@@ -59,8 +59,10 @@ describe('featureTileKey / parseIdTileKey', () => {
   it('round-trips a (tile, layer) key', () => {
     const id: TileId = { z: 14, x: 3, y: 9, t: 500 };
     const key = featureTileKey(id, 'flows');
-    expect(key).toBe('14/3/9/500::flows');
-    expect(parseIdTileKey(key)).toEqual(id);
+    // `#0` is the raw variant the canonical key always spells out (v3's
+    // variant axis); parsing therefore reports it back explicitly.
+    expect(key).toBe('14/3/9/500#0::flows');
+    expect(parseIdTileKey(key)).toEqual({ ...id, variantId: 0 });
   });
 
   it('returns undefined for a malformed key', () => {
@@ -135,7 +137,7 @@ describe('resolveIdPick', () => {
     expect(hit.tileKey).toBe(key);
     expect(hit.featureIndex).toBe(1);
     expect(hit.index).toBe(1);
-    expect(hit.tileId).toEqual({ z: 12, x: 1, y: 2, t: 0 });
+    expect(hit.tileId).toEqual({ z: 12, x: 1, y: 2, t: 0, variantId: 0 });
     // Point geometry → coordinate is feature i's own vertex.
     expect(hit.coordinate).toEqual([-73.9, 40.8]);
     expect(hit.object!.mag).toBeCloseTo(9, 5);

@@ -16,6 +16,7 @@
  *     near/far), `OrbitControls` about the earth centre.
  */
 
+import { cameraDistanceForZoom } from '@poopdeck.gl/core/geo';
 import {
   LocalEnuProjection,
   type GeoAnchor,
@@ -85,9 +86,73 @@ export function globeControlLimits(globe: GlobeProjection): {
 export const MAX_GROUND_PITCH_DEG = 85;
 
 /**
- * `MapControls` limits for the flat ground rig (the `globeControlLimits` twin).
- * Radians, because that is what `OrbitControls.maxPolarAngle` reads.
+ * Furthest-OUT web-mercator zoom the flat rig allows. `0` is not a taste call —
+ * it is where every basemap host stops: maplibre/mapbox `minZoom` defaults to 0
+ * and deck's `MapState` clamps there too, so a camera that dollies past it keeps
+ * shrinking the DATA while the basemap underneath is frozen at its own floor,
+ * and the two silently drift apart (the `BasemapOverlay.sync` `jumpTo` is
+ * clamped host-side, without complaint). Clamping the camera at the same floor
+ * keeps the two canvases locked at every scale.
  */
-export function groundControlLimits(): { maxPolarAngle: number } {
-  return { maxPolarAngle: (MAX_GROUND_PITCH_DEG * Math.PI) / 180 };
+export const MIN_MERCATOR_ZOOM = 0;
+
+/**
+ * Closest-IN web-mercator zoom the flat rig allows — deck's `MapState` ceiling,
+ * and comfortably inside maplibre's own 22, so the basemap never clamps first on
+ * the zoom-in side either.
+ */
+export const MAX_MERCATOR_ZOOM = 20;
+
+/** Inputs the flat rig's distance clamps derive from (all four are needed —
+ *  without a projection/viewport/FOV there is no zoom↔distance mapping). */
+export interface GroundControlLimitOptions {
+  /** The scene projection. Distance clamps apply to `'mercator'` scenes ONLY —
+   *  a metric ENU/AV scene has no slippy-map zoom to clamp against. */
+  projection?: Projection;
+  /** Viewport height in CSS px (the zoom→distance scale). */
+  viewportHeight?: number;
+  /** Camera vertical field-of-view, degrees. */
+  fovDeg?: number;
+  /** Override the zoom-out floor. @default {@link MIN_MERCATOR_ZOOM} */
+  minZoom?: number;
+  /** Override the zoom-in ceiling. @default {@link MAX_MERCATOR_ZOOM} */
+  maxZoom?: number;
+}
+
+/**
+ * `MapControls` limits for the flat ground rig (the `globeControlLimits` twin):
+ * the polar (tilt) clamp always, plus — on a mercator scene — the dolly clamps
+ * that hold the camera inside `[minZoom, maxZoom]`. Distances come from the
+ * shared `cameraDistanceForZoom`, the exact inverse of the zoom
+ * `cameraToViewState` recovers, so "zoom 0" means the same thing to the clamp
+ * and to the basemap being driven from that zoom. Higher zoom = nearer camera,
+ * hence the crossed assignment.
+ */
+export function groundControlLimits(opts: GroundControlLimitOptions = {}): {
+  maxPolarAngle: number;
+  minDistance?: number;
+  maxDistance?: number;
+} {
+  const maxPolarAngle = (MAX_GROUND_PITCH_DEG * Math.PI) / 180;
+  const { projection, viewportHeight, fovDeg } = opts;
+  if (
+    projection?.kind !== 'mercator' ||
+    !(viewportHeight !== undefined && viewportHeight > 0) ||
+    !(fovDeg !== undefined && fovDeg > 0 && fovDeg < 180)
+  ) {
+    return { maxPolarAngle };
+  }
+  const a = opts.minZoom ?? MIN_MERCATOR_ZOOM;
+  const b = opts.maxZoom ?? MAX_MERCATOR_ZOOM;
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  // Mercator ground resolution is latitude-independent (world units are
+  // mercator-metres), so the clamp holds anywhere on the map — pass latitude 0.
+  const distance = (zoom: number): number =>
+    cameraDistanceForZoom(projection, zoom, 0, viewportHeight, fovDeg);
+  return {
+    maxPolarAngle,
+    minDistance: distance(hi),
+    maxDistance: distance(lo),
+  };
 }

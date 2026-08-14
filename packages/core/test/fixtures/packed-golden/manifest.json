@@ -1,25 +1,35 @@
 {
   "format": "stt-packed",
-  "formatVersion": 2,
+  "formatVersion": 3,
   "capabilities": [
     "time-delta"
+  ],
+  "variants": [
+    {
+      "id": 0,
+      "kind": "raw"
+    }
   ],
   "compression": "zstd",
   "blobOrdering": "spatial",
   "directory": {
-    "key": "index/7ef5d2979554975bdaf922d25acd40e9.sttd",
-    "length": 184,
-    "directoryVersion": 5,
+    "key": "index/3839c5a3b45795e0989912d95dd4c524.sttd",
+    "length": 177,
+    "directoryVersion": 6,
     "encoding": "zstd"
   },
   "packs": [
     {
-      "key": "packs/a1c4f66fe010f6424fcbd57bf15f525f.sttp",
-      "length": 3768
+      "key": "packs/45a379f1791ef1f59e79d8f90347fb30.sttp",
+      "length": 3364
     },
     {
-      "key": "packs/64c874ae97d0002e9bb5e2dc2542d7a5.sttp",
-      "length": 3789
+      "key": "packs/3bbdfa0ce3fc4d47d2d86f1bb958287c.sttp",
+      "length": 3382
+    },
+    {
+      "key": "packs/77f5c43e839c56ce803ae10e34325fd7.sttp",
+      "length": 1697
     }
   ],
   "metadata": {

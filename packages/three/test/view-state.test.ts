@@ -3,6 +3,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import {
   viewStateToCamera,
   cameraToViewState,
+  updateCameraClip,
   intersectSurface,
   type ViewState,
 } from '../src/projection/view-state';
@@ -107,6 +108,65 @@ describe('view-state ⇄ camera (globe)', () => {
     // target sits on the sphere; camera sits outside it.
     expect(target.length()).toBeCloseTo(6378137, 0);
     expect(cam.position.length()).toBeGreaterThan(target.length());
+  });
+});
+
+describe('updateCameraClip (clip planes track the dolly)', () => {
+  it('re-brackets the ground after a wheel-out that outran the far plane', () => {
+    // The bug this exists for: the scene is framed ONCE (`viewStateToCamera` sets
+    // near/far for the distance it framed at), then the controls own the camera.
+    // Dollying out ~2.6 levels puts the ground past `far`, and the viewport empties
+    // out — while the basemap under it, driven by a view state that knows nothing
+    // about clip planes, carries on rendering.
+    const proj = new MercatorProjection();
+    const cam = makeCamera();
+    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 11 }, cam, {
+      viewportHeight: VH,
+    });
+    const framedFar = cam.far;
+    // Wheel out: MapControls scales the offset from the (ground) target.
+    cam.position.multiplyScalar(50);
+    cam.updateMatrixWorld();
+    expect(cam.position.z).toBeGreaterThan(framedFar); // ground now behind `far`
+
+    updateCameraClip(proj, cam);
+    expect(cam.far).toBeGreaterThan(cam.position.z);
+    expect(cam.near).toBeLessThan(cam.position.z);
+    expect(cam.near).toBeGreaterThan(0);
+    // And the zoom it reads back at is untouched — this moves clip planes ONLY.
+    expect(
+      cameraToViewState(proj, cam, { viewportHeight: VH }).zoom,
+    ).toBeCloseTo(11 - Math.log2(50), 6);
+  });
+
+  it('keeps the whole planet inside the frustum when orbiting out on a globe', () => {
+    const proj = new GlobeProjection();
+    const cam = makeCamera();
+    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 3 }, cam, {
+      viewportHeight: VH,
+    });
+    cam.position.multiplyScalar(6); // out toward the OrbitControls distance cap
+    cam.updateMatrixWorld();
+    updateCameraClip(proj, cam);
+    const surfaceDistance = cam.position.length() - EARTH_RADIUS;
+    expect(cam.far).toBeGreaterThan(surfaceDistance);
+    expect(cam.near).toBeLessThan(surfaceDistance);
+    expect(cam.near).toBeGreaterThan(0);
+  });
+
+  it('is a no-op for a degenerate (on-surface) camera', () => {
+    const proj = new MercatorProjection();
+    const cam = makeCamera();
+    viewStateToCamera(proj, { longitude: 0, latitude: 0, zoom: 8 }, cam, {
+      viewportHeight: VH,
+    });
+    const { near, far } = cam;
+    cam.position.set(0, 0, 0); // sitting exactly on the ground plane
+    cam.updateMatrixWorld();
+    updateCameraClip(proj, cam);
+    // Never writes a zero/NaN projection matrix off a bad frame.
+    expect(cam.near).toBe(near);
+    expect(cam.far).toBe(far);
   });
 });
 

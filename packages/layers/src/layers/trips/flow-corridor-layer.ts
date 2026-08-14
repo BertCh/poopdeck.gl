@@ -515,6 +515,17 @@ export class FlowCorridorLayer<
     return { start: binary.startTimes[0], end: binary.endTimes[0] };
   }
 
+  /**
+   * Corridors run the time filter in WINDOW mode, and `timeBoundsForSublayer`
+   * above hands `instanceEndTime` a real feature end. So the slot is NOT free
+   * to carry per-vertex "next vertex" times — the base class's trail glide is
+   * off here (and meaningless: corridor geometry is static, animated by the
+   * value matrix rather than by a head sweeping along it).
+   */
+  protected override usesSegmentVertexTimes(): boolean {
+    return false;
+  }
+
   protected override _handleTimeUpdate(time: number): void {
     super._handleTimeUpdate(time);
     // Until a matrix tile has populated the axis there's nothing to animate;

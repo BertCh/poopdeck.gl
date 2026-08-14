@@ -14,25 +14,27 @@
  */
 
 import type { BinaryFeatures, TileId } from '@poopdeck.gl/core';
-import { getFeatureProperties } from '@poopdeck.gl/core';
+import { getFeatureProperties, parseTileKey } from '@poopdeck.gl/core';
 import type {
   InstanceProvenance,
   SttPickResult,
 } from '@poopdeck.gl/core/picking';
 
 /**
- * Parse a `z/x/y/t::layer` {@link import('../layers/point-buffers.js').pointTileKey}
- * back into its {@link TileId}, or `undefined` if the shape is unexpected (so a
- * malformed key never fabricates a bogus tile).
+ * Parse a `z/x/y/t#variant::layer`
+ * {@link import('../layers/point-buffers.js').pointTileKey} back into its
+ * {@link TileId}, or `undefined` if the shape is unexpected (so a malformed key
+ * never fabricates a bogus tile).
+ *
+ * Delegates to core rather than splitting on `/` by hand. The hand-rolled
+ * parser this replaced predated the variant axis: it read the `#<variant>`
+ * suffix as part of `t`, so `Number('0#0')` was `NaN` and EVERY well-formed key
+ * parsed to `undefined` — silently dropping `tileId` from every point-pick
+ * result. Delegating also picks up the `@<bucketMs>` temporal-LOD suffix for
+ * free, exactly as the sibling `parseIdTileKey` does.
  */
 export function parsePointTileKey(tileKey: string): TileId | undefined {
-  const sep = tileKey.indexOf('::');
-  const coords = sep >= 0 ? tileKey.slice(0, sep) : tileKey;
-  const p = coords.split('/');
-  if (p.length !== 4) return undefined;
-  const [z, x, y, t] = p.map(Number);
-  if (![z, x, y, t].every((n) => Number.isFinite(n))) return undefined;
-  return { z, x, y, t };
+  return parseTileKey(tileKey);
 }
 
 export interface ResolvePointPickParams {

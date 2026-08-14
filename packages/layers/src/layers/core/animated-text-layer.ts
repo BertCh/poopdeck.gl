@@ -106,7 +106,11 @@ import type {
   NumericAccessorValue,
 } from '../../lib/accessor-alias.js';
 import { expectGeometry } from '../../lib/geometry-guard.js';
-import { GeometryType, getFeatureProperties } from '@poopdeck.gl/core';
+import {
+  GeometryType,
+  getFeatureProperties,
+  tileLayerKey,
+} from '@poopdeck.gl/core';
 import type {
   Tile,
   STTTileLayer as TileLayer,
@@ -587,9 +591,17 @@ interface VisibleSet {
   };
 }
 
+/**
+ * (tile, layer) registry key.
+ *
+ * Delegates to the canonical {@link tileLayerKey} instead of re-spelling
+ * `${z}/${x}/${y}/${t}:${name}` — that spelling drops `bucketMs`, so a
+ * temporal-LOD (scrub-preview) tile and the base tile it shares an address
+ * with collided in `decodedCache` / `visibleCache` / `sublayerCache` and
+ * whichever landed second served the other's labels.
+ */
 function makeTileKey(tile: Tile, layer: TileLayer): string {
-  const { z, x, y, t } = tile.id;
-  return `${z}/${x}/${y}/${t}:${layer.name}`;
+  return tileLayerKey(tile.id, layer.name);
 }
 
 /**
@@ -687,6 +699,41 @@ function clamp01(x: number): number {
  *
  * Sublayer short id for `_subLayerProps` overrides: **`text`**.
  */
+/** One cached per-tile sublayer plus the keys it was built for. */
+interface CachedTextSublayer {
+  layer: TextLayer;
+  visible: VisibleSet;
+  layerPropsKey: string;
+  colorSig: string;
+}
+
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link AnimatedTextLayer.textCaches}.
+ */
+interface TextCaches {
+  decoded: Map<string, DecodedTile>;
+  visible: Map<string, VisibleSet>;
+  sublayers: Map<string, CachedTextSublayer>;
+  layerPropsKey: string;
+  tilesRef: Tile[] | null;
+  frameTime: number;
+}
+
+const TEXT_CACHE_SLOT = '_sttTextCaches';
+
+function freshTextCaches(): TextCaches {
+  return {
+    decoded: new Map(),
+    visible: new Map(),
+    sublayers: new Map(),
+    layerPropsKey: '',
+    tilesRef: null,
+    frameTime: NaN,
+  };
+}
+
 export class AnimatedTextLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<ExtraPropsT & Required<_AnimatedTextLayerProps>> {
@@ -798,10 +845,41 @@ export class AnimatedTextLayer<
     fadeOutDuration: { type: 'number', value: 0, min: 0 },
   };
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, an unmemoized `new AnimatedTextLayer({...})`
+   * in a React render started from empty maps — and because this layer forces a
+   * renderLayers pass on every sim-time tick, that meant re-running `decodeTile`
+   * for EVERY resident tile per frame (fresh Float64 position + time arrays,
+   * the full UTF-32 label transcode, the per-category colour table) plus a
+   * fresh TextLayer per tile, which re-runs the per-glyph `transformParagraph`
+   * layout. That is precisely the per-frame work this file's header says the
+   * caches exist to avoid. `AnimatedPointLayer` fixed this first.
+   */
+  private get textCaches(): TextCaches {
+    return this.stateSlot(TEXT_CACHE_SLOT, freshTextCaches);
+  }
+
+  // The accessors below keep the historical field NAMES (the shared harnesses
+  // and sibling layers speak them) while the storage lives on `state`.
+
   /** Per-tile decoded flat-column cache. Pruned to the live tile set each render. */
-  private decodedCache = new Map<string, DecodedTile>();
+  private get decodedCache(): Map<string, DecodedTile> {
+    return this.textCaches.decoded;
+  }
+  private set decodedCache(value: Map<string, DecodedTile>) {
+    this.textCaches.decoded = value;
+  }
   /** Per-tile visible subset + membership signature. Rebuilt only on a real change. */
-  private visibleCache = new Map<string, VisibleSet>();
+  private get visibleCache(): Map<string, VisibleSet> {
+    return this.textCaches.visible;
+  }
+  private set visibleCache(value: Map<string, VisibleSet>) {
+    this.textCaches.visible = value;
+  }
   /**
    * Per-tile sublayer-instance cache — the discipline the sibling icon layer
    * uses. Without it every tile built a fresh TextLayer + fresh accessor
@@ -812,21 +890,33 @@ export class AnimatedTextLayer<
    * prop digest AND the colour signature (which advances only while a row is
    * actually fading).
    */
-  private sublayerCache = new Map<
-    string,
-    {
-      layer: TextLayer;
-      visible: VisibleSet;
-      layerPropsKey: string;
-      colorSig: string;
-    }
-  >();
+  private get sublayerCache(): Map<string, CachedTextSublayer> {
+    return this.textCaches.sublayers;
+  }
+  private set sublayerCache(value: Map<string, CachedTextSublayer>) {
+    this.textCaches.sublayers = value;
+  }
   /** Digest of every prop baked into a sublayer at construction time. */
-  private lastLayerPropsKey = '';
+  private get lastLayerPropsKey(): string {
+    return this.textCaches.layerPropsKey;
+  }
+  private set lastLayerPropsKey(value: string) {
+    this.textCaches.layerPropsKey = value;
+  }
   /** Tile-array identity from the previous render (prune only on a real change). */
-  private lastTilesRef: Tile[] | null = null;
+  private get lastTilesRef(): Tile[] | null {
+    return this.textCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.textCaches.tilesRef = value;
+  }
   /** Sim-time of the last CPU re-filter; skips redundant identical ticks. */
-  private lastFrameTime = NaN;
+  private get lastFrameTime(): number {
+    return this.textCaches.frameTime;
+  }
+  private set lastFrameTime(value: number) {
+    this.textCaches.frameTime = value;
+  }
 
   finalizeState(context: LayerContext): void {
     super.finalizeState(context);

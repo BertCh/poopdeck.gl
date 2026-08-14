@@ -20,7 +20,7 @@ import {
 import type { Tile, BinaryFeatures } from '@poopdeck.gl/core';
 import { GeometryType } from '@poopdeck.gl/core';
 import { BaseSTTLayer, type STTLayerContext } from './layer.js';
-import { resolveCategoryColor, type RGBA } from '../lib/color.js';
+import { resolveCategoryColor, srgbToLinear, type RGBA } from '../lib/color.js';
 
 export interface STTStaticPathLayerOptions {
   id?: string;
@@ -108,10 +108,14 @@ export class STTStaticPathLayer extends BaseSTTLayer {
           this.opts.colorMapping,
           this.opts.colorMappingDefault,
         );
+        // Alpha premultiplied into RGB (LineBasicMaterial has no per-vertex
+        // alpha), then sRGB→linear once per feature — a classic `vertexColors`
+        // material has no colour node to convert in, and the premultiplied value
+        // IS what should land on screen (see `srgbToLinear`).
         const a = (rgba[3] ?? 255) / 255;
-        const r = (rgba[0] / 255) * a;
-        const g = (rgba[1] / 255) * a;
-        const bl = (rgba[2] / 255) * a;
+        const r = srgbToLinear((rgba[0] / 255) * a);
+        const g = srgbToLinear((rgba[1] / 255) * a);
+        const bl = srgbToLinear((rgba[2] / 255) * a);
         const v0 = b.startIndices![f];
         const v1 = b.startIndices![f + 1];
         for (let v = v0; v < v1 - 1; v++) {

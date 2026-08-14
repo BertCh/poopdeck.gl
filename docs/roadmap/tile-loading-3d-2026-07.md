@@ -287,6 +287,15 @@ planes.
 
 ## 5. Waves
 
+**Status (2026-08-03): Waves 1, 2 and 4 have LANDED; Wave 3 has not.** The tables
+below stay as written because the `F*` / `A*` identifiers are the citation targets
+for 35 source and test files — they are a change register, not a plan. What is
+still open from this record is the manual half: the four volumetric demos at their
+shipped cameras, carried as **L2** in the [roadmap README](./README.md). Two
+per-item exceptions to "landed": **F11** (RC8 interval-aware ranking) was gated
+measure-first and was never measured, and **A7** shipped as `tileKey` in
+`packages/core/src/tile-key.ts` rather than the proposed `tileIdToKey` name.
+
 ### Wave 1 — correctness (no format change, no rebuild, no republish)
 
 | #   | Where                                               | Change                                                                                                                                                                                                                     |
@@ -335,7 +344,7 @@ The shipped design separates the two jobs the one counter was doing:
 | A6  | maplibre: route per-layer mode through the **visible** set (today `render()` walks the resident map ⇒ up to 5 zoom levels composited); add `tileLoadTimeWindow`.                                                                                                                                           |
 | A7  | export core's `tileIdToKey` and use it in all ten layer `makeTileKey` helpers, maplibre's `tileKey`, three's `residentSetEqual`.                                                                                                                                                                           |
 
-### Wave 3 — architectural (staged, not blocking)
+### Wave 3 — architectural (staged, not blocking; NOT built)
 
 **A1. Replace the AABB with a frustum-quadtree selection primitive.** Port the shape of
 deck's `getOSMTileIndices`: `viewport.getFrustumPlanes()` + `@math.gl/culling` CullingVolume
@@ -351,7 +360,7 @@ only its four corner rays; the horizon clamp, altitude dilation and floor conven
 one place. Gate with a conformance test: one fixture camera through all four adapters,
 agreeing within one tile and zero zoom levels.
 
-### Wave 4 — config (cheap, independent)
+### Wave 4 — config (cheap, independent; landed)
 
 `no-overlap` off the **volume branch only** (see the correction in §7) · `maxPitch`
 85 → 70 on the four volumetric demos and `DemoViewer`'s default · couple `useGlobalBounds`
@@ -383,7 +392,10 @@ blob-ordering and `maxPitch` assertions.
    next rebuild of each volumetric archive.
 4. **Only if wanted fleet-wide at once:** ~1.5 GB to R2 across the ten storm4d archives +
    `mrms-storm3d-volume` + `earthquake-columns` + `flights`, plus `v2-golden` hash churn.
-   **Fold into B2 rather than running a republish for this alone.**
+   ⚠️ **The B2 republish this was meant to ride shipped on 2026-07-31 WITHOUT it** — step 1
+   never landed (there is no `z_range` on `Metadata`) and neither did step 3. Carried as
+   **K11** in the [roadmap README](./README.md); it now needs the next rebuild window rather
+   than a dedicated one.
 5. **Do NOT change the tile address.** Build-side 2-D assignment — a tile is a full vertical
    column — is correct by design. A 3-D tile address would be a genuine breaking change with
    no demonstrated payoff; every altitude fix identified here is renderer-side selection.
@@ -412,9 +424,11 @@ bounds, and `stt-validate` and the MCP `describe_dataset` both report them as th
 bbox. All three understate the true extent today.
 
 **Fix belongs in the builder** (compute the real geometry bbox, not the centroid bbox) and
-only takes effect on a rebuild — so it is a natural rider on the B2 republish rather than a
-reason to schedule one. Until then a query box is honoured as given, and the oversized-scan
-threshold **warns without truncating**: a slow correct frame beats a fast wrong one.
+only takes effect on a rebuild. ⚠️ **It was slated to ride the B2 republish and did not** —
+`calculate_bounds` still reads `f.lon`/`f.lat` as of 2026-08-03, and B2 shipped on 2026-07-31.
+Carried as **K11** in the [roadmap README](./README.md). Until then a query box is honoured as
+given, and the oversized-scan threshold **warns without truncating**: a slow correct frame
+beats a fast wrong one.
 
 ## 7. Verified correct — do not re-investigate
 

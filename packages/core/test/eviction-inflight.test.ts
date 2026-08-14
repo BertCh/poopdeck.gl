@@ -39,7 +39,7 @@ const settle = (ms = 10): Promise<void> =>
  * offset-shifted (real timers keep running) to step past the 30 s paused
  * grace period without waiting it out.
  */
-function makeHarness() {
+function makeHarness(unloads?: number[]) {
   const pending: Array<{ ids: TileId[]; resolve: () => void }> = [];
   const tileset = new SpatioTemporalTileset({
     minZoom: 0,
@@ -53,6 +53,9 @@ function makeHarness() {
       new Promise<(Tile | null)[]>((resolve) => {
         pending.push({ ids, resolve: () => resolve(ids.map(fakeTile)) });
       }),
+    ...(unloads
+      ? { onTileUnload: (t: Tile) => unloads.push(t.id.t / BUCKET_MS) }
+      : {}),
   });
   const loadBucket = async (i: number): Promise<void> => {
     tileset.update({
@@ -135,6 +138,94 @@ describe('SpatioTemporalTileset eviction/in-flight coupling', () => {
     const stats = tileset.getCacheStats();
     expect(stats.cacheBytes).toBe(0);
     expect(stats.tileCount).toBe(0);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * BH-7 — the exclusions survive loop rotation.
+ *
+ * Rotation changes only the ORDER of the over-limit plan, never who is
+ * eligible for it: needed, pinned and in-flight headers are excluded before
+ * any distance is computed, and that must remain true when the distance is
+ * measured modulo a loop span.
+ */
+describe('SpatioTemporalTileset loop rotation vs the eviction exclusions', () => {
+  /** Buckets 26..33 — a 7 000 ms loop with the playhead at its end. */
+  const LOOP = { start: 26 * BUCKET_MS, end: 33 * BUCKET_MS };
+
+  it('never evicts an in-flight or needed header, and rotates the rest', async () => {
+    installClock();
+    const unloads: number[] = [];
+    const { tileset, loadBucket, releaseBatches } = makeHarness(unloads);
+
+    // Five settled tiles around the loop.
+    for (const i of [26, 27, 28, 29, 31]) {
+      await loadBucket(i);
+      await releaseBatches();
+      advanceClock(1000);
+    }
+    tileset.getBufferedRanges(); // coverage index on
+    await settle();
+    expect(tileset.getCacheStats().tileCount).toBe(5);
+
+    // Bucket 30 goes IN FLIGHT and stays pending — under rotation it is the
+    // just-passed tile, i.e. exactly the one the plan would evict first.
+    await loadBucket(30);
+    expect(tileset.getCacheStats().activeRequests).toBeGreaterThan(0);
+
+    tileset.setLoopWindow(LOOP);
+    tileset.options.maxCacheSize = 3;
+    unloads.length = 0;
+
+    // Playhead at bucket 32 (needed, and not yet resident).
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: 32 * BUCKET_MS + 501,
+      timeWindow: 100,
+    });
+    await settle();
+
+    // The in-flight bucket 30 survives despite ranking first on the wrapped
+    // metric; the rotated order takes the tier-C pair instead.
+    expect(unloads).toEqual([29, 28]);
+    expect(unloads).not.toContain(30);
+    expect(unloads).not.toContain(32);
+    // ...and its request was never released out from under the batch.
+    expect(tileset.getCacheStats().activeRequests).toBeGreaterThan(0);
+
+    tileset.finalize();
+  });
+
+  it('falls back to the incumbent order with no loop declared', async () => {
+    installClock();
+    const unloads: number[] = [];
+    const { tileset, loadBucket, releaseBatches } = makeHarness(unloads);
+
+    for (const i of [26, 27, 28, 29, 31]) {
+      await loadBucket(i);
+      await releaseBatches();
+      advanceClock(1000);
+    }
+    tileset.getBufferedRanges();
+    await settle();
+    await loadBucket(30); // in flight, pending
+
+    tileset.options.maxCacheSize = 3;
+    unloads.length = 0;
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: 6,
+      time: 32 * BUCKET_MS + 501,
+      timeWindow: 100,
+    });
+    await settle();
+
+    // Furthest-behind first — the incumbent plan, unchanged.
+    expect(unloads).toEqual([26, 27]);
+    expect(unloads).not.toContain(30);
 
     tileset.finalize();
   });

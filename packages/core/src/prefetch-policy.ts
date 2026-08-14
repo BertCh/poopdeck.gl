@@ -101,6 +101,18 @@ export const PREFETCH_RELOAD_FRACTION = 0.5;
  * resident window keeps loading and the governor's speed-scaled gates stay
  * satisfiable — the ladder shrinks speculation, never the playhead's own
  * data. At scale 1 the ladder is a strict no-op (byte-identical horizon).
+ *
+ * The floor is a FLOOR, not a disable threshold: the rungs run 0.7, 0.49,
+ * 0.343, then stick at 0.25 forever. A quarter-horizon runway still coalesces
+ * and still feeds the governor's gates, so the ladder degrades speculation
+ * asymptotically rather than switching it off — snapping the scale to 0 instead
+ * collapses every further rung onto `gateFloor` and throws away 0.25 × horizon
+ * of runway the incumbent kept. (§9.1 of the problems doc describes this as a
+ * "disable threshold 0.25"; that is a transcription of THIS floor, not a second
+ * mechanism. Do not implement it as one.) CO-2's contract — with a null
+ * `bytesForHorizon` callback the emitted plan is byte-identical to the
+ * pre-CO-2 one — is exactly the claim these three constants underwrite, and
+ * `prefetch-policy.test.ts` pins the resulting horizon sequence numerically.
  */
 export const PRESSURE_SCALE_MIN = 0.25;
 export const PRESSURE_SCALE_DECAY = 0.7;
@@ -131,6 +143,139 @@ export const PREFETCH_CACHE_FRACTION = 0.5;
 
 /** Floor on the per-pass enqueue budget, whatever the cache budget scales to. */
 export const PREFETCH_MIN_BUDGET_TILES = 64;
+
+/**
+ * Floor on the per-pass enqueue BYTE budget, whatever the cache byte budget
+ * scales to (M6/BH-2). Mirrors {@link PREFETCH_MIN_BUDGET_TILES}: a tiny or
+ * misconfigured `maxCacheByteSize` must still leave a workable runway rather
+ * than collapsing the enqueue to a handful of tiles. 4 MiB ≈ one cold prefetch
+ * slice ({@link PREFETCH_SLICE_COLD_BYTES}), so the floor is always at least
+ * one dispatchable slice of work.
+ *
+ * CURRENCY: COMPRESSED directory bytes — the same unit
+ * `STTArchive.getTileByteSize` (`entry.length`) reports and the same unit the
+ * slice sizer and the throughput estimator speak. See
+ * {@link PrefetchPolicy.enqueueBudgetBytes} for why the whole budget is
+ * denominated that way and how the DECODED cache cap is converted into it.
+ */
+export const PREFETCH_MIN_BUDGET_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Decoded cache bytes per COMPRESSED directory byte — the exchange rate between
+ * the two byte currencies this module has to reconcile (M6/BH-2, F3 repair).
+ *
+ * ## Why an exchange rate is needed at all
+ *
+ * The prefetch budget has a numerator and a denominator and they are measured
+ * by different instruments:
+ *
+ * - the DENOMINATOR is `maxCacheByteSize`, and the LRU enforces it against
+ *   `Σ header.byteSize` where `byteSize = estimateTileSize(tile)` — the
+ *   DECODED, in-memory footprint of a tile (its retained IPC bytes plus every
+ *   materialized binary column);
+ * - the NUMERATOR is what a planning pass can charge per candidate, and the
+ *   only size a pass can know BEFORE fetching is the directory's
+ *   `entry.length` — the COMPRESSED, on-the-wire length.
+ *
+ * Charging compressed bytes against a decoded cap silently over-admits the
+ * runway by exactly the compression ratio, which for zstd-19 Arrow payloads is
+ * several-fold — i.e. the budget that exists to keep the runway RESIDENT would
+ * admit several times what the cache can hold, which is the thrash it was added
+ * to prevent. The two must be in one currency.
+ *
+ * ## Which currency, and why
+ *
+ * COMPRESSED. The per-tile charge cannot be converted (a tile's decoded size is
+ * unknowable until it is decoded), but the cache cap can: divide it by this
+ * expansion and it becomes "how many directory bytes fit in the cache". That
+ * also leaves {@link PREFETCH_MIN_BUDGET_BYTES} in its natural unit — the floor
+ * is about having one dispatchable SLICE of network work, and slices are sized
+ * from measured throughput, which is compressed bytes per ms.
+ *
+ * ## Where the number comes from
+ *
+ * MEASURED, per tileset, from tiles it is actually holding: `Σ byteSize`
+ * (decoded) over `Σ getTileByteSize` (compressed) across resident loaded tiles.
+ * That is a fact about this archive at this zoom, not a constant, and it is
+ * re-derived each planning pass — see
+ * {@link SpatioTemporalTileset} `prefetchByteExpansion`.
+ *
+ * {@link PREFETCH_COLD_BYTE_EXPANSION} is the value used only until
+ * {@link PREFETCH_BYTE_EXPANSION_MIN_SAMPLES} tiles have been priced both ways.
+ * It is deliberately CONSERVATIVE (it under-admits rather than over-admits),
+ * because no sound upper bound on expansion is computable offline. Its evidence:
+ * `stt-optimize inspect` reports declared payload expansion
+ * (`uncompressed_bytes / compressed_bytes`) of 2.10–2.45 across this repo's own
+ * archive fixtures, and a decoded tile is never smaller than its uncompressed
+ * payload (it retains those bytes and adds materialized buffers on top), so 8
+ * sits above every expansion this repo can demonstrate while staying inside the
+ * band real zstd-19 archives occupy. Being too HIGH costs a shorter cold
+ * runway; being too LOW is the defect itself.
+ *
+ * Clamps: {@link PREFETCH_MIN_BYTE_EXPANSION} is 1 because a decoded tile can
+ * never be smaller than its compressed form, so a measured ratio below 1 is a
+ * synthetic/degenerate sample and must never INFLATE the budget above what the
+ * pre-BH-2 code admitted. {@link PREFETCH_MAX_BYTE_EXPANSION} bounds how far one
+ * pathological archive can shrink the runway.
+ *
+ * KILL SWITCH: pass `1` as `enqueueBudgetBytes`'s second argument (and as the
+ * plan's byte-budget divisor) and every comparison reverts, exactly, to the
+ * pre-repair mixed-currency behavior.
+ */
+export const PREFETCH_COLD_BYTE_EXPANSION = 8;
+
+/** Hard floor on the expansion: decoded is never smaller than compressed. */
+export const PREFETCH_MIN_BYTE_EXPANSION = 1;
+
+/** Hard ceiling on the expansion, so one odd archive cannot starve the runway. */
+export const PREFETCH_MAX_BYTE_EXPANSION = 64;
+
+/**
+ * Resident tiles that must be priced in BOTH currencies before the measured
+ * expansion displaces {@link PREFETCH_COLD_BYTE_EXPANSION}. Small, because the
+ * estimate is byte-weighted (a ratio of sums, not a mean of ratios) and a
+ * handful of real tiles already dominates a guess; large enough that a single
+ * unrepresentative tile cannot set the exchange rate for a session.
+ */
+export const PREFETCH_BYTE_EXPANSION_MIN_SAMPLES = 4;
+
+/**
+ * The measured decoded-per-compressed expansion, or the conservative cold value
+ * when the sample is too small or degenerate. Pure and total: same inputs, same
+ * output, no clock and no state.
+ *
+ * @param compressedBytes Σ directory `entry.length` over the sampled tiles.
+ * @param decodedBytes    Σ `estimateTileSize` over the SAME tiles.
+ * @param samples         How many tiles those two sums cover.
+ */
+export function byteExpansionRatio(
+  compressedBytes: number,
+  decodedBytes: number,
+  samples: number,
+): number {
+  if (
+    samples < PREFETCH_BYTE_EXPANSION_MIN_SAMPLES ||
+    !(compressedBytes > 0) ||
+    !(decodedBytes > 0)
+  )
+    return PREFETCH_COLD_BYTE_EXPANSION;
+  return clampByteExpansion(decodedBytes / compressedBytes);
+}
+
+/**
+ * Clamp an expansion into {@link PREFETCH_MIN_BYTE_EXPANSION} ..
+ * {@link PREFETCH_MAX_BYTE_EXPANSION}; a non-finite or non-positive input falls
+ * back to {@link PREFETCH_COLD_BYTE_EXPANSION} rather than disabling the
+ * conversion (which is what an unclamped 0 or NaN would do).
+ */
+export function clampByteExpansion(ratio: number): number {
+  if (!Number.isFinite(ratio) || ratio <= 0)
+    return PREFETCH_COLD_BYTE_EXPANSION;
+  return Math.min(
+    PREFETCH_MAX_BYTE_EXPANSION,
+    Math.max(PREFETCH_MIN_BYTE_EXPANSION, ratio),
+  );
+}
 
 /**
  * Prefetch dispatches in small time-ordered SLICES instead of one giant
@@ -180,6 +325,17 @@ export const PREFETCH_SLICE_COLD_BYTES = 4 * 1024 * 1024;
  */
 export const PREFETCH_DEBOUNCE_MS = 250;
 
+/**
+ * Directory-exact byte cost of holding `horizonSimMs` of sim-time ahead of the
+ * play head resident, with the honesty flag that says whether the number is a
+ * fact or a floor. Wire {@link SpatioTemporalTileset.bytesForHorizon} (the CO-1
+ * selection-cost oracle) here.
+ */
+export type HorizonBytesOracle = (horizonSimMs: number) => {
+  bytes: number;
+  exact: boolean;
+};
+
 /** Everything one planning pass needs to know about the world. */
 export interface PrefetchPlanRequest {
   /** Play-head sim-time (ms). */
@@ -200,6 +356,29 @@ export interface PrefetchPlanRequest {
    * never re-arm and loading would stop exactly when the gate waits for it.
    */
   pipelineIdle: boolean;
+  /**
+   * Byte ceiling the planned runway may occupy in the tile cache, in the SAME
+   * currency {@link bytesForHorizon} answers in — COMPRESSED directory bytes.
+   * The tileset passes
+   * `PREFETCH_CACHE_FRACTION × maxCacheByteSize ÷ expansion`, i.e. the DECODED
+   * cache cap converted into directory bytes (see
+   * {@link PREFETCH_COLD_BYTE_EXPANSION}); the undivided cap would compare a
+   * compressed sum against a decoded ceiling and over-solve the horizon by the
+   * compression ratio. `null` (or absent) turns the feasibility solve off and
+   * leaves the AIMD ladder as the sole regulator, exactly as before this field
+   * existed.
+   */
+  byteBudget?: number | null;
+  /**
+   * Directory oracle for {@link byteBudget}. Present + `exact` ⇒ {@link
+   * PrefetchPolicy.plan} SOLVES the horizon (see there); `null`, absent, or
+   * `exact: false` ⇒ the pressure ladder runs unchanged.
+   *
+   * Must be MONOTONE non-decreasing in its argument — the solve bisects on
+   * that property. CO-1's prefix-sum implementation is monotone by
+   * construction (a widening window over non-negative per-bucket totals).
+   */
+  bytesForHorizon?: HorizonBytesOracle | null;
 }
 
 /** What one planning pass decided. */
@@ -483,6 +662,16 @@ export class PrefetchPolicy {
    * The pressure-recovery step runs on every call, including calls that return
    * `null` — recovery is paced by wall time, not by how often a pass survives
    * the throttle.
+   *
+   * HORIZON FEASIBILITY (CO-2). When {@link PrefetchPlanRequest.bytesForHorizon}
+   * and {@link PrefetchPlanRequest.byteBudget} are both supplied and the oracle
+   * answers exactly, the horizon left by the caps is not merely *scaled* — it is
+   * SOLVED: `h* = max{ h ≤ effectiveAhead : bytes(h) ≤ byteBudget }`, by monotone
+   * bisection over bucket boundaries (see {@link solveFeasibleHorizon}). The AIMD
+   * ladder is then demoted to a backstop that still shrinks `h*` further if the
+   * compressed-byte solve under-priced decoded residency, and it remains the ONLY
+   * regulator whenever the oracle is absent or blind — in which case the emitted
+   * plan is byte-identical to the pre-CO-2 one.
    */
   plan(request: PrefetchPlanRequest): PrefetchPlan | null {
     const {
@@ -525,6 +714,18 @@ export class PrefetchPolicy {
       );
     }
 
+    // THE GATE FLOOR — the hard minimum every shrinking mechanism below shares.
+    // The governor's buffered-runway gates are speed-scaled wall-clock gates, so
+    // a horizon under this cannot satisfy the gate it exists to feed: the source
+    // deadlocks at the start-wait rather than degrading. Named once here because
+    // three separate mechanisms (the run-ahead cap, the feasibility solve, the
+    // pressure ladder) are each forbidden to cut below it.
+    const gateFloor = Math.max(
+      bucketMs,
+      timeWindow,
+      speed * PREFETCH_CAP_FLOOR_REAL_MS,
+    );
+
     // Governor run-ahead fairness cap. The internal safety floor keeps a
     // cooperating-but-misjudged cap from starving this source's own
     // speed-scaled gates: the horizon never drops below the resident window
@@ -532,14 +733,20 @@ export class PrefetchPolicy {
     if (this.runAheadLimit !== null) {
       effectiveAhead = Math.min(
         effectiveAhead,
-        Math.max(
-          this.runAheadLimit,
-          bucketMs,
-          timeWindow,
-          speed * PREFETCH_CAP_FLOOR_REAL_MS,
-        ),
+        Math.max(this.runAheadLimit, gateFloor),
       );
     }
+
+    // ONE-SHOT FEASIBILITY SOLVE (CO-2), between the caps and the ladder: ask
+    // the directory what the capped horizon actually COSTS and shrink to the
+    // largest bucket-aligned horizon that fits the cache budget. Inert (returns
+    // its input) without an exact oracle, which is what keeps the no-oracle plan
+    // byte-identical to the pre-CO-2 one.
+    effectiveAhead = this.solveFeasibleHorizon(
+      request,
+      effectiveAhead,
+      gateFloor,
+    );
 
     // Pressure ladder: recover the scale when no runway eviction happened
     // recently, at most one step per PRESSURE_RECOVERY_STEP_INTERVAL_MS of
@@ -554,21 +761,19 @@ export class PrefetchPolicy {
       this.pressure = Math.min(1, this.pressure + PRESSURE_SCALE_RECOVERY_STEP);
       this.lastPressureRecoveryAt = now;
     }
-    // The scale applies AFTER every cap, so pressure always shrinks the final
-    // horizon. At scale 1 the branch is skipped entirely — the un-pressured
-    // horizon must stay byte-identical to a ladder-free one, so no floor here
-    // may RAISE it. Under pressure the floor keeps the resident window loading
-    // and — same sizing as the run-ahead cap above — never shrinks below what
-    // the governor's speed-scaled wall-clock gates consume, so a decay step
-    // can't turn a recoverable stall into the maxStartWaitMs escape hatch at
-    // high sim-speed.
+    // The scale applies AFTER every cap AND after the feasibility solve, so
+    // pressure always shrinks the final horizon — which is precisely what keeps
+    // the ladder a usable BACKSTOP once the solve is wired: compressed directory
+    // bytes under-price decoded residency, so an "exact" solve can still thrash,
+    // and the eviction signal must still be able to cut further. At scale 1 the
+    // branch is skipped entirely — the un-pressured horizon must stay
+    // byte-identical to a ladder-free one, so no floor here may RAISE it. Under
+    // pressure the floor keeps the resident window loading and — same sizing as
+    // the run-ahead cap above — never shrinks below what the governor's
+    // speed-scaled wall-clock gates consume, so a decay step can't turn a
+    // recoverable stall into the maxStartWaitMs escape hatch at high sim-speed.
     if (this.pressure < 1) {
-      effectiveAhead = Math.max(
-        effectiveAhead * this.pressure,
-        bucketMs,
-        timeWindow,
-        speed * PREFETCH_CAP_FLOOR_REAL_MS,
-      );
+      effectiveAhead = Math.max(effectiveAhead * this.pressure, gateFloor);
     }
 
     const endTime = time + direction * effectiveAhead;
@@ -609,6 +814,83 @@ export class PrefetchPolicy {
   }
 
   /**
+   * The CO-2 feasibility solve: the largest horizon at or below `effectiveAhead`
+   * whose directory byte cost fits `byteBudget`, found by monotone bisection
+   * over BUCKET BOUNDARIES (`O(log buckets)` oracle calls, one per probe).
+   *
+   * Why a solve rather than the ladder alone: the AIMD ladder discovers "the
+   * runway does not fit" only AFTER the over-limit eviction pass has already
+   * reached into the protected runway — i.e. after the fetch→evict→refetch
+   * thrash it is trying to prevent has happened, and once per rung. The
+   * directory knows every candidate tile's compressed length up front, so the
+   * same question is answerable before a single byte moves.
+   *
+   * Three properties are load-bearing:
+   *
+   * - THE GATE FLOOR SURVIVES THE SOLVE. An infeasible floor keeps the floor.
+   *   Returning something smaller would be arithmetically "honest" and
+   *   operationally fatal: the governor's speed-scaled gates would never be
+   *   satisfiable, so the source deadlocks instead of degrading. Over-committing
+   *   at the floor is the deliberate choice — §9.4's eviction tiering absorbs it.
+   * - IT NEVER RAISES A HORIZON. `h* ≤ effectiveAhead` always, and a horizon
+   *   already at or under the floor is returned untouched (raising it there
+   *   would break the at-scale-1 byte-identity invariant).
+   * - IT ABSTAINS RATHER THAN GUESSES. A missing oracle, a missing/degenerate
+   *   budget, a bucket-less archive, or an oracle answering `exact: false`
+   *   (index not built, byte channel blind) all return the input unchanged and
+   *   hand regulation back to the ladder.
+   *
+   * Deterministic: a pure function of the request and the injected oracle.
+   */
+  private solveFeasibleHorizon(
+    request: PrefetchPlanRequest,
+    effectiveAhead: number,
+    gateFloor: number,
+  ): number {
+    const { byteBudget, bytesForHorizon, bucketMs } = request;
+    if (!bytesForHorizon) return effectiveAhead;
+    if (
+      typeof byteBudget !== 'number' ||
+      !Number.isFinite(byteBudget) ||
+      byteBudget <= 0
+    ) {
+      return effectiveAhead;
+    }
+    // The candidate grid IS the bucket grid (the oracle's prefix sums are
+    // bucket-keyed); an archive that declares no buckets has nothing to bisect
+    // over, so it stays on the ladder.
+    if (!(bucketMs > 0) || !Number.isFinite(effectiveAhead)) {
+      return effectiveAhead;
+    }
+    if (effectiveAhead <= gateFloor) return effectiveAhead;
+
+    const full = bytesForHorizon(effectiveAhead);
+    if (!full.exact) return effectiveAhead; // bytes-blind ⇒ ladder
+    if (full.bytes <= byteBudget) return effectiveAhead; // already feasible
+
+    // Bisect over the bucket boundaries strictly inside [gateFloor,
+    // effectiveAhead]. Monotone by the oracle's contract, so the predicate
+    // "fits the budget" is a step function and the largest true index is what
+    // bisection finds.
+    let lo = Math.ceil(gateFloor / bucketMs);
+    let hi = Math.floor(effectiveAhead / bucketMs);
+    let best = -1;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const probe = bytesForHorizon(mid * bucketMs);
+      if (!probe.exact) return effectiveAhead; // lost exactness mid-solve
+      if (probe.bytes <= byteBudget) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    // Nothing above the floor fits: KEEP THE FLOOR (the deadlock rejection).
+    return best < 0 ? gateFloor : Math.min(best * bucketMs, effectiveAhead);
+  }
+
+  /**
    * Ceiling on how many tiles one pass may enqueue: a fraction of the tile-count
    * cache budget, never below {@link PREFETCH_MIN_BUDGET_TILES}. Bounding the
    * runway this way keeps it RESIDENT — an enqueue larger than the LRU is
@@ -619,6 +901,54 @@ export class PrefetchPolicy {
       PREFETCH_MIN_BUDGET_TILES,
       Math.floor(maxCacheSize * PREFETCH_CACHE_FRACTION),
     );
+  }
+
+  /**
+   * The same ceiling denominated in BYTES (M6/BH-2): a fraction of the cache's
+   * BYTE budget, never below {@link PREFETCH_MIN_BUDGET_BYTES}.
+   *
+   * Why both exist. {@link enqueueBudget} meters the runway in TILES, but the
+   * LRU's binding constraint is `maxCacheByteSize`, not tile count — and tiles
+   * are not remotely fungible: one satellite tile is ~17 MB where one sparse
+   * leaf is ~5 KB, and a count budget prices them identically. A pass that fits
+   * the count budget can therefore still be several times the byte cache, get
+   * evicted before the play head arrives, and be re-fetched one uncoalescable
+   * tile at a time — exactly the thrash the budget exists to prevent (D3).
+   *
+   * The two budgets are enforced TOGETHER, not one instead of the other: the
+   * caller stops at whichever binds first. The count budget survives as the
+   * guard for byte-blind directories, where per-tile sizes are unknown (or
+   * reported as 0) and the byte budget would never bind at all.
+   *
+   * ## The returned budget is in COMPRESSED bytes
+   *
+   * This is the F3 repair and the whole point of the second argument. A pass
+   * charges candidates in COMPRESSED directory bytes (`getTileByteSize`), which
+   * is the only size knowable before a tile is fetched; `maxCacheByteSize` is a
+   * DECODED cap (the LRU sums `estimateTileSize`). Comparing the two directly
+   * over-admits the runway by the compression ratio. So the cap is converted
+   * into the charge's currency here — `cap ÷ expansion` — and the floor, which
+   * is about one dispatchable slice of network work, is already compressed. See
+   * {@link PREFETCH_COLD_BYTE_EXPANSION} for where the rate comes from.
+   *
+   * @param maxCacheByteSize          Cache cap in DECODED bytes.
+   * @param decodedPerCompressedByte  Expansion, from {@link byteExpansionRatio}.
+   *                                  Passing `1` reverts to the pre-repair
+   *                                  mixed-currency comparison exactly (the
+   *                                  documented kill switch).
+   *
+   * Rollback: return `Infinity` here and the enqueue is count-bounded exactly
+   * as it was before this method existed.
+   */
+  enqueueBudgetBytes(
+    maxCacheByteSize: number,
+    decodedPerCompressedByte: number,
+  ): number {
+    const expansion = clampByteExpansion(decodedPerCompressedByte);
+    const scaled = (maxCacheByteSize * PREFETCH_CACHE_FRACTION) / expansion;
+    // A NaN budget is a misconfiguration, not a licence to enqueue forever.
+    if (Number.isNaN(scaled)) return PREFETCH_MIN_BUDGET_BYTES;
+    return Math.max(PREFETCH_MIN_BUDGET_BYTES, scaled);
   }
 
   /**

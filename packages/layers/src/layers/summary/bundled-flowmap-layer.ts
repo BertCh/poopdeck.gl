@@ -175,6 +175,69 @@ interface GlobalBundle {
 const REBUILD_SETTLE_MS = 150;
 
 /**
+ * Everything the render path carries between frames, kept in ONE bag so it can
+ * live on `this.state` and survive deck's `_transferState`. See the
+ * {@link BundledFlowmapLayer.bundleCaches} docstring for why this one is a
+ * correctness fix (GPU resource ownership) and not just a perf cache.
+ */
+interface BundledFlowmapCaches {
+  /** Per-tile derived OD geometry. */
+  geom: Map<string, TileGeom>;
+  /** The single bundle for the current visible set — OWNS GPU resources. */
+  bundle: GlobalBundle | null;
+  /** Signature the live {@link bundle} was built for. */
+  bundleSig: string;
+  /** Cached bundled sublayer + the propsKey it was built for. */
+  bundledLayer: Layer | null;
+  bundledLayerKey: string;
+  /** Per-tile straight-arrow sublayers, used only on the fallback path. */
+  fallback: Map<string, { layer: Layer; key: string }>;
+  /** `state.tiles` identity from the previous render (prune-walk skip). */
+  tilesRef: Tile[] | null;
+  propsKey: string;
+  /** Handle for the amortized one-KDEEB-iteration-per-rAF pump. */
+  rafId: number | null;
+  /** Sorted membership key of the live tile set (NOT array identity). */
+  tileSetKey: string;
+  /** Station identity for {@link tileSetKey}; rebuilt only when the set changes. */
+  nodeTable: NodeTable | null;
+  /** Debounced-rebuild bookkeeping — see {@link REBUILD_SETTLE_MS}. */
+  pendingSig: string;
+  rebuildTimer: ReturnType<typeof setTimeout> | null;
+  epoch: number;
+  /** Global bucket axis (node STEP gate + merged matrix texture). */
+  bucket0Abs: number;
+  bucketWidth: number;
+  numBuckets: number;
+  lastStep: number;
+}
+
+const BUNDLED_CACHE_SLOT = '_sttBundledFlowmapCaches';
+
+function freshBundledCaches(): BundledFlowmapCaches {
+  return {
+    geom: new Map(),
+    bundle: null,
+    bundleSig: '',
+    bundledLayer: null,
+    bundledLayerKey: '',
+    fallback: new Map(),
+    tilesRef: null,
+    propsKey: '',
+    rafId: null,
+    tileSetKey: '',
+    nodeTable: null,
+    pendingSig: '',
+    rebuildTimer: null,
+    epoch: 0,
+    bucket0Abs: 0,
+    bucketWidth: 0,
+    numBuckets: 0,
+    lastStep: -1,
+  };
+}
+
+/**
  * GPU-edge-bundled animated OD flowmap on the {@link SpatioTemporalLayer} chassis.
  */
 export class BundledFlowmapLayer<
@@ -227,32 +290,150 @@ export class BundledFlowmapLayer<
     preBundled: false,
   };
 
-  private geomCache = new Map<string, TileGeom>();
+  /**
+   * Everything this layer carries between frames — including GPU-OWNING
+   * handles — lives on `this.state`, never in class fields.
+   *
+   * This one is not a perf nicety like the trips caches: `bundle.bundler` is an
+   * {@link EdgeBundler} owning 3 textures + 3 framebuffers + 4 compiled Models,
+   * plus an R32F `matrixTexture`. deck's `_transferState` moves only
+   * `state`/`internalState` onto the instance React hands it, and
+   * `_finalizeOldLayers` never sees a MATCHED old layer — so `finalizeState`
+   * does not run on it. Held as fields, the deck-documented inline-construction
+   * idiom (`layers={[new BundledFlowmapLayer({...})]}`) therefore LEAKED a
+   * complete GPU bundle on every re-instantiation that reached `renderLayers`,
+   * while the fresh instance saw `bundle === null` and rebuilt the whole thing
+   * synchronously inside deck's render callback.
+   *
+   * The orphaned `_rebuildTimer` was the sharper edge: its closure reads
+   * `this.state`, the SAME object transferred to the new instance, so it
+   * allocated a bundle onto a dead layer and then `setState`d the live one.
+   * On `state` the handles follow the instance and the single `disposeBundle`
+   * path stays authoritative.
+   */
+  private get bundleCaches(): BundledFlowmapCaches {
+    return this.stateSlot(BUNDLED_CACHE_SLOT, freshBundledCaches);
+  }
+
+  // The accessors below keep the historical field NAMES (the call sites and the
+  // test harnesses speak them) while the storage lives on `state`.
+
+  private get geomCache(): Map<string, TileGeom> {
+    return this.bundleCaches.geom;
+  }
+  private set geomCache(value: Map<string, TileGeom>) {
+    this.bundleCaches.geom = value;
+  }
   /** The single bundle for the current visible set, and the signature it's for. */
-  private bundle: GlobalBundle | null = null;
-  private bundleSig = '';
+  private get bundle(): GlobalBundle | null {
+    return this.bundleCaches.bundle;
+  }
+  private set bundle(value: GlobalBundle | null) {
+    this.bundleCaches.bundle = value;
+  }
+  private get bundleSig(): string {
+    return this.bundleCaches.bundleSig;
+  }
+  private set bundleSig(value: string) {
+    this.bundleCaches.bundleSig = value;
+  }
   /** Cached bundled sublayer + the propsKey it was built for. */
-  private bundledLayer: Layer | null = null;
-  private bundledLayerKey = '';
+  private get bundledLayer(): Layer | null {
+    return this.bundleCaches.bundledLayer;
+  }
+  private set bundledLayer(value: Layer | null) {
+    this.bundleCaches.bundledLayer = value;
+  }
+  private get bundledLayerKey(): string {
+    return this.bundleCaches.bundledLayerKey;
+  }
+  private set bundledLayerKey(value: string) {
+    this.bundleCaches.bundledLayerKey = value;
+  }
   /** Per-tile straight-arrow sublayers, used only on the fallback path. */
-  private fallbackCache = new Map<string, { layer: Layer; key: string }>();
-  private lastTilesRef: Tile[] | null = null;
-  private lastPropsKey = '';
-  private _bundleRafId: number | null = null;
+  private get fallbackCache(): Map<string, { layer: Layer; key: string }> {
+    return this.bundleCaches.fallback;
+  }
+  private set fallbackCache(value: Map<string, { layer: Layer; key: string }>) {
+    this.bundleCaches.fallback = value;
+  }
+  private get lastTilesRef(): Tile[] | null {
+    return this.bundleCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.bundleCaches.tilesRef = value;
+  }
+  private get lastPropsKey(): string {
+    return this.bundleCaches.propsKey;
+  }
+  private set lastPropsKey(value: string) {
+    this.bundleCaches.propsKey = value;
+  }
+  private get _bundleRafId(): number | null {
+    return this.bundleCaches.rafId;
+  }
+  private set _bundleRafId(value: number | null) {
+    this.bundleCaches.rafId = value;
+  }
   /** Sorted membership key of the live tile set (NOT array identity). */
-  private tileSetKey = '';
+  private get tileSetKey(): string {
+    return this.bundleCaches.tileSetKey;
+  }
+  private set tileSetKey(value: string) {
+    this.bundleCaches.tileSetKey = value;
+  }
   /** Station identity for {@link tileSetKey}; rebuilt only when the set changes. */
-  private nodeTable: NodeTable | null = null;
+  private get nodeTable(): NodeTable | null {
+    return this.bundleCaches.nodeTable;
+  }
+  private set nodeTable(value: NodeTable | null) {
+    this.bundleCaches.nodeTable = value;
+  }
   /** Debounced-rebuild bookkeeping — see {@link REBUILD_SETTLE_MS}. */
-  private pendingSig = '';
-  private _rebuildTimer: ReturnType<typeof setTimeout> | null = null;
-  private _bundleEpoch = 0;
+  private get pendingSig(): string {
+    return this.bundleCaches.pendingSig;
+  }
+  private set pendingSig(value: string) {
+    this.bundleCaches.pendingSig = value;
+  }
+  private get _rebuildTimer(): ReturnType<typeof setTimeout> | null {
+    return this.bundleCaches.rebuildTimer;
+  }
+  private set _rebuildTimer(value: ReturnType<typeof setTimeout> | null) {
+    this.bundleCaches.rebuildTimer = value;
+  }
+  private get _bundleEpoch(): number {
+    return this.bundleCaches.epoch;
+  }
+  private set _bundleEpoch(value: number) {
+    this.bundleCaches.epoch = value;
+  }
 
   // Global bucket axis (drives the node STEP gate + the merged matrix texture).
-  private _bucket0Abs = 0;
-  private _bucketWidth = 0;
-  private _numBuckets = 0;
-  private _lastStep = -1;
+  private get _bucket0Abs(): number {
+    return this.bundleCaches.bucket0Abs;
+  }
+  private set _bucket0Abs(value: number) {
+    this.bundleCaches.bucket0Abs = value;
+  }
+  private get _bucketWidth(): number {
+    return this.bundleCaches.bucketWidth;
+  }
+  private set _bucketWidth(value: number) {
+    this.bundleCaches.bucketWidth = value;
+  }
+  private get _numBuckets(): number {
+    return this.bundleCaches.numBuckets;
+  }
+  private set _numBuckets(value: number) {
+    this.bundleCaches.numBuckets = value;
+  }
+  private get _lastStep(): number {
+    return this.bundleCaches.lastStep;
+  }
+  private set _lastStep(value: number) {
+    this.bundleCaches.lastStep = value;
+  }
 
   finalizeState(context: any): void {
     super.finalizeState(context);

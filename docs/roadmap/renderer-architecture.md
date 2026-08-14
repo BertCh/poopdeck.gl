@@ -93,8 +93,21 @@ lockstep" by comments + per-package parity tests, which **drifted in shipped
 pixels** (`wakeTailScale` 0.15 vs 0.1; fade default 10%-soft vs hard-0; divergent
 `colorMappingDefault`). The adopted fix — the **STT Render Kernel** — keeps the
 rendering models exactly as they are and unifies only the CPU decisions, the
-codegen'd scalar alpha, and the vocabulary, with **CI as the enforcer** instead of
-"// keep in lockstep" comments.
+scalar alpha _definition_, and the vocabulary, with **CI as the enforcer** instead
+of "// keep in lockstep" comments.
+
+> **What "unifies the scalar alpha" turned out to mean.** The plan was an Expr
+> AST emitted per dialect (§1.1). What was built is the AST plus its CPU
+> evaluator; **the emit half was never wired into any backend** (§5.1 stayed
+> blocked from the day it was written, and no emitter ever had a render-path
+> consumer — `emitGLSL100` was deleted as dead, `emitGLSL300` and its unused
+> Cesium wrapper were removed at the 0.6.0 cut, and `emitTSL` was never
+> written). Every shipped shader is hand-written. The drift defence that actually runs in CI is the AST's
+> `evalExpr` used as a **second, independently-authored oracle**: each backend's
+> shader math is pinned to both it and `core/time-filter`'s `timeFilterAlpha`.
+> That is a conformance contract, not a compiler — and it is worth saying plainly
+> because the "one formula, machine-emitted everywhere" phrasing outran the code
+> in several docs before this correction.
 
 ### 1.1 Decision 5 — no 1:1 composite chassis (and the Draw-IR corollary)
 
@@ -106,17 +119,21 @@ scored by three judges, **P2 (backend-neutral Draw-IR + mini-reconciler) had
 the highest consistency ceiling AND the lowest migration cost/risk scores,
 and was still disqualified** — a declarative chassis is still a chassis (it
 reverses Decision 5) and double-diffs deck's own reconciler. Winner = P4
-(spec-in-core + idiomatic adapters) with grafts: P2's Expr-AST codegen of the
-scalar alpha, P3's `assertDescriptorConsistent` over-claim CI gate, P1's
-`makeTilesetCallbacks` collapse + typed `Degradation`.
+(spec-in-core + idiomatic adapters) with grafts: P2's Expr-AST for the scalar
+alpha, P3's `assertDescriptorConsistent` over-claim CI gate, P1's
+`makeTilesetCallbacks` collapse + typed `Degradation`. _(The P2 graft landed as
+an AST + CPU evaluator only; its codegen half never shipped — see the note in
+§1.)_
 
 ### 1.2 What cannot be unified (structural, not laziness)
 
 - **The rendering models.** A neutral Geometry-IR would force deck to discard its
   zero-copy tesselator path — the reason the deck backend exists.
-- **Shader/material source** beyond the codegen'd scalar alpha snippet — vertex
-  geometry (billboard/arc-strip/column-prism/surfel-disk/ECEF) stays hand-written
-  per language.
+- **Shader/material source.** Vertex geometry
+  (billboard/arc-strip/column-prism/surfel-disk/ECEF) stays hand-written per
+  language. So, in practice, does the scalar alpha snippet — the one piece that
+  was scoped for codegen — held to the shared math by conformance test instead
+  (§1, §5.1).
 - **Buffer merge granularity + time base**; camera ownership + render loop;
   vertex-level projection execution (deck projects on GPU against a host viewport
   and can never take a CPU `Projection`); deck's GPU palette-texture fast path;
@@ -216,15 +233,18 @@ per-instance provenance buffer** (`InstanceProvenance`, `core/picking`;
 builder copied). Until a merged backend emits provenance, `index` is optional and
 it returns `worldPoint`-only picks.
 
-### 2.6 Codegen op-set = linear alpha only (surfel excluded)
+### 2.6 Frozen op-set = linear alpha only (surfel excluded)
 
 The adversarial critic's highest-impact confirmed hole: `surfel-material.ts`
 computes `exp(dt·dt·-0.5)` (:149), `exp(-falloff·r²)` (:181) and `sqrt` (:89)
-— and `exp/pow/sqrt/smoothstep` are **not** in the codegen op-set.
+— and `exp/pow/sqrt/smoothstep` are **not** in the `Expr` op-set.
 **Decision:** `ALPHA_EXPR` covers **linear alpha only**
 (window/wake/cumulative/trail); the surfel/splat Gaussian temporal weight and
-`wakeSizeScale` **vertex-stage** math are explicitly excluded from codegen and
-stay per-backend, pinned to the CPU oracle by parity tests. This is stated in
+`wakeSizeScale` **vertex-stage** math are explicitly excluded from the op-set
+and stay per-backend. The practical consequence, now that the AST's value is
+the second oracle rather than emission (§1): those excluded pieces have **one**
+oracle, not two — they are pinned to `core/time-filter` alone by parity tests.
+This is stated in
 `docs/spec/render-spec.json`, not discovered later. The surfel hero material
 (line-for-line TSL port of deck's `splat-primitive-layer.ts`: smallest-three
 quaternion unpack, hexagon disk envelope ~13% fewer fragments than a quad,
@@ -262,8 +282,13 @@ as a strategic decision in this project.
 ### 2.9 Five-tier enforcement ladder + its honest ceiling
 
 1. **Deletion** for pure CPU logic (the `DEFAULT_*_PALETTE` precedent).
-2. **Codegen** for scalar GPU alpha (one `ALPHA_EXPR`; `evalExpr` oracle;
-   emitters are machine translations; op-set frozen small).
+2. **Second oracle** for scalar GPU alpha — one `ALPHA_EXPR`, evaluated by
+   `evalExpr`, authored independently of `core/time-filter` and pinned equal to
+   it; each backend's hand-written shader math is then pinned to **both**.
+   Op-set frozen small. _(This tier was designed as **codegen** — emitters as
+   machine translations. It never got there: no emitter has a render-path
+   consumer, so what enforces this tier is the double-oracle conformance test,
+   not generation. §5.1 is the blocked rewire.)_
 3. **Vocabulary + tsc** — `LayerKind`/`Capability`/`TimeFilterMode` are frozen
    `as const` unions; renaming a token is a compile break everywhere. (NO
    codegen pipeline for this — the critic flagged that as over-machined.)
@@ -274,7 +299,9 @@ as a strategic decision in this project.
    `backend-capabilities.md` regenerated + drift-guarded.
 
 **Honest ceiling (no proposal escapes it):** tiers 1–4 prove _scalar_ math and
-_generated-GLSL numeric_ parity, but **cannot prove compiled-shader pixels**
+_JS-reference numeric_ parity (with the shipped GLSL/TSL locked to that
+reference structurally, since it cannot be executed headless), but **cannot
+prove compiled-shader pixels**
 (billboard sizing, depth, blend, the WGSL `select()`-in-`varying()` crash
 class — which already shipped black screens). **Browser visual verification
 stays a mandatory manual gate**, consistent with the project's visual-verify
@@ -763,21 +790,39 @@ the package's tests run against a mock, not the app's resolved version.
 
 ### 5.1 Decision 6 — GPU-conformance CI (the one live decision; BLOCKED)
 
-Is a WebGPU-capable CI runner available for the nightly `emitTSL` smoke-compile +
+Is a WebGPU-capable CI runner available for a nightly `emitTSL` smoke-compile +
 1px `TIME_FILTER_VECTORS` readback, or does the three gate fall back to
 CPU-mirror-vs-oracle with manual browser verify as the only pixel gate?
+_(`emitTSL` has never been written; it is the name this question gives to a
+function that would have to exist first.)_
 
 **Still blocked.** Every job in `.github/workflows/ci.yml` runs on `ubuntu-latest`;
 none is GPU-backed. The one browser job installs a headless browser to probe that
 all showcase demos load — a liveness check, not a pixel gate. Everything in the
 Phase-1 rewire queue is counted out until this is answered: rewiring deck's
-`TimeFilterExtension` inject strings → `emitGLSL300(ALPHA_EXPR[mode])`, maplibre's
-`TIME_WINDOW_GLSL` → `emitGLSL100`, three's TSL node → `emitTSL`, plus per-backend
-headless conformance. The kernel already de-dupes the math via the CPU oracle, so
-the rewire is **structural dedup with real pixel risk** (generated GLSL differs
-textually and in FP association from hand-tuned source on all three backends) and
-no automated pixel gate to catch regressions. Shader work therefore stays
-oracle/JS-reference-based, and no campaign may couple itself to the rewire.
+`TimeFilterExtension` inject strings (GLSL ES 3.00) →
+`emitGLSL300(ALPHA_EXPR[mode])`, maplibre's `TIME_WINDOW_GLSL` (GLSL ES 1.00) → a
+1.00 emitter, three's TSL node → an `emitTSL` that would have to be written first,
+plus per-backend headless conformance. The kernel already de-dupes the math via the
+CPU oracle, so the rewire is **structural dedup with real pixel risk** (generated
+GLSL differs textually and in FP association from hand-tuned source on all three
+backends) and no automated pixel gate to catch regressions. Shader work therefore
+stays oracle/JS-reference-based, and no campaign may couple itself to the rewire.
+
+**Consequence of staying blocked this long: the emitters were dead weight, and
+have been retired rather than kept warm.** `emitGLSL100` went first — zero
+consumers outside its own test, which only asserted it returned a string
+byte-identical to `emitGLSL300`, since the emitted subset is valid in both
+dialects. `emitGLSL300` and its sole caller, `@poopdeck.gl/cesium`'s
+`timeFilterAlphaGlsl` (which no Cesium layer called), were **removed at the
+0.6.0 cut**, closing the decision this section had held open. `render-spec.json`
+now declares an empty `emitters` list, and a contract test pins both names as
+absent so neither returns without a consumer. An emitter would be re-written
+from the frozen op-set if this question is ever unblocked; it is a small,
+mechanical job, and doing it speculatively is what produced dead weight twice.
+What is NOT retired is `ALPHA_EXPR` + `evalExpr`: that is the second oracle
+every backend's conformance test pins against, and it is the part of P2's graft
+that is actually load-bearing.
 
 ### 5.2 three backend — integration tail
 

@@ -7,7 +7,7 @@
  *
  * The packed format content-addresses objects and schema templates with
  * blake3-128 (the first 16 bytes / 32 hex chars of the 256-bit hash — see
- * `docs/spec/stt-packed-format.md`). A formatVersion-2 manifest embeds its
+ * `docs/spec/stt-packed-format.md`). A formatVersion-3 manifest embeds its
  * Arrow schema templates as `{hash, data}` pairs, and the reader MUST verify
  * `blake3_128(data) == hash` for every entry at open (spec §3.2) — so the TS
  * reader needs BLAKE3 without dragging in a WASM bundle or a native dep for

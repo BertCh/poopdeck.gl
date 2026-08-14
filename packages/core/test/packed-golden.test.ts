@@ -5,7 +5,7 @@
  * `manifest.json` + `index/<hash>.sttd` + `packs/<hash>.sttp`) through the
  * TypeScript `STTArchive`, proving the TS reader and the Rust writer agree on:
  *   - the manifest schema (format / packs / folded metadata),
- *   - the v5 directory (per-run `pack_id` + pack-relative offsets, incl. the
+ *   - the v6 directory (per-run `pack_id` + pack-relative offsets, incl. the
  *     byte-identical dedup that shares ONE blob across k=0,4,9), and
  *   - the per-blob zstd tile payloads (feature ids / coords / times).
  *
@@ -111,7 +111,7 @@ describe('STT packed format (golden fixture)', () => {
     expect(log.ranges.length).toBe(0);
   });
 
-  it('decodes the v5 directory: 12 entries with the expected packId/offset', async () => {
+  it('decodes the v6 directory: 12 entries with the expected packId/offset', async () => {
     const log = emptyLog();
     const archive = makeArchive(log);
     const index = await archive.getIndex();
@@ -147,11 +147,18 @@ describe('STT packed format (golden fixture)', () => {
     expect(byX.get(4)!.length).toBe(e0.length);
     expect(byX.get(9)!.length).toBe(e0.length);
 
-    // 2 packs: at least one entry lands in pack 1 (the cut to a second object).
-    // Offsets are OBJECT-ABSOLUTE, so each pack's first blob starts right after
-    // that object's 8-byte magic prelude — not at 0.
+    // The blobs cut across MORE THAN ONE pack object — that cut is the point,
+    // since a single pack would never exercise object-absolute offsets. The
+    // exact pack COUNT is a function of the pack target and the encoder's byte
+    // sizes, so it is derived here rather than pinned: pinning it turns every
+    // intentional encoder change into a false failure in a test about offsets.
+    // Ids are dense from 0. Offsets are OBJECT-ABSOLUTE, so each pack's first
+    // blob starts right after that object's 8-byte magic prelude — not at 0.
     const packIds = new Set(index.tiles.map((t) => t.packId));
-    expect(packIds).toEqual(new Set([0, 1]));
+    expect(packIds.size).toBeGreaterThan(1);
+    expect([...packIds].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: packIds.size }, (_, i) => i),
+    );
     for (const pid of packIds) {
       expect(
         index.tiles.some(
@@ -238,10 +245,12 @@ describe('STT packed format (golden fixture)', () => {
     }
     // Per-pack coalescing: with the default 2 MB gap the contiguous blobs in a
     // pack fuse into ONE range each, and a range never bridges two packs — so
-    // the batch issues exactly one range per pack (2 packs → 2 requests).
+    // the batch issues exactly one range per pack touched. Asserted as that
+    // RATIO rather than against a pinned pack count, which is an encoder-byte
+    // artifact and not what this test is about.
     const distinctPackObjects = new Set(packRanges.map((r) => r.path));
-    expect(distinctPackObjects.size).toBe(2);
-    expect(packRanges.length).toBe(2);
+    expect(distinctPackObjects.size).toBeGreaterThan(1);
+    expect(packRanges.length).toBe(distinctPackObjects.size);
   });
 
   it('per-pack coalescing never bridges two pack objects', async () => {

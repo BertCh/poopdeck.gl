@@ -34,7 +34,7 @@ import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
 import { cellBoundaryFromTile } from './h3-cell.js';
 import { rampBucketColor } from './quadbin-buffers.js';
 import type { Projection } from '../projection/local-enu.js';
-import type { RGBA } from './color.js';
+import { srgbToLinear, type RGBA } from './color.js';
 
 /** Default 6-stop low→high ramp (mirrors the deck H3 layer's DEFAULT_COLOR_RANGE). */
 export const DEFAULT_H3_COLOR_RANGE: RGBA[] = [
@@ -237,10 +237,14 @@ export function buildH3Buffers(
         if (pz > maxZ) maxZ = pz;
       }
 
+      // sRGB→linear ONCE per cell (all its ring vertices share the colour): the
+      // summary mesh shades through a classic `vertexColors` material, which has
+      // no colour node for the shader-side conversion the TSL layers use. See
+      // `srgbToLinear` / `../tsl/color-space.ts`.
       const rgba = rampBucketColor(weights[i], domain, range);
-      const cr = rgba[0] / 255,
-        cg = rgba[1] / 255,
-        cb = rgba[2] / 255;
+      const cr = srgbToLinear(rgba[0] / 255),
+        cg = srgbToLinear(rgba[1] / 255),
+        cb = srgbToLinear(rgba[2] / 255);
       const ca = (rgba[3] ?? 255) / 255;
       for (let c = 0; c < n; c++) {
         const o4 = (vBase + c) * 4;

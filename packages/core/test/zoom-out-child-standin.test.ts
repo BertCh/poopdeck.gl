@@ -133,6 +133,13 @@ describe('getVisibleTiles: finer-descendant stand-in on zoom-out', () => {
     tileset.finalize();
   });
 
+  // The zoom-OUT half of the CO-6 cover band stays at 2 levels, deliberately:
+  // see COVER_DP_DESCENDANT_LEVELS. Reaching one level further UP costs one
+  // extra tile in the delivered list, but one level further DOWN multiplies the
+  // delivered descendants per blank cell by four (a depth-3 stand-in can hand
+  // the renderer 64 tiles for a single cell), so the search-cost argument the DP
+  // dissolves is replaced by a delivery-cost argument that it does not. This
+  // pin is therefore still live under the DP, not a legacy of the old cap.
   it('does not search beyond CHILD_LOOKAHEAD_LEVELS (depth-3 descendants are not a stand-in)', async () => {
     const { tileset, zoomOut } = makeGatedTileset({
       refinementStrategy: 'best-available',
@@ -306,6 +313,278 @@ describe('getVisibleTiles: resident-ancestor stand-in on zoom-in', () => {
     // right — drawing the coarse copy on top would render those features
     // twice, which is exactly what 'no-overlap' is configured to avoid.
     expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual([SIBLING]);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * CO-6 property + determinism: whatever the resident set, the cover the DP
+ * delivers is an ANTICHAIN over the quadtree, and it covers at least as much of
+ * the frame as the capped greedy does on the same set.
+ *
+ * The register pins the fallback cover greedy GIVEN ITS CAPS — i.e. optimality
+ * within its family — and the M5 mechanism entry sanctions dropping the caps.
+ * What has to survive is therefore the greedy's CONTRACTS, and "at most one
+ * cover per visible cell" is the load-bearing one: two covers over the same
+ * area is a double-draw, invisible on an opaque layer and a patch of doubled
+ * density on every translucent one. These cases assert the contract holds and
+ * the coverage is not worse, across pseudo-random resident sets.
+ */
+describe('getVisibleTiles: cover DP properties over random resident sets', () => {
+  const PRIMARY_Z = 10;
+  /** The 4×4 block of primary cells the viewport needs; none ever loads. */
+  const PRIMARY_CELLS: TileId[] = [];
+  for (let y = 512; y < 516; y++) {
+    for (let x = 512; x < 516; x++) {
+      PRIMARY_CELLS.push({ z: PRIMARY_Z, x, y, t: 0 });
+    }
+  }
+
+  /** Deterministic PRNG (mulberry32) — no wall clock, no Math.random. */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /**
+   * Two residency regimes, because the de-capping only has room to help in one
+   * of them and the contract has to hold in both:
+   *
+   * - `'zoom-in'` — the multi-notch gesture the cap was costing us. The camera
+   *   was parked out at z6/z7, so nothing FINER than the primary exists and the
+   *   two levels the old cap could reach are usually absent.
+   * - `'mixed'` — a camera sitting between zooms with resident tiles scattered
+   *   on both sides. Deep ancestors mostly cannot draw here whatever the cap
+   *   says (an ancestor spanning the whole needed block is blocked the moment
+   *   any one cell has a descendant cover), which is exactly why the antichain
+   *   assertion, not the coverage one, is what earns its keep in this regime.
+   */
+  type Regime = 'zoom-in' | 'mixed';
+
+  function residentSet(seed: number, regime: Regime): Map<number, TileId[]> {
+    const next = rng(seed);
+    const byZoom = new Map<number, TileId[]>();
+    const keep = (z: number, id: TileId, p: number): void => {
+      if (next() >= p) return;
+      const list = byZoom.get(z);
+      if (list) list.push(id);
+      else byZoom.set(z, [id]);
+    };
+    const seenAncestor = new Set<string>();
+    for (const cell of PRIMARY_CELLS) {
+      for (let up = 1; up <= 4; up++) {
+        const z = PRIMARY_Z - up;
+        const id = { z, x: cell.x >> up, y: cell.y >> up, t: 0 };
+        const k = `${z}/${id.x}/${id.y}`;
+        if (seenAncestor.has(k)) continue;
+        seenAncestor.add(k);
+        keep(z, id, regime === 'zoom-in' ? (up <= 2 ? 0.15 : 0.7) : 0.5);
+      }
+      if (regime === 'zoom-in') continue; // camera came from OUT: nothing finer
+      for (let down = 1; down <= 2; down++) {
+        const z = PRIMARY_Z + down;
+        const span = 1 << down;
+        for (let dy = 0; dy < span; dy++) {
+          for (let dx = 0; dx < span; dx++) {
+            keep(
+              z,
+              { z, x: (cell.x << down) + dx, y: (cell.y << down) + dy, t: 0 },
+              down === 1 ? 0.2 : 0.05,
+            );
+          }
+        }
+      }
+    }
+    return byZoom;
+  }
+
+  /** Walk the camera through every candidate zoom, then settle at PRIMARY_Z. */
+  async function deliver(
+    seed: number,
+    coverSearch: 'dp' | 'capped',
+    regime: Regime = 'mixed',
+  ): Promise<TileId[]> {
+    const byZoom = residentSet(seed, regime);
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 14,
+      enablePrefetch: false,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: 1000,
+      coverSearch,
+      getAvailableTiles: async (_b: BoundingBox, z: number) =>
+        z === PRIMARY_Z ? PRIMARY_CELLS : (byZoom.get(z) ?? []),
+      // Only the primary zoom is withheld: everything the camera passed through
+      // on the way is resident by the time it arrives.
+      getTileData: (id: TileId): Promise<Tile> =>
+        id.z === PRIMARY_Z
+          ? new Promise<Tile>(() => {})
+          : Promise.resolve(fakeTile(id)),
+    });
+    for (const z of [12, 11, 9, 8, 7, 6]) {
+      tileset.update({ bounds: BOUNDS, zoom: z, time: 0, timeWindow: 100 });
+      await settle(3);
+    }
+    tileset.update({
+      bounds: BOUNDS,
+      zoom: PRIMARY_Z,
+      time: 0,
+      timeWindow: 100,
+    });
+    await settle(3);
+    const ids = tileset.getVisibleTiles().map((t) => t.id);
+    tileset.finalize();
+    return ids;
+  }
+
+  /** Is `a` the same node as, or an ancestor of, `b`? */
+  function nested(a: TileId, b: TileId): boolean {
+    if (a.t !== b.t) return false;
+    const [hi, lo] = a.z <= b.z ? [a, b] : [b, a];
+    const d = lo.z - hi.z;
+    return lo.x >> d === hi.x && lo.y >> d === hi.y;
+  }
+
+  /** Primary cells covered by the delivered set. */
+  function coveredCells(ids: TileId[]): Set<string> {
+    const out = new Set<string>();
+    for (const id of ids) {
+      if (id.z >= PRIMARY_Z) {
+        const d = id.z - PRIMARY_Z;
+        out.add(`${id.x >> d}/${id.y >> d}`);
+        continue;
+      }
+      const d = PRIMARY_Z - id.z;
+      const span = 1 << d;
+      for (let dy = 0; dy < span; dy++) {
+        for (let dx = 0; dx < span; dx++) {
+          out.add(`${(id.x << d) + dx}/${(id.y << d) + dy}`);
+        }
+      }
+    }
+    return out;
+  }
+
+  const needed = new Set(PRIMARY_CELLS.map((c) => `${c.x}/${c.y}`));
+
+  const coveredNeeded = (ids: TileId[]): number => {
+    let n = 0;
+    for (const cell of coveredCells(ids)) if (needed.has(cell)) n++;
+    return n;
+  };
+
+  /** Delivered pairs where one tile is nested inside the other — double-draws. */
+  const antichainViolations = (ids: TileId[]): number => {
+    let n = 0;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        if (nested(ids[i], ids[j])) n++;
+      }
+    }
+    return n;
+  };
+
+  it('delivers an antichain and covers no less than the capped greedy', async () => {
+    for (const regime of ['zoom-in', 'mixed'] as const) {
+      for (let seed = 1; seed <= 8; seed++) {
+        const dp = await deliver(seed, 'dp', regime);
+        const capped = await deliver(seed, 'capped', regime);
+
+        // THE contract: no visible cell reaches the renderer with two covers.
+        expect(antichainViolations(dp)).toBe(0);
+
+        // COVERAGE, compared only where the comparison means anything. The
+        // capped walk can "cover more" by shipping a grandparent ON TOP OF a
+        // nearer parent (see the next case), and a cell counted twice is not a
+        // cell covered better — so the raw totals are only commensurable on the
+        // sets where the baseline is itself a legal antichain. There, the DP is
+        // never worse.
+        if (antichainViolations(capped) === 0) {
+          expect(coveredNeeded(dp)).toBeGreaterThanOrEqual(
+            coveredNeeded(capped),
+          );
+        }
+      }
+    }
+  });
+
+  it("closes the capped walk's cross-ancestor double-draw", async () => {
+    // The capped baseline does NOT always satisfy the contract it is measured
+    // against: resolving one cell at a time and recording nothing on emit lets
+    // a grandparent and a nearer parent both ship. That is the hole the DP was
+    // restructured to close, and this is the sample of random sets that shows
+    // it is reachable rather than theoretical.
+    let cappedViolations = 0;
+    let dpViolations = 0;
+    for (const regime of ['zoom-in', 'mixed'] as const) {
+      for (let seed = 1; seed <= 8; seed++) {
+        cappedViolations += antichainViolations(
+          await deliver(seed, 'capped', regime),
+        );
+        dpViolations += antichainViolations(await deliver(seed, 'dp', regime));
+      }
+    }
+    expect(cappedViolations).toBeGreaterThan(0);
+    expect(dpViolations).toBe(0);
+  });
+
+  it('covers STRICTLY more after a multi-notch zoom', async () => {
+    // The non-vacuity check for the assertion above: in the regime the
+    // de-capping exists for, some resident sets must actually gain — and they
+    // gain a LOT, because the capped walk's alternative is a blank frame (its
+    // reach stops two levels short of the only resident cover there is).
+    let gains = 0;
+    for (let seed = 1; seed <= 8; seed++) {
+      const cappedIds = await deliver(seed, 'capped', 'zoom-in');
+      if (antichainViolations(cappedIds) > 0) continue; // not comparable
+      const dp = coveredNeeded(await deliver(seed, 'dp', 'zoom-in'));
+      if (dp > coveredNeeded(cappedIds)) gains++;
+    }
+    expect(gains).toBeGreaterThan(0);
+  });
+
+  it('delivers the identical list for the identical resident set', async () => {
+    for (const seed of [3, 7]) {
+      for (const regime of ['zoom-in', 'mixed'] as const) {
+        const first = await deliver(seed, 'dp', regime);
+        const second = await deliver(seed, 'dp', regime);
+        // Same order, not just the same membership: the delivered array is the
+        // renderer's draw order, and a reshuffle is a re-upload.
+        expect(second).toEqual(first);
+      }
+    }
+  });
+
+  it('is stable across repeated calls on one tileset', async () => {
+    const byZoom = residentSet(5, 'mixed');
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 14,
+      enablePrefetch: false,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: 1000,
+      getAvailableTiles: async (_b: BoundingBox, z: number) =>
+        z === PRIMARY_Z ? PRIMARY_CELLS : (byZoom.get(z) ?? []),
+      getTileData: (id: TileId): Promise<Tile> =>
+        id.z === PRIMARY_Z
+          ? new Promise<Tile>(() => {})
+          : Promise.resolve(fakeTile(id)),
+    });
+    for (const z of [12, 11, 9, 8, 7, 6, PRIMARY_Z]) {
+      tileset.update({ bounds: BOUNDS, zoom: z, time: 0, timeWindow: 100 });
+      await settle(3);
+    }
+
+    const first = tileset.getVisibleTiles().map((t) => t.id);
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual(first);
+    expect(tileset.getVisibleTiles().map((t) => t.id)).toEqual(first);
 
     tileset.finalize();
   });

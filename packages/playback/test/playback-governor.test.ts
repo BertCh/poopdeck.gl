@@ -16,6 +16,13 @@ import {
   type BufferedRunway,
   type PlaybackGovernorState,
 } from '../src/playback-governor';
+import { decideAutoSpeedMultiplier, SPEED_STEPS } from '../src/auto-speed';
+import {
+  computeProgressiveFillWeights,
+  computeRunwayShedWeights,
+  legacyRunwayShedWeight,
+  type ProgressiveFillProbe,
+} from '../src/fairness';
 
 /** Mutable mock BufferSource: tests poke `runwaySimMs`/`complete` directly. */
 function makeSource() {
@@ -2058,7 +2065,7 @@ describe('PlaybackGovernor', () => {
     // Defaults throughout: speed 10, runwayToleranceMs 200 → slack =
     // max(200, RUN_AHEAD_SLACK_WALL_MS 3000) × 10 = 30_000 sim-ms.
 
-    it('caps the leader at laggard + slack, frees the laggard, and sheds the leader weight per formula', () => {
+    it('caps the leader at laggard + slack, frees the laggard, and fills weights by byte need', () => {
       const leader = makeFairSource();
       const laggard = makeFairSource();
       leader.state.runwaySimMs = 200_000;
@@ -2070,13 +2077,18 @@ describe('PlaybackGovernor', () => {
       g.requestPlay();
       expect(g.state).toBe('playing');
       // cap = laggard 50_000 + slack 30_000; the laggard itself runs free.
+      // (Unchanged by BH-3 — the cap lever is verbatim.)
       expect(leader.state.capCalls).toEqual([80_000]);
       expect(laggard.state.capCalls).toEqual([null]);
-      // weight_leader = base 1 × clamp((30k + 50k) / (30k + 200k), 0.25, 4).
-      expect(leader.state.weightCalls).toHaveLength(1);
-      expect(leader.state.weightCalls[0]).toBeCloseTo(80_000 / 230_000);
-      // The laggard lands exactly on base — never written (base IS current).
-      expect(laggard.state.weightCalls).toEqual([]);
+      // WEIGHTS (BH-3 progressive filling, replacing the 1/x shed — whose
+      // 80_000/230_000 answer for this exact vector is still pinned, on the
+      // named fallback, in the `legacyRunwayShedWeight` unit test below):
+      // fill target = lead 200_000 − slack 30_000 = 170_000. These mocks have
+      // no byte channel (estimateCost → 0 bytes) so β = 1 for both.
+      //   N_leader  = max(0, 170_000 − 200_000) = 0        → floor 0.25 × base
+      //   N_laggard = 170_000 − 50_000 = 120_000 (the max)  → 4 × base
+      expect(leader.state.weightCalls).toEqual([0.25]);
+      expect(laggard.state.weightCalls).toEqual([4]);
     });
 
     it('an OPTIONAL source ahead of the required laggard is capped but still never gates the clock', () => {
@@ -2165,12 +2177,14 @@ describe('PlaybackGovernor', () => {
       expect(leader.state.capCalls).toEqual([80_000]);
 
       g.requestPause();
-      // The leader's cap lifts and its base weight is restored; the laggard
-      // (already uncapped, already at base) hears nothing further.
+      // The leader's cap lifts and BOTH sources' base weights are restored:
+      // under progressive filling the laggard is gained to 4 × base (it is the
+      // one that has to buy bytes), so the one-shot restore has to walk it
+      // back too — the cap side is unchanged (it was already free).
       expect(leader.state.capCalls).toEqual([80_000, null]);
       expect(leader.state.weightCalls.at(-1)).toBe(1);
       expect(laggard.state.capCalls).toEqual([null]);
-      expect(laggard.state.weightCalls).toEqual([]);
+      expect(laggard.state.weightCalls).toEqual([4, 1]);
     });
 
     it('removing the LAGGARD deactivates fairness — peers shed their stale caps', () => {
@@ -2284,8 +2298,9 @@ describe('PlaybackGovernor', () => {
       g.addSource('leader', replacement.source, { required: true });
       g.notifyBufferChange(runway(50_000));
       expect(replacement.state.capCalls).toEqual([80_000]);
-      expect(replacement.state.weightCalls).toHaveLength(1);
-      expect(replacement.state.weightCalls[0]).toBeCloseTo(80_000 / 230_000);
+      // Same fill as the first case: the replacement is the leader, its need
+      // is already met, so it takes the 0.25 × base floor.
+      expect(replacement.state.weightCalls).toEqual([0.25]);
     });
 
     it('an EXTERNAL pause (direct timeController.pause) lifts caps exactly like requestPause', () => {
@@ -2305,6 +2320,2409 @@ describe('PlaybackGovernor', () => {
       expect(g.state).toBe('idle');
       expect(leader.state.capCalls).toEqual([80_000, null]);
       expect(leader.state.weightCalls.at(-1)).toBe(1);
+    });
+  });
+
+  /**
+   * BH-3 — fair-share weights denominated in BYTES (§11.3).
+   *
+   * The incumbent `1/x` shed compared RUNWAYS while the constrained resource is
+   * BYTES: two sources the same sim-distance behind the leader were handed the
+   * same share even when one needed ten times the bytes to close the gap. The
+   * progressive fill prices each deficit through the source's own byte density
+   * β and hands out share proportional to that need, which equalizes
+   * time-to-gate instead of sim-time runway.
+   *
+   * Everything AROUND the formula is verbatim and is re-asserted by the Phase 2
+   * suite above: laggard identification, the enter/exit hysteresis bands, the
+   * cap writes, the 20% weight deadband, and the one-shot restore.
+   */
+  describe('byte-aware fair-share weights (BH-3 — §11.3 progressive filling)', () => {
+    const fillProbe = (
+      id: string,
+      runwaySimMs: number,
+      betaBytesPerSimMs = 1,
+      baseWeight = 1,
+    ): ProgressiveFillProbe => ({
+      id,
+      runwaySimMs,
+      betaBytesPerSimMs,
+      baseWeight,
+    });
+
+    describe('computeProgressiveFillWeights (pure)', () => {
+      it('with equal β reproduces the qualitative order of the incumbent shed (laggard ≥ leaders)', () => {
+        const probes = [
+          fillProbe('leader', 200_000),
+          fillProbe('middle', 120_000),
+          fillProbe('laggard', 50_000),
+        ];
+        const fill = computeProgressiveFillWeights(probes, 30_000);
+        const shed = computeRunwayShedWeights(probes, 30_000);
+        // Both policies order the same way — the fill is a re-pricing of the
+        // shed, not a reversal of it.
+        for (const [heavier, lighter] of [
+          ['laggard', 'middle'],
+          ['middle', 'leader'],
+        ] as const) {
+          expect(fill.get(heavier)!).toBeGreaterThan(fill.get(lighter)!);
+          expect(shed.get(heavier)!).toBeGreaterThan(shed.get(lighter)!);
+        }
+        // Fill target = lead 200_000 − slack 30_000 = 170_000.
+        //   N_laggard = 120_000 (max) → 4 × base
+        //   N_middle  =  50_000       → 4 × 50/120 = 1.666… × base
+        //   N_leader  =       0       → floor 0.25 × base
+        expect(fill.get('laggard')).toBe(4);
+        expect(fill.get('middle')).toBeCloseTo((4 * 50_000) / 120_000, 10);
+        expect(fill.get('leader')).toBe(0.25);
+      });
+
+      it('a laggard whose bytes are 10× denser gets ~10× the share of an equal-runway peer', () => {
+        // The whole point of β: same sim-distance behind, ten times the bytes
+        // to buy, so ten times the byte-share — which the runway-only shed
+        // cannot express (it hands both peers the identical weight).
+        const probes = [
+          fillProbe('leader', 200_000, 1),
+          fillProbe('heavy', 50_000, 10),
+          fillProbe('light', 50_000, 1),
+        ];
+        const fill = computeProgressiveFillWeights(probes, 0);
+        expect(fill.get('heavy')! / fill.get('light')!).toBeCloseTo(10, 10);
+        expect(fill.get('heavy')).toBe(4);
+        expect(fill.get('light')).toBeCloseTo(0.4, 10);
+        // The incumbent shed is blind to the difference — the regression this
+        // item exists to fix.
+        const shed = computeRunwayShedWeights(probes, 0);
+        expect(shed.get('heavy')).toBe(shed.get('light'));
+      });
+
+      it('clamps bind at 0.25 / 4 × base, and the laggard is never shed below base', () => {
+        // 'sliver' needs 1/100th of the laggard's bytes: its proportional share
+        // (4 × 0.01 = 0.04) is below the floor, so the floor binds.
+        const fill = computeProgressiveFillWeights(
+          [
+            fillProbe('laggard', 0, 1, 2), // base 2
+            fillProbe('sliver', 99_000, 1, 2),
+            fillProbe('leader', 100_000, 1, 2),
+          ],
+          0,
+        );
+        expect(fill.get('laggard')).toBe(2 * 4); // ceiling × base
+        expect(fill.get('sliver')).toBe(2 * 0.25); // floor × base
+        expect(fill.get('leader')).toBe(2 * 0.25);
+        // The laggard is the one buying bytes: it is gained, never shed.
+        expect(fill.get('laggard')!).toBeGreaterThanOrEqual(2);
+      });
+
+      it('degenerates to base weights — no shed at all — when there is nothing to redistribute', () => {
+        // Empty vector: nothing to say.
+        expect(computeProgressiveFillWeights([], 30_000).size).toBe(0);
+        // One source: it IS the leader, so its need is zero.
+        expect(
+          computeProgressiveFillWeights([fillProbe('solo', 50_000, 1, 3)], 0),
+        ).toEqual(new Map([['solo', 3]]));
+        // Every source inside the slack band of the leader — the near-tie that
+        // must not produce weight traffic.
+        const nearTie = computeProgressiveFillWeights(
+          [fillProbe('a', 50_000), fillProbe('b', 56_000)],
+          30_000,
+        );
+        expect([...nearTie.values()]).toEqual([1, 1]);
+        // A complete source leaking in (unbounded runway) is not a licence to
+        // guess: fall back to base for everybody.
+        const leaked = computeProgressiveFillWeights(
+          [fillProbe('done', Infinity), fillProbe('real', 10)],
+          0,
+        );
+        expect([...leaked.values()]).toEqual([1, 1]);
+      });
+
+      it('reads a bytes-blind β as 1 — the fill degrades to a runway-only shed, never to a guess', () => {
+        const blind = computeProgressiveFillWeights(
+          [fillProbe('leader', 200_000, 0), fillProbe('laggard', 50_000, -3)],
+          30_000,
+        );
+        const unit = computeProgressiveFillWeights(
+          [fillProbe('leader', 200_000, 1), fillProbe('laggard', 50_000, 1)],
+          30_000,
+        );
+        expect(blind).toEqual(unit);
+      });
+
+      it('is deterministic and independent of probe order', () => {
+        const probes = [
+          fillProbe('a', 50_000, 2),
+          fillProbe('b', 120_000, 1),
+          fillProbe('c', 200_000, 7),
+        ];
+        const once = computeProgressiveFillWeights(probes, 30_000);
+        const twice = computeProgressiveFillWeights(probes, 30_000);
+        const shuffled = computeProgressiveFillWeights(
+          [probes[2], probes[0], probes[1]],
+          30_000,
+        );
+        expect(twice).toEqual(once);
+        // Same weights, whatever order the registry happened to iterate in.
+        for (const id of ['a', 'b', 'c']) {
+          expect(shuffled.get(id)).toBe(once.get(id));
+        }
+      });
+
+      it('keeps the incumbent 1/x shed available as the named one-release fallback', () => {
+        // The exact answer the governor used to write for the canonical
+        // leader-200k / laggard-50k / slack-30k vector, pinned here so the
+        // rollback path stays measured rather than merely present.
+        expect(legacyRunwayShedWeight(200_000, 50_000, 30_000)).toBeCloseTo(
+          80_000 / 230_000,
+          10,
+        );
+        expect(legacyRunwayShedWeight(50_000, 50_000, 30_000)).toBe(1);
+        // Clamped both ways, exactly as before.
+        expect(legacyRunwayShedWeight(1e12, 0, 1)).toBe(0.25);
+        expect(legacyRunwayShedWeight(0, 1e12, 1)).toBe(4);
+      });
+    });
+
+    describe('governor integration (scripted estimateCost)', () => {
+      /**
+       * Fairness mock with a scripted byte channel: `bytesPerCost` is what
+       * `estimateCost` reports for any range, so β = bytesPerCost / Δ and the
+       * RATIO between sources is what the fill actually consumes.
+       */
+      function makeByteSource(bytesPerCost: number) {
+        const state = {
+          runwaySimMs: 0,
+          complete: false,
+          bytesPerCost,
+          costCalls: [] as Array<{ start: number; end: number }>,
+          capCalls: [] as Array<number | null>,
+          weightCalls: [] as number[],
+        };
+        const source: BufferSource = {
+          getBufferedRunway(_time, _direction, horizonSimMs) {
+            return {
+              simMs: state.runwaySimMs,
+              bytesPending: 0,
+              horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+              complete: state.complete,
+            };
+          },
+          getBufferedRanges() {
+            return [];
+          },
+          estimateCost(range) {
+            state.costCalls.push(range);
+            return { bytes: state.bytesPerCost, tiles: 0 };
+          },
+          estimateTimeToReadyMs() {
+            return null;
+          },
+          flushPrefetch() {},
+          setPrefetchRunAheadLimit(simMs) {
+            state.capCalls.push(simMs);
+          },
+          setBandwidthWeight(weight) {
+            state.weightCalls.push(weight);
+          },
+        };
+        return { source, state };
+      }
+
+      // Defaults throughout: speed 10, slack = max(200, 3000) × 10 = 30_000.
+
+      it('routes 10× the share to the equal-runway source whose bytes are 10× denser', () => {
+        const leader = makeByteSource(30_000);
+        const heavy = makeByteSource(300_000); // β = 10 bytes / sim-ms
+        const light = makeByteSource(30_000); // β = 1 byte / sim-ms
+        leader.state.runwaySimMs = 200_000;
+        heavy.state.runwaySimMs = 50_000;
+        light.state.runwaySimMs = 50_000;
+        const g = makeGovernor();
+        g.addSource('leader', leader.source, { required: true });
+        g.addSource('heavy', heavy.source, { required: true });
+        g.addSource('light', light.source, { required: true });
+
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+        // β is measured over Δ = max(bucket, slack) = 30_000 sim-ms starting at
+        // each source's OWN frontier (playhead 0 + its runway).
+        expect(heavy.state.costCalls).toEqual([{ start: 50_000, end: 80_000 }]);
+        expect(leader.state.costCalls).toEqual([
+          { start: 200_000, end: 230_000 },
+        ]);
+        // Fill target 170_000: N_heavy = 10 × 120_000, N_light = 120_000.
+        expect(heavy.state.weightCalls).toEqual([4]);
+        expect(light.state.weightCalls).toEqual([0.4]);
+        expect(leader.state.weightCalls).toEqual([0.25]);
+        // The CAP lever is untouched by BH-3: both co-laggards run free, the
+        // leader is pinned at laggard + slack.
+        expect(heavy.state.capCalls).toEqual([null]);
+        expect(light.state.capCalls).toEqual([null]);
+        expect(leader.state.capCalls).toEqual([80_000]);
+      });
+
+      it('memoizes β per frontier bucket — one estimateCost per source per bucket, not per probe', () => {
+        const leader = makeByteSource(30_000);
+        const laggard = makeByteSource(300_000);
+        leader.state.runwaySimMs = 200_000;
+        laggard.state.runwaySimMs = 50_000;
+        const g = makeGovernor();
+        g.addSource('leader', leader.source, { required: true });
+        g.addSource('laggard', laggard.source, { required: true });
+        g.requestPlay();
+        expect(laggard.state.costCalls).toHaveLength(1);
+
+        // Three more probes inside the same 30_000 sim-ms frontier bucket: the
+        // directory walk is not repeated (the BH-3 cost bound).
+        laggard.state.runwaySimMs = 51_000;
+        g.notifyBufferChange(runway(51_000));
+        laggard.state.runwaySimMs = 52_000;
+        g.notifyBufferChange(runway(52_000));
+        expect(laggard.state.costCalls).toHaveLength(1);
+
+        // Crossing into the next bucket re-measures — the frontier moved
+        // somewhere the old density no longer describes.
+        laggard.state.runwaySimMs = 95_000;
+        g.notifyBufferChange(runway(95_000));
+        expect(laggard.state.costCalls).toHaveLength(2);
+      });
+
+      it('respects the 20% weight deadband and never writes optional or complete sources', () => {
+        const leader = makeByteSource(30_000);
+        const mid = makeByteSource(30_000);
+        const laggard = makeByteSource(30_000);
+        const overlay = makeByteSource(30_000);
+        leader.state.runwaySimMs = 200_000;
+        mid.state.runwaySimMs = 110_000;
+        laggard.state.runwaySimMs = 50_000;
+        overlay.state.runwaySimMs = 50_000;
+        const g = makeGovernor();
+        g.addSource('leader', leader.source, { required: true });
+        g.addSource('mid', mid.source, { required: true });
+        g.addSource('laggard', laggard.source, { required: true });
+        g.addSource('overlay', overlay.source, { required: false });
+
+        g.requestPlay();
+        // Fill target 170_000 → N = {leader 0, mid 60_000, laggard 120_000}.
+        expect(mid.state.weightCalls).toEqual([2]);
+        expect(laggard.state.weightCalls).toEqual([4]);
+        // An OPTIONAL source never sheds and never gains, however far behind
+        // it is — unchanged by BH-3.
+        expect(overlay.state.weightCalls).toEqual([]);
+
+        // mid drifts to a 2.1667 weight: +8.3% is inside the deadband, so the
+        // scheduler hears nothing.
+        mid.state.runwaySimMs = 105_000;
+        g.notifyBufferChange(runway(50_000));
+        expect(mid.state.weightCalls).toEqual([2]);
+
+        // A real move (weight → 3.667, +83%) re-sends.
+        mid.state.runwaySimMs = 60_000;
+        g.notifyBufferChange(runway(50_000));
+        expect(mid.state.weightCalls).toHaveLength(2);
+        expect(mid.state.weightCalls[1]).toBeCloseTo(
+          (4 * 110_000) / 120_000,
+          6,
+        );
+
+        // Completing a source takes it out of the fill entirely: no further
+        // weight traffic for it.
+        const before = mid.state.weightCalls.length;
+        mid.state.complete = true;
+        g.notifyBufferChange(runway(50_000));
+        expect(mid.state.weightCalls).toHaveLength(before);
+      });
+
+      it('produces NO weight traffic at all on a near-tie (the fill deadbands inside the slack band)', () => {
+        // The same near-tie the cap hysteresis protects: both sources inside
+        // one slack of the leader, so neither has any byte need and neither is
+        // written. Identity cannot flap when nothing is sent.
+        const a = makeByteSource(30_000);
+        const b = makeByteSource(300_000); // 10× denser, still no need
+        a.state.runwaySimMs = 50_000;
+        b.state.runwaySimMs = 56_000;
+        const g = makeGovernor();
+        g.addSource('a', a.source, { required: true });
+        g.addSource('b', b.source, { required: true });
+        g.requestPlay();
+        expect(a.state.weightCalls).toEqual([]);
+        expect(b.state.weightCalls).toEqual([]);
+
+        b.state.runwaySimMs = 60_000;
+        g.notifyBufferChange(runway(50_000));
+        expect(a.state.weightCalls).toEqual([]);
+        expect(b.state.weightCalls).toEqual([]);
+      });
+
+      it('is deterministic: identical probe sequences produce identical weight sequences', () => {
+        const script = [200_000, 150_000, 90_000, 60_000];
+        const run = (): number[][] => {
+          const leader = makeByteSource(30_000);
+          const laggard = makeByteSource(120_000);
+          leader.state.runwaySimMs = 400_000;
+          laggard.state.runwaySimMs = script[0];
+          const g = new PlaybackGovernor(tc, {});
+          g.addSource('leader', leader.source, { required: true });
+          g.addSource('laggard', laggard.source, { required: true });
+          g.requestPlay();
+          for (const r of script.slice(1)) {
+            laggard.state.runwaySimMs = r;
+            g.notifyBufferChange(runway(r));
+          }
+          g.dispose();
+          return [leader.state.weightCalls, laggard.state.weightCalls];
+        };
+        const first = run();
+        tc.setTime(0);
+        const second = run();
+        expect(second).toEqual(first);
+        // …and it actually exercised the fill (otherwise this pins nothing).
+        expect(first[0].length + first[1].length).toBeGreaterThan(0);
+      });
+    });
+  });
+
+  /**
+   * BH-4 — the cadence tolerance band derived PER SOURCE from declared
+   * temporal buckets (§11.2), instead of one global wall-ms constant.
+   *
+   * `τ_i = max(Δ_i, Δ_leader) + 200 ms × |speed|`. The residue is the probe
+   * staleness — and is exactly the incumbent default — so a derived band is
+   * never narrower than today's, and a source that declares nothing lands back
+   * on today's band bit-for-bit.
+   */
+  describe('per-source cadence tolerance τ (BH-4 — §11.2)', () => {
+    /** Mock source that may or may not declare a temporal bucket (sim-ms). */
+    function makeCadenceSource(bucketMs: number | null) {
+      const state = { runwaySimMs: 0, complete: false };
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          return {
+            simMs: state.runwaySimMs,
+            bytesPending: 0,
+            horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return [];
+        },
+        estimateCost() {
+          return { bytes: 0, tiles: 0 };
+        },
+        estimateTimeToReadyMs() {
+          return null;
+        },
+        flushPrefetch() {},
+      };
+      if (bucketMs !== null) {
+        source.getTemporalBucketMs = () => bucketMs;
+      }
+      return { source, state };
+    }
+
+    const HOUR = 3_600_000;
+    const MINUTE = 60_000;
+
+    /**
+     * Drive a two-source composite to the point where the fold decides, and
+     * report whether the clock survived. `playing` means the band lifted the
+     * lagging source to the leader; `buffering` means it did not.
+     */
+    function foldStalls(
+      opts: {
+        speed: number;
+        leadSimMs: number;
+        lagSimMs: number;
+        leadBucketMs: number | null;
+        lagBucketMs: number | null;
+      } & Partial<ConstructorParameters<typeof PlaybackGovernor>[1]>,
+    ): boolean {
+      const { speed, leadSimMs, lagSimMs, leadBucketMs, lagBucketMs, ...rest } =
+        opts;
+      tc.pause();
+      tc.setTime(0);
+      tc.setSpeed(speed);
+      const lead = makeCadenceSource(leadBucketMs);
+      const lag = makeCadenceSource(lagBucketMs);
+      // Start both comfortably past the gate, exactly as the Phase 1 cadence
+      // tests do, so the composite is PLAYING before the runways are moved to
+      // the vector under test.
+      lead.state.runwaySimMs = 10_000_000;
+      lag.state.runwaySimMs = 10_000_000;
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        ...rest,
+      });
+      g.addSource('lead', lead.source, { required: true });
+      g.addSource('lag', lag.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      lead.state.runwaySimMs = leadSimMs;
+      lag.state.runwaySimMs = lagSimMs;
+      g.notifyBufferChange(runway(lagSimMs));
+      const stalled = g.state === 'buffering';
+      // One governor per vector: a live one left subscribed would fight the
+      // next case for the shared clock.
+      g.dispose();
+      governor = null;
+      return stalled;
+    }
+
+    it('absorbs coarse-bucket quantization the 200 ms constant under-absorbs (1 h + 1 min at low speed)', () => {
+      // speed 1 → the incumbent band is 200 sim-ms, but an hourly-bucketed
+      // field's horizon can only move in 1 h steps: a ~1 h gap to its
+      // minute-bucketed peer is pure quantization, not starvation.
+      // τ_coarse = max(1 h, 1 min) + 200 × 1 = 3_600_200 sim-ms.
+      expect(
+        foldStalls({
+          speed: 1,
+          leadSimMs: 1_000_000,
+          lagSimMs: 500, // below the 600 sim-ms watermark on a raw min
+          leadBucketMs: MINUTE,
+          lagBucketMs: HOUR,
+        }),
+      ).toBe(false);
+    });
+
+    it('…and the SAME composite still stalls under the incumbent constant (the gap this closes)', () => {
+      // Identical runways, nothing declared: band 200 sim-ms → the 999_500 gap
+      // is not lifted → raw min 500 < watermark 600 → stall. This is the
+      // false-stall BH-4 removes, and the byte-identical fold for sources
+      // without the method (test 5).
+      expect(
+        foldStalls({
+          speed: 1,
+          leadSimMs: 1_000_000,
+          lagSimMs: 500,
+          leadBucketMs: null,
+          lagBucketMs: null,
+        }),
+      ).toBe(true);
+    });
+
+    it('does not mask a genuine laggard between two FINE-bucket sources (the over-absorb guard)', () => {
+      // Both at 1 min: τ = 60_000 + 200 × 10 = 62_000 sim-ms. A 99_000 sim-ms
+      // gap is well past that, so it is real starvation and still stalls — the
+      // derived band widens for the cadence a pair actually has, never
+      // globally.
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 100_000,
+          lagSimMs: 1_000,
+          leadBucketMs: MINUTE,
+          lagBucketMs: MINUTE,
+        }),
+      ).toBe(true);
+      // The identical gap IS absorbed once the leader declares an hourly
+      // cadence — per-source, exactly as specified.
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 100_000,
+          lagSimMs: 1_000,
+          leadBucketMs: HOUR,
+          lagBucketMs: MINUTE,
+        }),
+      ).toBe(false);
+    });
+
+    it('treats a declared temporalBucketMs of 0 as UNDECLARED — the wall default, never τ = 0', () => {
+      // An archive that never set temporalBucketMs reports 0. Falling to τ = 0
+      // would re-introduce the raw-min false stall the band exists to prevent.
+      // Default band at speed 10 = 2_000 sim-ms.
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 7_000,
+          lagSimMs: 5_500, // gap 1_500 ≤ 2_000 → jitter, no stall
+          leadBucketMs: 0,
+          lagBucketMs: 0,
+        }),
+      ).toBe(false);
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 7_000,
+          lagSimMs: 4_000, // gap 3_000 > 2_000 → genuine, stalls
+          leadBucketMs: 0,
+          lagBucketMs: 0,
+        }),
+      ).toBe(true);
+    });
+
+    it('an AUTHORED runwayToleranceMs still wins globally, including 0 → exact raw min', () => {
+      // Authored 0 pins the raw min even though both sources declare hourly
+      // buckets that would otherwise absorb the entire gap.
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 100_000,
+          lagSimMs: 1_000,
+          leadBucketMs: HOUR,
+          lagBucketMs: HOUR,
+          runwayToleranceMs: 0,
+        }),
+      ).toBe(true);
+      // An authored (small) band likewise: 250 wall-ms → 2_500 sim-ms, which
+      // the 99_000 gap clears.
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 100_000,
+          lagSimMs: 1_000,
+          leadBucketMs: HOUR,
+          lagBucketMs: HOUR,
+          runwayToleranceMs: 250,
+        }),
+      ).toBe(true);
+      // …and a generous authored band absorbs it, cadences notwithstanding.
+      expect(
+        foldStalls({
+          speed: 10,
+          leadSimMs: 100_000,
+          lagSimMs: 1_000,
+          leadBucketMs: null,
+          lagBucketMs: null,
+          runwayToleranceMs: 20_000, // 200_000 sim-ms
+        }),
+      ).toBe(false);
+    });
+
+    /**
+     * Read the FOLDED runway without a private accessor: park the clock past
+     * every plausible frontier (inside the one-wall-second overrun bound the
+     * per-tick clamp honours) and let the clamp snap it back. It snaps to
+     * `playhead + fold`, and the playhead is re-zeroed first.
+     */
+    function readFoldedSimMs(probeSimMs: number): number {
+      vi.advanceTimersByTime(200); // invalidate the throttled frontier probe
+      tc.setTime(0);
+      tc.setTime(probeSimMs);
+      return tc.getTime();
+    }
+
+    it('honours the safety bound r̂ ≤ min r_i + max τ_i, deterministically, over randomized vectors', () => {
+      // Deterministic pseudo-random vectors (mulberry32) — a property sweep
+      // with no wall clock and no RNG in the product path.
+      let seed = 0x9e3779b9;
+      const rand = (): number => {
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const BUCKETS = [null, 0, 500, 3_000];
+      const PROBE = 8_000; // above every reachable fold, inside the 10_000 clamp
+
+      for (let trial = 0; trial < 40; trial++) {
+        const specs = [0, 1, 2].map(() => ({
+          bucketMs: BUCKETS[Math.floor(rand() * BUCKETS.length)],
+          runwaySimMs: 1_000 + Math.floor(rand() * 5_000),
+        }));
+        tc.pause();
+        tc.setTime(0);
+        tc.setSpeed(10);
+        const built = specs.map((s) => {
+          const src = makeCadenceSource(s.bucketMs);
+          src.state.runwaySimMs = s.runwaySimMs;
+          return src;
+        });
+        const g = makeGovernor({
+          startGateWallMs: 0,
+          lowWatermarkWallMs: 0, // never stall: we are reading the fold, not gating
+        });
+        built.forEach((s, i) =>
+          g.addSource(`s${i}`, s.source, { required: true }),
+        );
+        g.requestPlay();
+        expect(g.state).toBe('playing');
+
+        const folded = readFoldedSimMs(PROBE);
+        const minRunway = Math.min(...specs.map((s) => s.runwaySimMs));
+        // τ_i is at most (max declared bucket) + the probe residue 200 × 10.
+        const declared = Math.max(...specs.map((s) => s.bucketMs ?? 0), 0);
+        const maxTau = declared > 0 ? declared + 2_000 : 2_000;
+        // One-sided robustness: the band may lift, but never past the safety
+        // bound — and it never reports LESS than the honest min.
+        expect(folded).toBeGreaterThanOrEqual(minRunway);
+        expect(folded).toBeLessThanOrEqual(minRunway + maxTau);
+        // Determinism: the same vector folds to the same number, repeatedly.
+        expect(readFoldedSimMs(PROBE)).toBe(folded);
+        g.dispose();
+        governor = null;
+      }
+    });
+
+    it('is NOT monotone in every r_i — a property of the lift structure itself, not of BH-4', () => {
+      // Worth pinning because the plan asserts monotonicity: it does not hold,
+      // and it did not hold BEFORE this item either. Any lift of the form
+      // "raise a source to the leader when it is within a band" breaks it, so
+      // the counterexample below uses a CONSTANT authored band and no declared
+      // cadences at all — i.e. the incumbent fold, verbatim.
+      tc.pause();
+      tc.setTime(0);
+      tc.setSpeed(10);
+      const a = makeCadenceSource(null);
+      const b = makeCadenceSource(null);
+      a.state.runwaySimMs = 5_000;
+      b.state.runwaySimMs = 5_000;
+      const g = makeGovernor({
+        startGateWallMs: 0,
+        lowWatermarkWallMs: 0,
+        runwayToleranceMs: 200, // authored: band 2_000 sim-ms at speed 10
+      });
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      g.requestPlay();
+
+      a.state.runwaySimMs = 1_000;
+      b.state.runwaySimMs = 2_500; // gap 1_500 ≤ 2_000 → a is lifted to b
+      expect(readFoldedSimMs(8_000)).toBe(2_500);
+
+      // Raising b — strictly MORE data — pushes it out of a's band, so a is no
+      // longer lifted and the fold falls back to a's honest runway.
+      b.state.runwaySimMs = 4_000;
+      expect(readFoldedSimMs(8_000)).toBe(1_000);
+      // The safety bound still holds throughout; that is the invariant the
+      // fold actually guarantees.
+    });
+  });
+
+  /**
+   * BH-7 (governor half) — pushing the LOOP WINDOW to every source.
+   *
+   * The tileset owns the loop-modular eviction arithmetic; the governor owns
+   * knowing where the boundary is. Everything here is about the push: when it
+   * happens, when it must NOT happen, and that a source without the optional
+   * method is exactly as it was.
+   */
+  describe('loop window plumbing (BH-7 — §9.4)', () => {
+    function makeLoopSource(withHook = true) {
+      const state = {
+        runwaySimMs: 500_000,
+        complete: false,
+        loopCalls: [] as Array<{ start: number; end: number } | null>,
+      };
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          return {
+            simMs: state.runwaySimMs,
+            bytesPending: 0,
+            horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return [];
+        },
+        estimateCost() {
+          return { bytes: 0, tiles: 0 };
+        },
+        estimateTimeToReadyMs() {
+          return null;
+        },
+        flushPrefetch() {},
+      };
+      if (withHook) {
+        source.setLoopWindow = (range) => {
+          state.loopCalls.push(range && { ...range });
+        };
+      }
+      return { source, state };
+    }
+
+    it('pushes the looping range on source registration', () => {
+      tc.setTimeRange({ start: 1_000, end: 9_000 });
+      tc.setLoop(true);
+      const a = makeLoopSource();
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      expect(a.state.loopCalls).toEqual([{ start: 1_000, end: 9_000 }]);
+    });
+
+    it('never touches setLoopWindow when the clock is not looping (zero regression)', () => {
+      tc.setTimeRange({ start: 1_000, end: 9_000 }); // a range, but no loop
+      const a = makeLoopSource();
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.requestPlay();
+      g.notifyBufferChange(runway(500_000));
+      g.seekTo(4_000);
+      g.requestPause();
+      expect(a.state.loopCalls).toEqual([]);
+    });
+
+    it('pushes on a loop-mode change and clears to null when looping stops', () => {
+      tc.setTimeRange({ start: 0, end: 10_000 });
+      const a = makeLoopSource();
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      expect(a.state.loopCalls).toEqual([]);
+
+      // The clock announces neither setLoop nor setTimeRange, so the sync is
+      // explicit (or picked up by the next evaluation).
+      tc.setLoop(true);
+      g.syncLoopWindows();
+      expect(a.state.loopCalls).toEqual([{ start: 0, end: 10_000 }]);
+
+      // Idempotent: the same window is not re-pushed, however many
+      // evaluations run.
+      g.syncLoopWindows();
+      g.requestPlay();
+      g.notifyBufferChange(runway(500_000));
+      expect(a.state.loopCalls).toHaveLength(1);
+
+      // A moved range is a new window.
+      tc.setTimeRange({ start: 0, end: 20_000 });
+      g.syncLoopWindows();
+      expect(a.state.loopCalls).toEqual([
+        { start: 0, end: 10_000 },
+        { start: 0, end: 20_000 },
+      ]);
+
+      // Loop off → the boundary is gone; the source must stop rotating.
+      tc.setLoop(false);
+      g.syncLoopWindows();
+      expect(a.state.loopCalls.at(-1)).toBeNull();
+      g.syncLoopWindows();
+      expect(a.state.loopCalls).toHaveLength(3); // and not re-cleared
+    });
+
+    it('pushes the range on a wrap — the strongest evidence the clock loops', () => {
+      tc.setTimeRange({ start: 0, end: 10_000 });
+      const a = makeLoopSource();
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      // Loop enabled without announcement, then the clock wraps.
+      tc.setLoop(true);
+      a.state.loopCalls.length = 0;
+      tc.setTime(12_000); // overshoot; emit the wrap the clock would emit
+      (tc as unknown as { notifyWrapListeners(): void }).notifyWrapListeners();
+      expect(a.state.loopCalls).toEqual([{ start: 0, end: 10_000 }]);
+    });
+
+    it('lifts the window from a departing source and from a swapped registry', () => {
+      tc.setTimeRange({ start: 0, end: 10_000 });
+      tc.setLoop(true);
+      const a = makeLoopSource();
+      const b = makeLoopSource();
+      const g = makeGovernor();
+      g.addSource('a', a.source, { required: true });
+      g.addSource('b', b.source, { required: true });
+      expect(a.state.loopCalls).toHaveLength(1);
+
+      g.removeSource('a');
+      expect(a.state.loopCalls.at(-1)).toBeNull();
+
+      // setSource clears the registry: the outgoing source stands down, the
+      // incoming one is told the window on the way in.
+      const c = makeLoopSource();
+      g.setSource(c.source);
+      expect(b.state.loopCalls.at(-1)).toBeNull();
+      expect(c.state.loopCalls).toEqual([{ start: 0, end: 10_000 }]);
+
+      // Disposal likewise — loaders outlive the governor.
+      g.dispose();
+      expect(c.state.loopCalls.at(-1)).toBeNull();
+    });
+
+    it('degrades silently for a source without setLoopWindow (feature-detected)', () => {
+      tc.setTimeRange({ start: 0, end: 10_000 });
+      tc.setLoop(true);
+      const legacy = makeLoopSource(false); // no hook at all
+      const modern = makeLoopSource();
+      const g = makeGovernor();
+      expect(() => {
+        g.addSource('legacy', legacy.source, { required: true });
+        g.addSource('modern', modern.source, { required: true });
+        g.requestPlay();
+        g.notifyBufferChange(runway(500_000));
+        g.removeSource('legacy');
+      }).not.toThrow();
+      // The source that CAN hear it still does — one source's gap does not
+      // suppress the push for the rest.
+      expect(modern.state.loopCalls).toEqual([{ start: 0, end: 10_000 }]);
+      expect(g.state).toBe('playing');
+    });
+  });
+
+  /**
+   * P0-2 — ScrubQoeStats, accumulated between the governor's own
+   * `scrubstart`/`scrubend` events.
+   *
+   * These are the §11.6 measurements the scrub-LOD keep-vs-delete decision
+   * hinges on. Everything here is OBSERVATION: the drag bracket's behaviour
+   * (preview-never-gates, the restore-on-release invariant) is measured, never
+   * altered — the assertions below re-check the incumbent behaviour alongside
+   * the counters.
+   */
+  describe('scrub QoE counters (P0-2)', () => {
+    interface ProbeBag {
+      enabled?: boolean;
+      scrub?: Array<Record<string, unknown>>;
+      requests?: Array<Record<string, unknown>>;
+      [k: string]: unknown;
+    }
+    const readBag = (): ProbeBag | undefined =>
+      (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+    const setBag = (bag: ProbeBag | undefined): void => {
+      if (bag === undefined) {
+        delete (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+      } else {
+        (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe = bag;
+      }
+    };
+    afterEach(() => setBag(undefined));
+
+    it('reads all-zero before the first drag (a harness may read it blind)', () => {
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+      expect(g.getScrubQoeStats()).toEqual({
+        timeToFirstPixelMs: null,
+        freshFrameFraction: 0,
+        bytesDuringScrub: 0,
+        settleMs: null,
+        tierSwitchCount: 0,
+      });
+    });
+
+    it('counts a clean drag as exactly two tier switches (degrade + restore)', () => {
+      const { source, state } = makeSource();
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(1000);
+      g.endScrub(1000);
+      expect(g.getScrubQoeStats().tierSwitchCount).toBe(2);
+      // The incumbent broadcast is unchanged — the counter shadows it. (The
+      // leading `false` is addSource's registration-time bit sync, which
+      // predates the drag and is deliberately not counted.)
+      expect(state.interactiveCalls).toEqual([false, true, false]);
+    });
+
+    it('counts an extra tier switch when a source joins mid-drag', () => {
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      const late = makeSource();
+      g.addSource('late', late.source, { required: false });
+      g.endScrub(0);
+      // grab + join + release: three visible tier assertions in one drag.
+      expect(g.getScrubQoeStats().tierSwitchCount).toBe(3);
+      expect(late.state.interactiveCalls).toEqual([true, false]);
+    });
+
+    it('reports timeToFirstPixel 0 when the first preview lands on resident data', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 10_000 }];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(5000);
+      expect(g.getScrubQoeStats().timeToFirstPixelMs).toBe(0);
+      expect(g.getScrubQoeStats().freshFrameFraction).toBe(1);
+    });
+
+    it('measures timeToFirstPixel when data lands under a resting thumb', () => {
+      const { source, state } = makeSource();
+      state.ranges = [];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(5000);
+      expect(g.getScrubQoeStats().timeToFirstPixelMs).toBeNull();
+
+      // The thumb rests; no further scrubTo will land. Only arriving data can
+      // close the span — that is why notifyBufferChange re-probes coverage.
+      vi.advanceTimersByTime(500);
+      state.ranges = [{ start: 4000, end: 6000 }];
+      g.notifyBufferChange(runway(2000));
+      expect(g.getScrubQoeStats().timeToFirstPixelMs).toBe(500);
+    });
+
+    it('leaves timeToFirstPixel null when the drag never reaches coverage', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 100 }];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(50_000);
+      vi.advanceTimersByTime(400);
+      g.scrubTo(60_000);
+      g.endScrub(60_000);
+      const stats = g.getScrubQoeStats();
+      expect(stats.timeToFirstPixelMs).toBeNull();
+      expect(stats.freshFrameFraction).toBe(0);
+    });
+
+    it('reports the fraction of preview positions showing current-instant data', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 1000 }];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(500); // fresh
+      g.scrubTo(5000); // not resident
+      g.scrubTo(900); // fresh
+      g.endScrub(900);
+      expect(g.getScrubQoeStats().freshFrameFraction).toBeCloseTo(2 / 3, 10);
+    });
+
+    it('settles at 0 when the release does not gate (full detail was resident)', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 10_000 }];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(2000);
+      g.endScrub(2000); // intent is not "playing" → no post-seek gate
+      expect(g.state).toBe('idle');
+      expect(g.getScrubQoeStats().settleMs).toBe(0);
+    });
+
+    it('measures settle-to-full-detail across the post-release gate', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 1_000_000;
+      const g = makeGovernor({ source, startGateWallMs: 2000 });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      g.beginScrub();
+      g.scrubTo(50_000);
+      // Release onto a position with no runway: the commit gates on the FINE
+      // tier (the preview-only contract), which is what settleMs measures.
+      state.runwaySimMs = 0;
+      g.endScrub(50_000);
+      expect(g.state).toBe('seeking');
+      // Still pending: reported as elapsed-so-far, like totalStallMs.
+      vi.advanceTimersByTime(750);
+      expect(g.getScrubQoeStats().settleMs).toBe(750);
+
+      state.runwaySimMs = 1_000_000;
+      g.notifyBufferChange(runway(1_000_000));
+      expect(g.state).toBe('playing');
+      expect(g.getScrubQoeStats().settleMs).toBe(750);
+
+      // A LATER stall opens a new gate but must not reopen the closed span.
+      vi.advanceTimersByTime(1000);
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      expect(g.getScrubQoeStats().settleMs).toBe(750);
+    });
+
+    it('windows bytesDuringScrub over the core `requests` channel', () => {
+      setBag({ enabled: true });
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+
+      // A request that completed BEFORE the drag opened.
+      readBag()!.requests = [
+        { key: 'pre', bytes: 1000, dispatchedAt: 1, completedAt: 5 },
+      ];
+      vi.advanceTimersByTime(100);
+      g.beginScrub();
+      const dragStart = performance.now();
+      vi.advanceTimersByTime(50);
+      readBag()!.requests!.push(
+        // Inside the window — counted.
+        {
+          key: 'a',
+          bytes: 700,
+          dispatchedAt: dragStart + 10,
+          completedAt: dragStart + 20,
+        },
+        {
+          key: 'b',
+          bytes: 300,
+          dispatchedAt: dragStart + 15,
+          completedAt: dragStart + 40,
+        },
+        // Superseded while queued: it moved no bytes, so it must not count.
+        {
+          key: 'cancelled',
+          bytes: 999,
+          dispatchedAt: 0,
+          completedAt: dragStart + 25,
+        },
+      );
+      expect(g.getScrubQoeStats().bytesDuringScrub).toBe(1000);
+      g.endScrub(0);
+
+      // The window closes at release: later traffic is not the drag's cost.
+      readBag()!.requests!.push({
+        key: 'after',
+        bytes: 5000,
+        dispatchedAt: performance.now() + 10,
+        completedAt: performance.now() + 20,
+      });
+      expect(g.getScrubQoeStats().bytesDuringScrub).toBe(1000);
+    });
+
+    it('reports 0 bytes (never throws) with no probe, or malformed samples', () => {
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(10);
+      expect(g.getScrubQoeStats().bytesDuringScrub).toBe(0);
+      g.endScrub(10);
+
+      setBag({
+        enabled: true,
+        requests: [null, 'nope', { bytes: 'x' }] as never,
+      });
+      g.beginScrub();
+      expect(() => g.getScrubQoeStats()).not.toThrow();
+      expect(g.getScrubQoeStats().bytesDuringScrub).toBe(0);
+      g.endScrub(10);
+    });
+
+    it('publishes the bracket on the telemetry `scrub` channel', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 10_000 }];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(3000);
+      vi.advanceTimersByTime(30);
+      g.endScrub(3000);
+
+      const samples = readBag()!.scrub!;
+      expect(samples).toHaveLength(2);
+      expect(samples[0].event).toBe('scrubstart');
+      const end = samples[1];
+      expect(end.event).toBe('scrubend');
+      // The window is what P0-5 slices the `requests` channel with.
+      expect(end.startedAtWall).toBe(samples[0].startedAtWall);
+      expect(end.endedAtWall as number).toBeGreaterThan(
+        end.startedAtWall as number,
+      );
+      // …carrying the five ScrubQoeStats fields inline.
+      expect(end.tierSwitchCount).toBe(2);
+      expect(end.freshFrameFraction).toBe(1);
+      expect(end.timeToFirstPixelMs).toBe(0);
+      expect(end.settleMs).toBe(0);
+      expect(end.bytesDuringScrub).toBe(0);
+    });
+
+    it('emits nothing on the `scrub` channel when the probe is off', () => {
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(1);
+      g.endScrub(1);
+      expect(readBag()).toBeUndefined();
+      // The counters still accumulate — they are plain fields, not probe state.
+      expect(g.getScrubQoeStats().tierSwitchCount).toBe(2);
+    });
+
+    it('windows per drag: a second grab starts a fresh bracket', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 10_000 }];
+      const g = makeGovernor({ source });
+
+      g.beginScrub();
+      g.scrubTo(100);
+      g.scrubTo(200);
+      g.endScrub(200);
+      expect(g.getScrubQoeStats().freshFrameFraction).toBe(1);
+      expect(g.getScrubQoeStats().tierSwitchCount).toBe(2);
+
+      state.ranges = [];
+      g.beginScrub();
+      g.scrubTo(90_000);
+      const during = g.getScrubQoeStats();
+      expect(during.freshFrameFraction).toBe(0); // not the previous drag's 1
+      expect(during.tierSwitchCount).toBe(1); // grab only; release pending
+      expect(during.settleMs).toBeNull();
+    });
+
+    it('treats a re-grab of a held thumb as the SAME bracket (idempotent)', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 10_000 }];
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.scrubTo(100);
+      g.beginScrub(); // no-op: already dragging
+      g.scrubTo(200);
+      g.endScrub(200);
+      expect(g.getScrubQoeStats().tierSwitchCount).toBe(2);
+      expect(state.interactiveCalls).toEqual([false, true, false]);
+    });
+
+    it('ignores previews issued outside a drag', () => {
+      const { source, state } = makeSource();
+      state.ranges = [{ start: 0, end: 10_000 }];
+      const g = makeGovernor({ source });
+      g.scrubTo(500); // no bracket open
+      expect(g.getScrubQoeStats().tierSwitchCount).toBe(0);
+      expect(g.getScrubQoeStats().freshFrameFraction).toBe(0);
+    });
+  });
+
+  /**
+   * The `playback.state` snapshot: the governor half of the trace-recorder
+   * contract.
+   *
+   * `tools/bench/src/policy-record.mjs` reads
+   * `snapshots['tileset.viewport'] ?? snapshots['playback.state']` and refuses
+   * to write a trace when NEITHER exists. This is the fallback (temporal-only —
+   * the governor has no camera), and it is also where `frame-cost.mjs` reads
+   * the O1 stallCount / totalStallMs acceptance cells from: the `playback`
+   * CHANNEL only emits on transitions, so a measurement window containing none
+   * would otherwise report "no data" for a run that simply never stalled.
+   */
+  describe('playback.state snapshot (trace contract + QoE readout)', () => {
+    interface ProbeBag {
+      enabled?: boolean;
+      playback?: Array<Record<string, unknown>>;
+      scrub?: Array<Record<string, unknown>>;
+      snapshots?: Record<string, Record<string, unknown>>;
+      [k: string]: unknown;
+    }
+    const readBag = (): ProbeBag | undefined =>
+      (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+    const setBag = (bag: ProbeBag | undefined): void => {
+      if (bag === undefined) {
+        delete (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+      } else {
+        (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe = bag;
+      }
+    };
+    const readState = (): Record<string, unknown> | undefined =>
+      readBag()?.snapshots?.['playback.state'];
+    afterEach(() => setBag(undefined));
+
+    it('GUARD: probe off ⇒ a full play/stall cycle never creates the bag', () => {
+      expect(readBag()).toBeUndefined();
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      // Not merely "no snapshot" — nothing was allocated at all. getQoeStats()
+      // builds an object per call, so the gate has to be BEFORE the payload.
+      expect(readBag()).toBeUndefined();
+    });
+
+    it('GUARD: enabled:false ⇒ no snapshots object is created', () => {
+      setBag({ enabled: false });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      g.notifyBufferChange(runway(100_000));
+      expect(readBag()!.snapshots).toBeUndefined();
+      expect(Object.keys(readBag()!)).toEqual(['enabled']);
+    });
+
+    it('publishes the trajectory fields the recorder reads', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      tc.setTime(4321);
+      g.notifyBufferChange(runway(100_000));
+
+      const snap = readState()!;
+      expect(snap).toBeDefined();
+      expect(snap.state).toBe('playing');
+      expect(snap.playheadMs).toBe(4321);
+      expect(snap.speed).toBe(10);
+      expect(snap.direction).toBe(1);
+      expect(snap.animating).toBe(true);
+    });
+
+    it('reports direction -1 for reverse playback', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      tc.setSpeed(-10);
+      g.notifyBufferChange(runway(100_000));
+      expect(readState()!.direction).toBe(-1);
+    });
+
+    it('stays `animating` THROUGH a gate, where the clock is frozen', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      expect(tc.isPlaying()).toBe(false); // clock IS frozen
+      const snap = readState()!;
+      // …but every source has just been re-asserted animating-at-speed, so a
+      // replay that keyed eviction grace off clock motion would see a paused
+      // session at the moment the loader is reaching hardest.
+      expect(snap.animating).toBe(true);
+      expect(snap.state).toBe('buffering');
+    });
+
+    it('goes quiet (animating false) once intent is paused', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      g.requestPause();
+      expect(readState()!.animating).toBe(false);
+    });
+
+    it('carries the QoE counters, matching getQoeStats() exactly', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        resumeFactor: 2,
+      });
+      g.requestPlay();
+      vi.advanceTimersByTime(500);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0)); // one honest stall
+      expect(g.state).toBe('buffering');
+      vi.advanceTimersByTime(1000);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+
+      const snap = readState()!;
+      const stats = g.getQoeStats();
+      expect(snap.stallCount).toBe(1);
+      expect(snap.stallCount).toBe(stats.stallCount);
+      expect(snap.totalStallMs).toBe(stats.totalStallMs);
+      expect(snap.startupMs).toBe(stats.startupMs);
+      expect(snap.degradedResumeCount).toBe(stats.degradedResumeCount);
+      expect(snap.creepMs).toBe(stats.creepMs);
+    });
+
+    it('republishes on the buffer pulse, with no state transition at all', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      const transitions = readBag()!.playback!.length;
+
+      tc.setTime(1000);
+      g.notifyBufferChange(runway(100_000));
+      expect(readState()!.playheadMs).toBe(1000);
+      tc.setTime(2000);
+      g.notifyBufferChange(runway(100_000));
+      expect(readState()!.playheadMs).toBe(2000);
+      // The state machine stayed silent throughout — this is the case a
+      // channel-only reader misses.
+      expect(g.state).toBe('playing');
+      expect(readBag()!.playback!.length).toBe(transitions);
+    });
+
+    it('is a latest-value snapshot, not a ring (bounded memory)', () => {
+      setBag({ enabled: true });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      for (let i = 0; i < 5000; i++) {
+        tc.setTime(i);
+        g.notifyBufferChange(runway(100_000));
+      }
+      expect(Array.isArray(readBag()!.snapshots!['playback.state'])).toBe(
+        false,
+      );
+      expect(readState()!.playheadMs).toBe(4999);
+    });
+
+    it('emits the scrub channel through the TYPED union (no cast)', () => {
+      setBag({ enabled: true });
+      const { source } = makeSource();
+      const g = makeGovernor({ source });
+      g.beginScrub();
+      g.endScrub(0);
+      // `scrub` used to reach the bag through an `as unknown as` cast at the
+      // call site because the channel union did not name it. Same bag, same
+      // ring — now type-checked.
+      const samples = readBag()!.scrub!;
+      expect(samples.map((s) => s.event)).toEqual(['scrubstart', 'scrubend']);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // M5 / CO-3 — fluid feasibility + the jitter re-fit of the gate constants.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** Bucket width the profile mocks below pretend the archive was built with. */
+  const BUCKET_MS = 20_000;
+
+  /**
+   * Mock BufferSource that ALSO exposes the CO-1 byte-density profile, so the
+   * governor's fluid feasibility check can be driven from a scripted density
+   * curve. `buckets` is the whole dataset; the mock windows it to the queried
+   * range with the same bucket-intersection rule the core tileset uses.
+   */
+  function makeProfileSource(
+    buckets: Array<{ start: number; missing: number }> = [],
+  ) {
+    const state = {
+      runwaySimMs: 0,
+      complete: false,
+      etaMs: null as number | null,
+      costBytes: 0,
+      costTiles: 0,
+      buckets,
+      /** false ⇒ the source returns `null` (blind byte channel / no index). */
+      profileEnabled: true,
+      profileCalls: [] as Array<{ start: number; end: number }>,
+      /** Range-dependent cost — the density curve auto-speed prices. */
+      costForRange: null as
+        | ((range: { start: number; end: number }) => {
+            bytes: number;
+            tiles: number;
+          })
+        | null,
+    };
+    const source: BufferSource = {
+      getBufferedRunway(_time, _direction, horizonSimMs) {
+        return {
+          simMs: state.runwaySimMs,
+          bytesPending: 0,
+          horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+          complete: state.complete,
+        };
+      },
+      getBufferedRanges() {
+        return [];
+      },
+      estimateCost(range) {
+        return state.costForRange
+          ? state.costForRange(range)
+          : { bytes: state.costBytes, tiles: state.costTiles };
+      },
+      estimateTimeToReadyMs() {
+        return state.etaMs;
+      },
+      flushPrefetch() {},
+      getByteDensityProfile(range) {
+        state.profileCalls.push(range);
+        if (!state.profileEnabled) return null;
+        const bucketStarts: number[] = [];
+        const missingBytes: number[] = [];
+        for (const b of state.buckets) {
+          if (b.start > range.end) continue;
+          if (b.start + BUCKET_MS < range.start) continue;
+          bucketStarts.push(b.start);
+          missingBytes.push(b.missing);
+        }
+        return { bucketStarts, missingBytes };
+      },
+    };
+    return { source, state };
+  }
+
+  describe('fluid feasibility check (M5/CO-3)', () => {
+    /**
+     * The item's centrepiece: flat density for two windows, a wall in window
+     * three. Playhead 0, speed 10, gate window 20_000 sim-ms.
+     */
+    const CLIFF = [
+      { start: 0, missing: 1_000 },
+      { start: 20_000, missing: 1_000 },
+      { start: 40_000, missing: 5_000_000 },
+    ];
+    /** Runway 5_000 sim-ms at speed 10 = 500 wall-ms of budget. */
+    const RUNWAY = 5_000;
+    /** ≤ max(500, PLAYTHROUGH_MIN_WALL_MS) ⇒ today's predictor says "go". */
+    const PASSING_ETA = 400;
+
+    function armCliffSource() {
+      const s = makeProfileSource(CLIFF);
+      s.state.runwaySimMs = RUNWAY;
+      s.state.etaMs = PASSING_ETA;
+      return s;
+    }
+
+    it('the byte cliff: the one-window predictor passes, the fluid check refuses', () => {
+      // (a) INCUMBENT path (kill switch pinned off): one ETA against the runway
+      //     — the whole window folded into one number, so the wall two windows
+      //     out is invisible. The gate opens.
+      const incumbentSource = armCliffSource();
+      const incumbent = makeGovernor({
+        source: incumbentSource.source,
+        startGateWallMs: 2000,
+        fluidFeasibility: false,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      incumbent.requestPlay();
+      expect(incumbent.state).toBe('playing');
+      expect(incumbentSource.state.profileCalls).toHaveLength(0);
+      incumbent.dispose();
+
+      // (b) FLUID path, same source, same runway, same ETA: cumulative missing
+      //     bytes through the cliff (5_002_000) exceed rate × deadline
+      //     (100 × (500 + 3500) = 400_000), so the gate does NOT open.
+      let rate = 100;
+      const fluidSource = armCliffSource();
+      const g = makeGovernor({
+        source: fluidSource.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: rate, samples: 5, stdDev: 0 }),
+      });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      expect(fluidSource.state.profileCalls.length).toBeGreaterThan(0);
+
+      // …and it keeps refusing until the RATE covers the cliff. The cliff needs
+      // ≥ 5_002_000 / 4000 = 1250.5 bytes/ms; 1200 is still short.
+      rate = 1200;
+      g.notifyBufferChange(runway(RUNWAY));
+      expect(g.state).toBe('starting');
+
+      rate = 2000;
+      g.notifyBufferChange(runway(RUNWAY));
+      expect(g.state).toBe('playing');
+    });
+
+    it('charges each bucket at its own deadline, not the window end (near bytes still pass)', () => {
+      // The same total bytes as the cliff, but spread evenly across the three
+      // buckets, fits every deadline — the fluid check is a schedule test, not
+      // a sum test.
+      const flat = makeProfileSource([
+        { start: 0, missing: 20_000 },
+        { start: 20_000, missing: 100_000 },
+        { start: 40_000, missing: 200_000 },
+      ]);
+      flat.state.runwaySimMs = RUNWAY;
+      flat.state.etaMs = null; // the incumbent path would REFUSE (blind ETA)
+      const g = makeGovernor({
+        source: flat.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+    });
+
+    it('any required source WITHOUT the profile routes to the incumbent path, unchanged', () => {
+      // Mixed source sets degrade cleanly: the feature-detect fails fast and no
+      // profile is even requested from the source that has one.
+      const withProfile = armCliffSource();
+      const withoutProfile = makeSource();
+      withoutProfile.state.runwaySimMs = RUNWAY;
+      withoutProfile.state.etaMs = PASSING_ETA;
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.addSource('profiled', withProfile.source, { required: true });
+      g.addSource('legacy', withoutProfile.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // incumbent verdict, cliff unseen
+      expect(withProfile.state.profileCalls).toHaveLength(0);
+    });
+
+    it('a null profile (blind byte channel) routes to the incumbent path', () => {
+      const s = armCliffSource();
+      s.state.profileEnabled = false;
+      const g = makeGovernor({
+        source: s.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      expect(s.state.profileCalls.length).toBeGreaterThan(0); // it DID ask
+    });
+
+    it('a cold (or absent) throughput estimator routes to the incumbent path', () => {
+      const cold = armCliffSource();
+      const g1 = makeGovernor({
+        source: cold.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: null, samples: 0 }),
+      });
+      g1.requestPlay();
+      expect(g1.state).toBe('playing');
+      g1.dispose();
+
+      const unwired = armCliffSource();
+      const g2 = makeGovernor({
+        source: unwired.source,
+        startGateWallMs: 2000,
+      });
+      g2.requestPlay();
+      expect(g2.state).toBe('playing');
+    });
+
+    it('the complete-runway short-circuit is unchanged (no predictor runs at all)', () => {
+      const s = armCliffSource();
+      s.state.complete = true;
+      const g = makeGovernor({
+        source: s.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      expect(s.state.profileCalls).toHaveLength(0);
+    });
+
+    it('zero required sources never stall, cliff or no cliff', () => {
+      const optional = makeProfileSource(CLIFF);
+      optional.state.runwaySimMs = 0;
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.addSource('overlay', optional.source, { required: false });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('playing');
+    });
+
+    it('spends the CONSERVATIVE rate: dispersion narrows what the cliff can absorb', () => {
+      // Same point rate (2000) in both runs. With no dispersion it clears the
+      // cliff; with stdDev 800 the z=1 lower bound is 1200 — under the 1250.5
+      // the cliff needs — and the gate holds.
+      const calm = armCliffSource();
+      const g1 = makeGovernor({
+        source: calm.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 2000, samples: 9, stdDev: 0 }),
+      });
+      g1.requestPlay();
+      expect(g1.state).toBe('playing');
+      g1.dispose();
+
+      const jittery = armCliffSource();
+      const g2 = makeGovernor({
+        source: jittery.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 2000, samples: 9, stdDev: 800 }),
+      });
+      g2.requestPlay();
+      expect(g2.state).toBe('starting');
+      g2.dispose();
+
+      // z = 0 pins the point estimate — the documented incumbent reading.
+      const pinned = armCliffSource();
+      const g3 = makeGovernor({
+        source: pinned.source,
+        startGateWallMs: 2000,
+        conservativeRateZ: 0,
+        getThroughput: () => ({ bytesPerMs: 2000, samples: 9, stdDev: 800 }),
+      });
+      g3.requestPlay();
+      expect(g3.state).toBe('playing');
+    });
+
+    it('reads backwards playback from the bucket the playhead enters FIRST', () => {
+      // Travelling backwards from 100_000: the near buckets are the HIGH ones,
+      // and the cliff at 40_000 is the far one. Mirrors the forward case
+      // exactly (same distances, same verdict).
+      tc.destroy();
+      tc = new TimeController({ initialTime: 100_000, speed: -10 });
+      const s = makeProfileSource([
+        { start: 40_000, missing: 5_000_000 },
+        { start: 60_000, missing: 1_000 },
+        { start: 80_000, missing: 1_000 },
+      ]);
+      s.state.runwaySimMs = RUNWAY;
+      s.state.etaMs = PASSING_ETA;
+      const g = makeGovernor({
+        source: s.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      expect(s.state.profileCalls.at(-1)!.end).toBe(100_000); // window behind
+    });
+
+    it('merges boundaries ACROSS sources: two halves that each fit, together do not', () => {
+      // 250_000 at the same deadline from each of two required sources. The
+      // deadline's budget is 400_000 bytes, so either alone fits and the pair
+      // does not — the composite is priced as one pipe, once.
+      const half = () => {
+        const s = makeProfileSource([{ start: 40_000, missing: 250_000 }]);
+        s.state.runwaySimMs = RUNWAY;
+        s.state.etaMs = null; // proves the FLUID path is the one answering
+        return s;
+      };
+      const a = half();
+      const solo = makeGovernor({
+        source: a.source,
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      solo.requestPlay();
+      expect(solo.state).toBe('playing');
+      solo.dispose();
+
+      const b = half();
+      const c = half();
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 5, stdDev: 0 }),
+      });
+      g.addSource('b', b.source, { required: true });
+      g.addSource('c', c.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+    });
+
+    it('is deterministic: the same scripted trace yields identical QoE counters', () => {
+      function runTrace() {
+        const s = armCliffSource();
+        let rate = 100;
+        const g = new PlaybackGovernor(tc, {
+          source: s.source,
+          startGateWallMs: 2000,
+          getThroughput: () => ({ bytesPerMs: rate, samples: 5, stdDev: 0 }),
+        });
+        const seen: PlaybackGovernorState[] = [];
+        g.on('statechange', (st) => seen.push(st));
+        g.requestPlay();
+        vi.advanceTimersByTime(300);
+        rate = 2000;
+        g.notifyBufferChange(runway(RUNWAY));
+        vi.advanceTimersByTime(300);
+        rate = 100;
+        s.state.runwaySimMs = 0;
+        g.notifyBufferChange(runway(0));
+        const out = { seen, qoe: g.getQoeStats() };
+        g.dispose();
+        return out;
+      }
+      const first = runTrace();
+      tc.pause();
+      tc.setTime(0);
+      const second = runTrace();
+      expect(second.seen).toEqual(first.seen);
+      expect(second.qoe.stallCount).toBe(first.qoe.stallCount);
+      expect(second.qoe.totalStallMs).toBe(first.qoe.totalStallMs);
+      expect(second.qoe.startupMs).toBe(first.qoe.startupMs);
+    });
+  });
+
+  describe('gate SHAPE under the jitter re-fit (M5/CO-3 guard)', () => {
+    // cv = stdDev / bytesPerMs = 1 ⇒ dispersionScale = clamp(1 + 2·1, 1, 3) = 3.
+    const calm = () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 });
+    const jittery = () => ({ bytesPerMs: 100, samples: 9, stdDev: 100 });
+
+    it('scales the EFFECTIVE watermark only, and never up into the start gate', () => {
+      const a = makeGovernor({ getThroughput: calm });
+      expect(a.getThroughputDispersionCv()).toBe(0);
+      expect(a.effectiveLowWatermarkWallMs).toBe(600); // configured default
+      a.dispose();
+
+      const b = makeGovernor({ getThroughput: jittery });
+      expect(b.getThroughputDispersionCv()).toBe(1);
+      // 600 × 3 = 1800, held under the 2000 start gate — the two thresholds
+      // stay two thresholds.
+      expect(b.effectiveLowWatermarkWallMs).toBe(1800);
+      expect(b.effectiveLowWatermarkWallMs).toBeLessThan(2000);
+      b.dispose();
+
+      // The k knob is bounded and 0 pins the incumbent constant.
+      const c = makeGovernor({ getThroughput: jittery, dispersionK: 0 });
+      expect(c.effectiveLowWatermarkWallMs).toBe(600);
+      c.dispose();
+
+      // Ceiling binds even at absurd jitter (cv = 10 ⇒ scale clamps at 3).
+      const d = makeGovernor({
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 1000 }),
+      });
+      expect(d.effectiveLowWatermarkWallMs).toBe(1800);
+    });
+
+    it('leaves the START GATE untouched by dispersion', () => {
+      // Gate = 2000 × 10 = 20_000 sim-ms, on a jittery link exactly as on a
+      // calm one: only the watermark is re-fit.
+      const { source, state } = makeSource();
+      state.etaMs = null; // no predictor rescue
+      state.runwaySimMs = 19_999;
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        getThroughput: jittery,
+      });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      state.runwaySimMs = 20_000;
+      g.notifyBufferChange(runway(20_000));
+      expect(g.state).toBe('playing');
+    });
+
+    it('start gate, watermark and resumeFactor stay THREE distinct behaviours', () => {
+      const { source, state } = makeSource();
+      state.etaMs = null;
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000, // gate      = 20_000 sim-ms
+        lowWatermarkWallMs: 600, // watermark = 18_000 sim-ms at cv = 1
+        resumeFactor: 2, // resume    = 40_000 sim-ms
+        getThroughput: jittery,
+      });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      // (1) 19_000 sits BETWEEN the effective watermark (18_000) and the start
+      //     gate (20_000): playing continues. The re-fit did not collapse the
+      //     two thresholds into one.
+      state.runwaySimMs = 19_000;
+      g.notifyBufferChange(runway(19_000));
+      expect(g.state).toBe('playing');
+
+      // (2) Under the effective watermark ⇒ stall.
+      state.runwaySimMs = 17_999;
+      g.notifyBufferChange(runway(17_999));
+      expect(g.state).toBe('buffering');
+
+      // (3) Resume is the THIRD behaviour: the plain start gate (20_000) is not
+      //     enough — resumeFactor × gate is.
+      state.runwaySimMs = 20_000;
+      g.notifyBufferChange(runway(20_000));
+      expect(g.state).toBe('buffering');
+      state.runwaySimMs = 40_000;
+      g.notifyBufferChange(runway(40_000));
+      expect(g.state).toBe('playing');
+    });
+
+    /**
+     * WATERMARK RE-FIT ONLY — read the scope before trusting the name.
+     *
+     * `makeSource()` deliberately does NOT expose `getByteDensityProfile`, so
+     * the fluid check bails at its feature-detect and BOTH runs below take the
+     * incumbent one-window predictor. What this pins is therefore exactly one
+     * thing: the dispersion re-fit of the low watermark is INERT at cv ≈ 0.
+     *
+     * It does NOT pin the fluid check against the incumbent — a profile-less
+     * source can't. That is the sibling block,
+     * "calm-link parity WITH a byte-density profile", immediately below.
+     */
+    it('the watermark re-fit is inert at cv ≈ 0 (no profile ⇒ both runs are the incumbent path)', () => {
+      // Guard the scope claim in the doc comment: the moment `makeSource()`
+      // grows a byte-density profile this test silently changes meaning (it
+      // would start comparing two FLUID runs). Fail loudly instead.
+      expect(makeSource().source.getByteDensityProfile).toBeUndefined();
+
+      /** One scripted runway trace; returns the state sequence it produced. */
+      function trace(opts: ConstructorParameters<typeof PlaybackGovernor>[1]) {
+        const { source, state } = makeSource();
+        state.etaMs = null;
+        state.runwaySimMs = 100_000;
+        const g = new PlaybackGovernor(tc, { ...opts, source });
+        const seen: PlaybackGovernorState[] = [];
+        g.on('statechange', (s) => seen.push(s));
+        g.requestPlay();
+        for (const simMs of [50_000, 10_000, 7_000, 45_000, 5_000, 60_000]) {
+          state.runwaySimMs = simMs;
+          g.notifyBufferChange(runway(simMs));
+        }
+        const out = { seen, stalls: g.getQoeStats().stallCount };
+        g.dispose();
+        return out;
+      }
+
+      const today = trace({ startGateWallMs: 2000, lowWatermarkWallMs: 600 });
+      const calmLink = trace({
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        getThroughput: calm,
+      });
+      expect(calmLink.seen).toEqual(today.seen);
+      expect(calmLink.stalls).toBe(today.stalls);
+
+      // The pin is live, not vacuous: a jittery link stalls where the calm one
+      // did not (10_000 and 7_000 sim-ms are above the 6_000 calm watermark and
+      // below the 18_000 jittery one).
+      const jitteryLink = trace({
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        getThroughput: jittery,
+      });
+      expect(jitteryLink.stalls).toBeGreaterThan(today.stalls);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // M5 / CO-3 — THE calm-link regression pin, on the DEFAULT-ON production
+  // path: a source that DOES expose `getByteDensityProfile`.
+  //
+  // Sibling of "the watermark re-fit is inert at cv ≈ 0" above, which uses a
+  // profile-less `makeSource()` and therefore compares two runs of the
+  // INCUMBENT predictor. This block compares the FLUID check against the
+  // incumbent on one identical trace, which is the section's central contract:
+  // the new path must reproduce today's verdicts wherever today's verdicts
+  // were right.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  describe('calm-link parity WITH a byte-density profile (M5/CO-3 pin)', () => {
+    /**
+     * Calm, cliff-free, MONOTONE-DECREASING density covering the whole fluid
+     * horizon: 60_000 wall-ms × speed 10 = 600_000 sim-ms ⇒ 31 buckets of
+     * 20_000. 10_000 B in the nearest bucket easing to 4_000 in the farthest —
+     * no step anywhere, max/min = 2.5.
+     */
+    const CALM = Array.from({ length: 31 }, (_, i) => ({
+      start: i * BUCKET_MS,
+      missing: 10_000 - 200 * i,
+    }));
+
+    /** Same curve with a wall dropped into the THIRD bucket (t = 40_000). */
+    const WALLED = CALM.map((b, i) =>
+      i === 2 ? { ...b, missing: 5_000_000 } : b,
+    );
+
+    /**
+     * A SELF-CONSISTENT source: every channel the two predictors can ask is
+     * derived from ONE bucket table through ONE intersection rule, and the ETA
+     * is the honest `estimateCost(range).bytes / rate` a real tileset returns.
+     * Without that the two predictors would be answering about different data
+     * and any agreement between them would be an accident.
+     */
+    function makeCalmSource(
+      buckets: Array<{ start: number; missing: number }>,
+      readRate: () => number,
+    ) {
+      const state = {
+        runwaySimMs: 0,
+        complete: false,
+        /** Ranges the FLUID path asked for — empty ⇒ it never ran. */
+        profileRanges: [] as Array<{ start: number; end: number }>,
+        /** Ranges the INCUMBENT path asked for. */
+        etaRanges: [] as Array<{ start: number; end: number }>,
+      };
+      // The core tileset's rule, verbatim: a bucket counts when it overlaps the
+      // query at all. Used by BOTH channels so they can never disagree.
+      const hit = (range: { start: number; end: number }) =>
+        buckets.filter(
+          (b) => b.start <= range.end && b.start + BUCKET_MS >= range.start,
+        );
+      const bytesIn = (range: { start: number; end: number }) =>
+        hit(range).reduce((n, b) => n + b.missing, 0);
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          return {
+            simMs: state.runwaySimMs,
+            bytesPending: 0,
+            horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return [];
+        },
+        estimateCost(range) {
+          return { bytes: bytesIn(range), tiles: hit(range).length };
+        },
+        estimateTimeToReadyMs(range) {
+          state.etaRanges.push(range);
+          return bytesIn(range) / readRate();
+        },
+        flushPrefetch() {},
+        getByteDensityProfile(range) {
+          state.profileRanges.push(range);
+          const window = hit(range);
+          return {
+            bucketStarts: window.map((b) => b.start),
+            missingBytes: window.map((b) => b.missing),
+          };
+        },
+      };
+      return { source, state };
+    }
+
+    /**
+     * Playhead 0, speed 10 ⇒ start gate 20_000, watermark 6_000, resume gate
+     * 40_000 sim-ms. Every step's rate sits well clear of BOTH predictors'
+     * thresholds, so the scripted verdicts are the same on either path:
+     *
+     *   runway  rate   incumbent needs   fluid needs   verdict
+     *   ------------------------------------------------------------------
+     *    5_000     1   ≥  39.6 B/ms      ≥ 20.0        both refuse  (gate)
+     *    5_000   200   ≥  39.6           ≥ 20.0        both pass    (gate)
+     *   12_000   200   — above the watermark, no predictor runs
+     *    4_000   200   ≥  25.0           ≥ 25.0        both rescue  (watermark)
+     *    4_000     5   ≥  25.0           ≥ 25.0        both refuse  → stall
+     *   20_000     5   ≥  14.7           ≥  9.9        both refuse  (resume)
+     *   20_000   300   ≥  14.7           ≥  9.9        both pass    (resume)
+     *    3_000     1   ≥  33.3           ≥ 33.3        both refuse  → stall
+     *   40_000     1   — runway alone clears the resume gate
+     */
+    const SCRIPT: Array<{ runwaySimMs: number; rate: number }> = [
+      { runwaySimMs: 5_000, rate: 200 },
+      { runwaySimMs: 12_000, rate: 200 },
+      { runwaySimMs: 4_000, rate: 200 },
+      { runwaySimMs: 4_000, rate: 5 },
+      { runwaySimMs: 20_000, rate: 5 },
+      { runwaySimMs: 20_000, rate: 300 },
+      { runwaySimMs: 3_000, rate: 1 },
+      { runwaySimMs: 40_000, rate: 1 },
+    ];
+
+    function runScript(opts: {
+      buckets: Array<{ start: number; missing: number }>;
+      fluidFeasibility: boolean;
+    }) {
+      tc.pause();
+      tc.setTime(0);
+      let rate = 1; // the opening gate evaluation runs at this rate
+      const { source, state } = makeCalmSource(opts.buckets, () => rate);
+      const g = new PlaybackGovernor(tc, {
+        source,
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        resumeFactor: 2,
+        fluidFeasibility: opts.fluidFeasibility,
+        getThroughput: () => ({ bytesPerMs: rate, samples: 9, stdDev: 0 }),
+      });
+      const seen: PlaybackGovernorState[] = [];
+      g.on('statechange', (s) => seen.push(s));
+      state.runwaySimMs = 5_000;
+      g.requestPlay();
+      // Per-STEP states, not just the transition sequence. The order of
+      // transitions alone is too coarse a pin: a predictor that opens the gate
+      // one step late and stalls one step early emits the SAME sequence (an
+      // early mutant of this test passed exactly that way).
+      const perStep: PlaybackGovernorState[] = [g.state];
+      for (const step of SCRIPT) {
+        rate = step.rate;
+        state.runwaySimMs = step.runwaySimMs;
+        g.notifyBufferChange(runway(step.runwaySimMs));
+        perStep.push(g.state);
+      }
+      const qoe = g.getQoeStats();
+      const out = {
+        seen,
+        perStep,
+        finalState: g.state,
+        stalls: qoe.stallCount,
+        totalStallMs: qoe.totalStallMs,
+        startupMs: qoe.startupMs,
+        profileRanges: state.profileRanges,
+        etaRanges: state.etaRanges,
+      };
+      g.dispose();
+      return out;
+    }
+
+    /** One gate evaluation at a fixed rate; returns the state it settled in. */
+    function openingGate(opts: {
+      buckets: Array<{ start: number; missing: number }>;
+      fluidFeasibility: boolean;
+      rate: number;
+    }) {
+      tc.pause();
+      tc.setTime(0);
+      const { source, state } = makeCalmSource(opts.buckets, () => opts.rate);
+      const g = new PlaybackGovernor(tc, {
+        source,
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        resumeFactor: 2,
+        fluidFeasibility: opts.fluidFeasibility,
+        getThroughput: () => ({
+          bytesPerMs: opts.rate,
+          samples: 9,
+          stdDev: 0,
+        }),
+      });
+      state.runwaySimMs = 5_000; // 5_000 < the 20_000 gate ⇒ predictor decides
+      g.requestPlay();
+      const settled = g.state;
+      g.dispose();
+      return settled;
+    }
+
+    it('reproduces the incumbent gate/watermark transition sequence exactly', () => {
+      const incumbent = runScript({
+        buckets: CALM,
+        fluidFeasibility: false,
+      });
+      const fluid = runScript({ buckets: CALM, fluidFeasibility: true });
+
+      // The verdicts are pinned as LITERALS, step by step, not merely
+      // cross-compared — so a change that moves BOTH paths the same way still
+      // fails here, and so does a change that only shifts WHEN a transition
+      // happens (which a bare transition sequence cannot see).
+      expect(incumbent.perStep).toEqual([
+        'starting', //  5_000 @   1 — gate held
+        'playing', //   5_000 @ 200 — gate opened by the predictor
+        'playing', //  12_000 @ 200 — clear of the watermark
+        'playing', //   4_000 @ 200 — under it, predictor rescues
+        'buffering', //  4_000 @   5 — rate collapses ⇒ stall 1
+        'buffering', // 20_000 @   5 — half the resume gate, still too slow
+        'playing', //  20_000 @ 300 — predictor clears the resume gate
+        'buffering', //  3_000 @   1 — dry and slow ⇒ stall 2
+        'playing', //  40_000 @   1 — runway alone clears the resume gate
+      ]);
+      expect(incumbent.seen).toEqual([
+        'starting',
+        'playing',
+        'buffering',
+        'playing',
+        'buffering',
+        'playing',
+      ]);
+      expect(incumbent.stalls).toBe(2);
+
+      // …and the fluid path reproduces them, step for step.
+      expect(fluid.perStep).toEqual(incumbent.perStep);
+      expect(fluid.seen).toEqual(incumbent.seen);
+      expect(fluid.finalState).toBe(incumbent.finalState);
+      expect(fluid.stalls).toBe(incumbent.stalls);
+      expect(fluid.totalStallMs).toBe(incumbent.totalStallMs);
+      expect(fluid.startupMs).toBe(incumbent.startupMs);
+
+      // The two runs really did take DIFFERENT code paths — this is the check
+      // the profile-less sibling test cannot make, and its absence is what let
+      // a dead pin look alive. The kill-switch run never asks for a profile;
+      // the default run asks on every gate/watermark evaluation.
+      expect(incumbent.profileRanges).toHaveLength(0);
+      expect(incumbent.etaRanges.length).toBeGreaterThan(0);
+      expect(fluid.profileRanges.length).toBeGreaterThan(0);
+
+      // And it asked over the horizon the item specifies: 60_000 wall-ms ×
+      // |speed| 10 = 600_000 sim-ms ahead of the playhead, NOT the gate window.
+      expect(fluid.profileRanges[0]).toEqual({ start: 0, end: 600_000 });
+      for (const range of fluid.profileRanges) {
+        expect(range.end - range.start).toBe(600_000);
+      }
+    });
+
+    it('never refuses where the incumbent passes, at any rate on this density', () => {
+      // The residual, ONE-DIRECTIONAL difference. On a monotone non-increasing
+      // density the fluid check is the LOOSER of the two at the start gate: the
+      // incumbent charges the whole gate window against the runway's wall time
+      // (19_800 B ⇒ ≥ 39.6 B/ms), while the fluid check gives the second bucket
+      // its own later deadline and only needs ≥ 20 B/ms. So calm links can only
+      // gain — no rate exists where the new path stalls and the old one did not.
+      for (const rate of [1, 5, 12, 19, 20, 25, 30, 39, 40, 100, 300]) {
+        const incumbent = openingGate({
+          buckets: CALM,
+          fluidFeasibility: false,
+          rate,
+        });
+        const fluid = openingGate({
+          buckets: CALM,
+          fluidFeasibility: true,
+          rate,
+        });
+        if (incumbent === 'playing') expect(fluid).toBe('playing');
+      }
+
+      // The sweep is not vacuous: the band between the two thresholds is real
+      // and is entered by the rates above. 30 B/ms clears 20 and misses 39.6.
+      expect(
+        openingGate({ buckets: CALM, fluidFeasibility: false, rate: 30 }),
+      ).toBe('starting');
+      expect(
+        openingGate({ buckets: CALM, fluidFeasibility: true, rate: 30 }),
+      ).toBe('playing');
+    });
+
+    it('the same harness DIVERGES on a byte wall — the calm pin can fail', () => {
+      // Anti-vacuity for the pin above. Identical source, identical trace step,
+      // identical rate: only the density changes. At 200 B/ms the incumbent
+      // sees 19_800 B in the gate window and opens; the fluid check sees
+      // 5_019_800 B due 3_500 wall-ms out (needing ≥ 1_254.95 B/ms) and holds.
+      // If the fluid verdict were NOT the one in force, this would read
+      // 'playing' and the equality assertions above would be worthless.
+      expect(
+        openingGate({ buckets: WALLED, fluidFeasibility: false, rate: 200 }),
+      ).toBe('playing');
+      expect(
+        openingGate({ buckets: WALLED, fluidFeasibility: true, rate: 200 }),
+      ).toBe('starting');
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // M5 / CO-4 — auto-speed evaluates the full candidate ladder.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  describe('getAutoSpeedSuggestion — ladder evaluation (M5/CO-4)', () => {
+    /**
+     * Build a range-priced source from a piecewise-constant density curve
+     * (bytes per sim-ms). This is what the single-point path cannot see: a
+     * faster candidate sweeps a LONGER window and meets a segment the current
+     * speed's window never reaches.
+     */
+    function densitySource(
+      segments: Array<{ until: number; bytesPerSimMs: number }>,
+    ) {
+      const cumulative = (t: number): number => {
+        let acc = 0;
+        let prev = 0;
+        for (const seg of segments) {
+          const hi = Math.min(t, seg.until);
+          if (hi > prev) acc += (hi - prev) * seg.bytesPerSimMs;
+          prev = seg.until;
+          if (t <= seg.until) return acc;
+        }
+        const tail = segments[segments.length - 1];
+        return acc + Math.max(0, t - tail.until) * tail.bytesPerSimMs;
+      };
+      const s = makeProfileSource();
+      s.state.costForRange = (range) => {
+        const bytes = cumulative(range.end) - cumulative(range.start);
+        return { bytes, tiles: bytes > 0 ? Math.ceil(bytes / 1000) : 0 };
+      };
+      return s;
+    }
+
+    /** Flat 10 B/sim-ms, then a wall from 16_000 to 24_000, then flat again. */
+    const SPIKE_CURVE = [
+      { until: 16_000, bytesPerSimMs: 10 },
+      { until: 24_000, bytesPerSimMs: 10_000 },
+      { until: Infinity, bytesPerSimMs: 10 },
+    ];
+
+    it('holds below a density spike the CURRENT-speed horizon never reaches', () => {
+      tc.setSpeed(1); // base 1× — candidate m ⇔ speed m
+      const s = densitySource(SPIKE_CURVE);
+      const throughput = () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 });
+
+      // MYOPIC: one window at speed 1 = [0, 8_000] — 80_000 bytes at 10 B/sim-ms
+      // → 100/10 × 0.7 = 7. Auto would snap to 7× and drive straight into the
+      // 16_000–24_000 wall.
+      const myopic = makeGovernor({
+        source: s.source,
+        getThroughput: throughput,
+      });
+      expect(myopic.getAutoSpeedSuggestion()).toBeCloseTo(7);
+      expect(
+        decideAutoSpeedMultiplier(
+          1,
+          myopic.getAutoSpeedSuggestion()!,
+          'cadence',
+        ),
+      ).toBe(6);
+      myopic.dispose();
+
+      // LADDER: every candidate ≥ 3× sweeps into the wall and is refused; 2×
+      // ([0, 16_000], still flat) is the largest feasible step.
+      const g = makeGovernor({
+        source: s.source,
+        baseSpeed: 1,
+        getThroughput: throughput,
+      });
+      const suggestion = g.getAutoSpeedSuggestion()!;
+      expect(suggestion).toBe(2);
+      expect(suggestion).toBeLessThan(7);
+      // And the consumer's snap lands ON the feasible step, not past it.
+      expect(decideAutoSpeedMultiplier(1, suggestion, 'cadence')).toBe(2);
+    });
+
+    it('pre-empts a storm-cell entry visible only inside the top candidate window', () => {
+      tc.setSpeed(1);
+      // Flat all the way to 60_000, wall beyond. Only the 8× and 10×
+      // candidates' windows (64_000 / 80_000 sim-ms) reach it.
+      const s = densitySource([
+        { until: 60_000, bytesPerSimMs: 10 },
+        { until: Infinity, bytesPerSimMs: 100_000 },
+      ]);
+      const g = makeGovernor({
+        source: s.source,
+        baseSpeed: 1,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 }),
+      });
+      const suggestion = g.getAutoSpeedSuggestion()!;
+      // 6× (48_000 sim-ms) is the largest candidate still clear of the cell.
+      expect(suggestion).toBe(6);
+    });
+
+    it('returns Infinity when nothing is pending at the top candidate', () => {
+      tc.setSpeed(1);
+      const s = makeProfileSource();
+      s.state.costBytes = 0;
+      s.state.costTiles = 0;
+      const g = makeGovernor({
+        source: s.source,
+        baseSpeed: 1,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 }),
+      });
+      expect(g.getAutoSpeedSuggestion()).toBe(Infinity);
+    });
+
+    it('returns null when an evaluated candidate’s range is bytes-blind', () => {
+      tc.setSpeed(1);
+      const s = makeProfileSource();
+      s.state.costTiles = 5; // tiles pending…
+      s.state.costBytes = 0; // …sizes unknown ⇒ no honest demand
+      const g = makeGovernor({
+        source: s.source,
+        baseSpeed: 1,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 }),
+      });
+      expect(g.getAutoSpeedSuggestion()).toBeNull();
+    });
+
+    it('returns null when a candidate is ETA-blind and no throughput is wired', () => {
+      tc.setSpeed(1);
+      const s = makeProfileSource();
+      s.state.costBytes = 1_000;
+      s.state.costTiles = 10;
+      s.state.etaMs = null;
+      const g = makeGovernor({ source: s.source, baseSpeed: 1 });
+      expect(g.getAutoSpeedSuggestion()).toBeNull();
+    });
+
+    it('keeps the multi-heavy contract: N equal sources ⇒ 1/N the speed', () => {
+      tc.setSpeed(1);
+      const throughput = () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 });
+      const one = makeProfileSource();
+      one.state.costBytes = 800_000;
+      one.state.costTiles = 100;
+      const g1 = makeGovernor({
+        source: one.source,
+        baseSpeed: 1,
+        getThroughput: throughput,
+      });
+      const solo = g1.getAutoSpeedSuggestion()!;
+      g1.dispose();
+
+      const a = makeProfileSource();
+      const b = makeProfileSource();
+      for (const s of [a, b]) {
+        s.state.costBytes = 800_000;
+        s.state.costTiles = 100;
+      }
+      governor = new PlaybackGovernor(tc, {
+        baseSpeed: 1,
+        getThroughput: throughput,
+      });
+      governor.addSource('a', a.source, { required: true });
+      governor.addSource('b', b.source, { required: true });
+      expect(governor.getAutoSpeedSuggestion()!).toBeCloseTo(solo / 2);
+    });
+
+    it('feasibility is monotone down the ladder for non-decreasing densities', () => {
+      tc.setSpeed(1);
+      // A deterministic sweep of non-decreasing density curves: whatever the
+      // ladder answers, every candidate at or below it must also be feasible.
+      for (const step of [1, 3, 7, 25, 120]) {
+        const s = densitySource([
+          { until: 20_000, bytesPerSimMs: step },
+          { until: 50_000, bytesPerSimMs: step * 4 },
+          { until: Infinity, bytesPerSimMs: step * 16 },
+        ]);
+        const g = new PlaybackGovernor(tc, {
+          source: s.source,
+          baseSpeed: 1,
+          getThroughput: () => ({ bytesPerMs: 5_000, samples: 9, stdDev: 0 }),
+        });
+        const answer = g.getAutoSpeedSuggestion()!;
+        g.dispose();
+        expect(answer).not.toBeNull();
+        // Re-price every candidate at or below the answer with the same math
+        // the governor uses; each must be sustainable at its own window.
+        for (const m of SPEED_STEPS.filter((x) => x <= answer)) {
+          const horizon = 8000 * m;
+          const { bytes } = s.source.estimateCost({ start: 0, end: horizon });
+          const sustainable = (5_000 / (bytes / horizon)) * 0.7;
+          expect(sustainable).toBeGreaterThanOrEqual(m);
+        }
+      }
+    });
+
+    it('is deterministic across re-runs with a fixed estimator and curve', () => {
+      tc.setSpeed(1);
+      const throughput = () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 });
+      const readings: number[][] = [];
+      for (let run = 0; run < 2; run++) {
+        const s = densitySource(SPIKE_CURVE);
+        const g = new PlaybackGovernor(tc, {
+          source: s.source,
+          baseSpeed: 1,
+          getThroughput: throughput,
+        });
+        const seq: number[] = [];
+        for (const t of [0, 4_000, 12_000, 30_000]) {
+          tc.setTime(t);
+          seq.push(g.getAutoSpeedSuggestion()!);
+        }
+        g.dispose();
+        readings.push(seq);
+      }
+      expect(readings[1]).toEqual(readings[0]);
+    });
+
+    it('without baseSpeed, the single-point computation is preserved bit-for-bit', () => {
+      // The regression pin: no base speed ⇒ no candidates expressible ⇒ the
+      // incumbent one-measurement path, unchanged.
+      tc.setSpeed(1);
+      const throughput = () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 });
+      const a = densitySource(SPIKE_CURVE);
+      const noBase = makeGovernor({
+        source: a.source,
+        getThroughput: throughput,
+      });
+      expect(noBase.getAutoSpeedSuggestion()).toBeCloseTo(7);
+      noBase.dispose();
+
+      // …and the explicit kill switch does the same with a base speed present.
+      const b = densitySource(SPIKE_CURVE);
+      const pinned = makeGovernor({
+        source: b.source,
+        baseSpeed: 1,
+        ladderEvaluation: false,
+        getThroughput: throughput,
+      });
+      expect(pinned.getAutoSpeedSuggestion()).toBeCloseTo(7);
+    });
+
+    it('reads a mutable base speed through the function form', () => {
+      tc.setSpeed(1);
+      let base: number | null = null;
+      const s = densitySource(SPIKE_CURVE);
+      const g = makeGovernor({
+        source: s.source,
+        baseSpeed: () => base,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 }),
+      });
+      expect(g.getAutoSpeedSuggestion()).toBeCloseTo(7); // null base ⇒ incumbent
+      base = 1;
+      expect(g.getAutoSpeedSuggestion()).toBe(2); // ladder engages live
+    });
+
+    it('shrinks the safety factor as measured dispersion grows', () => {
+      tc.setSpeed(1);
+      const s = makeProfileSource();
+      s.state.costBytes = 800_000; // 8_000 sim-ms window at speed 1 → 100 B/sim-ms
+      s.state.costTiles = 100;
+      const calm = makeGovernor({
+        source: s.source,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 0 }),
+      });
+      const calmValue = calm.getAutoSpeedSuggestion()!;
+      calm.dispose();
+
+      // cv = 0.5 ⇒ scale = clamp(1 + 2·0.5, 1, 3) = 2 ⇒ η = 0.35.
+      const jittery = makeGovernor({
+        source: s.source,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 50 }),
+      });
+      expect(jittery.getAutoSpeedSuggestion()!).toBeCloseTo(calmValue / 2);
+      jittery.dispose();
+
+      // dispersionK: 0 pins the incumbent 0.7.
+      const pinned = makeGovernor({
+        source: s.source,
+        dispersionK: 0,
+        getThroughput: () => ({ bytesPerMs: 100, samples: 9, stdDev: 50 }),
+      });
+      expect(pinned.getAutoSpeedSuggestion()!).toBeCloseTo(calmValue);
     });
   });
 

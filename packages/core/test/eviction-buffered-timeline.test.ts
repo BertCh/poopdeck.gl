@@ -142,6 +142,45 @@ describe('SpatioTemporalTileset grace eviction vs buffered timeline', () => {
     tileset.finalize();
   });
 
+  /**
+   * BH-7 — a declared loop rotates the OVER-limit plan and nothing else. The
+   * under-limit grace path has no playhead-relative tiering to rotate: it is
+   * the wall-clock sweep plus the coverage-index exemption, and both must
+   * behave identically whether or not a loop is declared.
+   */
+  it('a declared loop leaves the under-limit grace path untouched', async () => {
+    installClock();
+    const tileset = makeTileset();
+    tileset.setLoopWindow({ start: 0, end: 20 * BUCKET_MS });
+
+    await loadBucket(tileset, WEST, 0);
+    await enableBufferTracking(tileset);
+    await loadBucket(tileset, WEST, 5);
+    expect(tileset.getCacheStats().tileCount).toBe(2);
+
+    // Coverage-index exemption still holds past the paused grace period…
+    advanceClock(31_000);
+    await loadBucket(tileset, WEST, 5, 1);
+    expect(tileset.getCacheStats().tileCount).toBe(2);
+
+    // …and a tile from a PREVIOUS viewport still ages out on the timer, loop
+    // or no loop (the loop says when a tile will be replayed, not where the
+    // camera is pointing).
+    await loadBucket(tileset, EAST, 0);
+    await enableBufferTracking(tileset);
+    advanceClock(31_000);
+    await loadBucket(tileset, EAST, 0, 1);
+    expect(tileset.getCacheStats().tileCount).toBe(1);
+
+    tileset.finalize();
+  });
+
+  it('exposes the archive bucket size to the governor (getTemporalBucketMs)', () => {
+    const tileset = makeTileset();
+    expect(tileset.getTemporalBucketMs()).toBe(BUCKET_MS);
+    tileset.finalize();
+  });
+
   it('over-limit pressure still reclaims index-protected tiles', async () => {
     installClock();
     const tileset = makeTileset({ maxCacheSize: 2 });

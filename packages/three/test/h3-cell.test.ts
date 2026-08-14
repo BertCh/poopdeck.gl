@@ -4,6 +4,7 @@ import { h3IndexFromTile, cellBoundaryFromTile } from '../src/lib/h3-cell';
 import { buildH3Buffers, DEFAULT_H3_COLOR_RANGE } from '../src/lib/h3-buffers';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeVectorTile as summaryTile } from './_support/features';
+import { onScreen } from './_support/color-space';
 
 // ── Reference H3 cell ids ────────────────────────────────────────────────────
 // `8928308280fffff` — the res-9 SF cell from h3-js's README, centroid
@@ -104,12 +105,15 @@ describe('buildH3Buffers', () => {
     const high = DEFAULT_H3_COLOR_RANGE[DEFAULT_H3_COLOR_RANGE.length - 1];
     // cell 0 (count 0) → first stop; cell 1 (count 100 ≥ hi) → last stop.
     // cell 0's first vertex is at colors[0..]; cell 1 starts after cell 0's verts.
-    expect(buf.colors[0]).toBeCloseTo(low[0] / 255, 5);
-    expect(buf.colors[1]).toBeCloseTo(low[1] / 255, 5);
+    // The buffer holds LINEAR-light values (the summary mesh shades through a
+    // classic `vertexColors` material, so it decodes on the CPU); the ramp byte
+    // is what Three's sRGB output pass puts back on screen — assert THAT.
+    expect(onScreen(buf.colors[0])).toBeCloseTo(low[0] / 255, 5);
+    expect(onScreen(buf.colors[1])).toBeCloseTo(low[1] / 255, 5);
     // Find a vertex belonging to cell 1 by scanning for the high color.
     let foundHigh = false;
     for (let i = 0; i < buf.colors.length; i += 4) {
-      if (Math.abs(buf.colors[i] - high[0] / 255) < 1e-5) {
+      if (Math.abs(onScreen(buf.colors[i]) - high[0] / 255) < 1e-5) {
         foundHigh = true;
         break;
       }
@@ -137,12 +141,15 @@ describe('buildH3Buffers', () => {
       [2, 8],
     );
     const buf = buildH3Buffers([tile], proj, {});
-    // Lowest count maps to first stop.
-    expect(buf.colors[0]).toBeCloseTo(DEFAULT_H3_COLOR_RANGE[0][0] / 255, 5);
+    // Lowest count maps to first stop (compared as displayed — see above).
+    expect(onScreen(buf.colors[0])).toBeCloseTo(
+      DEFAULT_H3_COLOR_RANGE[0][0] / 255,
+      5,
+    );
     const last = DEFAULT_H3_COLOR_RANGE[DEFAULT_H3_COLOR_RANGE.length - 1];
     let foundLast = false;
     for (let i = 0; i < buf.colors.length; i += 4) {
-      if (Math.abs(buf.colors[i] - last[0] / 255) < 1e-5) {
+      if (Math.abs(onScreen(buf.colors[i]) - last[0] / 255) < 1e-5) {
         foundLast = true;
         break;
       }

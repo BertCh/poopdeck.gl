@@ -100,15 +100,41 @@ const LONG_STEP_FRACTION = 0.1;
  *  drift with the viewer's locale zone. The LOCALE is left to the viewer
  *  (`undefined`): pinning the zone is a correctness requirement, pinning
  *  month/day order to en-US was never one. */
-const formatDate = (timestamp: number) =>
-  new Date(timestamp).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'UTC',
-  });
+const DATE_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'UTC',
+};
+
+/**
+ * ONE `Intl.DateTimeFormat`, built on first use and reused.
+ *
+ * This was `new Date(t).toLocaleString(undefined, {...})`, which is not the
+ * cheap call it looks like: every invocation re-normalizes the option bag and
+ * resolves a formatter. The transport bar renders on the 10 Hz UI clock and
+ * formats at least four timestamps per render (the playhead label, its
+ * `aria-valuetext`, and both range endpoints), so that was ~80 formatter
+ * resolutions a second for four strings — 1.1 % of total CPU on the
+ * `ocean-drifters` profile, spent entirely on the transport bar.
+ *
+ * Built lazily rather than at module scope so the module stays importable in
+ * an environment without a full `Intl` (SSR shims), and so the viewer's locale
+ * is read when the player first renders rather than at bundle-eval time.
+ */
+let dateFormatter: Intl.DateTimeFormat | null = null;
+
+const formatDate = (timestamp: number): string => {
+  // `toLocaleString` degraded to the string 'Invalid Date' on a non-finite
+  // timestamp; `Intl.DateTimeFormat.format` THROWS a RangeError instead. Keep
+  // the old, non-fatal behaviour — a malformed range should render a bad label,
+  // not take the whole transport bar down with it.
+  if (!Number.isFinite(timestamp)) return 'Invalid Date';
+  dateFormatter ??= new Intl.DateTimeFormat(undefined, DATE_FORMAT_OPTIONS);
+  return dateFormatter.format(timestamp);
+};
 
 /** `M:SS` / `H:MM:SS` — the readout shape every video player uses. */
 const formatClock = (seconds: number): string => {
@@ -1177,7 +1203,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
               style={{
                 width: `${progress}%`,
                 background: 'var(--accent)',
-                // Smooth over the 20Hz UI clock while playing; instant while
+                // Smooth over the 10Hz UI clock while playing; instant while
                 // the user is driving, or the fill would lag the thumb.
                 transition:
                   isPlaying && !scrubbing

@@ -8,26 +8,27 @@ half: the **render kernel**, a set of framework-free modules under
 `packages/core/src/render/` and `packages/core/src/geo/` that hold the CPU
 logic every renderer backend (`@poopdeck.gl/layers` on deck.gl,
 `@poopdeck.gl/three`, `@poopdeck.gl/maplibre`, `@poopdeck.gl/cesium`) needs
-and would otherwise hand-copy: time-filter alpha math, shader codegen, color
-expansion, geometry reductions, geographic projection, picking id encoding,
-tileset fetch-callback glue, and the capability-declaration vocabulary.
+and would otherwise hand-copy: time-filter alpha math (plus a second,
+independently-authored expression-AST oracle for it), color expansion,
+geometry reductions, geographic projection, picking id encoding, tileset
+fetch-callback glue, and the capability-declaration vocabulary.
 
 None of it is re-exported from the package root (`@poopdeck.gl/core`) —
 each module is its own `exports` sub-path in `packages/core/package.json`,
 so a backend imports only the pieces it needs and bundlers tree-shake the
 rest:
 
-| Sub-path                             | Source file                                                                        | Consumed by                     |
-| :----------------------------------- | :--------------------------------------------------------------------------------- | :------------------------------ |
-| `@poopdeck.gl/core/time-filter`      | [`render/time-filter.ts`](../../packages/core/src/render/time-filter.ts)           | layers, three, cesium           |
-| `@poopdeck.gl/core/shader-codegen`   | [`render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts)     | cesium                          |
-| `@poopdeck.gl/core/style`            | [`render/style.ts`](../../packages/core/src/render/style.ts)                       | layers, three, maplibre, cesium |
-| `@poopdeck.gl/core/geometry`         | [`render/geometry.ts`](../../packages/core/src/render/geometry.ts)                 | layers, three, maplibre         |
-| `@poopdeck.gl/core/geo`              | [`geo/index.ts`](../../packages/core/src/geo/index.ts)                             | three, cesium                   |
-| `@poopdeck.gl/core/picking`          | [`render/picking.ts`](../../packages/core/src/render/picking.ts)                   | three, maplibre, cesium         |
-| `@poopdeck.gl/core/tileset-adapter`  | [`render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts)   | layers, three, maplibre         |
-| `@poopdeck.gl/core/capabilities`     | [`render/capabilities.ts`](../../packages/core/src/render/capabilities.ts)         | layers, three, maplibre, cesium |
-| `@poopdeck.gl/core/capabilities-doc` | [`render/capabilities-doc.ts`](../../packages/core/src/render/capabilities-doc.ts) | doc generation only             |
+| Sub-path                             | Source file                                                                        | Consumed by                                          |
+| :----------------------------------- | :--------------------------------------------------------------------------------- | :--------------------------------------------------- |
+| `@poopdeck.gl/core/time-filter`      | [`render/time-filter.ts`](../../packages/core/src/render/time-filter.ts)           | layers, three, cesium                                |
+| `@poopdeck.gl/core/shader-codegen`   | [`render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts)     | backend conformance tests; one unwired cesium export |
+| `@poopdeck.gl/core/style`            | [`render/style.ts`](../../packages/core/src/render/style.ts)                       | layers, three, maplibre, cesium                      |
+| `@poopdeck.gl/core/geometry`         | [`render/geometry.ts`](../../packages/core/src/render/geometry.ts)                 | layers, three, maplibre                              |
+| `@poopdeck.gl/core/geo`              | [`geo/index.ts`](../../packages/core/src/geo/index.ts)                             | three, cesium                                        |
+| `@poopdeck.gl/core/picking`          | [`render/picking.ts`](../../packages/core/src/render/picking.ts)                   | three, maplibre, cesium                              |
+| `@poopdeck.gl/core/tileset-adapter`  | [`render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts)   | layers, three, maplibre                              |
+| `@poopdeck.gl/core/capabilities`     | [`render/capabilities.ts`](../../packages/core/src/render/capabilities.ts)         | layers, three, maplibre, cesium                      |
+| `@poopdeck.gl/core/capabilities-doc` | [`render/capabilities-doc.ts`](../../packages/core/src/render/capabilities-doc.ts) | doc generation only                                  |
 
 A repo test (`packages/core/test/kernel-framework-free.test.ts`) statically
 scans every file under `packages/core/src` and fails the build if it imports
@@ -42,12 +43,13 @@ for what each backend claims to support on top of it, see
 
 The CPU reference for the per-feature/per-vertex temporal alpha every backend
 animates against, plus the time-relativization scheme and a vocabulary
-resolver. This is the numeric oracle: three's TSL node graph
-(`@poopdeck.gl/three`'s `tsl/time-filter.ts`) is a hand-written structural
-mirror of these functions, pinned to them by
-`packages/three/test/time-filter-math.test.ts`; deck's `TimeFilterExtension`
-inject strings and maplibre's hand-written GLSL implement the same four
-modes independently.
+resolver. This is the numeric oracle. **Every backend's GPU shader is
+hand-written** — deck's `TimeFilterExtension` inject strings, maplibre's
+GLSL snippets, three's TSL node graph — and each implements these four modes
+independently in its own dialect. What keeps them from drifting is not code
+generation but a conformance contract: each backend's shader math is pinned
+by test to this oracle _and_ to `core/shader-codegen`'s independently-authored
+`evalExpr` (see [`core/shader-codegen`](#coreshader-codegen) below).
 
 ```typescript
 type TimeFilterMode = 'window' | 'wake' | 'cumulative' | 'trail' | 'none';
@@ -138,9 +140,17 @@ function.
 
 ## `core/shader-codegen`
 
-The scalar time-filter alpha authored once as an expression AST and
-machine-emitted to a target shading dialect, so the GPU math has no
-hand-maintained copy to drift from `core/time-filter`'s CPU functions.
+The scalar time-filter alpha authored a **second** time, as a branchless
+expression AST, independently of `core/time-filter`'s CPU functions.
+
+The module name is historical and oversells it: **nothing that ships is
+generated from this AST.** All four backends hand-write their own shader
+math (see the table below). What the module actually buys is a _second
+oracle_ — `evalExpr` is a separate, differently-shaped implementation of the
+same four modes, so a backend's math can be pinned against two
+independently-authored references instead of one. A transcription slip in
+either implementation shows up as a failing test rather than as drifted
+pixels. Read it as a conformance oracle, not a compiler.
 
 ```typescript
 type Expr =
@@ -158,20 +168,18 @@ type Expr =
 
 The frozen op-set is exactly: `uniform`, `attr`, `const`, `add`, `sub`,
 `mul`, `div`, `min`, `max`, `step`, `clamp01`, `select`. `select(c, t, f)` is
-`c != 0 ? t : f`, emitted as a lazy GLSL ternary so a fade `div` guarded by
-`select` never evaluates a zero-denominator branch. This op-set is
-deliberately scoped to the four **linear** modes (`window`, `wake`,
+`c != 0 ? t : f`, evaluated lazily (and emitted as a GLSL ternary), so a fade
+`div` guarded by `select` never evaluates a zero-denominator branch. This
+op-set is deliberately scoped to the four **linear** modes (`window`, `wake`,
 `cumulative`, `trail`) — the surfel/splat temporal-Gaussian weight, the
 radial falloff, and the `wakeSizeScale` vertex-stage multiplier use
-transcendentals outside the set and stay hand-written per backend, pinned to
-the CPU oracle by parity tests instead of codegen.
+transcendentals outside the set, so they have no second oracle and are pinned
+to `core/time-filter` alone by per-backend parity tests.
 
 ```typescript
 const ALPHA_EXPR: Record<'window' | 'wake' | 'cumulative' | 'trail', Expr>;
 
 function evalExpr(e: Expr, env: Record<string, number>): number;
-function emitGLSL300(e: Expr, nameMap?: Record<string, string>): string;
-function emitGLSL100(e: Expr, nameMap?: Record<string, string>): string;
 
 const TIME_FILTER_VARS: {
   currentTime: 'currentTime';
@@ -188,27 +196,61 @@ const TIME_FILTER_VARS: {
 ```
 
 - `ALPHA_EXPR[mode]` is the frozen per-mode AST.
-- `evalExpr` is the CPU oracle: it must equal `core/time-filter`'s
+- `evalExpr` is the second oracle: it must equal `core/time-filter`'s
   `timeFilterAlpha` numerically for every mode — asserted by a 2000-sample
   randomized conformance sweep in `packages/core/test/shader-codegen.test.ts`.
-- `emitGLSL100`/`emitGLSL300` are pure string emitters. The subset they emit
-  (`step`/`min`/`max`/`clamp`/ternary) is valid in both GLSL ES 1.00 and 3.00,
-  so today they produce byte-identical output; they stay separate entry
-  points so a future op can diverge per dialect. `nameMap` rewrites the
-  canonical `uniform`/`attr` identifiers above to a host shader's actual
-  variable names.
+  This is the function the backend conformance tests import.
+- `TIME_FILTER_VARS` is the canonical identifier set an AST refers to. It is
+  the vocabulary each backend maps onto its own shader variable names by hand.
 
-`@poopdeck.gl/cesium`'s `shaders.ts` is the only backend that calls
-`emitGLSL300` directly today (`timeFilterAlphaGlsl`, generating the alpha
-snippet for a Cesium custom `Appearance` fragment shader — Cesium's worked
-`@poopdeck.gl/cesium`'s `STTPointLayer` currently filters via the `core/time-filter` CPU oracle
-rather than this GPU path). deck's `TimeFilterExtension` inject strings and
-maplibre's GLSL are hand-written, independently implementing the same four
-modes rather than consuming the emitted string. An `emitTSL` entry point for
-three's TSL node graph is referenced in this module's source comments; it
-has no implementation — three's TSL alpha (`@poopdeck.gl/three`'s
-`tsl/time-filter.ts`) is a hand-written node-graph mirror of
-`core/time-filter`, not machine-emitted from `Expr`.
+### Backend conformance obligations
+
+No backend consumes an emitted string. Each hand-writes its shader in its own
+dialect and is pinned by test to _both_ oracles — `core/time-filter`'s
+`timeFilterAlpha` and this module's `evalExpr`:
+
+| Backend                 | What ships                                                          | Dialect                                                        | Pinned by                                                                   |
+| :---------------------- | :------------------------------------------------------------------ | :------------------------------------------------------------- | :-------------------------------------------------------------------------- |
+| `@poopdeck.gl/layers`   | hand-written inject strings (`extensions/time-filter-extension.ts`) | GLSL ES 3.00 (`layout(std140) uniform`, `in`/`out`)            | `packages/layers/test/` time-filter conformance                             |
+| `@poopdeck.gl/maplibre` | hand-written snippets (`shaders/time-window.glsl.ts`)               | GLSL ES 1.00 (`attribute`; `linkProgram` is WebGL1-compatible) | `packages/maplibre/test/time-modes.test.ts` (the three-way statement of it) |
+| `@poopdeck.gl/three`    | hand-written TSL node graph (`tsl/time-filter.ts`)                  | TSL node graph (WebGPU / WebGL2)                               | `packages/three/test/tsl-time-filter-conformance.test.ts` (graph executed)  |
+| `@poopdeck.gl/cesium`   | **no shader** — per-frame CPU alpha writes into the batch table     | —                                                              | `packages/cesium/test/` (direct oracle calls)                               |
+
+For the GLSL backends the pin has the same shape, because GLSL cannot be
+executed in a headless unit test: the package keeps a JS reference
+implementation of its shader math, the tests assert that reference equals
+`timeFilterAlpha` **and** `evalExpr(ALPHA_EXPR[mode], env)` over a dense sweep
+including every boundary, and the shipped GLSL is locked to the reference
+structurally (the formula lines are asserted verbatim, so editing one without
+the other fails). `packages/maplibre/test/time-modes.test.ts` states this
+contract explicitly and is the model for the others.
+
+**Three is pinned harder**, because TSL is the one dialect that _can_ run
+headless. A TSL graph is a plain object tree (`ConstNode`/`UniformNode` carry
+`.value`; `OperatorNode` carries `.op`; `MathNode` carries `.method`;
+`ConditionalNode` carries its branches), so no `NodeBuilder`, GPU, or WebGPU
+renderer is needed to walk and evaluate it. `tsl-time-filter-conformance.test.ts`
+therefore executes the **shipped graph itself** against both oracles rather
+than a hand-kept mirror of it — there is no reference to drift. Its evaluator
+throws on any unknown node class or operator, so a graph rewritten with a new
+op fails loudly instead of silently passing. Compiled-shader
+_pixels_ remain outside what any of this proves — see
+[renderer-architecture.md §2.9](../roadmap/renderer-architecture.md#29-five-tier-enforcement-ladder--its-honest-ceiling).
+
+> **There is no GLSL emitter any more, by decision.** `emitGLSL300` and its
+> only caller, `@poopdeck.gl/cesium`'s `timeFilterAlphaGlsl`, were removed at
+> the 0.6.0 cut; `emitGLSL100` had gone earlier. None of them was ever in a
+> render path — every backend hand-writes its shader in its own dialect, and
+> Cesium CPU-filters through `timeFilterAlpha`. What the kernel exports is the
+> AST and its evaluator, because conformance compares the alpha VALUE, not the
+> shader TEXT. Re-add an emitter when something compiles its output.
+
+There is **no `emitTSL`**, in this package or in `@poopdeck.gl/three`, and
+there never was. Where the name still appears — in
+[renderer-architecture.md §5.1](../roadmap/renderer-architecture.md#51-decision-6--gpu-conformance-ci-the-one-live-decision-blocked)'s
+open question — it is a proposal, not a function. three's TSL alpha
+(`@poopdeck.gl/three`'s `tsl/time-filter.ts`) is a hand-written node-graph
+mirror of `core/time-filter`.
 
 ## `core/style`
 

@@ -138,3 +138,75 @@ describe('SpatioTemporalTileset additive LOD — getVisibleTiles retains parents
     expect(zs.length).toBe(4);
   });
 });
+
+/**
+ * CO-6 guard: `lodMode: 'additive'` bypasses BOTH halves of the placeholder
+ * work, and must keep doing so.
+ *
+ * Neither half applies to an additive octree. The fetch side judges a coarse
+ * tile as a throwaway placeholder whose value expires when the detail arrives —
+ * but here a coarse tile holds the sparse overview points that exist at NO other
+ * zoom, so it is never throwaway and never oversized (one representative per
+ * coarse voxel). The cover side de-duplicates one zoom against another — but
+ * additive renders the union precisely because the levels are disjoint. Both
+ * bypasses are unconditional (`lodMode === 'additive'` is the first line of
+ * `shouldSkipParentFetch` and `getVisibleTiles`), so the new options must be
+ * inert here whatever they are set to.
+ */
+describe('SpatioTemporalTileset additive LOD — CO-6 bypasses', () => {
+  it('fetches every coarse level however the placeholder rule is priced', async () => {
+    const requested = new Set<number>();
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 10,
+      maxZoom: 20,
+      lodMode: 'additive',
+      enablePrefetch: false,
+      refinementStrategy: 'best-available',
+      // Every coarse tile is 14 MB on a slow link with instant children: the
+      // most emphatically "not worth it" a placeholder can be under either rule.
+      getTileByteSize: (id: TileId) => (id.z < 20 ? 14_000_000 : 1),
+      getThroughput: () => ({ bytesPerMs: 1, samples: 20 }),
+      getAvailableTiles: async (
+        _b: BoundingBox,
+        z: number,
+      ): Promise<TileId[]> => [{ z, x: 0, y: 0, t: 0 }],
+      getTileData: async (id: TileId) => {
+        requested.add(id.z);
+        return fakeTile(id);
+      },
+    });
+    tileset.update({ bounds: BOUNDS, zoom: 20, time: 0, timeWindow: 1000 });
+    for (let i = 0; i < 5; i++) await tick();
+
+    for (let z = 10; z <= 20; z++) expect(requested.has(z)).toBe(true);
+    tileset.finalize();
+  });
+
+  it('renders the union under either coverSearch setting', async () => {
+    for (const coverSearch of ['dp', 'capped'] as const) {
+      const tileset = new SpatioTemporalTileset({
+        minZoom: 14,
+        maxZoom: 15,
+        lodMode: 'additive',
+        coverSearch,
+        enablePrefetch: false,
+        refinementStrategy: 'best-available',
+        getAvailableTiles: async (
+          _b: BoundingBox,
+          z: number,
+        ): Promise<TileId[]> => {
+          if (z === 15) return [{ z: 15, x: 0, y: 0, t: 0 }];
+          if (z === 14) return [{ z: 14, x: 0, y: 0, t: 0 }];
+          return [];
+        },
+        getTileData: async (id: TileId) => fakeTile(id),
+      });
+      tileset.update({ bounds: BOUNDS, zoom: 15, time: 0, timeWindow: 1000 });
+      for (let i = 0; i < 5; i++) await tick();
+
+      const zs = tileset.getVisibleTiles().map((t) => (t.id as TileId).z);
+      expect(zs.sort()).toEqual([14, 15]);
+      tileset.finalize();
+    }
+  });
+});

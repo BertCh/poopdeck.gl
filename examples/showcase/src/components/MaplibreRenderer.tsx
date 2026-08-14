@@ -32,7 +32,6 @@ import {
   STTQuadbinSummaryLayer,
   STTFlowmapLayer,
   STTLayerGroup,
-  maplibreBackend,
   type STTBaseLayer,
   type STTBaseLayerOptions,
   type RGBA8,
@@ -43,8 +42,7 @@ import {
 import { cellToBoundary } from 'h3-js';
 import type { TimeController } from '@poopdeck.gl/playback';
 import type { SourceRegistry } from '@poopdeck.gl/react';
-import { renderableDatasetTypes } from '../lib/backendSupport';
-import type { Dataset, DatasetType } from '../types';
+import type { Dataset } from '../types';
 
 // CARTO's free dark style. We accept any style URL via prop, but this is the
 // sensible default so we stay visually consistent with the deck.gl viewport
@@ -74,12 +72,7 @@ const DEFAULT_BASEMAP_STYLE =
  * pathReveal claim is filed under `line`. That is a capability-matrix bug in
  * @poopdeck.gl/maplibre, not something to override from here.
  */
-export const MAPLIBRE_RENDERABLE_TYPES: ReadonlySet<DatasetType> =
-  renderableDatasetTypes(maplibreBackend, [
-    'lightning',
-    'radar',
-    'flowmap-bundled',
-  ]);
+export { MAPLIBRE_RENDERABLE_TYPES } from '../lib/rendererEligibility';
 
 /** Bright, slightly-blue flash color for lightning (deck's LIGHTNING_FLASH_COLOR). */
 const LIGHTNING_FLASH_COLOR: RGBA8 = [222, 236, 255, 255];

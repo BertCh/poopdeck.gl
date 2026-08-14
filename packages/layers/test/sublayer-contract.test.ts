@@ -463,7 +463,7 @@ describe('getSubLayerProps inheritance (composite props reach sublayers)', () =>
     expect(sub.props.opacity).toBe(0.4);
     expect(sub.props.pickable).toBe(true);
     // Per-tile sublayer ids stay unique and stable: parent-shortId-tileKey.
-    expect(sub.props.id).toBe('pts-points-0/0/0/0:layer0');
+    expect(sub.props.id).toBe('pts-points-0/0/0/0#0:layer0');
   });
 
   it('AnimatedPointLayer: a coordinateSystem change invalidates cached sublayers', async () => {
@@ -981,7 +981,7 @@ describe('SplatLayer Worldbuild sublayer contract', () => {
     expect(sub.props.revealFade).toBe(900);
     expect(sub.props.temporalSigmaDynamic).toBe(250);
     // Per-tile sublayer id stays parent-shortId-tileKey.
-    expect(sub.props.id).toBe('splat-splats-0/0/0/0:layer0');
+    expect(sub.props.id).toBe('splat-splats-0/0/0/0#0:layer0');
     // The dynamic flag was baked.
     expect([...sub.props.data.attributes.instanceIsDynamic.value]).toEqual([
       0, 1, 0,

@@ -11,19 +11,24 @@
  * legend/cube chips. This inverts the old "map inset inside page chrome"
  * frame into "UI inside the map".
  */
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, {
+  Suspense,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useParams, useLocation, Navigate, Link } from 'react-router';
 import { getDatasetById } from '../datasets';
 import { getDemoMeta } from '../content/demoMeta';
 import DemoViewer from '../components/demo/DemoViewer';
 import DemoHoverPreview from '../components/demo/DemoHoverPreview';
 import type { DemoCamera } from '../components/demo/previewBasemap';
-import MaplibreRenderer, {
+import {
   MAPLIBRE_RENDERABLE_TYPES,
-} from '../components/MaplibreRenderer';
-import SttThreeGeoViewer, {
   datasetSupportsThree,
-} from '../components/demo/SttThreeGeoViewer';
+} from '../lib/rendererEligibility';
 import { useDemoPlayback } from '../components/demo/useDemoPlayback';
 import { usePlaybackHotkeys, PlaybackControls } from '@poopdeck.gl/react';
 // The site's own reduced-motion hook, as every other animated surface here uses
@@ -35,6 +40,13 @@ import { useReducedMotion } from '../lib/reducedMotion';
 
 /** Idle time before the floating transport fades out during playback. */
 const CHROME_IDLE_MS = 3000;
+
+const MaplibreRenderer = React.lazy(
+  () => import('../components/MaplibreRenderer'),
+);
+const SttThreeGeoViewer = React.lazy(
+  () => import('../components/demo/SttThreeGeoViewer'),
+);
 
 /**
  * `PlaybackControls` is authored in the site's light editorial theme (dark ink
@@ -58,6 +70,10 @@ const DARK_CONTROL_THEME = {
 const DemoPage: React.FC = () => {
   const { datasetId } = useParams<{ datasetId: string }>();
   const location = useLocation();
+  // Keep benchmark diagnostics opt-in in production. The HUD activates layer
+  // snapshots and a frame sampler; normal visitors should pay neither cost.
+  const showPerfHud =
+    import.meta.env.DEV || new URLSearchParams(location.search).has('perf');
   const selectedDataset = useMemo(
     () => getDatasetById(datasetId || ''),
     [datasetId],
@@ -160,29 +176,35 @@ const DemoPage: React.FC = () => {
     >
       {/* Full-bleed map — fills the whole surface; the chrome floats on top. */}
       <div className="absolute inset-0">
-        {useMaplibre ? (
-          <MaplibreRenderer
-            key={selectedDataset.id}
-            dataset={selectedDataset}
-            timeController={playback.timeController}
-            registry={playback.registry}
-          />
-        ) : useThree ? (
-          <SttThreeGeoViewer
-            key={selectedDataset.id}
-            dataset={selectedDataset}
-            playback={playback}
-            topLeftInset={headerInset}
-          />
-        ) : (
-          <DemoViewer
-            dataset={selectedDataset}
-            playback={playback}
-            showPerfHud
-            topLeftInset={headerInset}
-            onCameraChange={setCamera}
-          />
-        )}
+        <Suspense
+          fallback={
+            <div className="w-full h-full" style={{ background: '#0a0d12' }} />
+          }
+        >
+          {useMaplibre ? (
+            <MaplibreRenderer
+              key={selectedDataset.id}
+              dataset={selectedDataset}
+              timeController={playback.timeController}
+              registry={playback.registry}
+            />
+          ) : useThree ? (
+            <SttThreeGeoViewer
+              key={selectedDataset.id}
+              dataset={selectedDataset}
+              playback={playback}
+              topLeftInset={headerInset}
+            />
+          ) : (
+            <DemoViewer
+              dataset={selectedDataset}
+              playback={playback}
+              showPerfHud={showPerfHud}
+              topLeftInset={headerInset}
+              onCameraChange={setCamera}
+            />
+          )}
+        </Suspense>
       </div>
 
       {/* Floating header (top-left): back link, title, description, and the

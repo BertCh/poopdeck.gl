@@ -1,31 +1,21 @@
 /**
- * Cumulative ("draw and persist") mode tests for TimeFilterExtension.
+ * Cumulative ("draw and persist") mode WIRING tests for TimeFilterExtension.
  *
- * The reveal logic lives in GLSL (the `vs:#main-start` inject), which can't run
- * without a GPU. We assert two things instead:
- *   1. Wiring — the shader module declares the `cumulative` uniform and the
- *      inject carries the persist branch + the default prop is off.
- *   2. Semantics — a pure-JS reference of the branch (kept in lockstep with the
- *      GLSL) produces the intended "appear at creation, fade in, then persist"
- *      alpha. If you change the GLSL branch, update `cumulativeAlphaRef` too.
+ * Scope is deliberately narrow: that the shader module declares the `cumulative`
+ * uniform, that the inject carries the persist branch, and that the default prop
+ * is off. Those are plumbing facts no math test would catch.
+ *
+ * The MATH is not tested here. This file used to carry a local
+ * `cumulativeAlphaRef` checked against hand-typed expectations — a mirror of a
+ * mirror, tied to nothing, and covering one of four modes. It has been replaced
+ * by `./time-filter-conformance.test.ts`, which pins a full JS reference of the
+ * inject to BOTH core oracles (`time-filter.ts` and `shader-codegen.ts`'s
+ * `evalExpr`) across all four modes and structurally locks the shipped GLSL.
+ * Add reveal-semantics assertions there, not here.
  */
 
 import { describe, it, expect } from 'vitest';
 import { TimeFilterExtension } from '../src/extensions/time-filter-extension';
-
-/** JS mirror of the GLSL `if (timeFilter.cumulative > 0.0) { … }` branch. */
-function cumulativeAlphaRef(
-  startTime: number,
-  currentTime: number,
-  fadeIn: number,
-): number {
-  if (startTime > currentTime) return 0; // not created yet
-  if (fadeIn > 0) {
-    const age = currentTime - startTime;
-    if (age < fadeIn) return age / fadeIn; // ink appearing
-  }
-  return 1; // revealed and persisting
-}
 
 function getShaderObject() {
   const ext = new TimeFilterExtension();
@@ -54,26 +44,5 @@ describe('TimeFilterExtension cumulative-mode wiring', () => {
   });
 });
 
-describe('cumulative reveal semantics (reference)', () => {
-  const fadeIn = 1000;
-
-  it('hides features whose creation is in the future', () => {
-    expect(cumulativeAlphaRef(5000, 4000, fadeIn)).toBe(0);
-  });
-
-  it('fades a freshly-created feature in over fadeInDuration', () => {
-    expect(cumulativeAlphaRef(4000, 4000, fadeIn)).toBe(0); // just created
-    expect(cumulativeAlphaRef(4000, 4500, fadeIn)).toBeCloseTo(0.5);
-    expect(cumulativeAlphaRef(4000, 5000, fadeIn)).toBe(1); // fully inked
-  });
-
-  it('persists a long-created feature regardless of how far time advanced', () => {
-    expect(cumulativeAlphaRef(100, 999_999_999, fadeIn)).toBe(1);
-  });
-
-  it('with no fadeIn, reveals instantly at creation and persists', () => {
-    expect(cumulativeAlphaRef(4000, 3999, 0)).toBe(0);
-    expect(cumulativeAlphaRef(4000, 4000, 0)).toBe(1);
-    expect(cumulativeAlphaRef(4000, 4001, 0)).toBe(1);
-  });
-});
+// Reveal semantics (appear at creation → fade in → persist) are pinned against
+// both core oracles in ./time-filter-conformance.test.ts.

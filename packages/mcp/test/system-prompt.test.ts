@@ -7,7 +7,7 @@ function dataset(overrides: Partial<DatasetSummary> = {}): DatasetSummary {
     name: 'earthquakes',
     path: '/data/earthquakes',
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
     boundingBox: { minLon: -180, minLat: -85, maxLon: 180, maxLat: 85 },
     timeRange: { start: 0, end: 3_600_000 },
     minZoom: 0,

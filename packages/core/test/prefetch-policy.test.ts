@@ -15,7 +15,14 @@ import {
   PREFETCH_CAP_FLOOR_REAL_MS,
   PREFETCH_DEBOUNCE_MS,
   PREFETCH_LOOKAHEAD_REAL_MS,
+  PREFETCH_CACHE_FRACTION,
+  PREFETCH_BYTE_EXPANSION_MIN_SAMPLES,
+  PREFETCH_COLD_BYTE_EXPANSION,
+  PREFETCH_MAX_BYTE_EXPANSION,
+  PREFETCH_MIN_BYTE_EXPANSION,
+  PREFETCH_MIN_BUDGET_BYTES,
   PREFETCH_MIN_BUDGET_TILES,
+  byteExpansionRatio,
   PREFETCH_RELOAD_FRACTION,
   PREFETCH_SLICE_COLD_BYTES,
   PREFETCH_SLICE_MAX_BYTES,
@@ -64,6 +71,43 @@ const horizon = (
   policy: PrefetchPolicy,
   over: Partial<PrefetchPlanRequest> = {},
 ) => policy.plan(baseRequest({ ...over, pipelineIdle: true }))!.effectiveAhead;
+
+/**
+ * The gate floor for `baseRequest` at speed 0: `max(bucketMs, timeWindow,
+ * speed × PREFETCH_CAP_FLOOR_REAL_MS)` = max(100, 1000, 0). No mechanism —
+ * cap, solve or ladder — may return a horizon below this.
+ */
+const GATE_FLOOR = 1000;
+/** `baseRequest`'s horizon before any byte reasoning: timeWindow × 4 steps. */
+const UNSOLVED = 4000;
+const BYTES_PER_BUCKET = 1000;
+
+/**
+ * A MONOTONE byte oracle over `baseRequest`'s 100 ms bucket grid:
+ * {@link BYTES_PER_BUCKET} per bucket of horizon, so `bytes(h) = 10 × h`. Every
+ * probe is recorded, which is how the tests below assert the solve bisects
+ * (a handful of calls) rather than scanning the 31 candidate boundaries.
+ */
+function byteOracle(opts: { exact?: boolean } = {}) {
+  const probes: number[] = [];
+  return {
+    probes,
+    fn: (horizonSimMs: number): { bytes: number; exact: boolean } => {
+      probes.push(horizonSimMs);
+      return {
+        bytes: (horizonSimMs / 100) * BYTES_PER_BUCKET,
+        exact: opts.exact ?? true,
+      };
+    },
+  };
+}
+
+/** Horizon under a byte budget, with the oracle above. */
+const solvedHorizon = (
+  policy: PrefetchPolicy,
+  byteBudget: number,
+  over: Partial<PrefetchPlanRequest> = {},
+) => horizon(policy, { byteBudget, bytesForHorizon: byteOracle().fn, ...over });
 
 describe('PrefetchPolicy direction hysteresis', () => {
   it('starts forward', () => {
@@ -231,6 +275,149 @@ describe('PrefetchPolicy horizon bounds', () => {
     expect(policy.enqueueBudget(10)).toBe(PREFETCH_MIN_BUDGET_TILES);
     expect(policy.enqueueBudget(0)).toBe(PREFETCH_MIN_BUDGET_TILES);
   });
+
+  /**
+   * BH-2 — the same ceiling in the unit the LRU is actually denominated in.
+   * The count budget prices a 17 MB satellite tile and a 5 KB sparse leaf
+   * identically; `maxCacheByteSize` does not.
+   *
+   * Expansion 1 is the documented kill switch — it reproduces the pre-F3
+   * arithmetic exactly — so it is what pins the fraction and the floor. The
+   * currency conversion itself is pinned separately below.
+   */
+  it('sizes the per-pass enqueue BYTE budget from the cache BYTE budget', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+
+    // The shipped default cache (2 GiB) → half of it.
+    expect(policy.enqueueBudgetBytes(2 * 1024 * 1024 * 1024, 1)).toBe(
+      1024 * 1024 * 1024,
+    );
+    expect(policy.enqueueBudgetBytes(64 * 1024 * 1024, 1)).toBe(
+      64 * 1024 * 1024 * PREFETCH_CACHE_FRACTION,
+    );
+
+    // FLOOR: a tiny (or zero, or negative) cache config still leaves a
+    // workable runway rather than collapsing the enqueue to nothing.
+    expect(policy.enqueueBudgetBytes(1024, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
+    expect(policy.enqueueBudgetBytes(0, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
+    expect(policy.enqueueBudgetBytes(-1, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
+    // The floor binds exactly at 2 × itself.
+    expect(policy.enqueueBudgetBytes(2 * PREFETCH_MIN_BUDGET_BYTES, 1)).toBe(
+      PREFETCH_MIN_BUDGET_BYTES,
+    );
+    expect(policy.enqueueBudgetBytes(4 * PREFETCH_MIN_BUDGET_BYTES, 1)).toBe(
+      2 * PREFETCH_MIN_BUDGET_BYTES,
+    );
+
+    // A NaN cache budget is a misconfiguration, not a licence to enqueue
+    // forever; Infinity IS the documented rollback (count-only behavior).
+    expect(policy.enqueueBudgetBytes(Number.NaN, 1)).toBe(
+      PREFETCH_MIN_BUDGET_BYTES,
+    );
+    expect(policy.enqueueBudgetBytes(Number.POSITIVE_INFINITY, 1)).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+
+  /**
+   * F3 — the budget's two sides must be the same byte currency.
+   *
+   * `maxCacheByteSize` is a DECODED cap: the LRU enforces it against
+   * `Σ estimateTileSize(tile)`. What a planning pass can charge is
+   * `getTileByteSize`, the COMPRESSED `entry.length`. Handing the raw cap back
+   * as a ceiling for compressed charges admits a runway ~`expansion` times
+   * bigger than the cache can hold — which is precisely the residency failure
+   * the budget was added to prevent. The cap is therefore converted into the
+   * charge's currency before it is returned.
+   */
+  it('converts the DECODED cache cap into the COMPRESSED currency it is charged in', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const CAP = 2 * 1024 * 1024 * 1024; // 2 GiB decoded, the shipped default
+    const half = CAP * PREFETCH_CACHE_FRACTION;
+
+    // A 4× archive: 1 GiB of decoded cache holds only 256 MiB of directory
+    // bytes, and that — not the 1 GiB — is what a compressed charge may spend.
+    expect(policy.enqueueBudgetBytes(CAP, 4)).toBe(half / 4);
+    expect(policy.enqueueBudgetBytes(CAP, 8)).toBe(half / 8);
+    // Monotone in the expansion: a more compressible archive never buys MORE
+    // directory bytes of runway.
+    let prev = Number.POSITIVE_INFINITY;
+    for (const r of [1, 2, 3, 4, 6, 8, 12, 16, 32, 64]) {
+      const b = policy.enqueueBudgetBytes(CAP, r);
+      expect(b).toBeLessThanOrEqual(prev);
+      prev = b;
+    }
+
+    // Clamps. Below 1 is physically impossible (a decoded tile is never
+    // smaller than its compressed form) and must never INFLATE the budget past
+    // what the kill-switch value admits; above the ceiling one odd archive
+    // cannot starve the runway further.
+    expect(policy.enqueueBudgetBytes(CAP, 0.25)).toBe(
+      policy.enqueueBudgetBytes(CAP, PREFETCH_MIN_BYTE_EXPANSION),
+    );
+    expect(policy.enqueueBudgetBytes(CAP, 1e9)).toBe(
+      policy.enqueueBudgetBytes(CAP, PREFETCH_MAX_BYTE_EXPANSION),
+    );
+    // A degenerate rate falls back to the conservative cold value, never to
+    // "no conversion" (which is the defect) and never to a divide-by-zero.
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(policy.enqueueBudgetBytes(CAP, bad)).toBe(
+        half / PREFETCH_COLD_BYTE_EXPANSION,
+      );
+
+    // The floor is already compressed currency (one dispatchable slice of
+    // network work), so it is NOT divided — it binds instead.
+    expect(policy.enqueueBudgetBytes(4 * PREFETCH_MIN_BUDGET_BYTES, 8)).toBe(
+      PREFETCH_MIN_BUDGET_BYTES,
+    );
+  });
+
+  /**
+   * The exchange rate itself: measured from tiles priced in both currencies,
+   * conservative until there are enough of them, clamped at both ends, and a
+   * pure function of its inputs.
+   */
+  it('measures the decoded/compressed expansion, or stays conservative', () => {
+    // Too few samples ⇒ the documented cold value, not a one-tile guess.
+    expect(byteExpansionRatio(1000, 4000, 0)).toBe(
+      PREFETCH_COLD_BYTE_EXPANSION,
+    );
+    expect(
+      byteExpansionRatio(1000, 4000, PREFETCH_BYTE_EXPANSION_MIN_SAMPLES - 1),
+    ).toBe(PREFETCH_COLD_BYTE_EXPANSION);
+
+    // Enough samples ⇒ the measured ratio OF SUMS.
+    const n = PREFETCH_BYTE_EXPANSION_MIN_SAMPLES;
+    expect(byteExpansionRatio(1000, 4000, n)).toBe(4);
+    expect(byteExpansionRatio(2_000_000, 7_000_000, n)).toBe(3.5);
+
+    // Byte-WEIGHTED, not a mean of per-tile ratios: one 1 MB tile at 2× plus
+    // three 1 KB tiles at 20× is a 2.05× archive, because the big tile is what
+    // fills the cache. (A mean of ratios would say 15.5×.)
+    expect(
+      byteExpansionRatio(1_000_000 + 3_000, 2_000_000 + 60_000, 4),
+    ).toBeCloseTo(2.0538, 4);
+
+    // Degenerate sums ⇒ cold, never 0 and never Infinity.
+    expect(byteExpansionRatio(0, 4000, n)).toBe(PREFETCH_COLD_BYTE_EXPANSION);
+    expect(byteExpansionRatio(1000, 0, n)).toBe(PREFETCH_COLD_BYTE_EXPANSION);
+
+    // Clamped at both ends.
+    expect(byteExpansionRatio(1000, 100, n)).toBe(PREFETCH_MIN_BYTE_EXPANSION);
+    expect(byteExpansionRatio(1, 1e9, n)).toBe(PREFETCH_MAX_BYTE_EXPANSION);
+
+    // Pure: same inputs, same output, no state carried between calls.
+    for (let i = 0; i < 3; i++)
+      expect(byteExpansionRatio(1000, 4000, n)).toBe(4);
+  });
+
+  it('leaves the tile-count budget untouched (both budgets coexist)', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    // The byte budget is an ADDITIONAL bound, not a replacement: the count
+    // budget is still the guard for byte-blind directories.
+    expect(policy.enqueueBudget(1000)).toBe(500);
+    expect(policy.enqueueBudgetBytes(1000, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
+  });
 });
 
 describe('PrefetchPolicy run-ahead cap', () => {
@@ -278,6 +465,235 @@ describe('PrefetchPolicy run-ahead cap', () => {
   });
 });
 
+describe('PrefetchPolicy byte-feasibility solve', () => {
+  it('lands on the largest bucket-aligned horizon under budget', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    // 4000 ms of horizon costs 40 000 bytes; the budget buys 25 buckets.
+    expect(solvedHorizon(policy, 25 * BYTES_PER_BUCKET)).toBe(2500);
+  });
+
+  it('rounds DOWN to a bucket boundary rather than over-committing', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    // 25.9 buckets' worth of budget still only buys 25 whole buckets: the
+    // candidate grid is the bucket grid the oracle's prefix sums are keyed on.
+    expect(solvedHorizon(policy, 25.9 * BYTES_PER_BUCKET)).toBe(2500);
+  });
+
+  it('leaves a feasible horizon untouched, at the cost of ONE probe', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const oracle = byteOracle();
+
+    expect(
+      horizon(policy, {
+        byteBudget: 40 * BYTES_PER_BUCKET, // exactly the full horizon's cost
+        bytesForHorizon: oracle.fn,
+      }),
+    ).toBe(UNSOLVED);
+    // Feasibility is checked at the top of the range first, so the common case
+    // (budget is ample) never enters the bisection at all.
+    expect(oracle.probes).toEqual([UNSOLVED]);
+  });
+
+  it('bisects rather than scanning the candidate boundaries', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const oracle = byteOracle();
+
+    horizon(policy, {
+      byteBudget: 25 * BYTES_PER_BUCKET,
+      bytesForHorizon: oracle.fn,
+    });
+    // 31 bucket boundaries in [floor, horizon]; log2(31) ≈ 5, plus the initial
+    // feasibility probe. A scan would be 31+.
+    expect(oracle.probes.length).toBeLessThanOrEqual(8);
+    expect(oracle.probes.length).toBeGreaterThan(1);
+  });
+
+  it('KEEPS THE FLOOR when even the floor is over budget (the deadlock guard)', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+
+    // The floor alone costs 10 buckets = 10 000 bytes; the budget is 5 000.
+    // Shrinking below the floor would leave the governor's speed-scaled gates
+    // permanently unsatisfiable — the source would deadlock at the start-wait
+    // instead of degrading — so the floor wins and §9.4 eviction absorbs it.
+    expect(solvedHorizon(policy, 5 * BYTES_PER_BUCKET)).toBe(GATE_FLOOR);
+    // Same at an absurdly small budget: never below the floor, ever.
+    expect(solvedHorizon(policy, 1)).toBe(GATE_FLOOR);
+  });
+
+  it('keeps the speed-scaled floor satisfiable at high playback speed', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const speed = 4;
+    policy.setAnimationState(true, speed);
+    const bucketMs = 1000;
+    // Uncapped horizon = speed × 8 s = 32 000, capped by max(64 × 1000,
+    // speed × 5 000 = 20 000) → 64 000, so 32 000 stands. Floor = 20 000.
+    const unsolved = horizon(policy, { bucketMs, timeWindow: 1000 });
+    expect(unsolved).toBe(32_000);
+
+    const solved = horizon(policy, {
+      bucketMs,
+      timeWindow: 1000,
+      byteBudget: 1,
+      bytesForHorizon: (h: number) => ({ bytes: h, exact: true }),
+    });
+    expect(solved).toBe(speed * PREFETCH_CAP_FLOOR_REAL_MS);
+  });
+
+  it('routes a bytes-BLIND oracle to the pressure ladder', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const blind = byteOracle({ exact: false });
+
+    // An `exact: false` answer is a floor pretending to be a fact; the solve
+    // refuses to bisect on it and hands regulation back to the ladder.
+    expect(horizon(policy, { byteBudget: 1, bytesForHorizon: blind.fn })).toBe(
+      UNSOLVED,
+    );
+
+    policy.noteRunwayEviction();
+    expect(
+      horizon(policy, { byteBudget: 1, bytesForHorizon: blind.fn }),
+    ).toBeCloseTo(UNSOLVED * PRESSURE_SCALE_DECAY, 10);
+  });
+
+  it('skips the solve for an archive with no bucket grid', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const oracle = byteOracle();
+
+    expect(
+      horizon(policy, {
+        bucketMs: 0,
+        byteBudget: 1,
+        bytesForHorizon: oracle.fn,
+      }),
+    ).toBe(UNSOLVED);
+    expect(oracle.probes).toEqual([]);
+  });
+
+  it('ignores a degenerate budget', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+
+    for (const budget of [null, undefined, 0, -1, Number.NaN, Infinity]) {
+      const oracle = byteOracle();
+      expect(
+        horizon(policy, {
+          byteBudget: budget as number | null,
+          bytesForHorizon: oracle.fn,
+        }),
+      ).toBe(UNSOLVED);
+      expect(oracle.probes).toEqual([]);
+    }
+  });
+
+  it('leaves the AIMD ladder as the backstop UNDER the solve', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const budget = 25 * BYTES_PER_BUCKET;
+    expect(solvedHorizon(policy, budget)).toBe(2500);
+
+    // The compressed-byte solve said 2500 fits; residency says otherwise (a
+    // decoded tile is much larger than its directory length), so the eviction
+    // signal must still be able to cut further. It cuts the SOLVED horizon.
+    policy.noteRunwayEviction();
+    expect(solvedHorizon(policy, budget)).toBeCloseTo(
+      2500 * PRESSURE_SCALE_DECAY,
+      10,
+    );
+  });
+
+  it('never exceeds a cap the solve was handed', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setRunAheadLimit(2000);
+
+    // Budget ample: the run-ahead cap still binds, and the solve cannot lift it.
+    expect(solvedHorizon(policy, 1e9)).toBe(2000);
+    // Budget tight: the solve shrinks further, from the CAPPED horizon.
+    expect(solvedHorizon(policy, 15 * BYTES_PER_BUCKET)).toBe(1500);
+  });
+
+  it('is monotone non-decreasing in the byte budget', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    let previous = 0;
+    // From 1: a budget of 0 is the "no budget declared" sentinel (asserted
+    // above), not "zero bytes allowed", so it is outside the monotone family.
+    for (let buckets = 1; buckets <= 60; buckets++) {
+      const h = solvedHorizon(policy, buckets * BYTES_PER_BUCKET);
+      expect(h).toBeGreaterThanOrEqual(previous);
+      expect(h).toBeGreaterThanOrEqual(GATE_FLOOR);
+      expect(h).toBeLessThanOrEqual(UNSOLVED);
+      previous = h;
+    }
+    expect(previous).toBe(UNSOLVED);
+  });
+
+  it('is deterministic across re-runs and across policy instances', () => {
+    const shape = (p: PrefetchPolicy) => {
+      const plan = p.plan(
+        baseRequest({
+          pipelineIdle: true,
+          byteBudget: 25 * BYTES_PER_BUCKET,
+          bytesForHorizon: byteOracle().fn,
+        }),
+      )!;
+      return {
+        direction: plan.direction,
+        time: plan.time,
+        effectiveAhead: plan.effectiveAhead,
+        endTime: plan.endTime,
+        queryRange: plan.queryRange,
+        // The one function member, sampled: it closes over direction + time.
+        distances: [
+          plan.aheadDistance(PLAYHEAD),
+          plan.aheadDistance(PLAYHEAD + 700),
+          plan.aheadDistance(PLAYHEAD - 700),
+        ],
+      };
+    };
+
+    const a = new PrefetchPolicy(fakeClock().now);
+    const first = shape(a);
+    expect(shape(a)).toEqual(first);
+    expect(shape(new PrefetchPolicy(fakeClock().now))).toEqual(first);
+  });
+
+  it('emits a plan byte-identical to the pre-solve one without an oracle', () => {
+    const shapes: Array<Partial<PrefetchPlanRequest>> = [
+      {},
+      { prefetchAhead: 250 },
+      { prefetchAhead: 100, prefetchSteps: 1 },
+      { bucketMs: 0 },
+      { bucketMs: 60_000, timeWindow: 60_000 },
+    ];
+    const emit = (over: Partial<PrefetchPlanRequest>) => {
+      const policy = new PrefetchPolicy(fakeClock().now);
+      policy.setAnimationState(true, 3);
+      const plan = policy.plan(baseRequest({ ...over, pipelineIdle: true }))!;
+      return {
+        effectiveAhead: plan.effectiveAhead,
+        endTime: plan.endTime,
+        queryRange: plan.queryRange,
+      };
+    };
+
+    for (const over of shapes) {
+      // Absent fields, explicit nulls, and a blind oracle must all reduce to
+      // exactly the plan the policy emitted before CO-2 existed.
+      const legacy = emit(over);
+      expect(
+        emit({ ...over, byteBudget: null, bytesForHorizon: null }),
+      ).toEqual(legacy);
+      expect(
+        emit({
+          ...over,
+          byteBudget: 1,
+          bytesForHorizon: byteOracle({ exact: false }).fn,
+        }),
+      ).toEqual(legacy);
+      expect(
+        emit({ ...over, byteBudget: null, bytesForHorizon: byteOracle().fn }),
+      ).toEqual(legacy);
+    }
+  });
+});
+
 describe('PrefetchPolicy pressure ladder', () => {
   it('is a strict no-op at scale 1', () => {
     const policy = new PrefetchPolicy(fakeClock().now);
@@ -286,18 +702,108 @@ describe('PrefetchPolicy pressure ladder', () => {
     // A horizon BELOW the pressure floor is left alone: the floor only exists
     // to stop a decay step from starving the resident window.
     expect(horizon(policy, { prefetchAhead: 100, prefetchSteps: 1 })).toBe(100);
+    // ...and so is the CO-2 solve, whichever way it is switched off: a horizon
+    // at or under the gate floor is returned as-is rather than lifted to it.
+    expect(
+      horizon(policy, {
+        prefetchAhead: 100,
+        prefetchSteps: 1,
+        byteBudget: 1,
+        bytesForHorizon: byteOracle().fn,
+      }),
+    ).toBe(100);
+    expect(
+      horizon(policy, { byteBudget: null, bytesForHorizon: byteOracle().fn }),
+    ).toBe(UNSOLVED);
+  });
+
+  /**
+   * THE LADDER'S RUNGS, AS NUMBERS.
+   *
+   * Asserting `pressureScale === PRESSURE_SCALE_MIN` is a tautology: it holds
+   * for every possible value of the constant, so it cannot detect the constant
+   * being changed. The ladder is a shipped control law whose rungs the governor
+   * gates and the §9.4 eviction tiers are tuned against, and CO-2 keeps it as
+   * the null-callback fallback — so the values themselves are the contract and
+   * are pinned literally here.
+   */
+  it('pins the ladder constants to their literal values', () => {
+    expect(PRESSURE_SCALE_DECAY).toBe(0.7);
+    expect(PRESSURE_SCALE_MIN).toBe(0.25);
+    expect(PRESSURE_SCALE_RECOVERY_STEP).toBe(0.1);
+    expect(PRESSURE_RECOVERY_QUIET_MS).toBe(5000);
+    expect(PRESSURE_RECOVERY_STEP_INTERVAL_MS).toBe(1000);
   });
 
   it('degrades one rung per runway eviction, down to the floor', () => {
     const policy = new PrefetchPolicy(fakeClock().now);
 
     policy.noteRunwayEviction();
-    expect(policy.pressureScale).toBeCloseTo(PRESSURE_SCALE_DECAY, 10);
+    expect(policy.pressureScale).toBeCloseTo(0.7, 10);
     policy.noteRunwayEviction();
-    expect(policy.pressureScale).toBeCloseTo(PRESSURE_SCALE_DECAY ** 2, 10);
+    expect(policy.pressureScale).toBeCloseTo(0.49, 10);
+    policy.noteRunwayEviction();
+    expect(policy.pressureScale).toBeCloseTo(0.343, 10);
 
+    // The fourth rung would be 0.2401. The ladder FLOORS at 0.25 — it does not
+    // snap to zero, and it does not disable speculation: the floored rung still
+    // buys a quarter-horizon runway. Extra evictions hold there forever.
     for (let i = 0; i < 10; i++) policy.noteRunwayEviction();
-    expect(policy.pressureScale).toBe(PRESSURE_SCALE_MIN);
+    expect(policy.pressureScale).toBeCloseTo(0.25, 10);
+    expect(policy.pressureScale).toBeGreaterThan(0);
+  });
+
+  /**
+   * THE FALLBACK PATH, AS NUMBERS — the pin CO-2's own byte-identity claim
+   * needs. CO-2 states that "with a null callback the emitted plan is
+   * byte-identical to today's"; that claim is only testable if the *pressured*
+   * horizons are written down, because the un-pressured (scale-1) case exercises
+   * none of the ladder. This sequence is the pre-CO-2 behaviour, verbatim.
+   *
+   * Setup: `prefetchAhead × prefetchSteps` = 6400 ms, which is exactly the
+   * 64-bucket cap, so the caps are inert and the ladder is the only thing
+   * moving the number. Gate floor = max(bucketMs, timeWindow, 0) = 1000 ms.
+   *
+   *   eviction  1     2     3     4     5     6
+   *   scale     0.7   0.49  0.343 0.25  0.25  0.25   (floored, never 0)
+   *   horizon   4480  3136  2195.2 1600 1600  1600   (gate floor 1000 never binds)
+   *
+   * A ladder that instead disabled itself below 0.25 would read
+   * `…, 2195.2, 1000, 1000, 1000` — the gate floor, 600 ms short — which is the
+   * regression this test exists to catch.
+   */
+  it('emits the pinned horizon sequence over consecutive evictions on the null-callback path', () => {
+    const pressured = { prefetchAhead: 1600, prefetchSteps: 4 };
+    /** Three spellings of "the oracle is switched off" — all are the fallback. */
+    const killSwitches: Partial<PrefetchPlanRequest>[] = [
+      {}, // fields absent entirely (pre-CO-2 callers)
+      { byteBudget: null, bytesForHorizon: null }, // explicit null callback
+      { byteBudget: null, bytesForHorizon: byteOracle().fn }, // budget withheld
+    ];
+
+    for (const off of killSwitches) {
+      const policy = new PrefetchPolicy(fakeClock().now);
+      // Un-pressured, the caps alone leave the full 64-bucket horizon.
+      expect(horizon(policy, { ...pressured, ...off })).toBe(6400);
+
+      const sequence: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        policy.noteRunwayEviction();
+        policy.invalidatePlan(); // drop the runway throttle, not the pressure
+        sequence.push(horizon(policy, { ...pressured, ...off }));
+      }
+
+      expect(sequence).toHaveLength(6);
+      expect(sequence[0]).toBeCloseTo(4480, 6);
+      expect(sequence[1]).toBeCloseTo(3136, 6);
+      expect(sequence[2]).toBeCloseTo(2195.2, 6);
+      expect(sequence[3]).toBeCloseTo(1600, 6);
+      expect(sequence[4]).toBeCloseTo(1600, 6);
+      expect(sequence[5]).toBeCloseTo(1600, 6);
+      // ...and explicitly NOT collapsed onto the gate floor.
+      expect(sequence[3]).toBeGreaterThan(GATE_FLOOR);
+      expect(sequence[5]).toBeGreaterThan(GATE_FLOOR);
+    }
   });
 
   it('shrinks the planned horizon while pressured', () => {
@@ -384,7 +890,7 @@ describe('PrefetchPolicy pressure ladder', () => {
     const clock = fakeClock();
     const policy = new PrefetchPolicy(clock.now);
     for (let i = 0; i < 10; i++) policy.noteRunwayEviction();
-    expect(policy.pressureScale).toBe(PRESSURE_SCALE_MIN);
+    expect(policy.pressureScale).toBeCloseTo(0.25, 10);
 
     clock.advance(PRESSURE_RECOVERY_QUIET_MS);
     for (let i = 0; i < 100; i++) {

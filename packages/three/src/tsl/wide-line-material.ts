@@ -52,6 +52,7 @@ import {
   type UniformNode,
   type TSLNode,
 } from './nodes.js';
+import { srgbToWorking } from './color-space.js';
 import { PaletteUniforms, paletteColorNode } from './palette.js';
 import {
   TimeFilterUniforms,
@@ -215,7 +216,7 @@ export function createWideLineMaterial(
         ),
       ); // gradient (mix is varying-safe)
 
-  material.colorNode = vColor.xyz;
+  material.colorNode = srgbToWorking(vColor.xyz);
   material.opacityNode = vColor.a.mul(line.opacity).mul(alpha);
   material.transparent = true;
   material.depthTest = true;

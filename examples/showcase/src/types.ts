@@ -758,13 +758,50 @@ export interface TripsDataset
   type: 'trips';
   /**
    * Composite overlay: the manifest URL of a SECOND (per-trip, OSRM-routed)
-   * archive rendered ON TOP as moving head-dots via AnimatedTripHeadsLayer — one
-   * dot per active ride gliding over the flow corridors below, both on the one
-   * playhead. The corridor archive stays the primary governor source; the heads
+   * archive rendered ON TOP of the flow corridors below, both on the one
+   * playhead. The corridor archive stays the primary governor source; the
    * overlay ALSO gates the clock unless {@link BaseDataset.overlayGatesPlayback}
-   * is set false. Styled by the `head*` fields.
+   * is set false.
+   *
+   * Draws as moving head-DOTS (AnimatedTripHeadsLayer, styled by the `head*`
+   * fields) by default, or as fading TRAILS when {@link overlayTrail} is set.
    */
   headsOverlayUrl?: string;
+  /**
+   * Draw the {@link headsOverlayUrl} archive as fading TRAILS
+   * (AnimatedTripsLayer) instead of head dots. Presence IS the switch; the
+   * fields configure the trail, since the top-level `trip*`/`width*` ones
+   * belong to the PRIMARY corridor layer and a composite needs both styled
+   * independently.
+   *
+   * A trail reads the route a vehicle just took, where a dot reads only where
+   * it is — on a corridor base that already encodes aggregate volume, the
+   * per-trip PATH is the part the corridors can't show.
+   *
+   * `trailLength` is in sim-ms and must fit the overlay's loader window: the
+   * tileset covers `[t − window/2, t + window/2]`, so a trail longer than half
+   * {@link headsOverlayTimeWindow} runs off the back of the resident tiles and
+   * truncates. (`AnimatedTripsLayer.getEffectiveTimeWindow` widens the window to
+   * `2 × trailLength` rather than let that happen — which is exactly the
+   * residency blow-up that field's docstring warns about, so size the two
+   * together instead of relying on the widen.)
+   */
+  overlayTrail?: {
+    /** Trail color (RGBA 0-255). @default the `headColor` fallback */
+    color?: ColorRGBA;
+    /** Trail width, in {@link overlayTrail.widthUnits}. */
+    width?: number;
+    /** @default 'meters' — trails thicken on zoom like the head dots do. */
+    widthUnits?: 'pixels' | 'meters';
+    widthMinPixels?: number;
+    widthMaxPixels?: number;
+    /** Trail span in sim-ms — how far back down the route the tail reaches. */
+    trailLength: number;
+    /** Alpha-fade head→tail (`true`) or a solid snake (`false`). @default true */
+    fadeTrail?: boolean;
+    capRounded?: boolean;
+    jointRounded?: boolean;
+  };
   /**
    * Loader window (ms) for the {@link headsOverlayUrl} archive, overriding the
    * primary's `timeWindow` on the overlay tileset ONLY.

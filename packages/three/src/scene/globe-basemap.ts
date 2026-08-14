@@ -29,6 +29,7 @@ import {
   MeshBasicMaterial,
   TextureLoader,
   EquirectangularReflectionMapping,
+  SRGBColorSpace,
   type Texture,
   type ColorRepresentation,
 } from 'three';
@@ -88,6 +89,11 @@ export function makeGlobeBasemap(
       opts.textureUrl,
       (texture) => {
         texture.mapping = EquirectangularReflectionMapping;
+        // An earth photo is sRGB-encoded, but `TextureLoader` tags nothing —
+        // left unset the sampler returns the encoded value, the output pass
+        // encodes it AGAIN and the globe washes out pale (the texture twin of
+        // the layer-colour bug; see `../tsl/color-space.ts`).
+        texture.colorSpace = SRGBColorSpace;
         material.map = texture;
         // Solid color tints the texture; reset to white so the image shows true.
         material.color.set(0xffffff);

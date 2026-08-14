@@ -173,7 +173,12 @@ describe('createSttMcpServer — discovery tools', () => {
       earthquakes: makeManifestJson({ metadata: { name: 'earthquakes' } }),
       'nyc-od-quadbin': makeManifestJson({
         metadata: {
-          summary_tier: { scheme: 'quadbin', min_zoom: 8, max_zoom: 15 },
+          summary_tier: {
+            variant_id: 1,
+            scheme: 'quadbin',
+            min_zoom: 8,
+            max_zoom: 15,
+          },
         },
       }),
     });
@@ -642,7 +647,7 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       const parsed = JSON.parse(firstText(result));
       expect(parsed.exitCode).toBe(0);
       expect(parsed.manifestSummary.path).toBe(outputDir);
-      expect(parsed.manifestSummary.formatVersion).toBe(2);
+      expect(parsed.manifestSummary.formatVersion).toBe(3);
     } finally {
       await close();
     }
@@ -1028,7 +1033,7 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
         '500',
       ]);
       // Single-dataset run reads the resulting manifest back.
-      expect(parsed.manifestSummary.formatVersion).toBe(2);
+      expect(parsed.manifestSummary.formatVersion).toBe(3);
     } finally {
       await close();
     }

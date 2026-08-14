@@ -1,0 +1,22 @@
+{"ch":"header","traceVersion":1,"route":"micro/loop-boundary","channelsPresent":["viewport","requests","decode","evict"],"config":{"decodeBytesPerMs":2000,"decodePoolSize":2,"loopEndMs":8000,"loopStartMs":0,"maxResidentBytes":10000000,"maxResidentTiles":6,"prefetchHorizonBuckets":2,"temporalBucketMs":1000},"note":"Hand-written 22-event micro-trace. One spatial cell (z2/1/1), eight temporal buckets of 1000 ms, a playhead that sweeps 0 -> 7000 and then WRAPS to 0. Cache holds 6 tiles; prefetch horizon is 2 buckets. The incumbent eviction measures playhead distance LINEARLY, so just before the wrap it has dropped buckets 0 and 1000 as \"furthest behind\" - the exact tiles the wrap needs next. Replaying it pins the resulting refetch as the incumbent baseline (the inverse-of-Belady pathology).","recordedAt":"2026-08-10T00:00:00.000Z","source":"hand-written"}
+{"ch":"viewport","tMs":0,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":0,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":1000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":1000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":2000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":2000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":3000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":3000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":4000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":4000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":5000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":5000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":6000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":6000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":7000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":7000,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":8000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":0,"timeWindowMs":1000,"zoom":2}
+{"ch":"viewport","tMs":9000,"animating":true,"bounds":[-80,10,-10,60],"direction":1,"playheadMs":1000,"timeWindowMs":1000,"zoom":2}
+{"ch":"requests","tMs":0,"key":"2/1/1/0#0","bytes":10000,"completedAt":40,"dispatchedAt":5,"enqueuedAt":0,"priority":0,"source":"micro"}
+{"ch":"requests","tMs":0,"key":"2/1/1/1000#0","bytes":11000,"completedAt":40,"dispatchedAt":5,"enqueuedAt":0,"priority":1,"source":"micro"}
+{"ch":"requests","tMs":0,"key":"2/1/1/2000#0","bytes":12000,"completedAt":40,"dispatchedAt":5,"enqueuedAt":0,"priority":1,"source":"micro"}
+{"ch":"requests","tMs":1000,"key":"2/1/1/3000#0","bytes":13000,"completedAt":1040,"dispatchedAt":1005,"enqueuedAt":1000,"priority":1,"source":"micro"}
+{"ch":"requests","tMs":2000,"key":"2/1/1/4000#0","bytes":14000,"completedAt":2040,"dispatchedAt":2005,"enqueuedAt":2000,"priority":1,"source":"micro"}
+{"ch":"requests","tMs":3000,"key":"2/1/1/5000#0","bytes":15000,"completedAt":3040,"dispatchedAt":3005,"enqueuedAt":3000,"priority":1,"source":"micro"}
+{"ch":"requests","tMs":4000,"key":"2/1/1/6000#0","bytes":16000,"completedAt":4040,"dispatchedAt":4005,"enqueuedAt":4000,"priority":1,"source":"micro"}
+{"ch":"requests","tMs":5000,"key":"2/1/1/7000#0","bytes":17000,"completedAt":5040,"dispatchedAt":5005,"enqueuedAt":5000,"priority":1,"source":"micro"}
+{"ch":"decode","tMs":45,"key":"2/1/1/0#0","bytes":10000,"decodeMs":6,"queueWaitMs":0}
+{"ch":"decode","tMs":52,"key":"2/1/1/1000#0","bytes":11000,"decodeMs":7,"queueWaitMs":3}
+{"ch":"evict","tMs":4000,"key":"2/1/1/0#0","bytes":10000,"playheadMs":4000,"tier":"b"}

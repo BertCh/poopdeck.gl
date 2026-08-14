@@ -110,6 +110,110 @@ describe('SharedRequestScheduler.setSourceWeight', () => {
     expect(s.getStats().queued).toBe(0);
   });
 
+  it('re-weights the BYTE quantum, not the slot count (M6 / BH-1)', async () => {
+    // The weight a governor writes now buys BYTES: a source's per-round quantum
+    // is `weight × byteQuantum`. This is what makes BH-3's β-aware shedding
+    // mean anything — a laggard behind because its tiles are 10× heavier gets
+    // 10× the bytes, not 10× the slots it cannot fill.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const work: Held[] = [];
+    const enqueue = (sourceId: string, costBytes: number): void => {
+      const h = held(`${sourceId}${work.length}`);
+      work.push(h);
+      void s
+        .schedule({
+          sourceId,
+          costBytes,
+          getPriority: () => 0,
+          execute: h.execute,
+        })
+        .catch(() => {});
+    };
+    for (let i = 0; i < 200; i++) enqueue('a', 100);
+    for (let i = 0; i < 200; i++) enqueue('b', 100);
+
+    await drain(work, 40);
+    const even = s.getStats().dispatchedBytesBySource;
+    expect(even.a / even.b).toBeGreaterThan(0.8);
+    expect(even.a / even.b).toBeLessThan(1.25);
+
+    // Triple 'a''s weight mid-flight: its quantum becomes 3000 B/round while
+    // 'b' stays at 1000, so 'a' should draw ~3× the bytes from here on.
+    const before = { ...even };
+    s.setSourceWeight('a', 3);
+    await drain(work, 80);
+    const after = s.getStats().dispatchedBytesBySource;
+    const deltaA = after.a - before.a;
+    const deltaB = after.b - before.b;
+    expect(deltaA / deltaB).toBeGreaterThan(2);
+    expect(deltaA / deltaB).toBeLessThan(4);
+    s.clear();
+  });
+
+  it('shedding a leader to 0.25 under byteQuantum:null reproduces slot DRR (M6 / BH-1 rollback)', async () => {
+    // §11.3's fairness controller sheds a leader to `0.25 × base` — so the
+    // scheduler's SUB-1 WEIGHT path is exactly what the multi-source rollback
+    // has to reproduce, and `setSourceWeight` is how it gets there. Under the
+    // pre-BH-1 slot scheme a weight-0.25 source can never clear the flat
+    // `deficit ≥ 1` admission gate (its deficit is clamped to 0.25 at each
+    // crediting), so a shed leader yields COMPLETELY to the laggard until the
+    // laggard drains. Reading the gate as `min(cost, weight × quantum)` here
+    // would relax it to 0.25 and let the shed leader keep taking turns.
+    //
+    // The expectation is the pre-BH-1 implementation's recorded dispatch order.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: null });
+    const work: Held[] = [];
+    const enqueue = (sourceId: string, priority: number, label: string) => {
+      const h = held(label);
+      work.push(h);
+      void s
+        .schedule({
+          sourceId,
+          weight: 1,
+          // Declared costs are ignored under the rollback; supply skewed ones
+          // so the pin fails if they ever leak into the decision.
+          costBytes: sourceId === 'leader' ? 64 : 900_000,
+          getPriority: () => priority,
+          execute: h.execute,
+        })
+        .catch(() => {});
+    };
+    for (let i = 0; i < 8; i++) {
+      enqueue('leader', 0, `L${i}`);
+      enqueue('lag', 1, `G${i}`);
+    }
+
+    // Equal weights: the more-urgent 'leader' and 'lag' alternate.
+    const before = await drain(work, 4);
+    expect(before).toEqual(['L0', 'G0', 'L1', 'G1']);
+
+    // Shed the leader to §11.3's floor while both still hold queued work.
+    s.setSourceWeight('leader', 0.25);
+
+    const after = await drain(work, 12);
+    expect(after).toEqual([
+      'L2', // already admitted under the old weight — never clawed back
+      'G2',
+      'G3',
+      'G4',
+      'G5',
+      'G6',
+      'G7',
+      'L3',
+      'L4',
+      'L5',
+      'L6',
+      'L7',
+    ]);
+    expect(s.getStats().queued).toBe(0);
+
+    // Rollback currency is slots: 1 per dispatch, skewed costBytes ignored.
+    expect(s.getStats().dispatchedBytesBySource).toEqual({
+      leader: 8,
+      lag: 8,
+    });
+  });
+
   it('normalizes invalid weights to 1 and ignores unknown sources', async () => {
     const s = new SharedRequestScheduler({ maxRequests: 1 });
     const work = seed(s, 3);

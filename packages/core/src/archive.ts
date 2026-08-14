@@ -11,7 +11,7 @@
  * ```text
  * data/<dataset>/
  *   manifest.json            metadata + directory pointer + pack table (mutable)
- *   index/<blake3>.sttd       v5 directory blob          (immutable)
+ *   index/<blake3>.sttd       v6 directory blob          (immutable)
  *   packs/<blake3>.sttp       per-blob zstd tile data    (immutable)
  *   packs/<blake3>.sttp
  * ```
@@ -45,6 +45,7 @@ import {
   type TemporalLodLevel,
   type TimeRange,
   type TileRequestOptions,
+  type SelectionCost,
   type SummaryTier,
   type SummaryColumn,
   type HeatmapDomain,
@@ -67,7 +68,11 @@ import { decompress, unzstdSync } from './compression.js';
 import { blake3Hex128 } from './blake3.js';
 import type { TemplateRegistry } from './tile.js';
 import { createSttTileSource, type SttTileSource } from './tile-source.js';
-import { ThroughputEstimator, type ThroughputEstimate } from './throughput.js';
+import {
+  LatencyEstimator,
+  ThroughputEstimator,
+  type ThroughputEstimate,
+} from './throughput.js';
 import { forEachBufferView } from './tile-transferables.js';
 import {
   getSharedScheduler,
@@ -79,6 +84,7 @@ import {
 } from './request-scheduler.js';
 import { MAX_SEAM_SPAN_DEG } from './geo/viewport-bounds.js';
 import { MAX_MERCATOR_LAT } from './geo/mercator.js';
+import { isProbeEnabled } from './telemetry.js';
 
 /** `format` discriminator written into every packed manifest. */
 const PACKED_FORMAT = 'stt-packed';
@@ -92,7 +98,29 @@ const PACKED_FORMAT = 'stt-packed';
  * anything else at open, mirroring the Rust reader. The transitional 0.3.x
  * format (formatVersion 1) was removed after the published fleet was migrated.
  */
-const PACKED_FORMAT_VERSION = 2;
+const PACKED_FORMAT_VERSION = 3;
+/**
+ * Oldest manifest `formatVersion` this reader OPENS.
+ *
+ * v2 differs from v3 in the container only — no `variants` registry (the variant
+ * axis did not exist, so every payload is raw) and directory codec v5 (no
+ * per-entry `variantId`). Tile payloads share the same layer-frame version, so
+ * nothing below the container forks.
+ *
+ * Read-only: every writer emits `PACKED_FORMAT_VERSION`. This exists because a
+ * published archive is a durable artifact and several have no reproducible
+ * source, so a read-side cutover would strand them rather than migrate them.
+ */
+const MIN_PACKED_FORMAT_VERSION = 2;
+/**
+ * Oldest directory codec this reader decodes: v5, the codec every packed v2
+ * archive carries. NOT 4 — v4 is the retired SINGLE-FILE directory that the
+ * packed client never read, and widening to it here would claim support this
+ * reader has never had.
+ */
+const MIN_DIRECTORY_VERSION = 5;
+/** Oldest `.sttd` / `.sttp` object prelude version this reader accepts. */
+const MIN_OBJECT_MAGIC_VERSION = 2;
 /**
  * Byte length of the v2 object magic prelude (`"STTD"`/`"STTP"` + u8
  * version(2) + 3 zero bytes). v2 directory reads skip it (blob offsets in
@@ -118,7 +146,64 @@ export const KNOWN_MANIFEST_CAPABILITIES: readonly string[] = [
   'elevation-fold',
   'time-delta',
   'vertex-value-quant',
+  // TB-12. Supported unconditionally, and it is the decoder — not any one
+  // backend — that supports it: `decodeTile` completes a partially-baked
+  // triangle buffer by earcutting each provably single-ring feature whose baked
+  // list is empty. Every consumer therefore sees a full buffer and needs no
+  // change, which is what makes this one safe to declare here (unlike
+  // `additive-partition` below, whose support is conditional on a render mode).
+  'triangles-partial',
+  // TB-11 extension 2. `TILE_META.vtf` anchors per-vertex time deltas to each
+  // feature's own start_time; `extractVertexTimes` branches on it. Supported
+  // unconditionally, like `triangles-partial` and unlike `additive-partition`:
+  // the decoder resolves it and every downstream consumer sees absolute times.
+  'vertex-time-feature-anchor',
+  // ⚠️ DT-2's `additive-partition` is deliberately NOT here yet, and the reason
+  // is the whole point of the capability. This reader CAN union across zooms
+  // (`lodMode: 'additive'`), but that mode is an explicit option whose default
+  // is `'parent-fallback'`. Declaring support before the tileset DEFAULTS
+  // `lodMode` from `metadata.partition` would mean opening a home-zoom archive
+  // and then rendering a sparse per-zoom slice as if it were complete — exactly
+  // the silent misdecode this registry exists to prevent, reintroduced one
+  // layer up. Add it in the same change that lands the defaulting, not before.
 ];
+
+/**
+ * The variant registry to validate a manifest's tiles against.
+ *
+ * A pre-v3 manifest carries no `variants` key, because the variant axis did not
+ * exist when it was written — so every payload in such an archive is raw, and
+ * its directory decodes every entry to variant 0. The absent registry is not
+ * missing information; it is the IMPLICIT raw-only registry. Returned here
+ * rather than written back onto the parsed manifest, so parsing stays a faithful
+ * record of the bytes on disk (mirrors Rust `pack::effective_variants`).
+ *
+ * A v3 manifest is returned unchanged: `variants` is required there, and an
+ * empty one stays the hard error it should be.
+ */
+function effectiveVariants(manifest: {
+  formatVersion?: number;
+  variants?: ManifestVariant[];
+  metadata?: { summary_tier?: { variant_id?: number } };
+}): ManifestVariant[] {
+  const declared = manifest.variants;
+  if (
+    (manifest.formatVersion ?? PACKED_FORMAT_VERSION) >=
+      PACKED_FORMAT_VERSION ||
+    (Array.isArray(declared) && declared.length > 0)
+  ) {
+    return declared ?? [];
+  }
+  const implied: ManifestVariant[] = [{ id: 0, kind: 'raw' }];
+  // A legacy summary tier named its variant in `metadata.summary_tier` — the
+  // only place it could — so honour that, or every summary tile in the archive
+  // reads as an undeclared variant.
+  const summaryId = manifest.metadata?.summary_tier?.variant_id;
+  if (typeof summaryId === 'number' && summaryId !== 0) {
+    implied.push({ id: summaryId, kind: 'summary' });
+  }
+  return implied;
+}
 
 /** `directory.layout` value for the paged container. */
 const DIRECTORY_LAYOUT_PAGED = 'paged';
@@ -145,8 +230,499 @@ const MOBILE_MAX_CACHE_TILES = 100;
  * fewer ones. The downside (larger single requests) is bounded separately by
  * the per-fetch size cap; the gap only controls how aggressively neighbours
  * fuse. Overridable per-archive via `ArchiveOptions.coalesceGapBytes`.
+ *
+ * ── The build/reader divergence (CO-7) ─────────────────────────────────────
+ * This constant is MIRRORED build-side by `stt_core::ordering_sim::
+ * DEFAULT_COALESCE_GAP_BYTES`, which is what the writer's `measured` ordering
+ * simulation prices layouts at. Since CO-7 the *session* gap is fitted
+ * ({@link adaptiveCoalesceGapBytes}) while the simulator deliberately stays on
+ * this build-assumed constant: build-time layout decisions must stay correct
+ * and reproducible, and a layout chosen under a moving reader constant would
+ * be neither. The divergence is intentional and is closed — not by making the
+ * simulator adaptive, but by co-versioning the assumption in the manifest
+ * (`metadata.ordering_workload.coalesce_gap_bytes`, SH-3 / M7) so
+ * `stt-optimize order-audit` can see reader-vs-layout drift. That declared gap
+ * is ALSO what licenses the reader to adapt at all; see
+ * {@link manifestBuildAssumedGapBytes} and {@link adaptiveCoalesceGapBand}.
+ *
+ * This value is also the permanent FALLBACK: a pinned
+ * `ArchiveOptions.coalesceGapBytes`, a cold estimator, or an archive that
+ * declares no build-assumed gap all resolve here, so absent measurement the
+ * reader behaves exactly as it did before CO-7.
  */
-const DEFAULT_RANGE_COALESCE_GAP = 2 * 1024 * 1024;
+export const DEFAULT_RANGE_COALESCE_GAP = 2 * 1024 * 1024;
+/**
+ * Absolute floor of the adaptive coalesce band (CO-7). Below ~256 KiB a saved
+ * request stops paying for itself on any realistic link, and the estimator's
+ * own noise dominates; it is also the width that keeps a leaf-page run fused on
+ * the cold-start path. A zero/near-zero `L̂` (a same-process or cache-warm
+ * transport) therefore lands on a floor rather than collapsing the fuse rule to
+ * "never coalesce".
+ *
+ * The archive's declared build-assumed gap can raise this floor but never lower
+ * it — the effective band is the INTERSECTION of the two (see
+ * {@link adaptiveCoalesceGapBand}).
+ */
+export const MIN_ADAPTIVE_COALESCE_GAP = 256 * 1024;
+/**
+ * Ceiling of the adaptive coalesce band (CO-7). The estimator feeds back on
+ * itself — a larger gap means fewer, longer transfers, which changes the
+ * samples that set the gap — so the band, not the formula, is what bounds the
+ * loop. 4 MiB is 2× the historic default: enough to express a genuinely
+ * high-latency origin, not enough for one mis-estimate to turn a viewport into
+ * a multi-megabyte over-fetch.
+ */
+export const MAX_ADAPTIVE_COALESCE_GAP = 4 * 1024 * 1024;
+/**
+ * Half-width (as a multiplicative factor) of the band the session gap may move
+ * inside, around the gap the WRITER's layout cost model assumed — the CO-7
+ * co-versioning guard / hazard D6.
+ *
+ * A layout the writer chose by simulation was priced at one specific gap
+ * (`stt_core::ordering_sim::DEFAULT_COALESCE_GAP_BYTES`), and the archive is
+ * content-addressed, so it cannot be re-fitted in place. Reading it under an
+ * arbitrarily different gap silently invalidates the fit. Reading it under a
+ * gap within ×2 of the declared one does not: the fuse decisions that flip
+ * inside that band are the marginal ones the simulation itself priced as
+ * near-ties. So the reader adapts *inside the declared band* and reports the
+ * drift ({@link CoalesceGapEstimate.driftsFromBuildAssumption}) for
+ * `stt-optimize order-audit` to adjudicate.
+ *
+ * NOT gated on `blobOrdering`. The manifest's ordering string names the WINNER
+ * of the selection (`"spatial"`, `"time-major"`, `"hilbert3"`, `"morton3"` —
+ * `stt_core::curve::BlobOrdering::as_str`), never the selection MODE, so
+ * `measured` never appears in it and a string allow-list cannot tell a fitted
+ * layout from a declared one. The build-assumed gap can, because the writer
+ * emits it exactly when (and only when) the ordering was resolved by
+ * simulation.
+ */
+export const ADAPTIVE_GAP_BAND_FACTOR = 2;
+
+/**
+ * The gap the writer's layout cost model assumed, in bytes, or `null` when the
+ * archive does not declare one (CO-7 / SH-3).
+ *
+ * The field is `metadata.ordering_workload.coalesce_gap_bytes` — snake_case,
+ * inside the verbatim stt-core metadata block, written by `PackWriter::
+ * finalize` and typed by `stt_core::metadata::OrderingWorkload`. It is present
+ * on exactly the archives whose blob ordering was resolved by SIMULATION (the
+ * `measured` selection mode) and absent everywhere else, which is precisely
+ * the distinction the co-versioning guard needs.
+ *
+ * Absent ⇒ `null` ⇒ the layout's provenance is unknown, and unknown is never
+ * guessed at. Every legacy and every explicitly-ordered archive lands here.
+ */
+export function manifestBuildAssumedGapBytes(
+  manifest: PackedManifest | undefined,
+): number | null {
+  const declared = (manifest?.metadata as ManifestMetadataShape | undefined)
+    ?.ordering_workload?.coalesce_gap_bytes;
+  return typeof declared === 'number' &&
+    Number.isFinite(declared) &&
+    declared >= 0
+    ? declared
+    : null;
+}
+
+/**
+ * The fitted coalesce gap: `L̂ × θ̂`, clamped into the band the archive's own
+ * build-assumed gap declares (CO-7).
+ *
+ * `L̂ × θ̂` — one round trip's latency times the link's byte rate — is the
+ * BYTE VALUE OF ONE REQUEST: the number of bytes the link would have moved in
+ * the time the extra round trip costs. Over-fetching fewer bytes than that to
+ * avoid a request is a win; over-fetching more is a loss. That is exactly the
+ * quantity the fuse rule already compares gaps against, so the RULE is
+ * untouched (register: extend, never replace) — only its constant becomes
+ * fitted.
+ *
+ * Two honesty contracts, both resolving to {@link DEFAULT_RANGE_COALESCE_GAP}:
+ *
+ *  - Either estimator COLD (`null`), or a non-finite / negative reading. A
+ *    cold estimator is never read as "zero latency" or "infinite bandwidth";
+ *    it means *unmeasured*, and unmeasured falls back to the incumbent.
+ *  - No `buildAssumedGapBytes`. Without it the reader cannot know what the
+ *    layout was priced at, so it does not move off the constant the layout was
+ *    (at worst) priced at — see {@link manifestBuildAssumedGapBytes}. This is
+ *    the co-versioning guard, and it lives in this pure function so no caller
+ *    can forget it.
+ *
+ * The band is `[G/2, G×2]` ({@link ADAPTIVE_GAP_BAND_FACTOR}) intersected with
+ * the reader's own safety band `[256 KiB, 4 MiB]`. A declared gap so far
+ * outside that safety band that the intersection is EMPTY (e.g. a 64 MiB build
+ * assumption) also falls back to the incumbent constant: the reader will not
+ * adapt toward an assumption it is unwilling to honor.
+ *
+ * Pure: no clock, no state, no I/O. Fixed inputs are a fixed gap, which is what
+ * makes the request plan reproducible under injected estimator state.
+ */
+export function adaptiveCoalesceGapBytes(
+  latencyMs: number | null | undefined,
+  bytesPerMs: number | null | undefined,
+  buildAssumedGapBytes: number | null | undefined,
+): number {
+  // The co-versioning guard: no usable declared band ⇒ no adaptation at all.
+  const band = adaptiveCoalesceGapBand(buildAssumedGapBytes);
+  if (band === null) {
+    return DEFAULT_RANGE_COALESCE_GAP;
+  }
+  if (
+    typeof latencyMs !== 'number' ||
+    typeof bytesPerMs !== 'number' ||
+    !Number.isFinite(latencyMs) ||
+    !Number.isFinite(bytesPerMs) ||
+    latencyMs < 0 ||
+    bytesPerMs < 0
+  ) {
+    return DEFAULT_RANGE_COALESCE_GAP;
+  }
+  const requestValueBytes = latencyMs * bytesPerMs;
+  return Math.min(
+    band.ceilingBytes,
+    Math.max(band.floorBytes, requestValueBytes),
+  );
+}
+
+/**
+ * The band the session gap may move inside, given the archive's declared
+ * build-assumed gap: `[G/2, G×2]` ({@link ADAPTIVE_GAP_BAND_FACTOR})
+ * intersected with the reader's own safety band
+ * `[{@link MIN_ADAPTIVE_COALESCE_GAP}, {@link MAX_ADAPTIVE_COALESCE_GAP}]`.
+ *
+ * `null` — meaning "do not adapt" — in exactly two cases:
+ *  - no declared build gap (`null`, absent, non-finite, ≤ 0): the layout's
+ *    provenance is unknown, which is the whole published fleet today;
+ *  - the intersection is EMPTY (e.g. a 64 MiB build assumption): the reader
+ *    will not adapt toward an assumption it is unwilling to honor.
+ */
+export function adaptiveCoalesceGapBand(
+  buildAssumedGapBytes: number | null | undefined,
+): { floorBytes: number; ceilingBytes: number } | null {
+  if (
+    typeof buildAssumedGapBytes !== 'number' ||
+    !Number.isFinite(buildAssumedGapBytes) ||
+    buildAssumedGapBytes <= 0
+  ) {
+    return null;
+  }
+  const floorBytes = Math.max(
+    MIN_ADAPTIVE_COALESCE_GAP,
+    buildAssumedGapBytes / ADAPTIVE_GAP_BAND_FACTOR,
+  );
+  const ceilingBytes = Math.min(
+    MAX_ADAPTIVE_COALESCE_GAP,
+    buildAssumedGapBytes * ADAPTIVE_GAP_BAND_FACTOR,
+  );
+  return floorBytes > ceilingBytes ? null : { floorBytes, ceilingBytes };
+}
+
+/** Why {@link STTArchive.effectiveCoalesceGap} returned the value it did. */
+export type CoalesceGapSource =
+  /** Fitted from `L̂ × θ̂` — adaptation is live. */
+  | 'adaptive'
+  /** `ArchiveOptions.coalesceGapBytes` was supplied; adaptation is disabled. */
+  | 'pinned'
+  /** One or both estimators have no samples yet. */
+  | 'cold'
+  /**
+   * The manifest declares no build-assumed gap
+   * ({@link manifestBuildAssumedGapBytes}), so the layout's provenance is
+   * unknown and the incumbent constant stands. Every legacy and every
+   * explicitly-ordered archive reports this.
+   */
+  | 'no-build-gap';
+
+/**
+ * The active coalesce gap plus the evidence behind it. The honesty flags ride
+ * in the return type so a caller cannot mistake the incumbent 2 MiB constant
+ * for a measured value — `source` says which one it is, and `latencyMs` /
+ * `bytesPerMs` are `null` exactly when the corresponding estimator is cold.
+ */
+export interface CoalesceGapEstimate {
+  /** Gap in bytes that both fuse sites will use right now. */
+  gapBytes: number;
+  /** Where {@link gapBytes} came from. */
+  source: CoalesceGapSource;
+  /** `L̂` in ms, or `null` when the latency estimator is cold. */
+  latencyMs: number | null;
+  /** `θ̂` in bytes/ms, or `null` when the throughput estimator is cold. */
+  bytesPerMs: number | null;
+  /** `manifest.blobOrdering`, or `null` when absent / manifest not yet open. */
+  blobOrdering: string | null;
+  /**
+   * The gap the writer's layout cost model assumed
+   * (`metadata.ordering_workload.coalesce_gap_bytes`), else `null`. This is the
+   * co-versioning gate: `null` means no adaptation, whatever the estimators
+   * say.
+   */
+  buildAssumedGapBytes: number | null;
+  /**
+   * True when the archive declares a build-assumed gap and the active session
+   * gap differs from it: the layout was priced at one exchange rate and is
+   * being read under another. Bounded by {@link ADAPTIVE_GAP_BAND_FACTOR} —
+   * reported here, adjudicated by `stt-optimize order-audit`.
+   */
+  driftsFromBuildAssumption: boolean;
+}
+
+// ── CO-5: the temporal-tier pick as a 1-D argmin ────────────────────────────
+//
+// Losslessness (§7.5 constraint (i)) makes EVERY addressable temporal tier a
+// correct answer: a coarse-bucket tile holds the same features as the base
+// tiles it aggregates, just addressed by a wider bucket. So the choice between
+// tiers is not a correctness question at all — it is pure cost, and the reader
+// already knows both terms of it exactly (CO-1 prices the bytes; CO-7 prices
+// the request). What lived here before was a ZOOM THRESHOLD, which knows
+// neither: a window far narrower than the coarse bucket over-fetches (one
+// 24 h tile to show 10 minutes), and a wide window at a zoom just above a
+// cutoff under-aggregates (720 hourly tiles where one daily tile would do).
+//
+// This prices EXISTING tiers only. It is emphatically NOT the feature-reducing
+// tier of §11.6 / G5 — nothing here drops, samples or aggregates anything, and
+// the temporal scrub axis stays counted out of that trigger (M8/DT-3 owns it).
+
+/**
+ * One priced candidate tier in {@link temporalTierArgmin}.
+ */
+export interface TemporalTierCost {
+  /** The tier's bucket width in ms (the archive base bucket, or a LOD level). */
+  bucketMs: number;
+  /** CO-1's answer for this tier's selection, honesty flag and all. */
+  selection: SelectionCost;
+  /**
+   * The objective: `bytes + tiles × requestOverheadBytes`. Meaningful only
+   * when `selection.unknownTiles === 0` — a lower-bound byte sum makes a
+   * lower-bound cost, which is exactly the thing that must not be compared.
+   */
+  cost: number;
+  /**
+   * Whether this tier is allowed to WIN the argmin.
+   *
+   * A declared tier that holds NOTHING for this (bbox, zoom, window) prices at
+   * `bytes = 0, tiles = 0` — so on the raw objective it costs 0, and sorted
+   * coarsest-first it beats the tier that actually holds the data on a strict
+   * `<`. What it buys is a BLANK FRAME. Zero coverage is not a cheap tier, it
+   * is an unusable one, so `tiles === 0` (or a nonsense tile count) is
+   * INELIGIBLE rather than free. Ineligible candidates are still priced and
+   * still reported — they are audit trail, never answers.
+   */
+  eligible: boolean;
+}
+
+/** Why {@link temporalTierArgmin} declined to answer (`'none'` ⇒ it did). */
+export type TemporalTierAbstention =
+  /** A comparison was made; `pick` is its argmin. */
+  | 'none'
+  /** Some candidate priced with `unknownTiles > 0` — lower bounds, not costs. */
+  | 'unpriced-tiles'
+  /** `L̂` or `θ̂` is cold: the request term has no measured value. */
+  | 'unmeasured-request-price'
+  /** Nothing addressable, or no addressable tier had any coverage here. */
+  | 'no-eligible-tier';
+
+/** The outcome of {@link temporalTierArgmin}. */
+export interface TemporalTierArgmin {
+  /**
+   * The cheapest ELIGIBLE tier, or `null` when the comparison could not be
+   * made honestly — see {@link reason}. `null` is the caller's signal to fall
+   * back to the zoom-threshold pick; it is never a signal to guess.
+   */
+  pick: TemporalTierCost | null;
+  /** Every candidate, COARSEST FIRST — the audit trail behind `pick`. */
+  candidates: TemporalTierCost[];
+  /**
+   * The bytes-equivalent request price the objective was evaluated at; `0`
+   * when the price was unmeasured (in which case `pick` is `null` and the
+   * reported costs are bytes-only, for the audit trail alone).
+   */
+  requestOverheadBytes: number;
+  /** `false` when any candidate's BYTES were a lower bound. */
+  exact: boolean;
+  /** `'none'` iff {@link pick} is non-null; otherwise why it is not. */
+  reason: TemporalTierAbstention;
+}
+
+/**
+ * The ADDRESSABLE tier set at `zoom`: `{base} ∪ {levels with zoom ≤
+ * maxZoomLevel}`, deduplicated and returned COARSEST FIRST.
+ *
+ * The membership rule is deliberately identical to
+ * `STTArchive.pickTemporalLodForZoom`'s applicability test, so the incumbent's
+ * answer is always a member of this set — which is what makes
+ * "argmin cost ≤ zoom-threshold cost" true by construction rather than by
+ * measurement.
+ *
+ * A returned length of 1 means only the base tier is addressable: there is
+ * nothing to choose, and the caller must take the incumbent path unchanged.
+ */
+export function addressableTemporalTiers(
+  levels: readonly TemporalLodLevel[] | null | undefined,
+  baseBucketMs: number,
+  zoom: number,
+): number[] {
+  const tiers = new Set<number>();
+  if (Number.isFinite(baseBucketMs) && baseBucketMs > 0) {
+    tiers.add(baseBucketMs);
+  }
+  for (const level of levels ?? []) {
+    if (!Number.isFinite(level.bucketMs) || level.bucketMs <= 0) continue;
+    if (zoom <= level.maxZoomLevel) tiers.add(level.bucketMs);
+  }
+  // Descending bucket width: coarsest first, which is also the tie-break
+  // order (see temporalTierArgmin).
+  return [...tiers].sort((a, b) => b - a);
+}
+
+/**
+ * The bytes-equivalent price of ONE REQUEST: `L̂ × θ̂`, the bytes this link
+ * would move during the round trip an extra request costs. `null` means
+ * UNMEASURED — either estimator cold, or a nonsense reading.
+ *
+ * `null` is not a small price, not a large one, and emphatically not 2 MiB.
+ * {@link DEFAULT_RANGE_COALESCE_GAP} is a safe FUSE THRESHOLD and an unsafe
+ * PRICE: at 2 MiB the `tiles × price` term dwarfs the byte term on essentially
+ * every real selection (a 500 KB byte term against a 10.5 MB request term in
+ * the CO-5 probe), so an argmin fed the constant ranks candidates by REQUEST
+ * COUNT and not by cost. Ranking by request count alone is exactly the family
+ * of mistake the do-not-touch register records (the 669 MiB incident), which
+ * is why the honest answer to a cold estimator is to abstain, not to
+ * substitute.
+ *
+ * Deliberately NOT clamped into CO-7's `[MIN_ADAPTIVE_COALESCE_GAP,
+ * MAX_ADAPTIVE_COALESCE_GAP]` band: that band bounds how much OVER-FETCH one
+ * estimate may authorize on the fuse path. Here the product is an exchange
+ * rate between two measured quantities, and clamping it would distort a
+ * comparison rather than bound a risk.
+ */
+export function requestPriceBytes(
+  latencyMs: number | null | undefined,
+  bytesPerMs: number | null | undefined,
+): number | null {
+  if (
+    typeof latencyMs !== 'number' ||
+    typeof bytesPerMs !== 'number' ||
+    !Number.isFinite(latencyMs) ||
+    !Number.isFinite(bytesPerMs) ||
+    latencyMs < 0 ||
+    bytesPerMs < 0
+  ) {
+    return null;
+  }
+  return latencyMs * bytesPerMs;
+}
+
+/**
+ * Argmin of `cost(b) = bytes(b) + tiles(b) × requestOverheadBytes` over the
+ * priced candidates.
+ *
+ * `requestOverheadBytes` is the BYTES-EQUIVALENT PRICE OF ONE REQUEST, `L̂ × θ̂`
+ * as {@link requestPriceBytes} computes it from the latency and throughput
+ * estimators. It converts a tile COUNT into bytes so the two terms of the
+ * objective are commensurable — which is the whole reason a coarse tier can
+ * win despite fetching bytes it does not strictly need. Pass `null` when it is
+ * unmeasured.
+ *
+ * Determinism: candidates are sorted by bucket width descending (a total order
+ * on a numeric key) and a challenger replaces the incumbent only on a STRICT
+ * improvement, so ties resolve to the COARSER tier, always, regardless of the
+ * order the caller priced them in.
+ *
+ * Honesty — three ways this refuses to answer, all reported in `reason` and
+ * all routing the caller back to the incumbent zoom threshold:
+ *  - `unpriced-tiles`: some candidate reports `unknownTiles > 0`. A selection
+ *    the reader cannot see is COUNTED, never estimated, so the cheapest of a
+ *    set of lower bounds is not a cheapest tier — it is a guess.
+ *  - `unmeasured-request-price`: `requestOverheadBytes` is `null` (or
+ *    nonsense). Half a priced objective is not an objective; substituting a
+ *    constant for the missing half decides the argmin by that constant.
+ *  - `no-eligible-tier`: nothing addressable, or every addressable tier has
+ *    ZERO coverage here. A zero-coverage tier costs 0 and would otherwise win
+ *    outright, delivering a blank frame (see {@link TemporalTierCost.eligible}).
+ */
+export function temporalTierArgmin(
+  priced: ReadonlyArray<{ bucketMs: number; selection: SelectionCost }>,
+  requestOverheadBytes: number | null,
+): TemporalTierArgmin {
+  // A measured price of exactly 0 is a real reading ("this link says a round
+  // trip is worth nothing") and stays a price. `null`/NaN/negative is the
+  // ABSENCE of a reading and is handled below by abstaining outright.
+  const measured =
+    typeof requestOverheadBytes === 'number' &&
+    Number.isFinite(requestOverheadBytes) &&
+    requestOverheadBytes >= 0;
+  const overhead = measured ? requestOverheadBytes : 0;
+  const candidates: TemporalTierCost[] = [...priced]
+    .sort((a, b) => b.bucketMs - a.bucketMs)
+    .map((c) => ({
+      bucketMs: c.bucketMs,
+      selection: c.selection,
+      cost: c.selection.bytes + c.selection.tiles * overhead,
+      eligible: Number.isFinite(c.selection.tiles) && c.selection.tiles > 0,
+    }));
+  const exact = candidates.every((c) => c.selection.unknownTiles === 0);
+  const abstain = (reason: TemporalTierAbstention): TemporalTierArgmin => ({
+    pick: null,
+    candidates,
+    requestOverheadBytes: overhead,
+    exact,
+    reason,
+  });
+  if (!exact) return abstain('unpriced-tiles');
+  if (!measured) return abstain('unmeasured-request-price');
+  // Coarsest-first + strict `<` ⇒ ties resolve to the coarser tier.
+  let pick: TemporalTierCost | null = null;
+  for (const candidate of candidates) {
+    if (!candidate.eligible) continue;
+    if (pick === null || candidate.cost < pick.cost) pick = candidate;
+  }
+  if (pick === null) return abstain('no-eligible-tier');
+  return {
+    pick,
+    candidates,
+    requestOverheadBytes: overhead,
+    exact,
+    reason: 'none',
+  };
+}
+
+/**
+ * What {@link STTArchive.pickTemporalLodByCost} answers: which temporal tier
+ * to address, what it costs, and — critically — HOW the answer was reached.
+ */
+export interface TemporalTierPick {
+  /**
+   * The tier to request. Equal to the archive's base `temporalBucketMs` when
+   * the base tier won, in which case the caller should use
+   * {@link STTArchive.getTileIdsInBounds} rather than the LOD query.
+   */
+  bucketMs: number;
+  /** Σ compressed bytes for {@link bucketMs}'s selection; `0` if unpriced. */
+  bytes: number;
+  /** Tiles in {@link bucketMs}'s selection; `0` if unpriced. */
+  tiles: number;
+  /** `bytes + tiles × requestOverheadBytes`; `Infinity` if unpriced. */
+  cost: number;
+  /**
+   * The measured `L̂·θ̂` exchange rate the objective used, or `0` when it was
+   * unmeasured — in which case {@link policy} is `'zoom-threshold'`. It is
+   * NEVER the 2 MiB coalesce-gap constant standing in for a measurement.
+   */
+  requestOverheadBytes: number;
+  /**
+   * `'cost-argmin'` when the tiers were compared; `'zoom-threshold'` when the
+   * comparison could not be made honestly and the incumbent rule answered.
+   */
+  policy: 'cost-argmin' | 'zoom-threshold';
+  /**
+   * `true` iff a complete cost comparison produced this answer. `false` means
+   * {@link bytes} / {@link tiles} / {@link cost} are NOT authoritative and
+   * {@link policy} is `'zoom-threshold'`; {@link abstainReason} says why.
+   */
+  exact: boolean;
+  /** `'none'` when {@link policy} is `'cost-argmin'`; otherwise why it is not. */
+  abstainReason?: TemporalTierAbstention;
+}
+
 /** Default ceiling on concurrent range requests per coalesced batch. */
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 24;
 /**
@@ -188,23 +764,24 @@ const SPATIAL_TIEBREAK_WEIGHT = 0.4;
  */
 const DEFAULT_TRANSFER_TIMEOUT_MS = 20_000;
 /**
- * Hard ceiling on how many `(x, y)` cells ONE bounds scan may enumerate.
+ * Threshold at which a bounds query stops enumerating theoretical `(x, y)`
+ * cells and switches to the per-zoom occupied-cell index.
  *
  * The scan runs on the selection path, and the tileset's selection key folds in
  * the time range — so during playback it re-runs at display refresh, not at
  * 10 Hz. It is bounded by the viewport in principle, but two things break that:
  * the camera zoom is CLAMPED up into the archive's `[minZoom, maxZoom]`, so a
- * whole-world camera over a `min_zoom: 10` archive scans 2^10 × 2^10 cells; and
+ * whole-world camera over a `min_zoom: 10` archive covers 2^10 × 2^10 cells; and
  * a degenerate box (see {@link orderLonRange}) can claim nearly the whole world
- * at any zoom. Both enumerate ~5e5 two-element arrays per pass, all of which
- * miss `tileEntryIndex`.
+ * at any zoom. Materializing those grids used to allocate ~5e5 two-element
+ * arrays per pass, almost all of which missed `tileEntryIndex`.
  *
- * Crossing it WARNS ONLY — the scan still returns every cell. Truncating it
- * (an earlier revision centred a window and dropped the rest) turns a
- * frame-rate problem into a blank-region problem, and narrowing the query to
- * `metadata.bounds` instead is unsound for the reason recorded above
- * `lonToTileX`. The fix belongs upstream, at whatever asked for a scan this
- * large. It is set FAR above any legitimate
+ * Crossing it selects from the occupied-cell index and WARNS; it never
+ * truncates results. Narrowing the query to `metadata.bounds` is unsound for
+ * the reason recorded above `lonToTileX`. The warning still matters because a
+ * world-sized box at high zoom usually identifies an upstream camera/zoom
+ * defect even when the sparse query makes it cheap. The threshold is FAR above
+ * any legitimate
  * footprint on purpose — the corrected pitched-frustum footprint is ~750 cells
  * at z8/pitch 80 (docs/roadmap/tile-loading-3d-2026-07.md §4.4: tile counts
  * legitimately RISE under pitch and must not be tuned back down), so 8192 is an
@@ -215,6 +792,50 @@ const MAX_QUERY_SCAN_CELLS = 8192;
 /** Whether an error is a fetch cancellation (must propagate, never retry). */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * Compose independent cancellation owners without dropping either one.
+ * Used to combine a per-query signal with the archive lifetime. The caller
+ * must run `cleanup` when the operation settles so listeners do not accumulate
+ * on long-lived query/archive signals.
+ */
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): {
+  signal: AbortSignal | undefined;
+  cleanup: () => void;
+} {
+  const present = [
+    ...new Set(signals.filter((s): s is AbortSignal => s !== undefined)),
+  ];
+  if (present.length === 0) return { signal: undefined, cleanup: () => {} };
+  if (present.length === 1) return { signal: present[0], cleanup: () => {} };
+
+  const controller = new AbortController();
+  const listeners: Array<{ signal: AbortSignal; fn: () => void }> = [];
+  for (const signal of present) {
+    const fn = (): void => {
+      if (!controller.signal.aborted) {
+        controller.abort(
+          signal.reason ??
+            new DOMException('The operation was aborted.', 'AbortError'),
+        );
+      }
+    };
+    if (signal.aborted) {
+      fn();
+      break;
+    }
+    signal.addEventListener('abort', fn, { once: true });
+    listeners.push({ signal, fn });
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const { signal, fn } of listeners) {
+        signal.removeEventListener('abort', fn);
+      }
+    },
+  };
 }
 
 /**
@@ -362,10 +983,191 @@ function getDeviceAwareCacheSize(): number {
   return DEFAULT_MAX_CACHE_TILES;
 }
 
+function getDeviceAwareCacheByteSize(): number {
+  return getDeviceAwareCacheSize() <= MOBILE_MAX_CACHE_TILES
+    ? 256 * 1024 * 1024
+    : 512 * 1024 * 1024;
+}
+
+/**
+ * Compressed tile caches are per archive, but memory pressure is per process.
+ * This insertion-ordered map is a shared O(1) LRU across every live archive,
+ * preventing a ten-source composite from multiplying the nominal 512 MiB
+ * budget tenfold.
+ */
+interface SharedByteCacheEntry {
+  byteSize: number;
+  evict: () => void;
+  /**
+   * Playhead-aware eviction score (BH-8), supplied by the owning archive.
+   * HIGHER = evict sooner. Reads the owner's LIVE playhead/loop fields on
+   * every call — it must never capture archive state that a later eviction
+   * could invalidate. Absent (or a non-finite return) scores 0, which is
+   * exactly the pre-BH-8 pure-LRU behavior.
+   */
+  score?: () => number;
+}
+const sharedByteCacheLru = new Map<string, SharedByteCacheEntry>();
+let sharedByteCacheBytes = 0;
+let nextArchiveCacheId = 1;
+const SHARED_BYTE_CACHE_MAX_BYTES = getDeviceAwareCacheByteSize();
+
+function unregisterSharedCacheEntry(token: string): void {
+  const existing = sharedByteCacheLru.get(token);
+  if (!existing) return;
+  sharedByteCacheLru.delete(token);
+  sharedByteCacheBytes -= existing.byteSize;
+}
+
+function touchSharedCacheEntry(token: string): void {
+  const existing = sharedByteCacheLru.get(token);
+  if (!existing) return;
+  sharedByteCacheLru.delete(token);
+  sharedByteCacheLru.set(token, existing);
+}
+
+/**
+ * How many of the LRU-oldest entries an eviction pass may consider (BH-8).
+ *
+ * The victim is the highest-scoring entry among the K oldest, so eviction
+ * stays O(1)-amortized (a constant scan, no sort, no heap) and a
+ * recently-touched entry can NEVER be chosen — the playhead only ever
+ * REORDERS the tail of the LRU, it never overrides recency.
+ *
+ * `1` is exactly the pre-BH-8 evict-the-single-oldest LRU and is the
+ * documented rollback. `8` was chosen because it is wide enough to hold a
+ * loop's sacrificial slot (see {@link byteCacheEvictionScore}) and narrow
+ * enough that the scan is free next to the eviction itself.
+ */
+export const EVICT_SCAN_LIMIT = 8;
+
+/**
+ * Pick an eviction victim from an insertion-ordered LRU map: the entry
+ * MAXIMIZING `score` among the `scanLimit` oldest, ties going to the oldest.
+ * Shared by the per-archive byte cache and the process-shared byte LRU so the
+ * two can never drift apart (BH-8).
+ *
+ * Two degeneracies are load-bearing and pinned by tests:
+ *  - `scanLimit = 1` → the first (oldest) entry, i.e. today's exact LRU;
+ *  - every score equal (e.g. no playhead was ever threaded in, so every
+ *    entry scores 0) → the first entry wins on the ties-to-oldest rule, so
+ *    the eviction ORDER is byte-identical to today's.
+ */
+export function selectLruVictim<K, V>(
+  lru: Map<K, V>,
+  score: (key: K, value: V) => number,
+  scanLimit: number = EVICT_SCAN_LIMIT,
+): [K, V] | undefined {
+  let best: [K, V] | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let scanned = 0;
+  for (const pair of lru) {
+    if (scanned++ >= scanLimit) break;
+    const raw = score(pair[0], pair[1]);
+    const s = Number.isFinite(raw) ? raw : 0;
+    // STRICTLY greater: the first (oldest) entry of a tie keeps the slot.
+    if (s > bestScore) {
+      bestScore = s;
+      best = pair;
+    }
+  }
+  return best;
+}
+
+function registerSharedCacheEntry(
+  token: string,
+  entry: SharedByteCacheEntry,
+): void {
+  unregisterSharedCacheEntry(token);
+  sharedByteCacheLru.set(token, entry);
+  sharedByteCacheBytes += entry.byteSize;
+  while (
+    sharedByteCacheBytes > SHARED_BYTE_CACHE_MAX_BYTES &&
+    sharedByteCacheLru.size > 0
+  ) {
+    // Same K-oldest scan as the per-archive cache (BH-8): under shared-budget
+    // pressure a looping archive's imminent tiles outrank another archive's
+    // just-passed ones, instead of the oldest insertion always losing.
+    const victim = selectLruVictim(
+      sharedByteCacheLru,
+      (_token, e) => e.score?.() ?? 0,
+    );
+    if (!victim) break;
+    sharedByteCacheLru.delete(victim[0]);
+    sharedByteCacheBytes -= victim[1].byteSize;
+    victim[1].evict();
+  }
+}
+
 interface ByteCacheEntry {
   bytes: ArrayBuffer;
   lastAccess: number;
   byteSize: number;
+  /**
+   * The tile's directory `timeStart` (BH-8) — where this payload sits on the
+   * timeline, which is what makes a playhead-aware victim choice possible.
+   * `NaN` for a payload with no timeline position; such an entry always
+   * scores 0 and is therefore only ever evicted on the ties-to-oldest rule.
+   */
+  timeStart: number;
+}
+
+/**
+ * The playhead/loop state threaded into the archive by playback callers.
+ * `direction` is the committed travel direction (+1 forward, −1 reverse).
+ */
+interface PlayheadState {
+  time: number;
+  direction: 1 | -1;
+}
+
+/**
+ * Loop-aware directional distance from the play-head to a cached tile, in
+ * sim-ms (BH-8). HIGHER = wanted later = evict sooner.
+ *
+ * This is BH-7's tileset metric, evaluated over one entry instead of a tier:
+ *
+ *  - `ahead` is the signed distance along the committed travel direction,
+ *    carrying the same bucket-end correction for reverse playback, so with no
+ *    loop declared this is exactly the archive's own
+ *    `minDistanceToPlayhead` distance (data already passed is pushed behind a
+ *    large constant offset, so it is evicted before anything still upcoming);
+ *  - under a declared LOOP the distance is taken MODULO the loop span
+ *    (`aheadMod`), because "behind the play-head" stops meaning "done with" —
+ *    the head comes back round. A tile just past the loop start, seen from a
+ *    head near the loop end, is the most imminent thing in the cache and
+ *    scores near 0; a tile the head has just passed scores near the full span
+ *    and is spent first. That inverts LRU's cyclic-scan worst case, where the
+ *    oldest entry is precisely the one wanted soonest on the next lap;
+ *  - a tile whose whole bucket lies OUTSIDE the declared loop is never
+ *    replayed at all, so it scores above every in-loop tile (`span + bucket`,
+ *    matching BH-7's "head of tier B" placement).
+ *
+ * With NO playhead ever threaded in (`playhead === null`) every entry scores
+ * 0, which is what makes non-playback consumers byte-identical to the
+ * pre-BH-8 LRU.
+ */
+export function byteCacheEvictionScore(
+  timeStart: number,
+  bucketMs: number,
+  playhead: PlayheadState | null,
+  loop: { start: number; end: number } | null,
+): number {
+  if (!playhead || !Number.isFinite(timeStart)) return 0;
+  const dir = playhead.direction === -1 ? -1 : 1;
+  const bucket = Number.isFinite(bucketMs) && bucketMs > 0 ? bucketMs : 0;
+  const ahead =
+    dir > 0 ? timeStart - playhead.time : playhead.time - (timeStart + bucket);
+  const span = loop ? loop.end - loop.start : 0;
+  if (!loop || !(span > 0)) {
+    // No loop: the incumbent one-directional metric — furthest behind the
+    // head is furthest from being wanted again.
+    return ahead >= 0 ? ahead : SCHEDULER_PREFETCH_TIER_BASE / 2 - ahead;
+  }
+  if (timeStart + bucket < loop.start || timeStart > loop.end) {
+    return span + bucket;
+  }
+  return ((ahead % span) + span) % span;
 }
 
 /**
@@ -384,15 +1186,14 @@ export interface ManifestDirectoryRef {
    */
   length: number;
   /**
-   * Directory (leaf) codec version (5 for the packed format). Unchanged by the
+   * Directory (leaf) codec version (6 for the packed format). Unchanged by the
    * paged container — `layout`, not this, discriminates the container shape.
    */
   directoryVersion: number;
   /**
    * At-rest encoding of the directory object. `'zstd'` = a zstd frame wrapping
    * the codec bytes (for a paged directory: EACH page — root + every leaf — is
-   * its own zstd frame); absent (every manifest written before the field
-   * existed) = raw codec bytes.
+   * its own zstd frame); absent means raw codec bytes.
    */
   encoding?: string;
   /**
@@ -412,6 +1213,16 @@ export interface ManifestDirectoryRef {
   pageCount?: number;
   /** Paged only: nominal entries-per-leaf-page used at build (informational). */
   pageEntries?: number;
+  /**
+   * Paged only: blake3-128 of the exact at-rest root frame bytes (excluding
+   * the STTD magic). Required with `pageHashes` for paged v3 directories.
+   */
+  rootHash?: string;
+  /**
+   * Paged only: one blake3-128 hash per exact at-rest leaf frame, in page
+   * descriptor order. Enables authenticated on-demand range loading.
+   */
+  pageHashes?: string[];
 }
 
 /**
@@ -428,7 +1239,7 @@ export interface ManifestPackRef {
 }
 
 /**
- * One schema-template entry of a formatVersion-2 manifest's `schemas` table
+ * One schema-template entry of a formatVersion-3 manifest's `schemas` table
  * (packed spec §3.2): the blake3-128 content hash of the raw template bytes
  * (32 lowercase hex chars — the hex form of the 16-byte reference v2 layer
  * frames embed) and the raw template bytes, base64-encoded (standard
@@ -439,6 +1250,15 @@ export interface ManifestSchemaTemplate {
   hash: string;
   /** The raw template bytes, base64. */
   data: string;
+}
+
+export interface ManifestVariant {
+  /** Numeric id stored in the directory and carried by TileId. */
+  id: number;
+  /** Stable semantic role of the representation. */
+  kind: 'raw' | 'summary';
+  /** Canonical layer name, when the representation has one. */
+  layerName?: string;
 }
 
 /**
@@ -453,10 +1273,10 @@ export interface ManifestSchemaTemplate {
 export interface PackedManifest {
   /** Format discriminator. Always {@link PACKED_FORMAT} (`"stt-packed"`). */
   format: string;
-  /** Manifest schema version (1 = frozen 0.3.x layout, 2 = 2026-07 break). */
+  /** Manifest schema version. Only the current clean-cutover value is read. */
   formatVersion: number;
   /**
-   * formatVersion 2 ONLY (v1 manifests MUST NOT carry the key): the
+   * formatVersion 3 ONLY (v1 manifests MUST NOT carry the key): the
    * dataset's Arrow IPC schema templates, embedded (spec §3.2). Sorted by
    * `hash` and deduped by the writer. The reader validates
    * `blake3_128(data) == hash` for every entry at open — a corrupt manifest
@@ -464,6 +1284,8 @@ export interface PackedManifest {
    * hash → bytes template registry v2 layer frames resolve against.
    */
   schemas?: ManifestSchemaTemplate[];
+  /** Required registry of independently addressable tile representations. */
+  variants: ManifestVariant[];
   /**
    * OPTIONAL required-to-understand feature declarations (spec §3.1). Each
    * entry names a feature the writer used that RE-TYPES existing tile columns
@@ -497,6 +1319,30 @@ export interface PackedManifest {
 }
 
 /**
+ * The (few) fields this reader consults inside {@link PackedManifest.metadata},
+ * which is otherwise the writer's metadata block verbatim and untyped.
+ *
+ * Mirrors `stt_core::metadata::Metadata` — snake_case, unlike the manifest's
+ * own camelCase top-level keys.
+ */
+interface ManifestMetadataShape {
+  /**
+   * The workload model the `measured` blob-ordering picker ran under
+   * (`stt_core::metadata::OrderingWorkload`), written by `PackWriter::finalize`
+   * ONLY when the ordering was resolved by simulation. Absent on `auto` and
+   * explicit orderings, and on every archive built before the field existed.
+   */
+  ordering_workload?: {
+    /**
+     * The range-read coalescing gap the layout simulation was priced at, in
+     * bytes — the reader-mirroring constant, and the co-versioning gate for
+     * CO-7's adaptive gap. See {@link manifestBuildAssumedGapBytes}.
+     */
+    coalesce_gap_bytes?: number;
+  };
+}
+
+/**
  * Extract the blake3-128 content address embedded in a content-addressed
  * directory object key (`.../<32-hex>.sttd`, the writer's
  * `index/{blake3_128_hex}.sttd`), or `null` when the key is not
@@ -505,8 +1351,217 @@ export interface PackedManifest {
  * / the Rust `blake3_128_hex(&index_bytes)`).
  */
 function directoryContentAddress(key: string): string | null {
-  const m = /(?:^|\/)([0-9a-f]{32})\.sttd$/i.exec(key);
+  const m = /^index\/([0-9a-f]{32})\.sttd$/.exec(key);
   return m ? m[1].toLowerCase() : null;
+}
+
+const DIRECTORY_KEY_PATTERN = /^index\/[0-9a-f]{32}\.sttd$/;
+const PACK_KEY_PATTERN = /^packs\/[0-9a-f]{32}\.sttp$/;
+
+function requireSafeInteger(
+  value: unknown,
+  field: string,
+  minimum = 0,
+): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < minimum
+  ) {
+    throw new Error(
+      `STT manifest: ${field} must be a safe integer >= ${minimum}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Runtime semantic validation for the parts of manifest.schema.json that
+ * TypeScript types cannot enforce on untrusted JSON. This runs before deriving
+ * or fetching any manifest-relative URL, making the content-addressed object
+ * key grammar the path-traversal/cross-prefix guard it is intended to be.
+ */
+function validateManifestSemantics(manifest: PackedManifest): void {
+  if (!manifest.directory || typeof manifest.directory !== 'object') {
+    throw new Error('STT manifest: missing directory pointer');
+  }
+  if (!Array.isArray(manifest.packs) || manifest.packs.length === 0) {
+    throw new Error('STT manifest: packs must be a non-empty array');
+  }
+  const declaredVariants = effectiveVariants(manifest);
+  if (!Array.isArray(declaredVariants) || declaredVariants.length === 0) {
+    throw new Error('STT manifest: variants must be a non-empty array');
+  }
+  const variantIds = new Set<number>();
+  for (const [i, variant] of declaredVariants.entries()) {
+    const id = requireSafeInteger(variant?.id, `variants[${i}].id`, 0);
+    if (variant.kind !== 'raw' && variant.kind !== 'summary') {
+      throw new Error(
+        `STT manifest: variants[${i}].kind must be 'raw' or 'summary'`,
+      );
+    }
+    if (variantIds.has(id)) {
+      throw new Error(`STT manifest: duplicate variant id ${id}`);
+    }
+    variantIds.add(id);
+  }
+  if (
+    !declaredVariants.some(
+      (variant) => variant.id === 0 && variant.kind === 'raw',
+    )
+  ) {
+    throw new Error("STT manifest: variant 0 must be declared with kind 'raw'");
+  }
+  if (
+    typeof manifest.directory.key !== 'string' ||
+    !DIRECTORY_KEY_PATTERN.test(manifest.directory.key)
+  ) {
+    throw new Error(
+      `STT manifest: directory.key must match index/<32 lowercase hex>.sttd; got ${JSON.stringify(manifest.directory.key)}`,
+    );
+  }
+  const directoryLength = requireSafeInteger(
+    manifest.directory.length,
+    'directory.length',
+    OBJECT_MAGIC_LEN + 1,
+  );
+  if (
+    typeof manifest.directory.directoryVersion !== 'number' ||
+    !Number.isInteger(manifest.directory.directoryVersion) ||
+    manifest.directory.directoryVersion < MIN_DIRECTORY_VERSION ||
+    manifest.directory.directoryVersion > DIRECTORY_VERSION
+  ) {
+    throw new Error(
+      `STT manifest: unsupported directoryVersion ` +
+        `${JSON.stringify(manifest.directory.directoryVersion)} ` +
+        `(expected ${MIN_DIRECTORY_VERSION}..${DIRECTORY_VERSION})`,
+    );
+  }
+  if (
+    manifest.directory.encoding !== undefined &&
+    manifest.directory.encoding !== 'zstd'
+  ) {
+    throw new Error(
+      `STT manifest: unknown directory encoding ${JSON.stringify(manifest.directory.encoding)} ` +
+        "(this reader supports absent or 'zstd')",
+    );
+  }
+  const layout = manifest.directory.layout;
+  if (
+    layout !== undefined &&
+    layout !== 'single' &&
+    layout !== DIRECTORY_LAYOUT_PAGED
+  ) {
+    throw new Error(
+      `STT manifest: unsupported directory.layout ${JSON.stringify(layout)}`,
+    );
+  }
+  const pagedFields = ['rootLength', 'pageCount', 'pageEntries'] as const;
+  if (layout === DIRECTORY_LAYOUT_PAGED) {
+    const rootLength = requireSafeInteger(
+      manifest.directory.rootLength,
+      'directory.rootLength',
+      1,
+    );
+    requireSafeInteger(manifest.directory.pageCount, 'directory.pageCount', 0);
+    requireSafeInteger(
+      manifest.directory.pageEntries,
+      'directory.pageEntries',
+      1,
+    );
+    if (OBJECT_MAGIC_LEN + rootLength > directoryLength) {
+      throw new Error(
+        `STT manifest: directory.rootLength ${rootLength} exceeds ` +
+          `directory payload length ${directoryLength - OBJECT_MAGIC_LEN}`,
+      );
+    }
+    const hasRootHash = manifest.directory.rootHash !== undefined;
+    const hasPageHashes = manifest.directory.pageHashes !== undefined;
+    // Per-frame hashes arrived with directory v6. A pre-v6 container never wrote
+    // them, so requiring them would report "corrupt" for an archive that is
+    // merely older. Every other paged field above (rootLength, pageCount,
+    // pageEntries and their bounds) is still enforced, and a v6 directory
+    // missing its hashes remains an error.
+    const legacyUnhashed =
+      manifest.directory.directoryVersion < DIRECTORY_VERSION &&
+      !hasRootHash &&
+      !hasPageHashes;
+    if (!legacyUnhashed && (!hasRootHash || !hasPageHashes)) {
+      throw new Error(
+        'STT manifest: paged directory requires rootHash and pageHashes',
+      );
+    }
+    if (hasRootHash && hasPageHashes) {
+      if (
+        typeof manifest.directory.rootHash !== 'string' ||
+        !/^[0-9a-f]{32}$/.test(manifest.directory.rootHash)
+      ) {
+        throw new Error(
+          'STT manifest: directory.rootHash must be 32 lowercase hex characters',
+        );
+      }
+      if (
+        !Array.isArray(manifest.directory.pageHashes) ||
+        manifest.directory.pageHashes.length !== manifest.directory.pageCount
+      ) {
+        throw new Error(
+          'STT manifest: directory.pageHashes length must equal pageCount',
+        );
+      }
+      for (let i = 0; i < manifest.directory.pageHashes.length; i++) {
+        if (!/^[0-9a-f]{32}$/.test(manifest.directory.pageHashes[i])) {
+          throw new Error(
+            `STT manifest: directory.pageHashes[${i}] must be 32 lowercase hex characters`,
+          );
+        }
+      }
+    }
+  } else {
+    for (const field of [...pagedFields, 'rootHash', 'pageHashes'] as const) {
+      if (manifest.directory[field] !== undefined) {
+        throw new Error(
+          `STT manifest: directory.${field} is only valid when layout is 'paged'`,
+        );
+      }
+    }
+  }
+
+  const packKeys = new Set<string>();
+  for (let i = 0; i < manifest.packs.length; i++) {
+    const pack = manifest.packs[i];
+    if (!pack || typeof pack !== 'object') {
+      throw new Error(`STT manifest: packs[${i}] must be an object`);
+    }
+    if (typeof pack.key !== 'string' || !PACK_KEY_PATTERN.test(pack.key)) {
+      throw new Error(
+        `STT manifest: packs[${i}].key must match packs/<32 lowercase hex>.sttp; ` +
+          `got ${JSON.stringify(pack.key)}`,
+      );
+    }
+    if (packKeys.has(pack.key)) {
+      throw new Error(`STT manifest: duplicate pack key ${pack.key}`);
+    }
+    packKeys.add(pack.key);
+    requireSafeInteger(pack.length, `packs[${i}].length`, OBJECT_MAGIC_LEN);
+  }
+
+  if (manifest.capabilities !== undefined) {
+    if (!Array.isArray(manifest.capabilities)) {
+      throw new Error('STT manifest: capabilities must be an array of strings');
+    }
+    const capabilities = new Set<string>();
+    for (let i = 0; i < manifest.capabilities.length; i++) {
+      if (typeof manifest.capabilities[i] !== 'string') {
+        throw new Error(`STT manifest: capabilities[${i}] must be a string`);
+      }
+      if (capabilities.has(manifest.capabilities[i])) {
+        throw new Error(
+          `STT manifest: duplicate capability ${manifest.capabilities[i]}`,
+        );
+      }
+      capabilities.add(manifest.capabilities[i]);
+    }
+  }
 }
 
 /** Standard-alphabet base64 → bytes (`atob` exists in browsers and Node ≥ 16). */
@@ -647,7 +1702,11 @@ export function estimateTileSize(tile: Tile): number {
 
 /** STT archive reader. */
 export class STTArchive {
+  private readonly cacheOwnerId = nextArchiveCacheId++;
   public url: string;
+  /** Cancels every transport/decode operation owned by this archive. */
+  private readonly lifetimeController = new AbortController();
+  private disposed = false;
   /**
    * The transport every request actually goes through: {@link baseFetchFn}
    * with the current `loadOptions.fetch` applied (see {@link applyLoadOptions}).
@@ -679,7 +1738,7 @@ export class STTArchive {
   /** Pack compression codec parsed from the manifest (per-blob, no dict). */
   private packCompression = Compression.Zstd;
   /**
-   * `manifest.formatVersion` (1 | 2), the AUTHORITATIVE discriminator (spec
+   * `manifest.formatVersion` (3), the AUTHORITATIVE discriminator (spec
    * §5.2). Set by `fetchManifest`; forwarded to every decode so a
    * mixed-version dataset fails loudly instead of misparsing.
    */
@@ -695,7 +1754,7 @@ export class STTArchive {
   private templatesInstalledOn?: TileDecoder;
   /**
    * Byte offset of directory codec data inside the `.sttd` object: 8 under
-   * formatVersion 2 (the `STTD` magic prelude), 0 under v1. Pack reads need
+   * formatVersion 3 (the `STTD` magic prelude), 0 under v1. Pack reads need
    * no equivalent — v2 blob offsets are already object-absolute.
    */
   private directoryDataStart = 0;
@@ -709,8 +1768,34 @@ export class STTArchive {
   private currentCacheBytes = 0;
   private maxCacheBytes: number;
 
-  /** Max byte gap bridged when coalescing adjacent tile ranges (see options). */
+  /**
+   * Last play-head threaded through {@link getTiles} via
+   * `TileRequestOptions.playheadTime` (BH-8), or `null` when no caller has
+   * ever declared one. Read LIVE by the byte cache's victim scan — including
+   * from the process-shared LRU's score callback — so the eviction policy
+   * always reflects where playback actually is, not where it was when an
+   * entry was stored.
+   */
+  private lastPlayhead: PlayheadState | null = null;
+  /**
+   * Declared playback loop window in sim-time (BH-7/BH-8), or `null` (the
+   * default, and the byte-identical-to-before state). See
+   * {@link setLoopWindow}.
+   */
+  private loopWindow: { start: number; end: number } | null = null;
+
+  /**
+   * STATIC max byte gap bridged when coalescing adjacent tile ranges: the
+   * historic default, or the caller's `ArchiveOptions.coalesceGapBytes` pin.
+   * This is the FALLBACK, not necessarily the gap in force — read
+   * {@link effectiveCoalesceGap} on the fuse path, never this field.
+   */
   private coalesceGapBytes: number = DEFAULT_RANGE_COALESCE_GAP;
+  /**
+   * True when {@link coalesceGapBytes} came from an explicit option. A pinned
+   * gap disables adaptation entirely — the CO-7 kill switch.
+   */
+  private coalesceGapPinned = false;
   /** Ceiling on concurrent range requests per coalesced batch (see options). */
   private maxConcurrentRequests: number = DEFAULT_MAX_CONCURRENT_REQUESTS;
   /** Backoff schedule for transient range failures (see options). */
@@ -728,6 +1813,14 @@ export class STTArchive {
    */
   private throughput = new ThroughputEstimator();
   /**
+   * EWMA of per-request time-to-first-byte, fed where the range path already
+   * stamps response timing ({@link fetchObjectRange}). Together with
+   * {@link throughput} it prices one request in bytes (`L̂ × θ̂`), which is the
+   * exchange rate {@link effectiveCoalesceGap} fuses on. Cold (`null`) until
+   * the first range response's headers arrive.
+   */
+  private latency = new LatencyEstimator();
+  /**
    * Aggregate-window sampling state (Chromium NQE style). Per-request samples
    * under the {@link maxConcurrentRequests}-way pool each see ~link/N and
    * systematically underestimate the link by the concurrency factor — so
@@ -740,6 +1833,14 @@ export class STTArchive {
 
   /** {@link tileCellKey} -> temporal entries at that spatial cell. */
   private tileEntryIndex = new Map<TileCellKey, TileEntry[]>();
+  /**
+   * Per-zoom references to the occupied-cell lists in {@link tileEntryIndex}.
+   * Oversized viewport queries filter this sparse index instead of allocating
+   * and probing every theoretical `(x, y)` cell in a potentially million-cell
+   * world grid. Lists are shared, so the memory cost is one reference per
+   * occupied cell rather than a second copy of the entries.
+   */
+  private occupiedCellListsByZoom = new Map<number, TileEntry[][]>();
   /** {@link tileEntryKey} -> the one entry at that address and tier. */
   private tileEntryByKey = new Map<TileEntryKey, TileEntry>();
   /**
@@ -749,13 +1850,25 @@ export class STTArchive {
    * resolve tier-qualified keys without awaiting metadata.
    */
   private baseTemporalBucketMs = 3600 * 1000;
+  /** Variant ids declared by the current manifest. */
+  private declaredVariantIds = new Set<number>([0]);
   /**
    * True when the manifest declares a temporal-LOD pyramid
-   * (`metadata.temporal_lod` non-empty) — only then can two directory
-   * entries share one `z/x/y/timeStart` across tiers, so only then does
-   * {@link findTileEntry}'s interval-scan fallback filter by tier.
+   * (`metadata.temporal_lod` non-empty) — only then can two directory entries
+   * share one `z/x/y/timeStart` across tiers, so only then does the default
+   * (base-tier) selection have to filter LOD tiles out. Cached at manifest
+   * fetch alongside {@link baseTemporalBucketMs} so the SYNCHRONOUS
+   * {@link estimateSelectionCost} can apply exactly the filter
+   * {@link getTileIdsInBounds} applies without awaiting metadata.
    */
-  private temporalLodDeclared = false;
+  private hasTemporalLod = false;
+  /**
+   * The manifest's summary tier, cached at fetch for the same reason as
+   * {@link hasTemporalLod}: {@link estimateSelectionCost} is synchronous and
+   * must reproduce {@link getSummaryTileIdsInBounds}'s zoom gate exactly.
+   * `undefined` when the dataset ships no summary tier.
+   */
+  private summaryTierSync?: SummaryTier;
 
   // --- Paged directory ------------------------------------------------------
   /**
@@ -835,6 +1948,10 @@ export class STTArchive {
         options.coalesceGapBytes >= 0
       ) {
         this.coalesceGapBytes = options.coalesceGapBytes;
+        // An explicit gap is a PIN: the caller has taken responsibility for
+        // the request plan, so the adaptive band never overrides it (CO-7's
+        // back-compat kill switch).
+        this.coalesceGapPinned = true;
       }
       if (
         typeof options.maxConcurrentRequests === 'number' &&
@@ -881,14 +1998,34 @@ export class STTArchive {
         this.opfsCache = new OpfsTileCache({
           directory: options.opfsCacheDirectory,
           maxBytes: options.opfsCacheMaxBytes,
+          // BH-9. The archive-OWNED cache opts into the admission filter and
+          // prices its GreedyDual-Size hit value off this archive's own link
+          // estimate. A caller-supplied `opfsCacheImpl` is left exactly as
+          // its owner constructed it — we never reconfigure someone else's
+          // cache, so a BYO instance keeps the incumbent admit-all policy.
+          admissionFilter: true,
+          getThroughput: () => this.throughput.getConservativeRate(),
         });
       }
     }
     this.maxCacheTiles = getDeviceAwareCacheSize();
-    this.maxCacheBytes =
-      this.maxCacheTiles <= MOBILE_MAX_CACHE_TILES
-        ? 256 * 1024 * 1024
-        : 512 * 1024 * 1024;
+    this.maxCacheBytes = getDeviceAwareCacheByteSize();
+    if (typeof options !== 'string') {
+      if (
+        typeof options.maxCacheTiles === 'number' &&
+        Number.isFinite(options.maxCacheTiles) &&
+        options.maxCacheTiles >= 0
+      ) {
+        this.maxCacheTiles = Math.floor(options.maxCacheTiles);
+      }
+      if (
+        typeof options.maxCacheBytes === 'number' &&
+        Number.isFinite(options.maxCacheBytes) &&
+        options.maxCacheBytes >= 0
+      ) {
+        this.maxCacheBytes = Math.floor(options.maxCacheBytes);
+      }
+    }
   }
 
   /**
@@ -966,6 +2103,7 @@ export class STTArchive {
   }
 
   private getDecoder(): TileDecoder {
+    this.throwIfDisposed();
     if (this.decoder) return this.decoder;
     this.decoder = this.decoderOption ?? createDefaultTileDecoder();
     return this.decoder;
@@ -992,10 +2130,22 @@ export class STTArchive {
     return decoder;
   }
 
-  /** Release worker resources, if any. */
+  private throwIfDisposed(): void {
+    if (this.disposed) {
+      throw new DOMException('STTArchive has been finalized', 'AbortError');
+    }
+  }
+
+  /** Abort archive-owned work and release worker resources. Idempotent. */
   finalize(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.lifetimeController.abort(
+      new DOMException('STTArchive finalized', 'AbortError'),
+    );
     this.decoder?.finalize();
     this.decoder = undefined;
+    this.clearByteCache();
   }
 
   /**
@@ -1017,6 +2167,7 @@ export class STTArchive {
    * the pack compression codec and the stable OPFS fingerprint.
    */
   private async fetchManifest(): Promise<PackedManifest> {
+    this.throwIfDisposed();
     if (this.manifestCache) return this.manifestCache;
     if (this.manifestPromise) return this.manifestPromise;
     this.manifestPromise = (async () => {
@@ -1039,12 +2190,18 @@ export class STTArchive {
       // Conformance reader-MUST: reject unrecognized formatVersion /
       // directoryVersion, not just format — both are closed enums/consts in
       // the manifest schema, and the Rust reader rejects them too.
-      if (manifest.formatVersion !== PACKED_FORMAT_VERSION) {
+      if (
+        typeof manifest.formatVersion !== 'number' ||
+        !Number.isInteger(manifest.formatVersion) ||
+        manifest.formatVersion < MIN_PACKED_FORMAT_VERSION ||
+        manifest.formatVersion > PACKED_FORMAT_VERSION
+      ) {
         throw new Error(
           `STT manifest: unsupported formatVersion ${JSON.stringify(manifest.formatVersion)} ` +
-            `(expected ${PACKED_FORMAT_VERSION})`,
+            `(expected ${MIN_PACKED_FORMAT_VERSION}..${PACKED_FORMAT_VERSION})`,
         );
       }
+      validateManifestSemantics(manifest);
       // Build the schema-template registry from the embedded `schemas` table,
       // hash-validating EVERY entry at open (spec §3.2) — a corrupt manifest
       // fails loudly, dataset-level, before any tile fetch. An absent table is
@@ -1060,26 +2217,13 @@ export class STTArchive {
       // reader does not implement (spec §3.1). A capability re-types EXISTING
       // columns, so skipping this check wouldn't fail later — it would
       // silently misdecode, mid-session, per tile.
-      if (Array.isArray(manifest.capabilities)) {
-        const unknown = manifest.capabilities.filter(
-          (c) => !KNOWN_MANIFEST_CAPABILITIES.includes(c),
-        );
-        if (unknown.length > 0) {
-          throw new Error(
-            `STT manifest: dataset requires capabilities this reader does not implement: ` +
-              `${unknown.join(', ')} (implemented: ${KNOWN_MANIFEST_CAPABILITIES.join(', ')})`,
-          );
-        }
-      }
-      if (!manifest.directory || !Array.isArray(manifest.packs)) {
+      const unknown = (manifest.capabilities ?? []).filter(
+        (c) => !KNOWN_MANIFEST_CAPABILITIES.includes(c),
+      );
+      if (unknown.length > 0) {
         throw new Error(
-          'STT manifest: missing directory pointer or pack table',
-        );
-      }
-      if (manifest.directory.directoryVersion !== DIRECTORY_VERSION) {
-        throw new Error(
-          `STT manifest: unsupported directoryVersion ` +
-            `${JSON.stringify(manifest.directory.directoryVersion)} (expected ${DIRECTORY_VERSION})`,
+          `STT manifest: dataset requires capabilities this reader does not implement: ` +
+            `${unknown.join(', ')} (implemented: ${KNOWN_MANIFEST_CAPABILITIES.join(', ')})`,
         );
       }
       // Base = manifest URL with the final path segment stripped (keep the
@@ -1098,23 +2242,28 @@ export class STTArchive {
             "STT manifest: 'gzip' is a retired codec — packed archives are zstd-only",
           );
         case 'zstd':
-        default:
-          // An unrecognized name is assumed to be zstd: every packed writer
-          // emits zstd, so a future codec string is likelier to be a zstd
-          // variant than a foreign container, and guessing keeps old readers
-          // working against newer manifests. A genuinely foreign codec still
-          // fails loudly on the first blob.
           this.packCompression = Compression.Zstd;
           break;
+        default:
+          throw new Error(
+            `STT manifest: unsupported compression ${JSON.stringify(manifest.compression)} ` +
+              "(expected 'zstd' or 'none')",
+          );
       }
       // Temporal-tier facts for the synchronous directory lookups
       // (findTileEntry): the base bucket width and whether a temporal-LOD
       // pyramid exists at all. Defaults mirror getMetadata's.
       const metaJson = manifest.metadata ?? {};
       this.baseTemporalBucketMs = metaJson.temporal_bucket_ms ?? 3600 * 1000;
-      this.temporalLodDeclared =
+      this.hasTemporalLod =
         Array.isArray(metaJson.temporal_lod) &&
         metaJson.temporal_lod.length > 0;
+      this.summaryTierSync = parseSummaryTier(metaJson.summary_tier);
+      // Legacy-aware: a pre-v3 manifest declares no registry, and its implicit
+      // one is raw-only (plus any summary tier its metadata names).
+      this.declaredVariantIds = new Set(
+        effectiveVariants(manifest).map((variant) => variant.id),
+      );
       // OPFS fingerprint = the content-addressed directory hash. It changes iff
       // the dataset's tiles change, and is stable across the dataset's packs.
       this.archiveFingerprint = manifest.directory.key;
@@ -1138,19 +2287,27 @@ export class STTArchive {
     url: string,
     what: string,
     expectedLength?: number,
+    signal?: AbortSignal,
   ): Promise<ArrayBuffer> {
-    const { signal, cleanup } = withTransferTimeout(
-      undefined,
+    const lifetime = composeAbortSignals(
+      signal,
+      this.lifetimeController.signal,
+    );
+    const transfer = withTransferTimeout(
+      lifetime.signal,
       this.transferTimeoutMs,
     );
     try {
-      const response = await raceAbort(this.fetchFn(url, { signal }), signal);
+      const response = await raceAbort(
+        this.fetchFn(url, { signal: transfer.signal }),
+        transfer.signal,
+      );
       if (!response.ok) {
         throw new Error(
           `STT ${what} fetch failed: ${response.status} ${response.statusText}`,
         );
       }
-      const buffer = await raceAbort(response.arrayBuffer(), signal);
+      const buffer = await raceAbort(response.arrayBuffer(), transfer.signal);
       if (
         expectedLength !== undefined &&
         buffer.byteLength !== expectedLength
@@ -1161,7 +2318,8 @@ export class STTArchive {
       }
       return buffer;
     } finally {
-      cleanup();
+      transfer.cleanup();
+      lifetime.cleanup();
     }
   }
 
@@ -1177,11 +2335,12 @@ export class STTArchive {
     what: string,
     expectedLength?: number,
   ): Promise<ArrayBuffer> {
+    const signal = this.lifetimeController.signal;
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
       if (attempt > 0) {
         const base = this.retryDelaysMs[attempt - 1];
-        await abortableDelay(base * (0.5 + Math.random()));
+        await abortableDelay(base * (0.5 + Math.random()), signal);
       }
       try {
         return await this.fetchWholeObject(url, what, expectedLength);
@@ -1231,6 +2390,14 @@ export class STTArchive {
    * 206 whose `Content-Range` or body length disagrees with the request. The
    * transfer runs under the stall timeout. This is the shared primitive behind
    * both per-pack tile reads and paged-directory leaf reads.
+   *
+   * Also the LATENCY sample point (CO-7): the interval between issuing the
+   * request and its response HEADERS resolving is this link's time-to-first-
+   * byte — the only part of a transfer that coalescing actually saves, and so
+   * the right `L̂` for {@link effectiveCoalesceGap}. It is stamped here rather
+   * than around {@link beginTransferSample}/{@link endTransferSample} because
+   * those bracket the whole busy WINDOW (retries and backoff included), which
+   * is the right weight for `θ̂` and the wrong one for a round trip.
    */
   private async fetchObjectRange(
     url: string,
@@ -1239,19 +2406,32 @@ export class STTArchive {
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
   ): Promise<ArrayBuffer> {
-    const { signal: transferSignal, cleanup } = withTransferTimeout(
+    const lifetime = composeAbortSignals(
       signal,
+      this.lifetimeController.signal,
+    );
+    const transfer = withTransferTimeout(
+      lifetime.signal,
       this.transferTimeoutMs,
     );
     try {
       const init: RequestInit = {
         headers: { Range: `bytes=${start}-${end}` },
-        signal: transferSignal,
+        signal: transfer.signal,
       };
       // `RequestInit.priority` is a hint; browsers without it ignore the field.
       if (fetchPriority)
         (init as RequestInit & { priority?: string }).priority = fetchPriority;
-      const response = await raceAbort(this.fetchFn(url, init), transferSignal);
+      const requestStart = nowMs();
+      const response = await raceAbort(
+        this.fetchFn(url, init),
+        transfer.signal,
+      );
+      // Headers are back: that elapsed time IS the round trip, whatever the
+      // response then says. A 4xx/5xx still cost a round trip, so the sample
+      // is taken before the status checks below — an error path that skipped
+      // it would bias `L̂` toward whichever requests happened to succeed.
+      this.latency.addSample(nowMs() - requestStart);
       if (!response.ok) {
         throw new Error(
           `STT range fetch failed: ${response.status} ${response.statusText}`,
@@ -1264,7 +2444,7 @@ export class STTArchive {
         );
       }
       validateContentRange(response, start, end);
-      const buffer = await raceAbort(response.arrayBuffer(), transferSignal);
+      const buffer = await raceAbort(response.arrayBuffer(), transfer.signal);
       const expected = end - start + 1;
       if (buffer.byteLength !== expected) {
         throw new Error(
@@ -1274,7 +2454,8 @@ export class STTArchive {
       }
       return buffer;
     } finally {
-      cleanup();
+      transfer.cleanup();
+      lifetime.cleanup();
     }
   }
 
@@ -1322,35 +2503,43 @@ export class STTArchive {
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
   ): Promise<ArrayBuffer> {
+    const lifetime = composeAbortSignals(
+      signal,
+      this.lifetimeController.signal,
+    );
     let lastError: unknown;
-    for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
-      if (attempt > 0) {
-        const base = this.retryDelaysMs[attempt - 1];
-        await abortableDelay(base * (0.5 + Math.random()), signal);
+    try {
+      for (let attempt = 0; attempt <= this.retryDelaysMs.length; attempt++) {
+        if (attempt > 0) {
+          const base = this.retryDelaysMs[attempt - 1];
+          await abortableDelay(base * (0.5 + Math.random()), lifetime.signal);
+        }
+        const attemptStart = nowMs();
+        try {
+          return await this.fetchObjectRange(
+            url,
+            start,
+            end,
+            lifetime.signal,
+            fetchPriority,
+          );
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          // Failure-aware estimation: the estimator is otherwise fed only by
+          // COMPLETED responses, so on a dead network `getEstimate()` holds
+          // the last healthy rate forever and every ETA built from it lies.
+          // A failed attempt burned its wall-clock for ~zero delivered bytes
+          // — feed that as a 1-byte sample weighted by the attempt duration,
+          // dragging the fast EWMA toward zero (a 20 s stall outweighs a
+          // quick 5xx, which is the right proportionality).
+          this.throughput.addSample(1, nowMs() - attemptStart);
+          lastError = error;
+        }
       }
-      const attemptStart = nowMs();
-      try {
-        return await this.fetchObjectRange(
-          url,
-          start,
-          end,
-          signal,
-          fetchPriority,
-        );
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        // Failure-aware estimation: the estimator is otherwise fed only by
-        // COMPLETED responses, so on a dead network `getEstimate()` holds
-        // the last healthy rate forever and every ETA built from it lies.
-        // A failed attempt burned its wall-clock for ~zero delivered bytes
-        // — feed that as a 1-byte sample weighted by the attempt duration,
-        // dragging the fast EWMA toward zero (a 20 s stall outweighs a
-        // quick 5xx, which is the right proportionality).
-        this.throughput.addSample(1, nowMs() - attemptStart);
-        lastError = error;
-      }
+      throw lastError;
+    } finally {
+      lifetime.cleanup();
     }
-    throw lastError;
   }
 
   /**
@@ -1364,6 +2553,107 @@ export class STTArchive {
    */
   getThroughputEstimate(): ThroughputEstimate {
     return this.throughput.getEstimate();
+  }
+
+  /**
+   * Current time-to-first-byte estimate in ms (EWMA over range responses), or
+   * `null` before the first one. `null` means UNMEASURED, never "instant".
+   */
+  getLatencyEstimateMs(): number | null {
+    return this.latency.getLatencyMs();
+  }
+
+  /**
+   * The MEASURED bytes-equivalent price of one request, `L̂ × θ̂`, or `null`
+   * while either estimator is cold (CO-5's request term).
+   *
+   * This is deliberately NOT {@link effectiveCoalesceGap}. The gap is a fuse
+   * THRESHOLD and carries a pinned mode, a co-versioning gate, a
+   * `[256 KiB, 4 MiB]` band and a 2 MiB cold default — fallbacks that exist so
+   * an un-measured session still plans exactly the requests it always did.
+   * They make it a safe threshold and an unsafe price: an argmin fed 2 MiB per
+   * request ranks candidates by tile count, not by cost. Anything trading
+   * requests against bytes must read the estimators here and ABSTAIN on
+   * `null`. See {@link requestPriceBytes}.
+   */
+  getRequestPriceBytes(): number | null {
+    return requestPriceBytes(
+      this.latency.getLatencyMs(),
+      this.throughput.getEstimate().bytesPerMs,
+    );
+  }
+
+  /**
+   * The byte gap both fuse sites bridge right now (CO-7).
+   *
+   * Precedence, most authoritative first:
+   *  1. an explicit `ArchiveOptions.coalesceGapBytes` — pinned, no adaptation;
+   *  2. the co-versioning guard — the manifest declares NO build-assumed gap
+   *     ({@link manifestBuildAssumedGapBytes}), so the layout's provenance is
+   *     unknown and {@link DEFAULT_RANGE_COALESCE_GAP} stands;
+   *  3. either estimator cold — {@link DEFAULT_RANGE_COALESCE_GAP};
+   *  4. otherwise `L̂ × θ̂`, clamped into the declared band around the
+   *     build-assumed gap ({@link ADAPTIVE_GAP_BAND_FACTOR}).
+   *
+   * Cases 1–3 are byte-for-byte today's behavior, so an archive that is never
+   * measured (or is explicitly pinned, or — like the whole published fleet
+   * today — carries no build-assumed gap) plans exactly the requests it always
+   * did. See {@link getCoalesceGapEstimate} for which case applied.
+   */
+  effectiveCoalesceGap(): number {
+    return this.getCoalesceGapEstimate().gapBytes;
+  }
+
+  /**
+   * {@link effectiveCoalesceGap} plus the evidence behind it — which of the
+   * four cases applied, the two estimator readings (`null` = cold), and any
+   * drift from the layout's build-assumed gap.
+   */
+  getCoalesceGapEstimate(): CoalesceGapEstimate {
+    // Always reported, even where they are not consulted: `latencyMs` /
+    // `bytesPerMs` describe the ESTIMATORS (null ⇔ cold), while `source` says
+    // whether the gap was derived from them.
+    const latencyMs = this.latency.getLatencyMs();
+    const bytesPerMs = this.throughput.getEstimate().bytesPerMs;
+    const blobOrdering = this.manifestCache?.blobOrdering ?? null;
+    const buildAssumedGapBytes = manifestBuildAssumedGapBytes(
+      this.manifestCache,
+    );
+    const report = (
+      gapBytes: number,
+      source: CoalesceGapSource,
+    ): CoalesceGapEstimate => ({
+      gapBytes,
+      source,
+      latencyMs,
+      bytesPerMs,
+      blobOrdering,
+      buildAssumedGapBytes,
+      driftsFromBuildAssumption:
+        buildAssumedGapBytes !== null && gapBytes !== buildAssumedGapBytes,
+    });
+
+    // (1) Explicit pin wins over every measurement.
+    if (this.coalesceGapPinned) {
+      return report(this.coalesceGapBytes, 'pinned');
+    }
+    // (2) Co-versioning guard: a layout is only safe to read under a moved gap
+    // when the archive says which gap it was priced at. `blobOrdering` cannot
+    // answer that — it names the WINNING curve, never the selection mode, so
+    // `measured` builds (the CLI default) publish as "spatial"/"time-major"
+    // like everything else. The declared gap can, and its absence means
+    // unknown provenance, which is never guessed at.
+    if (adaptiveCoalesceGapBand(buildAssumedGapBytes) === null) {
+      return report(this.coalesceGapBytes, 'no-build-gap');
+    }
+    // (3)/(4) Fitted, or the incumbent constant while either estimator is cold.
+    if (latencyMs === null || bytesPerMs === null) {
+      return report(this.coalesceGapBytes, 'cold');
+    }
+    return report(
+      adaptiveCoalesceGapBytes(latencyMs, bytesPerMs, buildAssumedGapBytes),
+      'adaptive',
+    );
   }
 
   /**
@@ -1419,6 +2709,7 @@ export class STTArchive {
 
   /** Archive metadata, folded into the manifest (no separate fetch). */
   async getMetadata(): Promise<ArchiveMetadata> {
+    this.throwIfDisposed();
     if (this.metadataCache) return this.metadataCache;
     const manifest = await this.fetchManifest();
     const json = manifest.metadata ?? {};
@@ -1466,6 +2757,7 @@ export class STTArchive {
 
   /** Archive directory (the v5 tile index). One whole-object GET, cached. */
   async getIndex(): Promise<ArchiveIndex> {
+    this.throwIfDisposed();
     if (this.indexCache) return this.indexCache;
     if (this.indexPromise) return this.indexPromise;
     this.indexPromise = this.fetchAndBuildIndex();
@@ -1487,7 +2779,7 @@ export class STTArchive {
           "(this reader supports absent or 'zstd')",
       );
     }
-    // v2 `.sttd` objects open with the 8-byte `STTD` magic prelude; the codec
+    // v3 `.sttd` objects open with the 8-byte `STTD` magic prelude; the codec
     // bytes (root frame + leaves) follow it, and `rootLength` keeps meaning
     // the root frame's at-rest length (spec §2.1) — so all paged math below
     // is unchanged once offsets are shifted by the prelude.
@@ -1497,35 +2789,35 @@ export class STTArchive {
     // page table, and leave the entry maps empty — leaves stream in on demand
     // via ensurePages*. Small/single directories take the whole-load path below.
     //
-    // KNOWN INTEGRITY GAP: this path returns before the content-address check
-    // below, and it cannot run it — the blake3-128 in the object key covers
-    // the ENTIRE at-rest object, which this path deliberately never fetches,
-    // and the manifest carries no root/per-page hashes to verify prefix or
-    // leaf ranges against. So paged-on-demand directories (in practice the
-    // LARGE production datasets) are trusted unverified; only whole-loaded
-    // directories get the §9.2 check. Closing this needs a manifest extension
-    // (root + per-page hashes) — tracked as a format follow-up.
+    // Every paged v3 manifest carries the root + one hash per leaf, so every
+    // independently-fetched at-rest frame is authenticated before decompression.
     if (
       dref.layout === DIRECTORY_LAYOUT_PAGED &&
       dref.length > this.directoryPageThresholdBytes &&
-      typeof dref.rootLength === 'number'
+      typeof dref.rootLength === 'number' &&
+      typeof dref.rootHash === 'string' &&
+      Array.isArray(dref.pageHashes)
     ) {
       const rootBuf = await this.fetchObjectRangeWithRetry(
         this.directoryUrl,
         0,
         this.directoryDataStart + dref.rootLength - 1,
       );
-      const root = decodePagedRoot(
-        this.unframeDirectory(
-          this.stripDirectoryMagic(new Uint8Array(rootBuf)),
-        ),
-      );
+      const rootFrame = this.stripDirectoryMagic(new Uint8Array(rootBuf));
+      this.verifyPagedFrameHash('root', rootFrame, dref.rootHash);
+      const root = decodePagedRoot(this.unframeDirectory(rootFrame), {
+        payloadLength: dref.length - OBJECT_MAGIC_LEN,
+        rootLength: dref.rootLength,
+        pageCount: dref.pageCount,
+        pageEntries: dref.pageEntries,
+      });
       this.paged = true;
       this.rootLength = dref.rootLength;
       this.pageTable = root.pages;
       this.residentPages.clear();
       this.pageFetchPromises.clear();
       this.tileEntryIndex.clear();
+      this.occupiedCellListsByZoom.clear();
       this.tileEntryByKey.clear();
       this.indexCache = { tiles: [] }; // incremental — filled as pages stream in
       return this.indexCache;
@@ -1533,7 +2825,7 @@ export class STTArchive {
 
     // Whole-load path (single, or a paged directory small enough to grab in one
     // GET). One whole-object fetch, validated against `directory.length` (which
-    // covers the ENTIRE object including the v2 magic — spec §2.1).
+    // covers the ENTIRE object including the v3 magic — spec §2.1).
     this.paged = false;
     const buffer = await this.fetchWholeObjectWithRetry(
       this.directoryUrl,
@@ -1558,6 +2850,7 @@ export class STTArchive {
     const tiles: TileEntry[] = raw.map((e) => this.toTileEntry(e));
     this.indexCache = { tiles };
     this.tileEntryIndex.clear();
+    this.occupiedCellListsByZoom.clear();
     this.tileEntryByKey.clear();
     this.mergeEntries(tiles);
     return this.indexCache;
@@ -1573,11 +2866,9 @@ export class STTArchive {
    * embedded in its key (packed spec §9.2). Enforced on every WHOLE-OBJECT
    * directory load — the directory is the reader's root of trust; a mismatch
    * means tampered or transport-corrupt bytes and MUST abort the open rather
-   * than be silently trusted. Two cases legitimately skip it: a key that
-   * isn't content-addressed (synthetic test archives) declares no address,
-   * and the paged-on-demand path never fetches the whole object so the
-   * whole-object address is unverifiable there (see the KNOWN INTEGRITY GAP
-   * note in fetchAndBuildIndex).
+   * than be silently trusted. The paged-on-demand path never fetches the whole
+   * object; it instead verifies the manifest's root/page hashes for every
+   * independently fetched frame before decompression.
    */
   private verifyDirectoryContentAddress(
     key: string,
@@ -1594,8 +2885,23 @@ export class STTArchive {
     }
   }
 
+  /** Verify one independently-fetchable paged-directory frame before decode. */
+  private verifyPagedFrameHash(
+    label: string,
+    frame: Uint8Array,
+    expected: string,
+  ): void {
+    const actual = blake3Hex128(frame);
+    if (actual !== expected) {
+      throw new Error(
+        `STT paged directory ${label}: content hash ${actual} does not match ` +
+          `manifest ${expected} — tampered or corrupt page`,
+      );
+    }
+  }
+
   /**
-   * Validate + strip the `STTD` object magic prelude (`"STTD"` + version 2 +
+   * Validate + strip the `STTD` object magic prelude (`"STTD"` + version 3 +
    * 3 zero bytes) off directory bytes. Mirrors the Rust
    * `pack::directory_codec_bytes`.
    */
@@ -1608,12 +2914,15 @@ export class STTArchive {
       bytes[3] !== 0x44 // 'D'
     ) {
       throw new Error(
-        'STT directory object: missing STTD magic (formatVersion 2)',
+        'STT directory object: missing STTD magic (formatVersion 3)',
       );
     }
-    if (bytes[4] !== 2) {
+    // The prelude is a pure envelope (kind tag, version, three reserved zeros),
+    // so an older version changes nothing about the codec bytes after it.
+    if (bytes[4] < MIN_OBJECT_MAGIC_VERSION || bytes[4] > 3) {
       throw new Error(
-        `STT directory object: unsupported object version ${bytes[4]} (this reader knows 2)`,
+        `STT directory object: unsupported object version ${bytes[4]} ` +
+          `(this reader knows ${MIN_OBJECT_MAGIC_VERSION}..3)`,
       );
     }
     if (bytes[5] !== 0 || bytes[6] !== 0 || bytes[7] !== 0) {
@@ -1634,6 +2943,7 @@ export class STTArchive {
       y: e.y,
       timeStart: e.timeStart,
       timeEnd: e.timeEnd,
+      variantId: e.variantId,
       packId: e.packId,
       offset: e.offset,
       length: e.length,
@@ -1649,11 +2959,22 @@ export class STTArchive {
   /** Insert entries into the (z/x/y → list) and tier-qualified key maps. */
   private mergeEntries(entries: TileEntry[]): void {
     for (const entry of entries) {
+      if (!this.declaredVariantIds.has(entry.variantId)) {
+        throw new Error(
+          `STT directory: variant ${entry.variantId} is not declared by manifest.variants`,
+        );
+      }
       const spatialKey = tileCellKey(entry.zoom, entry.x, entry.y);
       let list = this.tileEntryIndex.get(spatialKey);
       if (!list) {
         list = [];
         this.tileEntryIndex.set(spatialKey, list);
+        let zoomLists = this.occupiedCellListsByZoom.get(entry.zoom);
+        if (!zoomLists) {
+          zoomLists = [];
+          this.occupiedCellListsByZoom.set(entry.zoom, zoomLists);
+        }
+        zoomLists.push(list);
       }
       list.push(entry);
       this.tileEntryByKey.set(
@@ -1662,6 +2983,7 @@ export class STTArchive {
           entry.x,
           entry.y,
           entry.timeStart,
+          entry.variantId,
           entry.temporalBucketMs,
         ),
         entry,
@@ -1677,12 +2999,30 @@ export class STTArchive {
   ): ReturnType<typeof decodeDirectory> {
     const root = decodePagedRoot(
       this.unframeDirectory(bytes.subarray(0, rootLength)),
+      {
+        payloadLength: bytes.length,
+        rootLength,
+        pageCount: this.manifestCache?.directory.pageCount,
+        pageEntries: this.manifestCache?.directory.pageEntries,
+      },
     );
     const out: ReturnType<typeof decodeDirectory> = [];
-    for (const d of root.pages) {
+    for (let i = 0; i < root.pages.length; i++) {
+      const d = root.pages[i];
       const start = rootLength + d.relOffset;
+      if (start + d.length > bytes.length) {
+        throw new Error(
+          `STT paged directory: page ${i} range exceeds directory object`,
+        );
+      }
       const frame = bytes.subarray(start, start + d.length);
       const page = decodeDirectory(this.unframeDirectory(frame));
+      if (page.length !== d.entryCount) {
+        throw new Error(
+          `STT paged directory: page ${i} decoded ${page.length} entries, ` +
+            `root declares ${d.entryCount}`,
+        );
+      }
       for (const e of page) out.push(e);
     }
     return out;
@@ -1699,6 +3039,11 @@ export class STTArchive {
     signal?: AbortSignal,
   ): Promise<void> {
     if (!this.paged || !this.pageTable || !this.directoryUrl) return;
+    for (const i of indices) {
+      if (!Number.isSafeInteger(i) || i < 0 || i >= this.pageTable.length) {
+        throw new Error(`STT paged directory: invalid page index ${i}`);
+      }
+    }
     const pending = indices
       .filter(
         (i) => !this.residentPages.has(i) && !this.pageFetchPromises.has(i),
@@ -1715,6 +3060,10 @@ export class STTArchive {
       end: number;
       members: number[];
     }
+    // One reading for the whole pass: the fuse decisions in this plan are then
+    // all taken against the SAME G, which is what makes the plan a pure
+    // function of (pending pages, gap) and keeps it monotone in G.
+    const coalesceGap = this.effectiveCoalesceGap();
     const groups: Group[] = [];
     for (const i of pending) {
       const d = this.pageTable[i];
@@ -1723,7 +3072,7 @@ export class STTArchive {
       const start = this.directoryDataStart + this.rootLength + d.relOffset;
       const end = start + d.length - 1;
       const cur = groups[groups.length - 1];
-      if (cur && start - (cur.end + 1) <= this.coalesceGapBytes) {
+      if (cur && start - (cur.end + 1) <= coalesceGap) {
         cur.end = Math.max(cur.end, end);
         cur.members.push(i);
       } else {
@@ -1748,9 +3097,17 @@ export class STTArchive {
         const rel =
           this.directoryDataStart + this.rootLength + d.relOffset - g.start;
         const frame = new Uint8Array(buf, rel, d.length);
+        const expectedHash = this.manifestCache!.directory.pageHashes![i];
+        this.verifyPagedFrameHash(`page ${i}`, frame, expectedHash);
         const entries = decodeDirectory(this.unframeDirectory(frame)).map((e) =>
           this.toTileEntry(e),
         );
+        if (entries.length !== d.entryCount) {
+          throw new Error(
+            `STT paged directory: page ${i} decoded ${entries.length} entries, ` +
+              `root declares ${d.entryCount}`,
+          );
+        }
         if (!this.residentPages.has(i)) {
           this.mergeEntries(entries);
           this.residentPages.add(i);
@@ -1834,6 +3191,17 @@ export class STTArchive {
         groupMinDistance,
         groupSpatialDistance,
         { signal },
+        // Probe label: directory leaf pages, keyed by the group's lead page
+        // index. Cold-start byte accounting (K10) prices the leaf share, so
+        // page fetches must be visible on the channel alongside tile fetches.
+        (g) => ({
+          key: `dir/page/${g.members[0]}`,
+          bytes: g.end - g.start + 1,
+        }),
+        // BH-1 cost: the coalesced leaf-page range's exact size. Directory
+        // pages are as real a byte draw as tile blobs, so they are metered the
+        // same way rather than billing a flat quantum.
+        (g) => g.end - g.start + 1,
       );
     } catch (e) {
       runError = e;
@@ -1882,23 +3250,119 @@ export class STTArchive {
     const needed: number[] = [];
     for (let i = 0; i < this.pageTable.length; i++) {
       if (this.residentPages.has(i)) continue;
-      const p = this.pageTable[i];
-      if (zoom < p.minZoom || zoom > p.maxZoom) continue;
-      let lonHit = false;
-      for (const [lo, hi] of lonSpans) {
-        if (p.maxLon >= lo && hi >= p.minLon) {
-          lonHit = true;
-          break;
-        }
+      if (
+        !pageOverlapsQuery(
+          this.pageTable[i],
+          lonSpans,
+          latLo,
+          latHi,
+          zoom,
+          timeRange,
+        )
+      ) {
+        continue;
       }
-      if (!lonHit) continue;
-      if (p.maxLat < latLo || latHi < p.minLat) continue;
-      if (p.tMax < timeRange.start || p.tMin > timeRange.end) continue;
       needed.push(i);
     }
     if (needed.length > 0 || this.pageFetchPromises.size > 0) {
       await this.fetchAndMergePages(needed, signal);
     }
+  }
+
+  /**
+   * {@link ensurePagesForBounds} for an explicit CELL LIST — the paging half of
+   * {@link getAvailableTilesForCells}.
+   *
+   * Same descriptor predicate ({@link pageOverlapsQuery}, shared so the two can
+   * never drift), applied per cell against that cell's own geographic box and
+   * its own zoom. That per-cell zoom is the whole point: a frustum cut is
+   * MIXED-ZOOM, so the single `zoom` argument the bounds form takes cannot
+   * express it, and using the cut's deepest zoom for the whole list would prune
+   * every leaf that only covers the far field.
+   *
+   * A cell's box is in-world by construction (`x` arrives wrapped into
+   * `[0, 2^z)`), so its `lonQueryIntervals` is the single-interval fast path —
+   * the seam is already handled, once, by the wrap at emit.
+   *
+   * Pages are the outer loop with an early exit per page: a cut is hundreds of
+   * cells and a paged directory is hundreds of leaves, and almost every leaf is
+   * decided by its first overlapping cell.
+   */
+  private async ensurePagesForCells(
+    cells: readonly TileId[],
+    timeRange: TimeRange,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.paged || !this.pageTable) return;
+    // Hoisted per cell, exactly as the bounds form hoists them per query.
+    const boxes = cells.map((cell) => {
+      const [minLon, minLat, maxLon, maxLat] = tileToLonLatBounds(
+        cell.z,
+        cell.x,
+        cell.y,
+      );
+      return {
+        zoom: cell.z,
+        lonSpans: lonQueryIntervals(minLon, maxLon),
+        latLo: Math.min(minLat, maxLat),
+        latHi: Math.max(minLat, maxLat),
+      };
+    });
+    const needed: number[] = [];
+    for (let i = 0; i < this.pageTable.length; i++) {
+      if (this.residentPages.has(i)) continue;
+      const page = this.pageTable[i];
+      for (const box of boxes) {
+        if (
+          pageOverlapsQuery(
+            page,
+            box.lonSpans,
+            box.latLo,
+            box.latHi,
+            box.zoom,
+            timeRange,
+          )
+        ) {
+          needed.push(i);
+          break;
+        }
+      }
+    }
+    if (needed.length > 0 || this.pageFetchPromises.size > 0) {
+      await this.fetchAndMergePages(needed, signal);
+    }
+  }
+
+  /**
+   * Directory entries a query CANNOT see because their leaf page isn't
+   * resident — the honesty channel behind {@link SelectionCost.unknownTiles}.
+   *
+   * Runs exactly the {@link ensurePagesForBounds} descriptor predicate (shared
+   * code, so the two can't drift) but *counts* instead of fetching: a leaf that
+   * `ensurePagesForBounds` would fault in is precisely a leaf whose entries the
+   * synchronous walk is blind to. `entryCount` is the descriptor's own number,
+   * so this is a count the root page actually states — never an extrapolation
+   * from the priced entries.
+   */
+  private unknownEntriesInBounds(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+  ): number {
+    if (!this.paged || !this.pageTable) return 0;
+    const lonSpans = lonQueryIntervals(bounds.minLon, bounds.maxLon);
+    const latLo = Math.min(bounds.minLat, bounds.maxLat);
+    const latHi = Math.max(bounds.minLat, bounds.maxLat);
+    let unknown = 0;
+    for (let i = 0; i < this.pageTable.length; i++) {
+      if (this.residentPages.has(i)) continue;
+      const p = this.pageTable[i];
+      if (!pageOverlapsQuery(p, lonSpans, latLo, latHi, zoom, timeRange)) {
+        continue;
+      }
+      unknown += p.entryCount;
+    }
+    return unknown;
   }
 
   /**
@@ -1973,31 +3437,22 @@ export class STTArchive {
   private findTileEntry(id: TileId): TileEntry | undefined {
     const base = this.baseTemporalBucketMs;
     const want = id.bucketMs ?? base;
-    // Exact key: the entry may be tagged with its bucket width, or untagged
-    // (`'base'` — legacy archives and pre-LOD builds). An untagged entry IS
-    // a base-tier entry, so it also satisfies a base-bucket lookup.
+    const variantId = id.variantId ?? 0;
     const exact =
-      this.tileEntryByKey.get(tileEntryKey(id.z, id.x, id.y, id.t, want)) ??
+      this.tileEntryByKey.get(
+        tileEntryKey(id.z, id.x, id.y, id.t, variantId, want),
+      ) ??
       (want === base
         ? this.tileEntryByKey.get(
-            tileEntryKey(id.z, id.x, id.y, id.t, undefined),
+            tileEntryKey(id.z, id.x, id.y, id.t, variantId, undefined),
           )
         : undefined);
     if (exact) return exact;
     const entries = this.tileEntryIndex.get(tileCellKey(id.z, id.x, id.y));
     if (!entries) return undefined;
-    // Interval-scan fallback. Tier-filtered only when the archive declares
-    // a temporal-LOD pyramid — only then can two tiers alias one z/x/y/t
-    // (a base point query must not resolve to the coarse tile spanning it,
-    // and vice versa). Pyramid-less archives keep the historical unfiltered
-    // scan: there is exactly one tier to find, and some legacy fixtures tag
-    // entries with a bucket that differs from the manifest's
-    // `temporal_bucket_ms`.
-    if (!this.temporalLodDeclared) {
-      return entries.find((e) => e.timeStart <= id.t && e.timeEnd >= id.t);
-    }
     return entries.find(
       (e) =>
+        e.variantId === variantId &&
         (e.temporalBucketMs ?? base) === want &&
         e.timeStart <= id.t &&
         e.timeEnd >= id.t,
@@ -2014,6 +3469,101 @@ export class STTArchive {
    */
   getTileByteSize(id: TileId): number | undefined {
     return this.findTileEntry(id)?.length;
+  }
+
+  /**
+   * Price a whole SELECTION — every tile a `(bounds, zoom, timeRange)` query
+   * at one tier would address — in exact compressed bytes, synchronously and
+   * with zero network.
+   *
+   * This is the general form of a primitive the reader already had in pieces:
+   * {@link getTileByteSize} prices one tile, and the tileset's coverage index
+   * prices one viewport at the primary zoom. Here the same directory entries
+   * are summed for ANY (cell set × window × tier) triple, which is what the
+   * client's controllers need to stop guessing: how many bytes is this
+   * prefetch horizon / this gate window / this speed / this temporal tier?
+   *
+   * The walk is {@link entryListsInBounds} — the same occupied-cell scan
+   * {@link getTileIdsInBounds} uses — with the same variant, tier and
+   * `coverTMin` filters, summing `entry.length` instead of materializing a
+   * `TileId[]`. `opts` selects which of the three sibling selections is being
+   * priced:
+   *
+   *   - default (`{}`) → {@link getTileIdsInBounds}: variant 0, and when the
+   *     archive declares a temporal-LOD pyramid, base-bucket tiles only.
+   *   - `{ bucketMs }` → {@link getTileIdsInBoundsForTemporalLod}: the tier
+   *     whose tagged bucket equals `bucketMs` (untagged legacy entries count
+   *     as the base tier).
+   *   - `{ variantId }` → {@link getSummaryTileIdsInBounds}: that variant,
+   *     with the declared summary tier's zoom gate applied so an out-of-range
+   *     zoom prices at zero exactly as the id query returns `[]`.
+   *
+   * SYNCHRONOUS BY CONTRACT, hence the {@link SelectionCost.unknownTiles}
+   * honesty channel: it prices what the reader can see and *counts* what it
+   * cannot (non-resident leaves of a paged directory, or a directory that has
+   * not been opened at all — `Infinity` there). It never faults a page in and
+   * never invents a byte count. Callers that need a fully-priced answer should
+   * await {@link getTileIdsInBounds} for the same box first, which pages the
+   * needed leaves in, then ask again.
+   */
+  estimateSelectionCost(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+    opts?: { bucketMs?: number; variantId?: number },
+  ): SelectionCost {
+    const variantId = opts?.variantId ?? 0;
+    const wantBucketMs = opts?.bucketMs;
+    // The directory has not been opened, so neither the priced set nor the
+    // unpriced one is known. Report the unknown as unbounded rather than
+    // letting a zero read as "this selection is free".
+    if (!this.indexCache) {
+      return { bytes: 0, tiles: 0, unknownTiles: Number.POSITIVE_INFINITY };
+    }
+    // Summary-tier zoom gate, mirroring getSummaryTileIdsInBounds: outside the
+    // declared range the tier is not addressable, so it costs nothing.
+    const summary = this.summaryTierSync;
+    if (
+      summary !== undefined &&
+      variantId === summary.variantId &&
+      (zoom < summary.minZoom || zoom > summary.maxZoom)
+    ) {
+      return { bytes: 0, tiles: 0, unknownTiles: 0 };
+    }
+    const base = this.baseTemporalBucketMs;
+    // Only the DEFAULT base-tier selection filters LOD tiles out, and only
+    // when the archive declares a pyramid — exactly getTileIdsInBounds's rule.
+    const filterToBase =
+      wantBucketMs === undefined && variantId === 0 && this.hasTemporalLod;
+    let bytes = 0;
+    let tiles = 0;
+    for (const entries of this.entryListsInBounds(bounds, zoom)) {
+      for (const e of entries) {
+        if (e.variantId !== variantId) continue;
+        if (wantBucketMs !== undefined) {
+          if ((e.temporalBucketMs ?? base) !== wantBucketMs) continue;
+        } else if (filterToBase) {
+          const tagged = e.temporalBucketMs;
+          if (tagged !== undefined && tagged !== base) continue;
+        }
+        // Window overlap, byte-identical to the id queries': tight `timeEnd`
+        // above, tight covering `coverTMin` (falling back to the bucket edge
+        // `timeStart`) below — a tile whose data lies entirely after the
+        // window is not selected, so it must not be priced either.
+        if (
+          e.timeEnd >= timeRange.start &&
+          (e.coverTMin ?? e.timeStart) <= timeRange.end
+        ) {
+          bytes += e.length;
+          tiles++;
+        }
+      }
+    }
+    return {
+      bytes,
+      tiles,
+      unknownTiles: this.unknownEntriesInBounds(bounds, zoom, timeRange),
+    };
   }
 
   /**
@@ -2041,11 +3591,15 @@ export class STTArchive {
   private async writeOpfsPayload(
     key: string,
     payload: Uint8Array,
+    zoom: number,
   ): Promise<void> {
     const cache = this.opfsCache;
     if (!cache) return;
     try {
-      await cache.set(key, payload);
+      // The zoom rides along so the cache's admission filter (BH-9) can keep
+      // overview tiles unconditionally and make tiny leaf tiles earn their
+      // slot. A cache with the filter off ignores it.
+      await cache.set(key, payload, { zoom });
     } catch {
       // Best-effort: an OPFS error must never break the data path.
     }
@@ -2075,7 +3629,7 @@ export class STTArchive {
         // (spec §11) — a lying/oversized frame can't blow up this cold path.
         entry.uncompressedSize || undefined,
       );
-      await cache.set(key, decompressed);
+      await cache.set(key, decompressed, { zoom: id.z });
     } catch {
       // Best-effort: an OPFS error must never break the data path.
     }
@@ -2094,6 +3648,13 @@ export class STTArchive {
    * the background, reusing the decoder's own decompressed bytes when the
    * decoder hands them back (`onPayload`) and falling back to a main-thread
    * re-decompress for custom decoders that don't.
+   *
+   * `priority` (M6 / BH-5) carries the fetch stage's already-computed scheduler
+   * priority (lower = more urgent) into the decode pool, so a saturated pool
+   * serves the play-head's next tile before a prefetch-tier one instead of
+   * serving whatever arrived first. Omitted by the warm paths (byte-cache and
+   * OPFS hits), which are already the interactive class and default to the most
+   * urgent value.
    */
   private async decodeBytes(
     id: TileId,
@@ -2101,6 +3662,7 @@ export class STTArchive {
     compressed: ArrayBuffer,
     signal?: AbortSignal,
     writeToOpfs = false,
+    priority?: number,
   ): Promise<Tile> {
     // The packed format has NO shared zstd dictionary: every blob is
     // independently zstd-compressed (`compress_zstd_with_dict(_, None)` on the
@@ -2113,6 +3675,7 @@ export class STTArchive {
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed,
       compression: entry.compression,
+      expectedUncompressedSize: entry.uncompressedSize,
       // Integrity (T1.4): the directory CRC-32C covers the compressed bytes;
       // verified in the decoder (off main thread on the worker path) before
       // decompression. `0` = "no checksum recorded" (see TileEntry.crc32c).
@@ -2126,10 +3689,11 @@ export class STTArchive {
           }
         : undefined,
       signal,
+      priority,
     });
     if (opfsKey) {
       if (opfsPayload) {
-        void this.writeOpfsPayload(opfsKey, opfsPayload);
+        void this.writeOpfsPayload(opfsKey, opfsPayload, id.z);
       } else {
         void this.writeOpfsAsync(id, entry, compressed.slice(0));
       }
@@ -2166,6 +3730,7 @@ export class STTArchive {
       timeRange: { start: entry.timeStart, end: entry.timeEnd },
       compressed: buf,
       compression: Compression.None,
+      expectedUncompressedSize: entry.uncompressedSize,
       formatVersion: this.formatVersion,
       signal,
     });
@@ -2207,7 +3772,7 @@ export class STTArchive {
       signal,
       fetchPriority,
     );
-    this.storeBytes(tileKey(id), compressed);
+    this.storeBytes(tileKey(id), compressed, entry.timeStart);
     return this.decodeBytes(id, entry, compressed, signal, true);
   }
 
@@ -2257,7 +3822,7 @@ export class STTArchive {
     const key = tileKey(id);
     const cached = this.byteCache.get(key);
     if (cached) {
-      cached.lastAccess = Date.now();
+      this.touchCachedBytes(key, cached);
       this.cacheStats.hits++;
       try {
         return await this.decodeBytes(id, entry, cached.bytes, options?.signal);
@@ -2448,18 +4013,41 @@ export class STTArchive {
    * `executeGroup` must NEVER reject for a non-abort reason: each call site
    * already swallows per-group failures into per-tile `null`s, so a rejection
    * here is only ever an abort (which the scheduler treats as a settled slot).
+   *
+   * `groupProbeMeta` (optional, P0-2) labels each group on the `requests` probe
+   * channel. It is consulted ONLY when `globalThis.__sttProbe` is installed —
+   * with the probe off it is never called and nothing here allocates.
+   *
+   * `groupCostBytes` (optional, M6 / BH-1) prices each group in the scheduler's
+   * DRR currency. UNLIKE `groupProbeMeta` it is a DECISION input and is always
+   * consulted: a coalesced range's size is known exactly at enqueue
+   * (`end - start + 1`), so byte-metered fair share needs no estimate. Omitted
+   * (or returning `null`) ⇒ the group bills one quantum, i.e. the pre-BH-1 slot
+   * behaviour.
+   *
+   * `executeGroup` receives the group's dispatch-time scheduler priority
+   * (M6 / BH-5) so the DECODE stage can inherit what the network stage already
+   * decided instead of re-randomizing it into a FIFO.
    */
   private async runGroupFetches<G>(
     groups: G[],
-    executeGroup: (group: G, signal: AbortSignal | undefined) => Promise<void>,
+    executeGroup: (
+      group: G,
+      signal: AbortSignal | undefined,
+      priority: number,
+    ) => Promise<void>,
     groupMinDistanceMs: (group: G) => number | null,
     groupSpatialDistSq: (group: G) => number | null,
     options: TileRequestOptions | undefined,
+    groupProbeMeta?: (group: G) => { key: string; bytes: number },
+    groupCostBytes?: (group: G) => number | null,
   ): Promise<void> {
     if (groups.length === 0) return;
 
     const scheduler = getSharedScheduler();
     const callerSignal = options?.signal;
+    // OBSERVATION ONLY: resolved once per dispatch pass, not per group.
+    const probeOn = groupProbeMeta !== undefined && isProbeEnabled();
     const fetchPriority = options?.fetchPriority;
 
     // Each group is scheduled independently; we must observe EVERY group's
@@ -2508,19 +4096,30 @@ export class STTArchive {
     // the request settles so neither outlives the other.
     const scheduleOne = (r: (typeof ranked)[number]): Promise<void> => {
       const { group, seq: fallbackSeq, minDist, spatialDistSq } = r;
+      const meta = probeOn ? groupProbeMeta!(group) : undefined;
+      // BH-1: the coalesced range's exact size, known at enqueue. `null` /
+      // omitted ⇒ the scheduler bills one quantum (pre-BH-1 slot behaviour).
+      const costBytes = groupCostBytes?.(group) ?? undefined;
+      const priorityOf = (): number =>
+        this.groupSchedulerPriority(
+          minDist,
+          fallbackSeq,
+          fetchPriority,
+          spatialDistSq,
+        );
       const req = scheduler.scheduleRequest<void>({
         sourceId: this.url,
         weight: this.schedulerWeight,
-        getPriority: () =>
-          this.groupSchedulerPriority(
-            minDist,
-            fallbackSeq,
-            fetchPriority,
-            spatialDistSq,
-          ),
+        key: meta?.key,
+        bytes: meta?.bytes,
+        costBytes,
+        getPriority: priorityOf,
         // The scheduler's signal fires on cancel/abort; pass it to the fetch
         // so retry/timeout/raceAbort inside executeGroup stop promptly.
-        execute: (schedulerSignal) => executeGroup(group, schedulerSignal),
+        // BH-5: the same priority expression the scheduler just selected on is
+        // handed to the group so its decodes inherit it.
+        execute: (schedulerSignal) =>
+          executeGroup(group, schedulerSignal, priorityOf()),
       });
       // Wire caller supersession → scheduled-request abort. One-shot; detached
       // when the request settles so neither outlives the other (idempotent
@@ -2607,6 +4206,9 @@ export class STTArchive {
     ids: TileId[],
     options?: TileRequestOptions,
   ): Promise<(Tile | null)[]> {
+    // BH-8: remember where playback is before anything can store or evict
+    // bytes on this call. No-op for callers that declare no play-head.
+    this.notePlayhead(options);
     await this.getIndex();
     // Paged archives: ensure the ids' leaf pages are resident so findTileEntry
     // resolves them (usually a no-op — the caller's getTileIdsInBounds already
@@ -2638,7 +4240,7 @@ export class STTArchive {
       const key = tileKey(id);
       const cached = this.byteCache.get(key);
       if (cached) {
-        cached.lastAccess = Date.now();
+        this.touchCachedBytes(key, cached);
         this.cacheStats.hits++;
         const idx = i;
         const cacheKey = key;
@@ -2730,9 +4332,10 @@ export class STTArchive {
         members: Pending[];
       }
       // Coalescing is PER-PACK: a single HTTP range request addresses exactly
-      // one pack object, so a range may never bridge two packs. Group the
+      // one pack object, so a range may never bridge two packs — no value of
+      // the gap, adaptive or pinned, can bridge an object boundary. Group the
       // pending tiles by pack first, then within each pack sort by offset and
-      // coalesce neighbours within `coalesceGapBytes`.
+      // coalesce neighbours within the effective gap.
       const byPack = new Map<number, Pending[]>();
       for (const p of pending) {
         let list = byPack.get(p.entry.packId);
@@ -2742,6 +4345,9 @@ export class STTArchive {
         }
         list.push(p);
       }
+      // One reading for the whole batch (see fetchAndMergePages): every fuse
+      // decision in this plan is taken against the same G.
+      const coalesceGap = this.effectiveCoalesceGap();
       const groups: Group[] = [];
       for (const [packId, members] of byPack) {
         members.sort((a, b) => a.entry.offset - b.entry.offset);
@@ -2749,7 +4355,7 @@ export class STTArchive {
         for (const p of members) {
           const pStart = p.entry.offset;
           const pEnd = p.entry.offset + p.entry.length - 1;
-          if (current && pStart - (current.end + 1) <= this.coalesceGapBytes) {
+          if (current && pStart - (current.end + 1) <= coalesceGap) {
             current.end = Math.max(current.end, pEnd);
             current.members.push(p);
           } else {
@@ -2780,6 +4386,10 @@ export class STTArchive {
       const fetchGroup = async (
         group: Group,
         signal: AbortSignal | undefined,
+        // BH-5: the scheduler priority this group won its slot with, forwarded
+        // into every member decode so the decode pool orders by the same scale
+        // the network stage used instead of by arrival.
+        priority: number,
       ): Promise<void> => {
         let buffer: ArrayBuffer;
         this.beginTransferSample();
@@ -2818,10 +4428,17 @@ export class STTArchive {
                 return;
               }
               try {
-                this.storeBytes(tileKey(m.id), single);
+                this.storeBytes(tileKey(m.id), single, m.entry.timeStart);
                 deliver(
                   m.index,
-                  await this.decodeBytes(m.id, m.entry, single, signal, true),
+                  await this.decodeBytes(
+                    m.id,
+                    m.entry,
+                    single,
+                    signal,
+                    true,
+                    priority,
+                  ),
                 );
               } catch (decodeError) {
                 if (isAbortError(decodeError)) throw decodeError;
@@ -2839,11 +4456,18 @@ export class STTArchive {
           group.members.map(async (m) => {
             const rel = m.entry.offset - group.start;
             const slice = buffer.slice(rel, rel + m.entry.length);
-            this.storeBytes(tileKey(m.id), slice);
+            this.storeBytes(tileKey(m.id), slice, m.entry.timeStart);
             try {
               deliver(
                 m.index,
-                await this.decodeBytes(m.id, m.entry, slice, signal, true),
+                await this.decodeBytes(
+                  m.id,
+                  m.entry,
+                  slice,
+                  signal,
+                  true,
+                  priority,
+                ),
               );
             } catch (decodeError) {
               if (isAbortError(decodeError)) throw decodeError;
@@ -2864,7 +4488,7 @@ export class STTArchive {
       jobs.push(
         this.runGroupFetches(
           groups,
-          (group, signal) => fetchGroup(group, signal),
+          (group, signal, priority) => fetchGroup(group, signal, priority),
           (group) =>
             this.minDistanceToPlayhead(
               group.members.map((m) => m.entry),
@@ -2876,6 +4500,17 @@ export class STTArchive {
               options,
             ),
           options,
+          // Probe label: a coalesced range covers N tiles in ONE request, so
+          // the sample is keyed by the group's LEAD tile and carries the whole
+          // range's bytes. (The tileKey string format is an OPFS persistence
+          // contract — read here, never reshaped.)
+          (group) => ({
+            key: tileKey(group.members[0].id),
+            bytes: group.end - group.start + 1,
+          }),
+          // BH-1 cost: the coalesced range's EXACT size — this is the number
+          // the wire will actually carry, known here without any estimate.
+          (group) => group.end - group.start + 1,
         ),
       );
     }
@@ -2884,16 +4519,104 @@ export class STTArchive {
     return results;
   }
 
-  private storeBytes(key: TileKey, bytes: ArrayBuffer): void {
+  /**
+   * Declare the playback LOOP window in sim-time (BH-7/BH-8); `null` clears
+   * it. The `SpatioTemporalTileset` holds the same value for its own tier
+   * eviction and forwards it here (via the optional `setLoopWindow` on its
+   * loader) so the compressed-byte cache below it rotates on the same metric.
+   *
+   * Storage only: no fetch, no eviction pass, no decode is triggered by this
+   * call. A degenerate range (non-finite, or `end <= start`) is treated as
+   * `null`, and with no range declared eviction is byte-identical to its
+   * pre-BH-8 behavior — which is both the kill switch and the regression pin.
+   */
+  setLoopWindow(range: { start: number; end: number } | null): void {
+    if (
+      !range ||
+      !Number.isFinite(range.start) ||
+      !Number.isFinite(range.end) ||
+      range.end <= range.start
+    ) {
+      this.loopWindow = null;
+      return;
+    }
+    this.loopWindow = { start: range.start, end: range.end };
+  }
+
+  /**
+   * Record the play-head a batch request declared (BH-8). Cached rather than
+   * passed down because eviction is triggered from write paths that have no
+   * access to the originating options — and because the process-shared LRU
+   * scores entries long after the call that stored them returned.
+   */
+  private notePlayhead(options: TileRequestOptions | undefined): void {
+    const t = options?.playheadTime;
+    if (typeof t !== 'number' || !Number.isFinite(t)) return;
+    this.lastPlayhead = {
+      time: t,
+      direction: options?.playheadDirection === -1 ? -1 : 1,
+    };
+  }
+
+  /**
+   * {@link byteCacheEvictionScore} bound to this archive's LIVE playhead,
+   * loop window and temporal bucket. Deliberately a method (not a captured
+   * closure): the shared-LRU score callbacks call through it, so they read
+   * current state and never pin a stale playhead.
+   */
+  private evictionScore(timeStart: number): number {
+    return byteCacheEvictionScore(
+      timeStart,
+      this.baseTemporalBucketMs,
+      this.lastPlayhead,
+      this.loopWindow,
+    );
+  }
+
+  private storeBytes(
+    key: TileKey,
+    bytes: ArrayBuffer,
+    timeStart: number,
+  ): void {
+    if (this.maxCacheTiles === 0 || this.maxCacheBytes === 0) return;
     const existing = this.byteCache.get(key);
-    if (existing) this.currentCacheBytes -= existing.byteSize;
+    if (existing) {
+      this.currentCacheBytes -= existing.byteSize;
+      this.byteCache.delete(key);
+      unregisterSharedCacheEntry(this.sharedCacheToken(key));
+    }
     this.byteCache.set(key, {
       bytes,
       lastAccess: Date.now(),
       byteSize: bytes.byteLength,
+      timeStart,
     });
     this.currentCacheBytes += bytes.byteLength;
+    registerSharedCacheEntry(this.sharedCacheToken(key), {
+      byteSize: bytes.byteLength,
+      evict: () => {
+        if (!this.byteCache.has(key)) return;
+        this.dropCachedBytes(key);
+        this.cacheStats.evictions++;
+      },
+      // Closes over the tile's OWN timeline position (immutable for this key)
+      // and reads the archive's playhead live — never over cache state that
+      // an eviction could invalidate underneath it.
+      score: () => this.evictionScore(timeStart),
+    });
     this.evictIfNeeded();
+  }
+
+  private sharedCacheToken(key: TileKey): string {
+    return `${this.cacheOwnerId}:${key}`;
+  }
+
+  /** Refresh insertion order in both the local and process-wide LRUs. */
+  private touchCachedBytes(key: TileKey, entry: ByteCacheEntry): void {
+    entry.lastAccess = Date.now();
+    this.byteCache.delete(key);
+    this.byteCache.set(key, entry);
+    touchSharedCacheEntry(this.sharedCacheToken(key));
   }
 
   /**
@@ -2908,8 +4631,28 @@ export class STTArchive {
     if (!existing) return;
     this.byteCache.delete(key);
     this.currentCacheBytes -= existing.byteSize;
+    unregisterSharedCacheEntry(this.sharedCacheToken(key));
   }
 
+  private clearByteCache(): void {
+    for (const key of this.byteCache.keys()) {
+      unregisterSharedCacheEntry(this.sharedCacheToken(key));
+    }
+    this.byteCache.clear();
+    this.currentCacheBytes = 0;
+  }
+
+  /**
+   * Enforce the per-archive count and byte caps.
+   *
+   * BH-8: the victim is no longer unconditionally the oldest entry but the
+   * one furthest (in loop-aware, direction-aware sim-time) from the play-head
+   * among the {@link EVICT_SCAN_LIMIT} oldest — see
+   * {@link byteCacheEvictionScore}. The caps themselves, the poisoned-entry
+   * drop path and the device-derived constants are untouched, and with no
+   * play-head ever threaded in every candidate scores 0, so the eviction
+   * order is byte-identical to the pre-BH-8 LRU.
+   */
   private evictIfNeeded(): void {
     if (
       this.byteCache.size <= this.maxCacheTiles &&
@@ -2917,25 +4660,24 @@ export class STTArchive {
     ) {
       return;
     }
-    const entries = Array.from(this.byteCache.entries());
-    entries.sort((a, b) => a[1].lastAccess - b[1].lastAccess);
-    for (const [key, entry] of entries) {
-      if (
-        this.byteCache.size <= this.maxCacheTiles &&
-        this.currentCacheBytes <= this.maxCacheBytes
-      ) {
-        break;
-      }
-      this.byteCache.delete(key);
-      this.currentCacheBytes -= entry.byteSize;
+    while (
+      this.byteCache.size > this.maxCacheTiles ||
+      this.currentCacheBytes > this.maxCacheBytes
+    ) {
+      const victim = selectLruVictim(this.byteCache, (_key, entry) =>
+        this.evictionScore(entry.timeStart),
+      );
+      if (!victim) break;
+      this.dropCachedBytes(victim[0]);
       this.cacheStats.evictions++;
     }
   }
 
   /**
    * Report — once per zoom, so a stuck camera can't spam the console — that a
-   * bounds scan blew past {@link MAX_QUERY_SCAN_CELLS}. The scan still returns
-   * every cell; this is a performance warning, not a correctness one.
+   * bounds grid blew past {@link MAX_QUERY_SCAN_CELLS}. The query switches to
+   * the occupied-cell index and still returns every matching tile; this is a
+   * producer/camera diagnostic, not a correctness warning.
    *
    * This is deliberately loud and deliberately specific. A scan this size has
    * exactly three causes, and the numbers below separate them: a degenerate
@@ -2945,16 +4687,96 @@ export class STTArchive {
    * docs/roadmap/tile-loading-3d-2026-07.md found all three shipping at once,
    * silently — this one line would have surfaced every one of them.
    */
-  private warnOversizedScan(zoom: number, cells: number, cap: number): void {
+  private warnOversizedScan(
+    zoom: number,
+    cells: number,
+    cap: number,
+    strategy: 'occupied-index' | 'dense-grid',
+  ): void {
     if (this.warnedOversizedScans.has(zoom)) return;
     this.warnedOversizedScans.add(zoom);
+    const selection =
+      strategy === 'occupied-index'
+        ? 'Querying the occupied-cell index instead'
+        : 'The grid is densely occupied, so scanning it directly without materializing coordinate tuples';
     console.warn(
-      `[stt] ${this.url}: tile scan at z${zoom} enumerated ${cells} cells ` +
-        `(expected under ${cap}). Every cell is still scanned — this costs ` +
-        `frame time, it does not drop tiles. Check for an inverted/degenerate ` +
-        `viewport box, or a camera zoom clamped up into this archive's ` +
-        `[minZoom, maxZoom].`,
+      `[stt] ${this.url}: tile grid at z${zoom} covers ${cells} cells ` +
+        `(expected under ${cap}). ${selection}; ` +
+        `no tiles are dropped. Check for an inverted/degenerate viewport box, ` +
+        `or a camera zoom clamped up into this archive's [minZoom, maxZoom].`,
     );
+  }
+
+  /**
+   * Temporal-entry lists for occupied cells inside a viewport.
+   *
+   * Ordinary viewports retain the direct grid walk: a few dozen `Map.get`
+   * calls are cheaper than filtering the archive index. Once the theoretical
+   * grid exceeds {@link MAX_QUERY_SCAN_CELLS}, walk only occupied cells at the
+   * requested zoom. The result is sorted by wrapped x scan position then y,
+   * exactly matching {@link boundsToTiles}; callers therefore keep stable
+   * request ordering without allocating up to `2^zoom × 2^zoom` coordinate
+   * tuples. Completeness is unchanged: paged archives call
+   * {@link ensurePagesForBounds} before this method, so every overlapping leaf
+   * is already represented in the resident occupied-cell index.
+   */
+  private entryListsInBounds(bounds: BoundingBox, zoom: number): TileEntry[][] {
+    const window = tileScanWindow(bounds, zoom);
+    const occupied = this.occupiedCellListsByZoom.get(zoom);
+    const useDirectGrid =
+      window.cells <= MAX_QUERY_SCAN_CELLS ||
+      (occupied !== undefined && occupied.length * 2 >= window.cells);
+
+    // Direct lookup wins for ordinary viewports and genuinely dense grids.
+    // Iterate in-place instead of first allocating `[x, y][]`; even the dense
+    // oversized fallback therefore pays for results/map probes, not a second
+    // million-element coordinate object graph.
+    if (useDirectGrid) {
+      if (window.cells > MAX_QUERY_SCAN_CELLS) {
+        this.warnOversizedScan(
+          zoom,
+          window.cells,
+          MAX_QUERY_SCAN_CELLS,
+          'dense-grid',
+        );
+      }
+      const lists: TileEntry[][] = [];
+      for (let i = 0; i < window.xCount; i++) {
+        const x =
+          (((window.startX + i) % window.worldSize) + window.worldSize) %
+          window.worldSize;
+        for (let y = window.minY; y <= window.maxY; y++) {
+          const entries = this.tileEntryIndex.get(tileCellKey(zoom, x, y));
+          if (entries) lists.push(entries);
+        }
+      }
+      return lists;
+    }
+
+    this.warnOversizedScan(
+      zoom,
+      window.cells,
+      MAX_QUERY_SCAN_CELLS,
+      'occupied-index',
+    );
+    if (!occupied || occupied.length === 0) return [];
+
+    const selected: Array<{
+      entries: TileEntry[];
+      relativeX: number;
+      y: number;
+    }> = [];
+    for (const entries of occupied) {
+      const cell = entries[0];
+      if (!cell || cell.y < window.minY || cell.y > window.maxY) continue;
+      const relativeX =
+        (((cell.x - window.startX) % window.worldSize) + window.worldSize) %
+        window.worldSize;
+      if (relativeX >= window.xCount) continue;
+      selected.push({ entries, relativeX, y: cell.y });
+    }
+    selected.sort((a, b) => a.relativeX - b.relativeX || a.y - b.y);
+    return selected.map((cell) => cell.entries);
   }
 
   /**
@@ -2968,8 +4790,9 @@ export class STTArchive {
    *
    * `bounds` is honoured AS GIVEN — deliberately not narrowed to the archive's
    * declared extent, which does not bound the data (see the note above
-   * `lonToTileX`). An oversized scan warns via {@link MAX_QUERY_SCAN_CELLS}
-   * but still returns every cell.
+   * `lonToTileX`). An oversized grid warns via
+   * {@link MAX_QUERY_SCAN_CELLS}, switches to the occupied-cell index, and
+   * still returns every matching tile.
    */
   async getTileIdsInBounds(
     bounds: BoundingBox,
@@ -2987,12 +4810,9 @@ export class STTArchive {
     const filterToBase =
       meta.temporalLod !== undefined && meta.temporalLod.length > 0;
     const ids: TileId[] = [];
-    for (const [x, y] of boundsToTiles(clipped, zoom, (cells, cap) =>
-      this.warnOversizedScan(zoom, cells, cap),
-    )) {
-      const entries = this.tileEntryIndex.get(tileCellKey(zoom, x, y));
-      if (!entries) continue;
+    for (const entries of this.entryListsInBounds(clipped, zoom)) {
       for (const e of entries) {
+        if (e.variantId !== 0) continue;
         if (filterToBase) {
           // The archive carries LOD tiers; exclude anything that isn't a
           // base-bucket tile so the existing renderer behaviour is
@@ -3010,7 +4830,13 @@ export class STTArchive {
           e.timeEnd >= timeRange.start &&
           (e.coverTMin ?? e.timeStart) <= timeRange.end
         ) {
-          ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart });
+          ids.push({
+            z: e.zoom,
+            x: e.x,
+            y: e.y,
+            t: e.timeStart,
+            variantId: 0,
+          });
         }
       }
     }
@@ -3041,12 +4867,9 @@ export class STTArchive {
     await this.ensurePagesForBounds(clipped, zoom, timeRange);
     const baseBucket = meta.temporalBucketMs;
     const ids: TileId[] = [];
-    for (const [x, y] of boundsToTiles(clipped, zoom, (cells, cap) =>
-      this.warnOversizedScan(zoom, cells, cap),
-    )) {
-      const entries = this.tileEntryIndex.get(tileCellKey(zoom, x, y));
-      if (!entries) continue;
+    for (const entries of this.entryListsInBounds(clipped, zoom)) {
       for (const e of entries) {
+        if (e.variantId !== 0) continue;
         // The tile matches iff its tagged bucket equals the requested one.
         // Legacy tiles (column absent) are treated as base-bucket tiles —
         // they only match a request for `bucketMs === baseBucket`.
@@ -3064,7 +4887,138 @@ export class STTArchive {
           e.timeEnd >= timeRange.start &&
           (e.coverTMin ?? e.timeStart) <= timeRange.end
         ) {
-          ids.push({ z: e.zoom, x: e.x, y: e.y, t: e.timeStart, bucketMs });
+          ids.push({
+            z: e.zoom,
+            x: e.x,
+            y: e.y,
+            t: e.timeStart,
+            variantId: 0,
+            bucketMs,
+          });
+        }
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Tile IDs whose interval overlaps `timeRange`, addressed by an explicit
+   * **cell list** rather than by a box at one zoom — the directory half of the
+   * frustum-quadtree selection path (FS-2).
+   *
+   * The incumbent selection enumerates `[minZoom..z]` boxes, one zoom at a
+   * time, because a camera was only ever reduced to ONE integer zoom. A frustum
+   * cut is a mixed-zoom antichain: near-field cells deep, far-field cells
+   * shallow. There is no box-and-zoom pair that describes it, so this walks
+   * exactly the named cells — the same cell-addressed directory probe
+   * {@link findTileEntry} and the occupied-cell scan already use.
+   *
+   * The three tier dispatches are the ones that already exist, selected by
+   * `opts` on the {@link estimateSelectionCost} pattern so nothing about the
+   * incumbent trio moves:
+   *
+   *   - default (`{}`) → {@link getTileIdsInBounds}'s filter: variant 0, and
+   *     base-bucket tiles only when the archive declares a pyramid.
+   *   - `{ bucketMs }` → {@link getTileIdsInBoundsForTemporalLod}'s: the tier
+   *     whose tagged bucket equals `bucketMs` (untagged legacy entries are the
+   *     base tier), with `bucketMs` stamped onto every returned id.
+   *   - `{ tier: 'summary' }` → {@link getSummaryTileIdsInBounds}'s: the
+   *     declared summary variant, with its zoom gate applied PER CELL. Per
+   *     cell, not per query, because under a cut some cells are inside the
+   *     summary range and some are not; the gate drops only the cells it
+   *     applies to, and an archive with no summary tier returns `[]` exactly as
+   *     the bounds form does.
+   *
+   * Cells are read as SPATIAL addresses: `t` is ignored (the time filter is
+   * `timeRange`), `x` must already be wrapped into `[0, 2^z)` — which is what
+   * `coverFrustumQuadtree` emits — and any cell that is not a finite in-range
+   * address is skipped rather than trusted. Duplicate cells collapse, so no id
+   * can be returned twice.
+   *
+   * Output order is the input cell order, then each cell's directory-entry
+   * order: deterministic, and stable under repeated calls.
+   */
+  async getAvailableTilesForCells(
+    cells: readonly TileId[],
+    timeRange: TimeRange,
+    opts?: { tier?: 'raw' | 'summary'; bucketMs?: number },
+  ): Promise<TileId[]> {
+    if (!cells || cells.length === 0) return [];
+    await this.getIndex();
+    const meta = await this.getMetadata();
+
+    const wantSummary = opts?.tier === 'summary';
+    const summary = wantSummary ? meta.summaryTier : undefined;
+    // No summary tier ⇒ nothing to address, same as getSummaryTileIdsInBounds.
+    if (wantSummary && !summary) return [];
+    const variantId = summary?.variantId ?? 0;
+    const wantBucketMs = opts?.bucketMs;
+    const baseBucket = meta.temporalBucketMs;
+    // Only the DEFAULT base-tier selection filters LOD tiles out, and only when
+    // the archive declares a pyramid — exactly getTileIdsInBounds's rule.
+    const filterToBase =
+      wantBucketMs === undefined &&
+      variantId === 0 &&
+      meta.temporalLod !== undefined &&
+      meta.temporalLod.length > 0;
+
+    // Normalize + de-duplicate first: the paging pass and the entry walk must
+    // agree cell for cell, and a malformed address must be dropped by both.
+    const cellKeys = new Set<string>();
+    const wanted: TileId[] = [];
+    for (const cell of cells) {
+      if (!cell) continue;
+      const z = cell.z;
+      if (!Number.isInteger(z) || z < 0 || z > 30) continue;
+      const world = 2 ** z;
+      const x = cell.x;
+      const y = cell.y;
+      if (!Number.isInteger(x) || x < 0 || x >= world) continue;
+      if (!Number.isInteger(y) || y < 0 || y >= world) continue;
+      // The summary zoom gate, per cell (see the doc comment).
+      if (summary && (z < summary.minZoom || z > summary.maxZoom)) continue;
+      const key = `${z}/${x}/${y}`;
+      if (cellKeys.has(key)) continue;
+      cellKeys.add(key);
+      wanted.push({ z, x, y, t: 0 });
+    }
+    if (wanted.length === 0) return [];
+
+    await this.ensurePagesForCells(wanted, timeRange);
+
+    const ids: TileId[] = [];
+    for (const cell of wanted) {
+      const entries = this.tileEntryIndex.get(
+        tileCellKey(cell.z, cell.x, cell.y),
+      );
+      if (!entries) continue;
+      for (const e of entries) {
+        if (e.variantId !== variantId) continue;
+        if (wantBucketMs !== undefined) {
+          if ((e.temporalBucketMs ?? baseBucket) !== wantBucketMs) continue;
+        } else if (filterToBase) {
+          const tagged = e.temporalBucketMs;
+          if (tagged !== undefined && tagged !== baseBucket) continue;
+        }
+        // Window overlap, byte-identical to the bounds queries': tight
+        // `timeEnd` above, tight covering `coverTMin` (falling back to the
+        // bucket-edge `timeStart`) below.
+        if (
+          e.timeEnd >= timeRange.start &&
+          (e.coverTMin ?? e.timeStart) <= timeRange.end
+        ) {
+          ids.push(
+            wantBucketMs === undefined
+              ? { z: e.zoom, x: e.x, y: e.y, t: e.timeStart, variantId }
+              : {
+                  z: e.zoom,
+                  x: e.x,
+                  y: e.y,
+                  t: e.timeStart,
+                  variantId,
+                  bucketMs: wantBucketMs,
+                },
+          );
         }
       }
     }
@@ -3110,7 +5064,27 @@ export class STTArchive {
     const tier = metadata.summaryTier;
     if (!tier) return [];
     if (zoom < tier.minZoom || zoom > tier.maxZoom) return [];
-    return this.getTileIdsInBounds(bounds, zoom, timeRange);
+    await this.getIndex();
+    await this.ensurePagesForBounds(bounds, zoom, timeRange);
+    const ids: TileId[] = [];
+    for (const entries of this.entryListsInBounds(bounds, zoom)) {
+      for (const entry of entries) {
+        if (entry.variantId !== tier.variantId) continue;
+        if (
+          entry.timeEnd >= timeRange.start &&
+          (entry.coverTMin ?? entry.timeStart) <= timeRange.end
+        ) {
+          ids.push({
+            z: entry.zoom,
+            x: entry.x,
+            y: entry.y,
+            t: entry.timeStart,
+            variantId: tier.variantId,
+          });
+        }
+      }
+    }
+    return ids;
   }
 
   /**
@@ -3185,6 +5159,114 @@ export class STTArchive {
       }
     }
     return pick;
+  }
+
+  /**
+   * Pick the temporal tier by COST rather than by zoom (CO-5) — the 1-D argmin
+   * that sits BESIDE {@link pickTemporalLodForZoom}, never replacing it.
+   *
+   * Enumerates the addressable set `{base} ∪ {levels with zoom ≤
+   * maxZoomLevel}` ({@link addressableTemporalTiers}), prices each tier with
+   * CO-1's {@link estimateSelectionCost}, and minimizes
+   *
+   * ```text
+   *   cost(b) = bytes(b) + tiles(b) × requestOverheadBytes
+   * ```
+   *
+   * where `requestOverheadBytes` is {@link getRequestPriceBytes} — the
+   * MEASURED `L̂ × θ̂`, read from the same two estimators CO-7's fuse rule is
+   * fitted from. It is not {@link effectiveCoalesceGap}: that method's job is
+   * to keep an un-measured session fusing exactly as it always did, so it
+   * answers 2 MiB when cold, when pinned, and whenever the ordering gate
+   * holds — and 2 MiB per request would swamp the byte term and turn this
+   * argmin into a ranking by tile count.
+   *
+   * Returns:
+   *  - `undefined` when the archive declares no temporal-LOD pyramid — there
+   *    is nothing to choose and nothing changes for such archives, which is
+   *    every archive in the fleet built without `--temporal-lod`;
+   *  - otherwise a {@link TemporalTierPick} whose `bucketMs` may be the base
+   *    bucket (⇒ address the base tier via {@link getTileIdsInBounds}).
+   *
+   * FALLBACK, and it is not optional. Three ways the comparison is declined,
+   * each reported in `abstainReason` and each answering from
+   * {@link pickTemporalLodForZoom} — byte-for-byte the incumbent — flagged
+   * `policy: 'zoom-threshold'`, `exact: false`:
+   *  - `unpriced-tiles`: an addressable tier reports `unknownTiles > 0` (a
+   *    non-resident leaf page of a paged directory, or a directory that is not
+   *    open), so the comparison would be between lower bounds;
+   *  - `unmeasured-request-price`: `L̂` or `θ̂` is still cold, so the request
+   *    term has no value. A cold link is abstained from, never assigned the
+   *    2 MiB constant;
+   *  - `no-eligible-tier`: no addressable tier holds anything here, so there
+   *    is nothing to choose between.
+   *
+   * The oracle never invents a byte count and never invents a request price.
+   *
+   * Resolves the directory root ({@link getIndex}) but deliberately does NOT
+   * fault leaf pages in: paging in directory bytes merely to PRICE a tier
+   * would spend the very resource the pick is trying to save. The needed
+   * leaves become resident as a side effect of the selection query that
+   * follows, so a paged archive answers from the zoom threshold on the first
+   * pass and from measured cost thereafter.
+   */
+  async pickTemporalLodByCost(
+    bounds: BoundingBox,
+    zoom: number,
+    timeRange: TimeRange,
+  ): Promise<TemporalTierPick | undefined> {
+    const meta = await this.getMetadata();
+    const levels = meta.temporalLod;
+    // No pyramid ⇒ no addressable set beyond the base tier. Identical to
+    // pickTemporalLodForZoom's `undefined`, and the reason archives without
+    // tiers see exactly zero behavioural change from this item.
+    if (!levels || levels.length === 0) return undefined;
+    await this.getIndex();
+    // The SAME base the synchronous walk filters on (manifest-cached), so the
+    // "base tier" candidate prices exactly the set getTileIdsInBounds returns.
+    const base = this.baseTemporalBucketMs;
+    // The MEASURED exchange rate, or null while either estimator is cold. A
+    // null here abstains inside temporalTierArgmin — it is never widened into
+    // a constant on the way in.
+    const requestOverheadBytes = this.getRequestPriceBytes();
+    const argmin = temporalTierArgmin(
+      addressableTemporalTiers(levels, base, zoom).map((bucketMs) => ({
+        bucketMs,
+        selection: this.estimateSelectionCost(bounds, zoom, timeRange, {
+          bucketMs,
+        }),
+      })),
+      requestOverheadBytes,
+    );
+    if (argmin.pick) {
+      return {
+        bucketMs: argmin.pick.bucketMs,
+        bytes: argmin.pick.selection.bytes,
+        tiles: argmin.pick.selection.tiles,
+        cost: argmin.pick.cost,
+        requestOverheadBytes: argmin.requestOverheadBytes,
+        policy: 'cost-argmin',
+        exact: true,
+        abstainReason: 'none',
+      };
+    }
+    // Unpriceable ⇒ the incumbent rule answers, and says so.
+    const zoomPick = await this.pickTemporalLodForZoom(zoom);
+    const bucketMs = zoomPick?.bucketMs ?? base;
+    // Report the LOWER-BOUND numbers we do have for the tier we returned
+    // rather than zeroes that could read as "free"; `exact: false` is what
+    // says they are not authoritative.
+    const priced = argmin.candidates.find((c) => c.bucketMs === bucketMs);
+    return {
+      bucketMs,
+      bytes: priced?.selection.bytes ?? 0,
+      tiles: priced?.selection.tiles ?? 0,
+      cost: priced?.cost ?? Number.POSITIVE_INFINITY,
+      requestOverheadBytes: argmin.requestOverheadBytes,
+      policy: 'zoom-threshold',
+      exact: false,
+      abstainReason: argmin.reason,
+    };
   }
 
   /** Clear the in-memory compressed-byte cache (does NOT touch OPFS). */
@@ -3342,29 +5424,29 @@ function orderLonRange(minLon: number, maxLon: number): [number, number] {
 }
 
 /**
- * Web-Mercator tile coordinates covering a bounding box at a zoom.
+ * Web-Mercator scan window covering a bounding box at a zoom.
  *
  * x iteration is wrap-aware (see {@link tileXSpanForLonRange}) so a viewport
  * straddling the antimeridian yields columns from BOTH edges of the world;
  * y stays clamped (there is nothing to wrap around at the poles).
  *
- * `onOversized` is invoked when the scan exceeds {@link MAX_QUERY_SCAN_CELLS}.
- * It is a WARNING ONLY — the scan still returns every cell.
- *
  * An earlier revision truncated the scan to a centred window at that threshold.
  * That traded a frame-rate problem for a correctness one: the tiles outside the
  * kept window are on screen and simply never load, which is the same blank-region
- * symptom this whole module was fixed to remove, only now behind a single
- * `console.warn` that a user never sees. A cell count this large IS a defect
- * upstream — a camera zoom clamped far below the archive's `minZoom`, or a
- * degenerate producer box — and it should be fixed there. A slow correct frame
- * beats a fast wrong one.
+ * symptom this whole module was fixed to remove. The sparse occupied-cell path
+ * above makes a huge grid cheap without narrowing it.
  */
-function boundsToTiles(
-  bounds: BoundingBox,
-  zoom: number,
-  onOversized?: (cells: number, cap: number) => void,
-): [number, number][] {
+interface TileScanWindow {
+  worldSize: number;
+  startX: number;
+  xCount: number;
+  minY: number;
+  maxY: number;
+  cells: number;
+}
+
+/** Compute a bounds scan once so dense and sparse query paths share geometry. */
+function tileScanWindow(bounds: BoundingBox, zoom: number): TileScanWindow {
   const n = 1 << zoom;
   const { start, count } = tileXSpanForLonRange(
     bounds.minLon,
@@ -3381,21 +5463,17 @@ function boundsToTiles(
   // inverted box degrade to the band it brackets instead of to nothing.
   const yTop = latToTileY(bounds.maxLat, zoom);
   const yBottom = latToTileY(bounds.minLat, zoom);
-  let minY = Math.max(0, Math.min(yTop, yBottom));
-  let maxY = Math.min(Math.max(yTop, yBottom), n - 1);
-  const startX = start;
-  const xCount = count;
+  const minY = Math.max(0, Math.min(yTop, yBottom));
+  const maxY = Math.min(Math.max(yTop, yBottom), n - 1);
   const rows = maxY - minY + 1;
-  const cells = xCount * Math.max(0, rows);
-  if (cells > MAX_QUERY_SCAN_CELLS) onOversized?.(cells, MAX_QUERY_SCAN_CELLS);
-  const tiles: [number, number][] = [];
-  for (let i = 0; i < xCount; i++) {
-    const x = (((startX + i) % n) + n) % n;
-    for (let y = minY; y <= maxY; y++) {
-      tiles.push([x, y]);
-    }
-  }
-  return tiles;
+  return {
+    worldSize: n,
+    startX: start,
+    xCount: count,
+    minY,
+    maxY,
+    cells: count * Math.max(0, rows),
+  };
 }
 
 /**
@@ -3485,6 +5563,44 @@ export function lonQueryIntervals(
         [lo, 180],
         [-180, hi],
       ];
+}
+
+/**
+ * The leaf-page pruning predicate: does this descriptor's subtree intersect a
+ * `(bounds, zoom, timeRange)` query? Geo-bbox ∩ viewport ∧ zoom membership ∧
+ * temporal overlap — exactly the Rust `PageDescriptor::overlaps`.
+ *
+ * `lonSpans` are the WRAPPED query intervals ({@link lonQueryIntervals}) and
+ * `latLo <= latHi` is the ordered latitude band; both are hoisted out of the
+ * page loop by callers because they are per-query, not per-page.
+ *
+ * ONE definition, two callers: `ensurePagesForBounds` (which FETCHES what
+ * overlaps) and `unknownEntriesInBounds` (which COUNTS what overlaps and is
+ * not resident). Those two must agree exactly — "a leaf the query would have
+ * faulted in" IS the definition of a leaf the synchronous cost walk is blind
+ * to, so a divergence would silently turn an unpriced leaf into a reported-
+ * exact answer.
+ */
+function pageOverlapsQuery(
+  p: PageDescriptor,
+  lonSpans: Array<[number, number]>,
+  latLo: number,
+  latHi: number,
+  zoom: number,
+  timeRange: TimeRange,
+): boolean {
+  if (zoom < p.minZoom || zoom > p.maxZoom) return false;
+  let lonHit = false;
+  for (const [lo, hi] of lonSpans) {
+    if (p.maxLon >= lo && hi >= p.minLon) {
+      lonHit = true;
+      break;
+    }
+  }
+  if (!lonHit) return false;
+  if (p.maxLat < latLo || latHi < p.minLat) return false;
+  if (p.tMax < timeRange.start || p.tMin > timeRange.end) return false;
+  return true;
 }
 
 /**
@@ -3597,7 +5713,10 @@ function parseSummaryTier(raw: unknown): SummaryTier | undefined {
         .filter((c): c is SummaryColumn => c !== null)
     : [];
   const subBuckets = Math.max(1, Math.floor(Number(r.sub_buckets ?? 1)));
+  const variantId = Number(r.variant_id);
+  if (!Number.isSafeInteger(variantId) || variantId < 0) return undefined;
   return {
+    variantId,
     scheme,
     minZoom,
     maxZoom,
@@ -3704,6 +5823,10 @@ function parsePropertyStyleHint(raw: unknown): PropertyStyleHint | null {
  * (the rest of the block survives), a non-array `properties` degrades to an
  * empty list, and unknown extra keys are ignored for forward compatibility.
  *
+ * This is the ONLY snake_case → camelCase hop for the whole `style_hints`
+ * block, so every field the Rust writer emits needs a line here — a field this
+ * function does not name is dropped silently, with no error, on every archive.
+ *
  * The hints are build-time-measured DEFAULTS only — layer props / spec /
  * user config always override them.
  */
@@ -3722,6 +5845,19 @@ export function parseStyleHints(json: unknown): StyleHints | undefined {
   const playback = r.suggested_playback_seconds;
   if (typeof playback === 'number' && Number.isFinite(playback)) {
     out.suggestedPlaybackSeconds = playback;
+  }
+  // The writer's companion to the duration hint: how much time to SHOW at once
+  // (`suggested_time_window_ms`, emitted by `stt-build --derived-playback-params`).
+  // This rename is the ONLY hop between the Rust field and the camelCase name
+  // `@poopdeck.gl/playback`'s `resolvePlaybackParams` reads, so dropping it here
+  // silently kills the feature end-to-end — nothing throws, the reader just
+  // keeps its bucket-derived default forever. Same guard as the duration hint:
+  // a non-finite value is dropped rather than propagated, and an absent field
+  // leaves the key ABSENT so the reader's `?? bucket × 24` fallback runs
+  // exactly as it did before the field existed.
+  const timeWindowMs = r.suggested_time_window_ms;
+  if (typeof timeWindowMs === 'number' && Number.isFinite(timeWindowMs)) {
+    out.suggestedTimeWindowMs = timeWindowMs;
   }
   const layerHint = r.layer_hint;
   if (

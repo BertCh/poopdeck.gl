@@ -41,7 +41,7 @@ interface Captured {
    * would trip Node's unhandled-rejection detector before the layer (behind an
    * `await import`) ever attaches its handler.
    */
-  metadataGate?: () => Promise<any>;
+  metadataGate?: (archive: any) => Promise<any>;
 }
 const captured: Captured = { archives: [], tilesets: [] };
 
@@ -69,7 +69,7 @@ vi.mock('@poopdeck.gl/core', async () => {
     setLoadOptions = vi.fn();
     getMetadata = vi.fn(() =>
       captured.metadataGate
-        ? captured.metadataGate()
+        ? captured.metadataGate(this)
         : Promise.resolve(METADATA),
     );
     constructor(opts: { url: string }) {
@@ -216,6 +216,106 @@ describe('SpatioTemporalLayer archive swap', () => {
 
     expect(init).not.toHaveBeenCalled();
   });
+
+  it('uses a monotonic generation so stale A→B→A metadata cannot commit', async () => {
+    const releases: Array<(metadata: unknown) => void> = [];
+    captured.metadataGate = () =>
+      new Promise((resolve) => {
+        releases.push(resolve);
+      });
+
+    const layer = await makeLayer();
+    const firstA = layer._initArchiveAndTileset();
+    const archiveA1 = captured.archives[0];
+
+    layer.props = { ...layer.props, data: 'mem://b.stt' };
+    const b = layer._initArchiveAndTileset();
+    const archiveB = captured.archives[1];
+
+    layer.props = { ...layer.props, data: 'mem://a.stt' };
+    const secondA = layer._initArchiveAndTileset();
+    const archiveA2 = captured.archives[2];
+
+    // Superseded pending archives are cancelled immediately, not left alive
+    // until their metadata requests happen to settle.
+    expect(archiveA1.finalize).toHaveBeenCalled();
+    expect(archiveB.finalize).toHaveBeenCalled();
+    expect(layer.state.initializingArchive).toBe(archiveA2);
+    expect(layer.state.archive).toBeNull();
+    expect(layer.state.tileset).toBeNull();
+
+    // Resolve in the most adversarial order. URL equality must not let the
+    // first A attach after the newer A has become authoritative.
+    releases[0](METADATA);
+    releases[1](METADATA);
+    await Promise.all([firstA, b]);
+    expect(captured.tilesets).toHaveLength(0);
+
+    releases[2](METADATA);
+    await secondA;
+    expect(captured.tilesets).toHaveLength(1);
+    expect(layer.state.archive).toBe(archiveA2);
+    expect(layer.state.initializingArchive).toBeNull();
+  });
+
+  it('detaches a live source immediately while its replacement loads', async () => {
+    const layer = await makeLayer();
+    await layer._initArchiveAndTileset();
+    const oldArchive = layer.state.archive;
+    const oldTileset = layer.state.tileset;
+
+    let release!: (metadata: unknown) => void;
+    captured.metadataGate = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    layer.props = { ...layer.props, data: 'mem://b.stt' };
+    const pending = layer._initArchiveAndTileset();
+
+    expect(oldArchive.finalize).toHaveBeenCalled();
+    expect(oldTileset.finalize).toHaveBeenCalled();
+    expect(layer.state.archive).toBeNull();
+    expect(layer.state.tileset).toBeNull();
+    expect(layer.state.metadata).toBeNull();
+    expect(layer.state.tiles).toEqual([]);
+
+    release(METADATA);
+    await pending;
+  });
+
+  it('pushes changed transport options into an archive still loading metadata', async () => {
+    let release!: (metadata: unknown) => void;
+    captured.metadataGate = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const layer = await makeLayer();
+    const pending = layer._initArchiveAndTileset();
+    const archive = captured.archives[0];
+
+    const loadOptions = { fetch: vi.fn() };
+    layer.props = {
+      ...layer.props,
+      loadOptions,
+      maxRequests: 3,
+    };
+    layer.updateState({
+      changeFlags: {
+        propsChanged: 'props.loadOptions,maxRequests changed',
+        dataChanged: false,
+        propsOrDataChanged: true,
+        viewportChanged: false,
+        somethingChanged: true,
+      },
+    });
+
+    expect(archive.setLoadOptions).toHaveBeenCalledWith(loadOptions);
+    expect(archive.setMaxConcurrentRequests).toHaveBeenCalledWith(3);
+
+    release(METADATA);
+    await pending;
+    expect(layer.state.tileset.options.maxRequests).toBe(3);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -264,7 +364,7 @@ describe('SpatioTemporalLayer lifecycle state', () => {
     expect(captured.tilesets).toHaveLength(0);
     expect(captured.archives).toHaveLength(1);
     expect(captured.archives[0].finalize).toHaveBeenCalledTimes(1);
-    expect(first.state.tileset).toBeUndefined();
+    expect(first.state.tileset).toBeNull();
   });
 
   it('finalizeState nulls the tileset/archive handles so deferred bail-outs see a dead slot', async () => {
@@ -323,7 +423,7 @@ describe('SpatioTemporalLayer init failure', () => {
     // The slot is released, so `updateState` no longer treats the dead URL as
     // live and a later prop change can retry.
     expect(layer.state.initializingUrl).toBeNull();
-    expect(layer.state.tileset).toBeUndefined();
+    expect(layer.state.tileset).toBeNull();
     expect(captured.archives[0].finalize).toHaveBeenCalledTimes(1);
   });
 

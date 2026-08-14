@@ -32,6 +32,8 @@ interface DecodeRequest {
   timeRange: TimeRange;
   compressed: ArrayBuffer;
   compression: Compression;
+  /** Exact decompressed size declared by the directory. */
+  expectedUncompressedSize: number;
   /** Directory CRC-32C of `compressed`; verified before decompress when set. */
   expectedCrc32c?: number;
   /** Declared `manifest.formatVersion` (spec §5.2 authority check). */
@@ -59,7 +61,14 @@ type IncomingMessage = DecodeRequest | CancelRequest | TemplatesMessage;
 
 type DecodeResponse =
   | { requestId: number; tile: Tile; payload?: Uint8Array }
-  | { requestId: number; error: string };
+  | { requestId: number; error: string }
+  /**
+   * CANCEL ACK (M6 / BH-5). A cancelled request returns without a tile — but
+   * the host tracks exactly one active request per worker, so it must still be
+   * told the worker is free. Without this ack the worker would look busy
+   * forever and the pool would lose a slot per cancel.
+   */
+  | { requestId: number; cancelled: true };
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -100,8 +109,23 @@ ctx.onmessage = async (event: MessageEvent<IncomingMessage>) => {
     if (msg.expectedCrc32c !== undefined) {
       verifyCrc32c(new Uint8Array(compressed), msg.expectedCrc32c);
     }
-    const payload = await decompress(new Uint8Array(compressed), compression);
-    if (cancelledRequestIds.delete(requestId)) return;
+    const payload = await decompress(
+      new Uint8Array(compressed),
+      compression,
+      msg.expectedUncompressedSize,
+    );
+    if (payload.byteLength !== msg.expectedUncompressedSize) {
+      throw new Error(
+        `tile payload length mismatch: decoded ${payload.byteLength} bytes, ` +
+          `directory declares ${msg.expectedUncompressedSize}`,
+      );
+    }
+    if (cancelledRequestIds.delete(requestId)) {
+      // Skip the IPC parse + feature extraction (the expensive half) and free
+      // the host's slot for this worker.
+      ctx.postMessage({ requestId, cancelled: true } as DecodeResponse);
+      return;
+    }
     const tile = decodeTile(payload, id, timeRange, {
       templates,
       formatVersion: msg.formatVersion,
@@ -127,7 +151,11 @@ ctx.onmessage = async (event: MessageEvent<IncomingMessage>) => {
     }
     ctx.postMessage(response, transferables);
   } catch (err) {
-    if (cancelledRequestIds.delete(requestId)) return; // cancelled, not a real error
+    if (cancelledRequestIds.delete(requestId)) {
+      // Cancelled, not a real error — but still ack so the host frees the slot.
+      ctx.postMessage({ requestId, cancelled: true } as DecodeResponse);
+      return;
+    }
     // Tag the error with the tile id so the main thread's `[STL] Tile error`
     // log identifies the offending tile without a separate debug pass.
     const base = err instanceof Error ? err.message : String(err);

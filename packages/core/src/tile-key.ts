@@ -60,10 +60,10 @@ export type TileCellKey = string & { readonly __tileCellKey: unique symbol };
  * byte-stable across releases for the cache to survive them.
  */
 export function tileKey(id: TileId): TileKey {
+  const variant = id.variantId ?? 0;
+  const base = `${id.z}/${id.x}/${id.y}/${id.t}#${variant}`;
   return (
-    id.bucketMs !== undefined
-      ? `${id.z}/${id.x}/${id.y}/${id.t}@${id.bucketMs}`
-      : `${id.z}/${id.x}/${id.y}/${id.t}`
+    id.bucketMs !== undefined ? `${base}@${id.bucketMs}` : base
   ) as TileKey;
 }
 
@@ -84,9 +84,10 @@ export function tileEntryKey(
   x: number,
   y: number,
   t: number,
+  variantId: number,
   bucketMs: number | undefined,
 ): TileEntryKey {
-  return `${z}/${x}/${y}/${t}/${bucketMs ?? 'base'}` as TileEntryKey;
+  return `${z}/${x}/${y}/${t}#${variantId}/${bucketMs ?? 'base'}` as TileEntryKey;
 }
 
 /**
@@ -99,4 +100,42 @@ export function tileEntryKey(
  */
 export function tileCellKey(z: number, x: number, y: number): TileCellKey {
   return `${z}/${x}/${y}` as TileCellKey;
+}
+
+/**
+ * Inverse of {@link tileKey}: recover the {@link TileId} a key names, or
+ * `undefined` when the string is not one this module produced (so a malformed
+ * key can never fabricate a bogus tile address).
+ *
+ * Accepts a COMPOSITE key — anything a backend appended after a `:` or `::`
+ * separator, as {@link tileLayerKey} and the three/maplibre `(tile, layer)`
+ * keys do — by parsing only the leading tile half. That is what lets those
+ * backends fold `bucketMs` into their keys without re-teaching every parser
+ * the `@<width>` suffix.
+ */
+export function parseTileKey(key: string): TileId | undefined {
+  // Cut at the first separator: `:` covers both `:` and `::` composites, and
+  // no part of a tile key itself contains one.
+  const sep = key.indexOf(':');
+  const head = sep >= 0 ? key.slice(0, sep) : key;
+
+  const at = head.indexOf('@');
+  const beforeBucket = at >= 0 ? head.slice(0, at) : head;
+  const bucketPart = at >= 0 ? head.slice(at + 1) : '';
+  const hash = beforeBucket.indexOf('#');
+  if (hash < 0) return undefined;
+  const coords = beforeBucket.slice(0, hash);
+  const variantPart = beforeBucket.slice(hash + 1);
+
+  const parts = coords.split('/');
+  if (parts.length !== 4) return undefined;
+  const [z, x, y, t] = parts.map(Number);
+  if (![z, x, y, t].every((n) => Number.isFinite(n))) return undefined;
+  const variantId = Number(variantPart);
+  if (!Number.isFinite(variantId)) return undefined;
+
+  if (at < 0) return { z, x, y, t, variantId };
+  const bucketMs = Number(bucketPart);
+  if (!Number.isFinite(bucketMs)) return undefined;
+  return { z, x, y, t, variantId, bucketMs };
 }

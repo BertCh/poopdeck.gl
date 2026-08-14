@@ -252,6 +252,49 @@ export interface NodeTable {
  * Animated OD flowmap on the {@link SpatioTemporalLayer} chassis. Inherits tile
  * streaming, prefetch, picking, and theme props at zero cost.
  */
+/** One cached per-tile FlowLinesLayer plus everything baked into it. */
+interface CachedFlowArc {
+  layer: FlowLinesLayer;
+  flowStep: number;
+  propsKey: string;
+  setKey: string;
+}
+
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link FlowmapLayer.flowCaches}.
+ */
+interface FlowmapCaches {
+  geom: Map<string, TileGeom>;
+  arcs: Map<string, CachedFlowArc>;
+  tilesRef: Tile[] | null;
+  propsKey: string;
+  tileSetKey: string;
+  nodeTable: NodeTable | null;
+  bucket0Abs: number;
+  bucketWidth: number;
+  numBuckets: number;
+  lastStep: number;
+}
+
+const FLOWMAP_CACHE_SLOT = '_sttFlowmapCaches';
+
+function freshFlowmapCaches(): FlowmapCaches {
+  return {
+    geom: new Map(),
+    arcs: new Map(),
+    tilesRef: null,
+    propsKey: '',
+    tileSetKey: '',
+    nodeTable: null,
+    bucket0Abs: 0,
+    bucketWidth: 0,
+    numBuckets: 0,
+    lastStep: -1,
+  };
+}
+
 export class FlowmapLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<ExtraPropsT & Required<_FlowmapLayerProps>> {
@@ -300,8 +343,29 @@ export class FlowmapLayer<
     },
   };
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, every unmemoized `new FlowmapLayer({...})`
+   * in a React render re-derived every tile's OD endpoints and re-interned the
+   * whole node table. `AnimatedTripsLayer` fixed this first.
+   */
+  private get flowCaches(): FlowmapCaches {
+    return this.stateSlot(FLOWMAP_CACHE_SLOT, freshFlowmapCaches);
+  }
+
+  // The accessors below keep the historical field NAMES while the storage lives
+  // on `state`.
+
   /** tileKey → geometry (rebuilt only when a tile appears). */
-  private geomCache = new Map<string, TileGeom>();
+  private get geomCache(): Map<string, TileGeom> {
+    return this.flowCaches.geom;
+  }
+  private set geomCache(value: Map<string, TileGeom>) {
+    this.flowCaches.geom = value;
+  }
   /**
    * tileKey → cached FlowLinesLayer + everything baked into it. `setKey` is
    * load-bearing: the endpoint insets are the node radii aggregated across ALL
@@ -309,28 +373,65 @@ export class FlowmapLayer<
    * hub's circle while a cache hit would keep the smaller inset — arrowheads
    * buried under the circle until the sub-step happened to turn over.
    */
-  private arcCache = new Map<
-    string,
-    {
-      layer: FlowLinesLayer;
-      flowStep: number;
-      propsKey: string;
-      setKey: string;
-    }
-  >();
-  private lastTilesRef: Tile[] | null = null;
-  private lastPropsKey = '';
+  private get arcCache(): Map<string, CachedFlowArc> {
+    return this.flowCaches.arcs;
+  }
+  private set arcCache(value: Map<string, CachedFlowArc>) {
+    this.flowCaches.arcs = value;
+  }
+  private get lastTilesRef(): Tile[] | null {
+    return this.flowCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.flowCaches.tilesRef = value;
+  }
+  private get lastPropsKey(): string {
+    return this.flowCaches.propsKey;
+  }
+  private set lastPropsKey(value: string) {
+    this.flowCaches.propsKey = value;
+  }
   /** Sorted membership key of the live tile set (NOT array identity). */
-  private tileSetKey = '';
+  private get tileSetKey(): string {
+    return this.flowCaches.tileSetKey;
+  }
+  private set tileSetKey(value: string) {
+    this.flowCaches.tileSetKey = value;
+  }
   /** Station identity for {@link tileSetKey}; rebuilt only when the set changes. */
-  private nodeTable: NodeTable | null = null;
+  private get nodeTable(): NodeTable | null {
+    return this.flowCaches.nodeTable;
+  }
+  private set nodeTable(value: NodeTable | null) {
+    this.flowCaches.nodeTable = value;
+  }
 
   // Global bucket axis (shared by every flow tile) — cached from the first
   // matrix tile, drives the time-forced render gate in _handleTimeUpdate.
-  private _bucket0Abs = 0;
-  private _bucketWidth = 0;
-  private _numBuckets = 0;
-  private _lastStep = -1;
+  private get _bucket0Abs(): number {
+    return this.flowCaches.bucket0Abs;
+  }
+  private set _bucket0Abs(value: number) {
+    this.flowCaches.bucket0Abs = value;
+  }
+  private get _bucketWidth(): number {
+    return this.flowCaches.bucketWidth;
+  }
+  private set _bucketWidth(value: number) {
+    this.flowCaches.bucketWidth = value;
+  }
+  private get _numBuckets(): number {
+    return this.flowCaches.numBuckets;
+  }
+  private set _numBuckets(value: number) {
+    this.flowCaches.numBuckets = value;
+  }
+  private get _lastStep(): number {
+    return this.flowCaches.lastStep;
+  }
+  private set _lastStep(value: number) {
+    this.flowCaches.lastStep = value;
+  }
 
   finalizeState(context: any): void {
     super.finalizeState(context);

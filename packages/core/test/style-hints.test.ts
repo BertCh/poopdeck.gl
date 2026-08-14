@@ -48,6 +48,7 @@ const WIRE_FIXTURE = {
     { name: 'category', cardinality: 7 },
   ],
   suggested_playback_seconds: 45,
+  suggested_time_window_ms: 21_600_000,
   layer_hint: 'points',
 };
 
@@ -68,6 +69,7 @@ const EXPECTED_HINTS: StyleHints = {
     { name: 'category', cardinality: 7 },
   ],
   suggestedPlaybackSeconds: 45,
+  suggestedTimeWindowMs: 21_600_000,
   layerHint: 'points',
 };
 
@@ -144,9 +146,71 @@ describe('parseStyleHints', () => {
       version: 1,
       properties: [],
       suggested_playback_seconds: 'forever',
+      suggested_time_window_ms: 'as long as it takes',
       layer_hint: 'hexagons', // not a recognized hint
     });
     expect(hints).toEqual({ version: 1, properties: [] });
+  });
+
+  // -------------------------------------------------------------------------
+  // BH-10 seam — `suggested_time_window_ms` ⇄ `suggestedTimeWindowMs`.
+  //
+  // This field crosses THREE layers and every one of them has to agree on a
+  // name: the Rust writer emits snake_case
+  // (`stt_core::metadata::StyleHints::suggested_time_window_ms`, behind
+  // `stt-build --derived-playback-params`), THIS parser is the only hop that
+  // renames it, and `@poopdeck.gl/playback`'s `resolvePlaybackParams` reads the
+  // camelCase result as the loader-window DEFAULT. A miss anywhere in that
+  // chain is SILENT — nothing throws, the field is simply dropped and the
+  // reader keeps the bucket-derived window forever. These cases are the pin on
+  // the middle hop; the reader hop is pinned in
+  // `packages/playback/test/derive-params.test.ts` ("the core-parser seam").
+  // -------------------------------------------------------------------------
+  it('maps suggested_time_window_ms onto suggestedTimeWindowMs', () => {
+    const hints = parseStyleHints({
+      version: 1,
+      properties: [],
+      suggested_time_window_ms: 21_600_000,
+    });
+    expect(hints).toEqual({
+      version: 1,
+      properties: [],
+      suggestedTimeWindowMs: 21_600_000,
+    });
+  });
+
+  it('omits suggestedTimeWindowMs entirely when the wire block has none', () => {
+    // Archives built before the field existed, and every build without
+    // `--derived-playback-params`. The key must be ABSENT, not
+    // `undefined`-filled, so the reader's `?? bucket × 24` default is what
+    // runs — this is the reader-side byte-neutrality claim.
+    const hints = parseStyleHints({
+      version: 1,
+      properties: [],
+      suggested_playback_seconds: 45,
+    });
+    expect('suggestedTimeWindowMs' in hints!).toBe(false);
+    expect(Object.keys(hints!)).toEqual([
+      'version',
+      'properties',
+      'suggestedPlaybackSeconds',
+    ]);
+  });
+
+  it('drops a non-finite window without losing the rest of the block', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, null, '6h', {}]) {
+      const hints = parseStyleHints({
+        version: 1,
+        properties: [],
+        suggested_time_window_ms: bad,
+        suggested_playback_seconds: 45,
+      });
+      expect(hints).toEqual({
+        version: 1,
+        properties: [],
+        suggestedPlaybackSeconds: 45,
+      });
+    }
   });
 
   it('tolerates unknown extra keys at block and entry level', () => {
@@ -195,7 +259,7 @@ let synthSeq = 0;
  * the path under test only reads the manifest.
  */
 function buildSyntheticArchive(metadata: unknown): InMemoryPackedDataset {
-  const pack = new Uint8Array([0]);
+  const pack = new Uint8Array(8);
   const indexBytes = encodeDirectory([
     {
       zoom: 0,
@@ -218,12 +282,13 @@ function buildSyntheticArchive(metadata: unknown): InMemoryPackedDataset {
   objects.set('index/dir.sttd', indexBytesObject);
   const manifest = {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: [{ id: 0, kind: 'raw' }],
     compression: 'none',
     directory: {
       key: 'index/dir.sttd',
       length: indexBytesObject.byteLength,
-      directoryVersion: 5,
+      directoryVersion: 6,
     },
     packs: [{ key: 'packs/p0.sttp', length: pack.byteLength }],
     metadata,
@@ -260,6 +325,11 @@ describe('style hints: metadata round-trip', () => {
     expect(suggestedDomainFor(meta.styleHints, 'magnitude')).toEqual([
       0.1, 5.3,
     ]);
+    // BH-10 end-to-end: a manifest carrying the writer's snake_case window hint
+    // reaches `ArchiveMetadata.styleHints` under the camelCase name that
+    // `resolvePlaybackParams` reads. Without this the feature is dead on
+    // arrival — the manifest carries the field and the player never sees it.
+    expect(meta.styleHints?.suggestedTimeWindowMs).toBe(21_600_000);
   });
 
   it('leaves styleHints undefined for archives without the block', async () => {

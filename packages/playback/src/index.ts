@@ -40,13 +40,32 @@ export type {
   PlaybackGovernorOptions,
   PlaybackGovernorState,
   PlaybackQoeStats,
+  ScrubQoeStats,
   SourceRunway,
   ThroughputEstimate,
 } from './playback-governor.js';
 
+// Multi-source fair-share weight policy (BH-3, §11.3): byte-aware progressive
+// filling toward equalized time-to-gate, plus the incumbent runway shed kept as
+// the named one-release fallback. Pure; the governor's only weight math.
+export {
+  computeProgressiveFillWeights,
+  computeRunwayShedWeights,
+  legacyRunwayShedWeight,
+  FAIRNESS_WEIGHT_MIN,
+  FAIRNESS_WEIGHT_MAX,
+} from './fairness.js';
+export type { ProgressiveFillProbe } from './fairness.js';
+
 // Auto-speed step decision (asymmetric ABR: immediate downshifts, damped
 // upshifts) shared by every consumer of getAutoSpeedSuggestion.
-export { decideAutoSpeedMultiplier, SPEED_STEPS } from './auto-speed.js';
+export {
+  decideAutoSpeedMultiplier,
+  dispersionScale,
+  DISPERSION_SCALE_K,
+  DISPERSION_SCALE_MAX,
+  SPEED_STEPS,
+} from './auto-speed.js';
 export type { AutoSpeedDecisionOptions, AutoSpeedPhase } from './auto-speed.js';
 
 // SttPlayer — the HTMLMediaElement-shaped facade over TimeController +

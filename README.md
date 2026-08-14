@@ -267,10 +267,13 @@ pnpm --filter @poopdeck.gl/showcase dev # Run the showcase locally
 
 STT renders through multiple, interchangeable backends (deck.gl, Three.js+TSL,
 MapLibre, CesiumJS) that all consume the same decoded tiles and playback clock.
-Shared logic (time-filter, color, projection, geometry, picking, tileset glue,
-shader-alpha codegen) lives in a framework-free **render kernel** under
-`@poopdeck.gl/core` sub-paths; each backend is a thin adapter that publishes a
-capability `BackendDescriptor`. See
+Shared logic (time-filter, color, projection, geometry, picking, tileset glue)
+lives in a framework-free **render kernel** under `@poopdeck.gl/core`
+sub-paths; each backend is a thin adapter that publishes a capability
+`BackendDescriptor`. Shaders are hand-written per dialect — the kernel holds
+the time-filter alpha _definition_ twice (a CPU oracle plus an independent
+expression-AST evaluator), and each backend's shader math is pinned to both by
+a conformance test. See
 [docs/roadmap/renderer-architecture.md](docs/roadmap/renderer-architecture.md)
 for the design and [docs/spec/backend-capabilities.md](docs/spec/backend-capabilities.md)
 for the generated capability matrix.

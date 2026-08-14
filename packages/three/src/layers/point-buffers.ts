@@ -10,7 +10,7 @@
  */
 
 import type { BinaryFeatures, Tile, TileId } from '@poopdeck.gl/core';
-import { GeometryType } from '@poopdeck.gl/core';
+import { GeometryType, tileKey } from '@poopdeck.gl/core';
 import { InstanceProvenance } from '@poopdeck.gl/core/picking';
 import type { Projection } from '../projection/local-enu.js';
 import {
@@ -70,12 +70,17 @@ export interface PointBuffers {
 }
 
 /**
- * Stable key for a source `(tile, layer)`: `z/x/y/t::layerName`. The
- * merged-buffer provenance records this per instance so a decoded pick index
- * maps back to a specific tile-layer's `BinaryFeatures`.
+ * Stable key for a source `(tile, layer)`: the canonical {@link tileKey} then
+ * `::layerName`. The merged-buffer provenance records this per instance so a
+ * decoded pick index maps back to a specific tile-layer's `BinaryFeatures`.
+ *
+ * The tile half comes from core so it folds in the temporal-LOD `bucketMs`;
+ * spelled `z/x/y/t` by hand, a scrub-preview tile and its base twin shared one
+ * provenance slot and a pick resolved against the wrong tile's features.
+ * `parseTileKey` reads the composite back, `@<width>` suffix and all.
  */
 export function pointTileKey(id: TileId, layerName: string): string {
-  return `${id.z}/${id.x}/${id.y}/${id.t}::${layerName}`;
+  return `${tileKey(id)}::${layerName}`;
 }
 
 function colorsForTile(

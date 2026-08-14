@@ -132,9 +132,13 @@ export { TimeFilterExtension } from './extensions/time-filter-extension.js';
 // per-feature/per-vertex times against a layer timeOffset — export the
 // canonical helper + the f32 precision ceiling so consumers don't have to
 // re-derive the scheme.
+// `NEVER_ENDS` rides along because the "feature has no end" sentinel MUST be a
+// large finite f32, never `Infinity` — deck's constant-attribute normalization
+// turns a non-finite value into 0 and blanks the layer.
 export {
   relativizeTime,
   MAX_RELATIVE_TIME_MS,
+  NEVER_ENDS,
 } from './extensions/time-filter-extension.js';
 export {
   CategoryColorExtension,
@@ -189,6 +193,7 @@ export {
   measure,
   disableProbe,
   enableProbe,
+  acquireProbe,
   snapshot,
   getSnapshot,
 } from './lib/telemetry.js';

@@ -32,10 +32,6 @@ export const links: LinksFunction = () => [
     rel: 'stylesheet',
     href: 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap',
   },
-  {
-    rel: 'stylesheet',
-    href: 'https://api.mapbox.com/mapbox-gl-js/v3.0.0/mapbox-gl.css',
-  },
 ];
 
 export const meta: MetaFunction = () => [

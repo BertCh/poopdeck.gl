@@ -47,6 +47,10 @@ export const sqrt = TSL.sqrt as unknown as Builder;
 export const mix = TSL.mix as unknown as Builder;
 export const step = TSL.step as unknown as Builder;
 export const oneMinus = TSL.oneMinus as unknown as Builder;
+/** `(vec4, sourceColorSpace) → vec4` in the renderer's working colour space.
+ *  Wrapped by {@link ../tsl/color-space.srgbToWorking} — call that, not this. */
+export const colorSpaceToWorking =
+  TSL.colorSpaceToWorking as unknown as Builder;
 
 // ── Built-in node constants ──────────────────────────────────────────────────
 export const positionGeometry = TSL.positionGeometry as unknown as TSLNode;

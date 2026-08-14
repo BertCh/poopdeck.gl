@@ -20,6 +20,31 @@ import {
 import { warnOnce } from '../lib/log.js';
 
 /**
+ * "This feature never stops being visible", expressed as the largest FINITE
+ * Float32.
+ *
+ * `Infinity` cannot be used, and that is not a style preference. deck runs
+ * every constant attribute value through `DataColumn._normalizeValue`
+ * (core/lib/attribute/data-column.ts), which for a size-1 attribute evaluates
+ * `Number.isFinite(value[0]) ? value[0] : defaultValue[0]`. `Infinity[0]` is
+ * `undefined`, so a literal `Infinity` writes the descriptor's `defaultValue`
+ * — `0` when none is declared. The shader's window test then reads an end time
+ * of 0 and hides the feature as soon as the playhead passes `timeWindow / 2`:
+ * a silently blank layer with no warning. `defaultValue: Infinity` fails the
+ * same way one level down (the raw non-finite number is kept and the buffer
+ * fills with NaN).
+ *
+ * Exported so callers writing their own `getInstanceEndTime` accessor have the
+ * sentinel to return instead of reaching for `Infinity`.
+ *
+ * The literal is the EXACT f32 maximum as a JS double
+ * (`(2 - 2^-23) * 2^127`), not the rounded `3.4028235e38` — so the value
+ * survives the Float32Array store unchanged and the CPU-side and GPU-side
+ * comparisons agree bit for bit.
+ */
+export const NEVER_ENDS = 3.4028234663852886e38;
+
+/**
  * Props for layers using TimeFilterExtension
  */
 export type TimeFilterExtensionProps<DataT = unknown> = {
@@ -163,7 +188,16 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
   getInstanceStartTime?: Accessor<DataT, number>;
   /**
    * Accessor returning a feature's end time.
-   * @default Infinity
+   *
+   * Defaults to {@link NEVER_ENDS} (the largest finite f32), NOT
+   * `Infinity`. deck normalizes every constant attribute value through
+   * `DataColumn._normalizeValue`, which rejects non-finite numbers and falls
+   * back to the descriptor's `defaultValue` — so a literal `Infinity` here
+   * silently becomes `0` and the shader hides every feature the moment the
+   * playhead passes `timeWindow / 2`. Return a large finite number from a
+   * custom accessor for the same reason.
+   *
+   * @default 3.4028234663852886e38 (the f32 maximum)
    */
   getInstanceEndTime?: Accessor<DataT, number>;
   /**
@@ -173,6 +207,33 @@ export type TimeFilterExtensionProps<DataT = unknown> = {
    * @default 0
    */
   getInstanceVertexTime?: Accessor<DataT, number>;
+  /**
+   * Re-points `instanceEndTime` from "this FEATURE's end time" to "the NEXT
+   * VERTEX's time", which is what lets a trail glide instead of stepping.
+   *
+   * Trail mode reads one time per segment instance (`instanceVertexTime`, the
+   * segment's START vertex), so `vTimeAlpha` is constant across the whole
+   * segment quad: the head jumps a whole segment at a time and the fade is a
+   * staircase. Upstream `TripsLayer` avoids that by binding a SECOND shader
+   * view of the timestamp buffer at `vertexOffset: 1` and interpolating along
+   * the segment — but a second view costs its own vertex-attribute slot, and
+   * this pipeline already sits at WebGL2's guaranteed 16-slot floor (see
+   * {@link AnimatedTripsLayer}'s attribute-budget note).
+   *
+   * `instanceEndTime` is the slot that pays for itself here: in TRAIL mode the
+   * shader never reads it (only window mode does), so a trail-only layer can
+   * hand it the next vertex's time and get the interpolation for free. Setting
+   * this flag tells the shader about the reinterpretation, and window mode
+   * falls back to {@link NEVER_ENDS} — exactly the constant a trail layer's
+   * unset `getInstanceEndTime` accessor would have supplied anyway.
+   *
+   * The interpolation itself is injected only for PATH-family layers (it reads
+   * PathLayer's `vPathPosition` / `vPathLength` varyings) — see the extension's
+   * `pathSegmentTime` option. This prop without that option still culls whole
+   * segments by both endpoints, it just doesn't glide.
+   * @default false
+   */
+  segmentTime?: boolean;
 };
 
 // Define uniform types for the shader module
@@ -195,6 +256,11 @@ type TimeFilterUniformProps = {
    * resolved "unset" default — anchors the cube at the tile's own timeOffset.
    */
   heightOrigin: number;
+  /**
+   * 1.0 = `instanceEndTime` carries the NEXT VERTEX's time rather than the
+   * feature's end time (see the `segmentTime` prop); 0.0 = off.
+   */
+  segmentTime: number;
 };
 
 // Uniform block for GLSL 3.0 (WebGL2). layout(std140) matches upstream
@@ -214,6 +280,7 @@ layout(std140) uniform timeFilterUniforms {
   float cumulative;
   float heightScale;
   float heightOrigin;
+  float segmentTime;
 } timeFilter;
 `;
 
@@ -232,21 +299,86 @@ layout(std140) uniform timeFilterUniforms {
 const glslVertexDecl = `\
 // Per-vertex timestamp, RELATIVE to the layer timeOffset (trail mode).
 in float instanceVertexTime;
-// Feature-level times, RELATIVE to the layer timeOffset.
+// Feature-level times, RELATIVE to the layer timeOffset. Under segmentTime,
+// instanceEndTime is re-pointed at the NEXT VERTEX's time instead; see the
+// prop docstring. (Shader sources stay ASCII: this string is concatenated
+// straight into GLSL, and a compile failure here blanks the layer.)
 in float instanceStartTime;
 in float instanceEndTime;
 out float vTimeAlpha;
+// Time at THIS FRAGMENT, interpolated along the segment under \`segmentTime\`
+// (else a constant copy of instanceVertexTime). Always written, so the
+// varying is never read undefined on layers that don't interpolate.
+out float vSegTime;
 `;
 
 const glslFragmentDecl = `\
 in float vTimeAlpha;
+in float vSegTime;
 `;
+
+// Trail fade evaluated PER FRAGMENT from the interpolated \`vSegTime\`, so the
+// head glides along a segment and the fade is continuous. Lives in the module
+// (not an injection) so both the discard and the color hook can call it — GLSL
+// locals don't cross injection points, and re-deriving it in each hook is a few
+// ALU ops on an already fragment-bound path.
+const glslFragmentHelpers = `\
+float sttSegmentTrailAlpha() {
+  float age = timeFilter.currentTime - vSegTime;
+  if (age < 0.0 || age > timeFilter.trailLength) return 0.0;
+  float faded = clamp(1.0 - age / timeFilter.trailLength, 0.0, 1.0);
+  // trailFade == 1.0 -> classic head-to-tail fade; 0.0 -> solid trail.
+  return mix(1.0, faded, timeFilter.trailFade);
+}
+`;
+
+/**
+ * `vs:#main-end` injection, in two flavours.
+ *
+ * BOTH collapse fully-hidden geometry at the VERTEX stage (upstream
+ * DataFilterExtension does the same): a degenerate clip-space position
+ * rasterizes zero fragments, so off-window features stop paying fragment cost —
+ * at low zoom most features in a tile are outside the window. The collapse is
+ * gated IN-SHADER on trail mode because window/wake/cumulative alphas are
+ * whole-feature (every vertex agrees) while a STAIRCASE trail fades per-vertex,
+ * and collapsing one end of a still-visible segment would drag its geometry to
+ * the origin. `segmentTime` re-opens the door for trails: there `vTimeAlpha` is
+ * a whole-SEGMENT flag derived from both endpoints, so a zero really does mean
+ * "no part of this segment is in the trail" — and a trail lights a small slice
+ * of a tile at any instant, so that reclaims the fragment cost of all the rest.
+ *
+ * The `pathSegmentTime` flavour additionally interpolates the segment's time.
+ * `vPathPosition.y` is the distance along the segment from its start vertex and
+ * `vPathLength` the segment's length, both written by PathLayer's
+ * `getLineJoinOffset()` — hence #main-end (they are not set yet at #main-start,
+ * and do not exist AT ALL on non-path layers, which is why this is an option
+ * rather than shared). Same interpolation upstream `TripsLayer` does, minus the
+ * second attribute slot: the head glides along the segment instead of jumping
+ * from vertex to vertex.
+ */
+function glslMainEnd(pathSegmentTime: boolean): string {
+  const interpolate = pathSegmentTime
+    ? `
+          if (timeFilter.segmentTime > 0.5) {
+            float segT = vPathLength > 0.0
+              ? clamp(vPathPosition.y / vPathLength, 0.0, 1.0)
+              : 0.0;
+            vSegTime = mix(instanceVertexTime, instanceEndTime, segT);
+          }`
+    : '';
+  return `${interpolate}
+          if (vTimeAlpha <= 0.0 &&
+              (timeFilter.trailLength <= 0.0 || timeFilter.segmentTime > 0.5)) {
+            gl_Position = vec4(0.);
+          }
+        `;
+}
 
 // Shader module definition for deck.gl 9.x
 const timeFilterUniforms = {
   name: 'timeFilter',
   vs: `${glslUniformBlock}${glslVertexDecl}`,
-  fs: `${glslUniformBlock}${glslFragmentDecl}`,
+  fs: `${glslUniformBlock}${glslFragmentDecl}${glslFragmentHelpers}`,
   uniformTypes: {
     currentTime: 'f32',
     windowHalf: 'f32',
@@ -259,6 +391,7 @@ const timeFilterUniforms = {
     cumulative: 'f32',
     heightScale: 'f32',
     heightOrigin: 'f32',
+    segmentTime: 'f32',
   },
 };
 
@@ -279,10 +412,12 @@ const defaultProps: DefaultProps<TimeFilterExtensionProps> = {
   // sentinel, which the 'number' validator would reject in deck's debug mode.
   timeHeightOrigin: { type: 'object', value: null, optional: true },
   getInstanceStartTime: { type: 'accessor', value: 0 },
-  getInstanceEndTime: { type: 'accessor', value: Infinity },
+  // NEVER_ENDS, not Infinity — see the prop doc and the constant's own note.
+  getInstanceEndTime: { type: 'accessor', value: NEVER_ENDS },
   // Constant default: window-mode layers never set a per-vertex time, but the
   // attribute is always registered so deck.gl requires a valid accessor.
   getInstanceVertexTime: { type: 'accessor', value: 0 },
+  segmentTime: false,
 };
 
 /**
@@ -374,6 +509,10 @@ function resolveHeightOrigin(
  * 2. Trail mode (trailLength > 0): Progressive drawing with trailing fade for paths/trajectories
  *    - Uses instanceVertexTime (actual per-vertex timestamp) for smooth animation
  *    - Falls back to instanceStartTime/instanceEndTime for feature-level filtering
+ *    - With the `segmentTime` prop (+ the `pathSegmentTime` option on path
+ *      layers), instanceEndTime carries the NEXT VERTEX's time and the fade is
+ *      interpolated ACROSS each segment in the fragment stage — a glide rather
+ *      than one alpha per segment. See that prop's docstring.
  */
 /**
  * Compatibility-mode placeholder. Earlier sprint iterations explored gating
@@ -399,10 +538,28 @@ export interface TimeFilterExtensionOptions {
    * path. Today all values behave identically.
    */
   mode?: TimeFilterMode;
+  /**
+   * Inject the per-segment time INTERPOLATION that turns the staircase trail
+   * into a glide. Reads PathLayer's `vPathPosition` / `vPathLength` varyings,
+   * so it is only legal on PATH-family layers (PathLayer and its subclasses) —
+   * on a ScatterplotLayer or an ArcLayer those identifiers don't exist and the
+   * shader fails to compile. Pair it with the layer prop `segmentTime: true`,
+   * which is what actually arms the branch at draw time.
+   *
+   * Unlike {@link mode}, this genuinely changes the emitted GLSL. It is an
+   * option (per-extension-INSTANCE `inject`) rather than a prop because deck
+   * bakes shaders per extension instance, and the shared `timeFilterUniforms`
+   * MODULE must stay byte-identical across every layer type — luma dedupes
+   * modules by name, so a per-layer module variant would silently hand one
+   * layer's source to another.
+   * @default false
+   */
+  pathSegmentTime?: boolean;
 }
 
 const defaultOptions: Required<TimeFilterExtensionOptions> = {
   mode: 'auto',
+  pathSegmentTime: false,
 };
 
 export class TimeFilterExtension extends LayerExtension<
@@ -450,6 +607,11 @@ export class TimeFilterExtension extends LayerExtension<
       inject: {
         'vs:#main-start': `
           vTimeAlpha = 1.0;
+          // Default: every corner of the quad carries the segment's START
+          // vertex time (today's staircase). Path layers built with
+          // \`pathSegmentTime\` overwrite this at #main-end with the true
+          // interpolated time along the segment.
+          vSegTime = instanceVertexTime;
 
           if (timeFilter.cumulative > 0.0) {
             // "Draw and persist": visible once created, then stays forever.
@@ -470,21 +632,38 @@ export class TimeFilterExtension extends LayerExtension<
             }
           } else if (timeFilter.trailLength > 0.0) {
             float trailStart = timeFilter.currentTime - timeFilter.trailLength;
-            float vertexTime = instanceVertexTime;
-            if (vertexTime > timeFilter.currentTime) {
-              vTimeAlpha = 0.0;
-            } else if (vertexTime < trailStart) {
-              vTimeAlpha = 0.0;
+            if (timeFilter.segmentTime > 0.5) {
+              // instanceEndTime is the NEXT vertex's time, so the segment spans
+              // [min, max] of the two and vTimeAlpha degrades to a whole-segment
+              // VISIBILITY flag — the fade itself is per-fragment, off vSegTime.
+              // Culling on the span (not just the start vertex) is what stops a
+              // segment blinking out while the head is still crossing it.
+              float segLo = min(instanceVertexTime, instanceEndTime);
+              float segHi = max(instanceVertexTime, instanceEndTime);
+              vTimeAlpha =
+                (segHi < trailStart || segLo > timeFilter.currentTime) ? 0.0 : 1.0;
             } else {
-              float age = timeFilter.currentTime - vertexTime;
-              float faded = clamp(1.0 - (age / timeFilter.trailLength), 0.0, 1.0);
-              // trailFade == 1.0 -> classic head→tail fade; 0.0 -> solid trail.
-              vTimeAlpha = mix(1.0, faded, timeFilter.trailFade);
+              float vertexTime = instanceVertexTime;
+              if (vertexTime > timeFilter.currentTime) {
+                vTimeAlpha = 0.0;
+              } else if (vertexTime < trailStart) {
+                vTimeAlpha = 0.0;
+              } else {
+                float age = timeFilter.currentTime - vertexTime;
+                float faded = clamp(1.0 - (age / timeFilter.trailLength), 0.0, 1.0);
+                // trailFade == 1.0 -> classic head→tail fade; 0.0 -> solid trail.
+                vTimeAlpha = mix(1.0, faded, timeFilter.trailFade);
+              }
             }
           } else {
             float timeStart = timeFilter.currentTime - timeFilter.windowHalf;
             float timeEnd = timeFilter.currentTime + timeFilter.windowHalf;
-            if (instanceEndTime < timeStart || instanceStartTime > timeEnd) {
+            // Under segmentTime the end slot holds a per-VERTEX time, not the
+            // feature's end, so window mode must not read it: NEVER_ENDS is
+            // exactly what a trail layer's unset accessor would have supplied.
+            float featureEnd =
+              timeFilter.segmentTime > 0.5 ? 3.4028235e38 : instanceEndTime;
+            if (featureEnd < timeStart || instanceStartTime > timeEnd) {
               vTimeAlpha = 0.0;
             }
             if (vTimeAlpha > 0.0 && timeFilter.fadeIn > 0.0) {
@@ -494,7 +673,7 @@ export class TimeFilterExtension extends LayerExtension<
               }
             }
             if (vTimeAlpha > 0.0 && timeFilter.fadeOut > 0.0) {
-              float remaining = instanceEndTime - timeStart;
+              float remaining = featureEnd - timeStart;
               if (remaining < timeFilter.fadeOut) {
                 vTimeAlpha *= (remaining / timeFilter.fadeOut);
               }
@@ -532,24 +711,16 @@ export class TimeFilterExtension extends LayerExtension<
               - project_common_position_to_clipspace(geometry.position);
           }
         `,
-        // Collapse fully-hidden features at the VERTEX stage (upstream
-        // DataFilterExtension does the same): degenerate clip-space position
-        // ⇒ zero fragments rasterized, so off-window features stop paying
-        // fragment cost (at low zoom most features in a tile are outside the
-        // window). Gated IN-SHADER on trail mode: window/wake/cumulative
-        // alphas are whole-feature (every vertex of a feature agrees), but a
-        // trail fades per-vertex — collapsing one end of a still-visible
-        // segment would drag its geometry to the origin.
-        'vs:#main-end': `
-          if (vTimeAlpha <= 0.0 && timeFilter.trailLength <= 0.0) {
-            gl_Position = vec4(0.);
-          }
-        `,
+        'vs:#main-end': glslMainEnd(extension.opts.pathSegmentTime),
         'fs:#main-start': `
           if (vTimeAlpha <= 0.0) discard;
+          if (timeFilter.segmentTime > 0.5 && timeFilter.trailLength > 0.0 &&
+              sttSegmentTrailAlpha() <= 0.0) discard;
         `,
         'fs:DECKGL_FILTER_COLOR': `
-          color.a *= vTimeAlpha;
+          color.a *= (timeFilter.segmentTime > 0.5 && timeFilter.trailLength > 0.0)
+            ? sttSegmentTrailAlpha()
+            : vTimeAlpha;
         `,
       },
     };
@@ -600,6 +771,20 @@ export class TimeFilterExtension extends LayerExtension<
         accessor: 'getInstanceEndTime',
         type: 'float32',
         stepMode: 'dynamic',
+        // DOUBLE DUTY: under the `segmentTime` prop this slot carries the NEXT
+        // VERTEX's time instead of the feature's end, which is how a trail
+        // layer buys upstream TripsLayer's per-segment interpolation without a
+        // 17th attribute. See the prop docstring — the registration is the same
+        // either way, only the meaning of the bytes changes.
+        //
+        // Without an explicit defaultValue, DataColumn synthesizes `[0]`
+        // (data-column.ts: `defaultValue || new Array(size).fill(0)`), which is
+        // what `_normalizeValue` writes for ANY non-finite accessor result —
+        // turning "never ends" into "ended at the epoch" and blanking the
+        // layer. `defaultValue: Infinity` does not work either: the raw
+        // non-finite number is kept, `defaultValue[0]` is `undefined`, and the
+        // attribute fills with NaN.
+        defaultValue: NEVER_ENDS,
       },
       // KNOWN LIMITATION (deck.gl ≤ 9.3): The 3 attributes above + PathLayer's
       // fp64 position split (8 slots) + instancePickingColors + instanceColors
@@ -634,6 +819,7 @@ export class TimeFilterExtension extends LayerExtension<
       cumulative = false,
       timeHeightScale = 0,
       timeHeightOrigin = null,
+      segmentTime = false,
     } = this.props;
 
     // Warn-once key. `this.id` is a PER-TILE sublayer id, so it would let one
@@ -683,8 +869,111 @@ export class TimeFilterExtension extends LayerExtension<
         timeHeightScale,
         warnKey,
       ),
+      segmentTime: segmentTime ? 1.0 : 0.0,
     };
 
+    // ── Push the DELTA, not the whole block ──────────────────────────────
+    // `draw()` runs once per MODEL per FRAME — on a tiled layer that is one
+    // call per visible tile, so a busy composite makes this a few hundred
+    // calls a frame. `setShaderModuleProps` walks every key it is handed:
+    // luma splits uniforms from bindings and re-merges them into a fresh
+    // object, cloning each value (`ShaderInputs.setProps`). Eleven of these
+    // twelve uniforms are constants for the layer's lifetime — only
+    // `currentTime` moves — so pushing the full block every frame paid that
+    // twelve times over for one changed float, and `ShaderInputs.setProps`
+    // measured as the single hottest JS frame on the storm4d composite.
+    //
+    // Correctness rests on luma MERGING partial module props into the values
+    // already held for the module, so an unsent key keeps its value rather
+    // than reverting to a default. That is only true for models that have
+    // already been pushed the full block, hence the `models[0]` identity
+    // check: deck rebuilds a layer's models on a shader change (it uses this
+    // exact test for its own `modelChanged`), and a fresh model starts from
+    // the module DEFAULTS. Skipping the full push for one would silently
+    // render it with `windowHalf: 0` / `trailLength: 0` — a blank layer.
+    const models = this.getModels();
+    const cache = this.state?.timeFilterPush as TimeFilterPushCache | undefined;
+    if (
+      cache &&
+      cache.model === models[0] &&
+      cache.modelCount === models.length &&
+      staticUniformsEqual(cache.uniforms, timeFilterProps)
+    ) {
+      // Steady state: nothing but the playhead moved.
+      if (cache.uniforms.currentTime === timeFilterProps.currentTime) return;
+      cache.uniforms = timeFilterProps;
+      this.setShaderModuleProps({
+        timeFilter: { currentTime: timeFilterProps.currentTime },
+      });
+      return;
+    }
+
+    if (this.state) {
+      this.state.timeFilterPush = {
+        model: models[0],
+        modelCount: models.length,
+        uniforms: timeFilterProps,
+      } satisfies TimeFilterPushCache;
+    }
     this.setShaderModuleProps({ timeFilter: timeFilterProps });
   }
+}
+
+/**
+ * What the last full uniform push covered, cached on the host layer's state.
+ * `model`/`modelCount` pin the push to the model set it was applied to — see
+ * the note in `draw()` for why a partial push is unsafe across a model swap.
+ */
+interface TimeFilterPushCache {
+  model: unknown;
+  modelCount: number;
+  uniforms: TimeFilterUniformProps;
+}
+
+/**
+ * Every uniform in the block that is a CONSTANT for the layer's lifetime —
+ * i.e. all of {@link TimeFilterUniformProps} except `currentTime`, the one
+ * value the playhead moves each frame.
+ *
+ * The `satisfies Record<…, true>` is the load-bearing part, not decoration:
+ * adding a uniform to `TimeFilterUniformProps` without listing it here is a
+ * COMPILE error. Miss one and `staticUniformsEqual` would report "unchanged"
+ * after that prop moved, the delta push would send only `currentTime`, and
+ * the uniform would silently stick at its previous value — a wrong render
+ * with no error anywhere. `STATIC_UNIFORM_KEYS` is derived from this object
+ * (rather than spelled a second time) so the comparison can never cover a
+ * different set than the one the type check enforces.
+ */
+const STATIC_UNIFORM_FIELDS = {
+  windowHalf: true,
+  fadeIn: true,
+  fadeOut: true,
+  trailLength: true,
+  trailFade: true,
+  wakeLength: true,
+  wakeTailScale: true,
+  cumulative: true,
+  heightScale: true,
+  heightOrigin: true,
+  segmentTime: true,
+} satisfies Record<Exclude<keyof TimeFilterUniformProps, 'currentTime'>, true>;
+
+const STATIC_UNIFORM_KEYS = Object.keys(
+  STATIC_UNIFORM_FIELDS,
+) as (keyof TimeFilterUniformProps)[];
+
+/**
+ * Do the lifetime-constant uniforms agree? Allocation-free: it walks the
+ * module-scope key array, so it adds no garbage to a path that runs once per
+ * visible tile per frame.
+ */
+function staticUniformsEqual(
+  a: TimeFilterUniformProps,
+  b: TimeFilterUniformProps,
+): boolean {
+  for (let i = 0; i < STATIC_UNIFORM_KEYS.length; i++) {
+    const key = STATIC_UNIFORM_KEYS[i];
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
 }

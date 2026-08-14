@@ -111,7 +111,7 @@ and the module stays small and synchronous.
 | method                                              | takes                                              | gives                                              |
 | --------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
 | `SttArchive.open(bytes)`                            | `manifest.json` bytes                              | an archive handle                                  |
-| `.formatVersion()`                                  |                                                    | `1` or `2`                                         |
+| `.formatVersion()`                                  |                                                    | `3`                                                |
 | `.metadataJson()`                                   |                                                    | dataset metadata as JSON (bbox, time range, zooms) |
 | `.directoryKey()` / `.directoryLength()`            |                                                    | the object to fetch next, and its size             |
 | `.loadDirectory(bytes)`                             | the whole directory object                         | tile count                                         |
@@ -129,7 +129,7 @@ anything this format can hold, and `BigInt` would force every host to convert.
 `DecodedTile` gives `layerCount()`, `layerName(i)` and `layerIpc(i)`. Each
 `layerIpc` is a **self-contained Arrow IPC stream** — schema message, one
 record batch, EOS. That re-framing is the point of the crate: on disk a
-formatVersion-2 tile references a schema template stored once in the manifest,
+formatVersion-3 tile references a schema template stored once in the manifest,
 which is excellent on the wire and useless to a consumer that only speaks
 Arrow.
 
@@ -232,7 +232,7 @@ Named honestly, because each one is a real gap and not a rounding error:
 cargo test -p stt-wasm
 ```
 
-Fixtures are written by the real `PackWriter`, in three shapes:
-formatVersion-2 with a single directory, formatVersion-2 with a paged
-directory, and formatVersion-1. A format change fails here rather than in a
-published artifact.
+Fixtures are written by the real `PackWriter` in both v3 directory layouts:
+single and paged. Frozen pre-v3 manifests are rejection fixtures, not a
+second reader path. A format change fails here rather than in a published
+artifact.

@@ -11,8 +11,9 @@
  *                  (Cesium's native frame IS WGS84 ECEF, so the kernel output drops in)
  *   - color      → `core/style` `expandCategoricalColors` (same fallback semantics as deck/three/maplibre)
  *   - time-filter→ `core/time-filter` `timeFilterAlpha` oracle, per-frame on the CPU
- *                  (identical math to every other backend; the GPU-appearance path
- *                  is ready via {@link timeFilterAlphaGlsl})
+ *                  (identical math to every other backend). This IS the shipped
+ *                  path; the GPU-appearance alternative is unwired — only its
+ *                  GLSL snippet exists, in `shaders.ts`.
  *   - streaming  → `core/tileset-adapter` `makeTilesetCallbacks` (see the package README/streaming helper)
  *   - picking    → `scene.pick` → `getFeatureProperties` → the shared `SttPickResult`
  *
@@ -154,9 +155,9 @@ export class STTPointLayer implements SttRenderNode {
    * shared oracle. Reuses one scratch Color (zero allocations per frame) and
    * skips points whose alpha is unchanged since the last frame — so a point
    * that is fully in or fully out of the window costs a single compare, not a
-   * Color allocation + GPU dirty. (The end-state fix is a GPU custom-Appearance
-   * path via `timeFilterAlphaGlsl`, making this a single `currentTime` uniform
-   * write; tracked as a separate follow-up.)
+   * Color allocation + GPU dirty. (The end-state fix would be a GPU
+   * custom-Appearance path — `shaders.ts` holds the GLSL snippet for it, but
+   * nothing wires it, so this CPU loop is what runs.)
    */
   setTime(absoluteMs: number): void {
     const cur = absoluteMs - this.timeOrigin;

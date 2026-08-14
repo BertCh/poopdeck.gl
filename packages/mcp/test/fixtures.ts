@@ -16,16 +16,30 @@ export function makeManifestJson(
   } = {},
 ): unknown {
   const { metadata: metadataOverrides, ...topOverrides } = overrides;
+  const summaryTier = metadataOverrides?.summary_tier as
+    | { layer_name?: string }
+    | null
+    | undefined;
   return {
     format: 'stt-packed',
-    formatVersion: 2,
+    formatVersion: 3,
+    variants: summaryTier
+      ? [
+          { id: 0, kind: 'raw' },
+          {
+            id: 1,
+            kind: 'summary',
+            layer_name: summaryTier.layer_name ?? 'summary',
+          },
+        ]
+      : [{ id: 0, kind: 'raw' }],
     capabilities: ['coord-quant'],
     compression: 'zstd',
     blobOrdering: 'hilbert3',
     directory: {
       key: 'index/aaaa.sttd',
       length: 4096,
-      directoryVersion: 5,
+      directoryVersion: 6,
       encoding: 'zstd',
       layout: 'paged',
       rootLength: 128,

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { enableProbe, getSnapshot } from '@poopdeck.gl/layers';
+import { acquireProbe, getSnapshot } from '@poopdeck.gl/layers';
 import type { OverviewPreloadResult } from '@poopdeck.gl/layers';
 import type { SourceRunway } from '@poopdeck.gl/playback';
 
@@ -113,10 +113,12 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
   }, [visible, expanded, getSourceRunways]);
 
   useEffect(() => {
-    if (!visible) return;
-    // Activate the probe so SpatioTemporalLayer publishes snapshots. No-op
-    // when already enabled.
-    enableProbe();
+    // A collapsed "Perf" chip should be inert. Only sample frames and ask the
+    // layers for snapshots while the panel that displays those values is open.
+    if (!visible || !expanded) return;
+    // The HUD only consumes latest-value snapshots. Do not activate the
+    // high-frequency sample arrays used by benchmark tooling.
+    const releaseProbe = acquireProbe({ samples: false });
     let frameCount = 0;
     let lastTime = performance.now();
     let animationFrameId: number;
@@ -165,8 +167,11 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
     };
 
     animationFrameId = requestAnimationFrame(updateStats);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [visible, getTilesetStats]);
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      releaseProbe();
+    };
+  }, [visible, expanded, getTilesetStats]);
 
   if (!visible) return null;
 

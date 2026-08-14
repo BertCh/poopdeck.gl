@@ -18,7 +18,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { STTArchive, estimateTileSize } from '../src/archive';
+import {
+  STTArchive,
+  estimateTileSize,
+  DEFAULT_RANGE_COALESCE_GAP,
+  MIN_ADAPTIVE_COALESCE_GAP,
+  MAX_ADAPTIVE_COALESCE_GAP,
+} from '../src/archive';
 import { OBJECT_MAGIC_LEN, directoryObject } from './helpers/packed-fixture';
 import { decompressSync } from '../src/compression';
 import { blake3Hex128 } from '../src/blake3';
@@ -36,6 +42,7 @@ import {
   packedFromGolden,
   packedFetch,
   type InMemoryPackedDataset,
+  type PackedFetchLog,
 } from './helpers/packed-fixture';
 
 /** A fresh, mutation-isolated dataset (pack bytes are copied at transcode). */
@@ -72,7 +79,11 @@ function tamperDirectoryCrcs(ds: InMemoryPackedDataset): void {
     entries.map((e) => ({ ...e, crc32c: (e.crc32c ^ 0xffffffff) >>> 0 })),
   );
   const dirObject = directoryObject(dir);
-  ds.objects.set(manifest.directory.key, dirObject);
+  const oldKey = manifest.directory.key;
+  const newKey = `index/${blake3Hex128(dirObject)}.sttd`;
+  ds.objects.delete(oldKey);
+  ds.objects.set(newKey, dirObject);
+  manifest.directory.key = newKey;
   manifest.directory.length = dirObject.length;
   ds.objects.set(
     'manifest.json',
@@ -255,12 +266,13 @@ describe('CRC-32C verification (T1.4)', () => {
       new TextEncoder().encode(
         JSON.stringify({
           format: 'stt-packed',
-          formatVersion: 2,
+          formatVersion: 3,
+          variants: [{ id: 0, kind: 'raw' }],
           compression: srcManifest.compression,
           directory: {
             key: 'index/dir.sttd',
             length: dirObject.length,
-            directoryVersion: 5,
+            directoryVersion: 6,
           },
           packs: [{ key: 'packs/p0.sttp', length: pack.length }],
           metadata: srcManifest.metadata,
@@ -301,6 +313,160 @@ describe('CRC-32C verification (T1.4)', () => {
     pack[stride + (blob.length >> 1)] ^= 0xff; // repair
     const healed = await archive.getTiles(ids);
     expect(healed[1]).not.toBeNull();
+  });
+});
+
+describe('CRC verification is invariant under the coalesce gap (CO-7)', () => {
+  /**
+   * Three copies of the golden blob in one pack, spaced by `pads`, each entry
+   * carrying the blob's REAL CRC. Returns the dataset plus a mutator that
+   * corrupts a chosen copy in place.
+   */
+  function spacedDataset(
+    url: string,
+    pads: number[],
+  ): {
+    ds: InMemoryPackedDataset;
+    ids: Array<{ z: number; x: number; y: number; t: number }>;
+    corrupt: (which: number) => void;
+  } {
+    const src = freshDataset('mem://crc-gap-src/manifest.json');
+    const srcManifest = JSON.parse(
+      new TextDecoder().decode(src.objects.get('manifest.json')!),
+    );
+    const e = decodeDirectory(
+      src.objects.get(srcManifest.directory.key)!.subarray(OBJECT_MAGIC_LEN),
+    )[0];
+    const blob = packOf(src).subarray(e.offset, e.offset + e.length);
+
+    let cursor = 0;
+    const offsets = pads.map((pad) => {
+      const offset = cursor + pad;
+      cursor = offset + blob.length;
+      return offset;
+    });
+    const pack = new Uint8Array(cursor);
+    for (const offset of offsets) pack.set(blob, offset);
+
+    const entries = offsets.map((offset, i) => ({
+      zoom: e.zoom,
+      x: e.x,
+      y: e.y,
+      timeStart: i,
+      timeEnd: i,
+      packId: 0,
+      offset,
+      length: blob.length,
+      uncompressedSize: e.uncompressedSize,
+      featureCount: e.featureCount,
+      hilbert: i,
+      crc32c: crc32c(blob),
+    }));
+    const dirObject = directoryObject(encodeDirectory(entries));
+
+    const objects = new Map<string, Uint8Array>();
+    objects.set('index/dir.sttd', dirObject);
+    objects.set('packs/p0.sttp', pack);
+    objects.set(
+      'manifest.json',
+      new TextEncoder().encode(
+        JSON.stringify({
+          format: 'stt-packed',
+          formatVersion: 3,
+          variants: [{ id: 0, kind: 'raw' }],
+          compression: srcManifest.compression,
+          directory: {
+            key: 'index/dir.sttd',
+            length: dirObject.length,
+            directoryVersion: 6,
+          },
+          packs: [{ key: 'packs/p0.sttp', length: pack.length }],
+          metadata: srcManifest.metadata,
+        }),
+      ),
+    );
+
+    return {
+      ds: { objects, manifestUrl: url },
+      ids: entries.map((entry) => ({
+        z: entry.zoom,
+        x: entry.x,
+        y: entry.y,
+        t: entry.timeStart,
+      })),
+      corrupt: (which: number) => {
+        pack[offsets[which] + (blob.length >> 1)] ^= 0xff;
+      },
+    };
+  }
+
+  /**
+   * The whole adaptive band plus its neighbours. Every value changes how many
+   * of the three blobs share one HTTP range — 0 fuses nothing, MAX_SAFE fuses
+   * everything — and none of it may change what CRC verification concludes.
+   */
+  const GAP_LADDER = [
+    0,
+    64 * 1024,
+    MIN_ADAPTIVE_COALESCE_GAP,
+    DEFAULT_RANGE_COALESCE_GAP,
+    MAX_ADAPTIVE_COALESCE_GAP,
+    Number.MAX_SAFE_INTEGER,
+  ];
+  /** Pads chosen so the ladder actually spans "all split" → "all fused". */
+  const PADS = [0, 300_000, 1_500_000];
+
+  it('every member of a fused buffer CRC-verifies, at every G', async () => {
+    const requestCounts: number[] = [];
+    for (const coalesceGapBytes of GAP_LADDER) {
+      const built = spacedDataset(
+        `mem://crc-gap-ok-${coalesceGapBytes}/`,
+        PADS,
+      );
+      const log: PackedFetchLog = { paths: [], ranges: [] };
+      const archive = new STTArchive({
+        url: built.ds.manifestUrl + 'manifest.json',
+        fetch: packedFetch(
+          { ...built.ds, manifestUrl: built.ds.manifestUrl + 'manifest.json' },
+          log,
+        ),
+        coalesceGapBytes,
+      });
+      const tiles = await archive.getTiles(built.ids);
+      for (const tile of tiles) {
+        expect(tile).not.toBeNull();
+        expect(tile!.layers[0].features.featureCount).toBeGreaterThan(0);
+      }
+      requestCounts.push(log.ranges.length);
+    }
+    // The ladder really did move the fuse decisions (otherwise the invariance
+    // above would be vacuous): it spans one-request-per-blob to one request.
+    expect(Math.max(...requestCounts)).toBe(PADS.length);
+    expect(Math.min(...requestCounts)).toBe(1);
+  });
+
+  it('a corrupt member fails ALONE, at every G — fusing never bypasses the check', async () => {
+    for (const coalesceGapBytes of GAP_LADDER) {
+      const built = spacedDataset(
+        `mem://crc-gap-bad-${coalesceGapBytes}/`,
+        PADS,
+      );
+      built.corrupt(1); // the middle blob only
+      const archive = new STTArchive({
+        url: built.ds.manifestUrl + 'manifest.json',
+        fetch: packedFetch({
+          ...built.ds,
+          manifestUrl: built.ds.manifestUrl + 'manifest.json',
+        }),
+        coalesceGapBytes,
+      });
+      const tiles = await archive.getTiles(built.ids);
+      // Whether the three blobs arrived in one buffer or three, the slice-and-
+      // verify path reaches the same verdict per member.
+      expect(tiles[0]).not.toBeNull();
+      expect(tiles[1]).toBeNull();
+      expect(tiles[2]).not.toBeNull();
+    }
   });
 });
 

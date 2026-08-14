@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
-# Regenerate the committed packed formatVersion-2 cross-impl golden fixtures
+# Regenerate the committed packed formatVersion-3 cross-impl golden fixtures
 # under packages/core/test/fixtures/ with the REAL Rust writer (stt-build,
-# which emits v2 by default; `--format-version 1` is the frozen kill switch):
+# which emits the only supported packed format, v2):
 #
-#   v2-golden/           points, v2  — numeric `speed` (+null) and TWO
-#   v2-golden-v1/        points, v1    dictionary columns `kind`/`agency`
-#                                      (+nulls), coord-quant 1 m,
-#                                      --quantize-attrs-auto (→ per-tile qa
-#                                      affines in TILE_META), 2 zooms × 2 time
-#                                      buckets, default (paged) directory.
-#   v2-golden-tracks/    tracks, v2  — LineString trajectories with duration
-#   v2-golden-tracks-v1/ tracks, v1    (→ interpolated u16-delta vertex_time,
-#                                      TILE_META `vt`), Float64 coords
-#                                      (unquantized path), --single-directory.
+#   v2-golden/         points — numeric `speed` (+null) and two dictionary
+#                      columns `kind`/`agency` (+nulls), coord-quant 1 m,
+#                      --quantize-attrs-auto (per-tile `qa` affines in
+#                      TILE_META), 2 zooms × 2 time buckets, paged directory.
+#   v2-golden-tracks/  LineString trajectories with duration (interpolated
+#                      u16-delta vertex_time, TILE_META `vt`), Float64 coords,
+#                      single directory.
 #
-# Each dataset is built TWICE from the SAME synthetic DuckDB-SQL source with
-# identical tiling flags — the v1 build is the equivalence baseline for
-# packed-v2-golden.test.ts ("v2 decode == v1 decode of the same logical
-# data", the strongest cross-format assertion). Builds are byte-reproducible
-# (2026-07 determinism hardening), so re-running is a no-op diff unless the
-# writer's bytes intentionally changed.
+# Builds are byte-reproducible, so re-running is a no-op diff unless the
+# writer's bytes intentionally changed. Packed format v1 was withdrawn; this
+# generator must never recreate retired `*-v1` fixtures or pass a version
+# override to the writer.
 #
 # The synthetic source lives in this script as SQL VALUES (DuckDB :memory: +
 # the spatial extension — a one-time `INSTALL spatial` needs network, cached
@@ -79,30 +74,28 @@ SELECT * FROM (VALUES
    ST_GeomFromText('LINESTRING(-121.88 37.33, -121.89 37.34, -121.90 37.35, -121.91 37.36, -121.92 37.37)'), 21.25)
 ) AS t(iso_time, end_time, geom, speed)"
 
-build_pair() { # $1 = out-dir base, $2 = extra args..., builds v2 + v1
-  local base="$1"; shift
-  for ver in 2 1; do
-    local out="$FIXTURES/$base"
-    [ "$ver" = 1 ] && out="$FIXTURES/$base-v1"
-    rm -rf "$out"
-    "${BUILD[@]}" --format-version "$ver" -o "$out" "$@"
-    # cargo/stt-build may drop a metadata sidecar; the fixture is only the
-    # dataset directory (manifest + index/ + packs/).
-  done
+build_fixture() { # $1 = out-dir name, remaining args = stt-build args
+  local name="$1"; shift
+  local out="$FIXTURES/$name"
+  rm -rf "$out"
+  "${BUILD[@]}" -o "$out" "$@"
+  # cargo/stt-build may drop a metadata sidecar; the fixture is only the
+  # dataset directory (manifest + index/ + packs/).
 }
 
-echo "==> points (v2-golden / v2-golden-v1)"
-build_pair v2-golden \
+echo "==> points (v2-golden)"
+build_fixture v2-golden \
   --duckdb ":memory:" --sql "$POINTS_SQL" \
   --time-field iso_time \
   --temporal-bucket 1h \
   --min-zoom 4 --max-zoom 5 \
+  --paged-directory-min-entries 1 \
   --blob-ordering spatial \
   --quantize-coords 1 --quantize-attrs-auto \
   --name v2-golden --layer default
 
-echo "==> tracks (v2-golden-tracks / v2-golden-tracks-v1)"
-build_pair v2-golden-tracks \
+echo "==> tracks (v2-golden-tracks)"
+build_fixture v2-golden-tracks \
   --duckdb ":memory:" --sql "$TRACKS_SQL" \
   --time-field iso_time --end-time-field end_time \
   --temporal-bucket 1h \
@@ -111,8 +104,8 @@ build_pair v2-golden-tracks \
   --single-directory \
   --name v2-golden-tracks --layer tracks
 
-echo "==> validating all four datasets (stt-validate)"
-for d in v2-golden v2-golden-v1 v2-golden-tracks v2-golden-tracks-v1; do
+echo "==> validating both datasets (stt-validate)"
+for d in v2-golden v2-golden-tracks; do
   cargo run --quiet --release -p spatiotemporal-tiles --bin stt-validate -- \
     "$FIXTURES/$d/manifest.json" >/dev/null
   echo "    $d OK"

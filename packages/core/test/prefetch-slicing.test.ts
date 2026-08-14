@@ -93,6 +93,49 @@ describe('SpatioTemporalTileset prefetch slicing', () => {
     tileset.finalize();
   });
 
+  /**
+   * BH-2 — two byte budgets, two different jobs. The ENQUEUE budget
+   * (`enqueueBudgetBytes`, a fraction of the cache) bounds how much runway one
+   * planning pass commits; the SLICE budget (`sliceBytes`, a second of measured
+   * download) bounds how much of it goes out in one dispatch. The slice sizing
+   * path was already byte-denominated and is untouched — this pins that the two
+   * compose rather than one swallowing the other.
+   */
+  it('sizes slices from throughput INSIDE a runway sized from the byte cache', async () => {
+    const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
+
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      // Count budget 150 tiles — never the binding one here.
+      maxCacheSize: 300,
+      // Enqueue byte budget = max(4 MiB, 0.5 × 8 MiB) = 4 MiB ⇒ 8 tiles.
+      maxCacheByteSize: 8 * 1024 * 1024,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: batchSpy,
+      getTileByteSize: () => 512_000,
+      // 2048 B/ms × 1000 ms = 2 048 000 B slice ⇒ exactly 4 tiles per slice.
+      getThroughput: () => ({ bytesPerMs: 2048, samples: 10 }),
+    });
+
+    tileset.setAnimationState(true, 1000);
+    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await new Promise((r) => setTimeout(r, 80));
+
+    const { prefetch } = splitCalls(batchSpy.mock.calls);
+    // The runway is 8 tiles (the byte cache fraction), dispatched as two
+    // 4-tile slices (the throughput budget) — nearest-first, in order.
+    expect(prefetch.map((ids) => ids.map((id) => id.t))).toEqual([
+      [1000, 2000, 3000, 4000],
+      [5000, 6000, 7000, 8000],
+    ]);
+
+    tileset.finalize();
+  });
+
   it('tags prefetch slices fetchPriority=low and priority batches auto', async () => {
     const hooksSeen: { ids: TileId[]; hooks?: TileBatchHooks }[] = [];
     const batchSpy = vi.fn(

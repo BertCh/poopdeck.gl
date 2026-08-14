@@ -320,6 +320,24 @@ describe('AnimatedPointLayer hardening', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it('consolidates many tiny exact-offset tiles and reuses the merged layer', () => {
+    const layer = makeLayer();
+    layer.state = {
+      tiles: Array.from({ length: 32 }, (_, x) =>
+        pointTile(2, { z: 6, x, y: 0, t: 0 }, 1_700_000_000_000),
+      ),
+    };
+
+    const first = layer.renderLayers();
+    const second = layer.renderLayers();
+
+    expect(first).toHaveLength(1);
+    expect(second[0]).toBe(first[0]);
+    expect(first[0].props.data.length).toBe(64);
+    expect(first[0].props.timeOffset).toBe(1_700_000_000_000);
+    expect(first[0].props.sttSlabProvenance).toHaveLength(32);
+  });
+
   it('still accepts the two-argument prepareTile/buildTileData form', () => {
     const layer = makeLayer();
     const tile = pointTile(2);

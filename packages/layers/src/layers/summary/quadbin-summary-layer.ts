@@ -452,6 +452,38 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
  * working `coverage`) / overrides sublayer props (deck's CompositeLayer
  * contract).
  */
+/** One cached per-tile QuadkeyLayer plus the keys it was built for. */
+interface CachedQuadbinSublayer {
+  layer: QuadkeyLayer<PreparedQuadRow>;
+  preparedKey: PreparedTile;
+  styleKey: string;
+}
+
+/**
+ * Everything the render path caches between frames, in ONE bag so it can live
+ * on `this.state` and survive deck's `_transferState`. See
+ * {@link QuadbinSummaryLayer.quadbinCaches}.
+ */
+interface QuadbinCaches {
+  prepared: Map<string, PreparedTile>;
+  sublayers: Map<string, CachedQuadbinSublayer>;
+  tilesRef: Tile[] | null;
+  pruneKey: string | null;
+  subBucketTick: number | null;
+}
+
+const QUADBIN_CACHE_SLOT = '_sttQuadbinCaches';
+
+function freshQuadbinCaches(): QuadbinCaches {
+  return {
+    prepared: new Map(),
+    sublayers: new Map(),
+    tilesRef: null,
+    pruneKey: null,
+    subBucketTick: null,
+  };
+}
+
 export class QuadbinSummaryLayer<
   ExtraPropsT extends {} = {},
 > extends SpatioTemporalLayer<
@@ -461,8 +493,33 @@ export class QuadbinSummaryLayer<
 
   static defaultProps = defaultProps;
 
+  /**
+   * Render caches, held on `this.state` rather than in class FIELDS.
+   *
+   * deck's `_transferState` moves only `state`/`internalState` onto the
+   * instance React hands it each render; class-field initializers re-run on
+   * that instance. Held as fields, every unmemoized
+   * `new QuadbinSummaryLayer({...})` in a React render discarded the whole
+   * per-tile cache — re-running the O(cells) `quadbinToTile` decode and
+   * re-allocating one JS row object per cell for every visible tile, plus
+   * constructing a fresh QuadkeyLayer per tile: exactly the cost the
+   * {@link sublayerCache} note below calls the dominant steady-state expense.
+   * `AnimatedTripsLayer` fixed this first.
+   */
+  private get quadbinCaches(): QuadbinCaches {
+    return this.stateSlot(QUADBIN_CACHE_SLOT, freshQuadbinCaches);
+  }
+
+  // The accessors below keep the historical field NAMES (the shared harnesses
+  // and sibling layers speak them) while the storage lives on `state`.
+
   /** Per-tile prepared-data cache. Pruned to the live tile set every render. */
-  private preparedTileCache = new Map<string, PreparedTile>();
+  private get preparedTileCache(): Map<string, PreparedTile> {
+    return this.quadbinCaches.prepared;
+  }
+  private set preparedTileCache(value: Map<string, PreparedTile>) {
+    this.quadbinCaches.prepared = value;
+  }
 
   /**
    * Per-tile QuadkeyLayer instance cache. Same idea as the animated layers'
@@ -478,15 +535,18 @@ export class QuadbinSummaryLayer<
    *  - `styleKey`: layer-level style props that we bake into the QuadkeyLayer
    *    at construction time (extruded, coverage, opacity, domain, etc.).
    */
-  private sublayerCache = new Map<
-    string,
-    {
-      layer: QuadkeyLayer<PreparedQuadRow>;
-      preparedKey: PreparedTile;
-      styleKey: string;
-    }
-  >();
-  private lastTilesRef: Tile[] | null = null;
+  private get sublayerCache(): Map<string, CachedQuadbinSublayer> {
+    return this.quadbinCaches.sublayers;
+  }
+  private set sublayerCache(value: Map<string, CachedQuadbinSublayer>) {
+    this.quadbinCaches.sublayers = value;
+  }
+  private get lastTilesRef(): Tile[] | null {
+    return this.quadbinCaches.tilesRef;
+  }
+  private set lastTilesRef(value: Tile[] | null) {
+    this.quadbinCaches.tilesRef = value;
+  }
 
   /**
    * Weight column + active sub-bucket at the last prune. Both are baked into
@@ -495,13 +555,23 @@ export class QuadbinSummaryLayer<
    * value — bounded only by `#tiles × #weight-columns-ever-used`, which defeats
    * the byte budget under a column-cycling UI.
    */
-  private lastPruneKey: string | null = null;
+  private get lastPruneKey(): string | null {
+    return this.quadbinCaches.pruneKey;
+  }
+  private set lastPruneKey(value: string | null) {
+    this.quadbinCaches.pruneKey = value;
+  }
 
   /**
    * Global sub-bucket index at the last tick that forced a re-render. Only
    * meaningful when the tier declares sub-buckets; `null` otherwise.
    */
-  private lastSubBucketTick: number | null = null;
+  private get lastSubBucketTick(): number | null {
+    return this.quadbinCaches.subBucketTick;
+  }
+  private set lastSubBucketTick(value: number | null) {
+    this.quadbinCaches.subBucketTick = value;
+  }
 
   finalizeState(context: LayerContext): void {
     // Base handles controller unsubscribe, the pending tile-load rAF, and

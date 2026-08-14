@@ -49,21 +49,23 @@ nothing about license (nuScenes is the counterexample).
 - **NODD labeling duties** — derived tiles must not be presented as original NOAA data; no
   implied endorsement; attribute.
 
-### 1.3 Live defects (verified against tiles.poopdeck.gl, 2026-07-26)
+### 1.3 Live defects (verified against tiles.poopdeck.gl, 2026-08-03)
 
-- **The demo-id gate holds; the overlay-stem gate does not exist.** `rain-flood-2019`,
-  `gtfs-ch` and `storm-4d-isolines` are in `LOCAL_ONLY_DATASETS`, so the three demos whose
-  archives are unsynced are correctly withheld from the public deploy. But
-  **`wpc-fronts` and `wpc-fronts-pips` 404 while un-gated**: they are overlay stems inside
-  `severe-weather-2024` (`datasets.ts:3058-3059`), which is itself un-gated, and the gate keys
-  on demo ids — so the composite ships a 404-stalling fronts overlay. Recorded as **L1** in the
-  [roadmap README](./README.md); fix is r2-sync of both stems, or gating the composite until
-  the sync lands. Standing lesson: a demo is only as gated as its _least_ synced archive, and
-  the r2-sync-both-or-neither rule for `wpc-fronts` + `wpc-fronts-pips` predates this defect.
-- **24 of 59 reachable archives are still `formatVersion: 1`** and therefore unopenable by the
-  current reader — the fleet republish, **B2** in the [roadmap README](./README.md). The BIXI
-  family, `av-synthetic`, `cosmos-drive-dreams`, the three `storm-*` archives, `gtfs-nl`,
-  `nwm-rivers-2019` and `comma-280-1641/ego` are the affected demos.
+The fleet-wide defects this section carried through July are **closed** — all 68
+registered manifests return `formatVersion: 2`, `wpc-fronts` / `wpc-fronts-pips` are synced,
+and `LOCAL_ONLY_DATASETS` is empty. What survives is the standing lesson and one open item.
+
+- **Standing lesson: a demo is only as gated as its _least_ synced archive.** The gate keys on
+  demo ids, so it cannot reach an overlay stem inside an otherwise-live composite — which is
+  how `wpc-fronts` + `wpc-fronts-pips` shipped a 404-stalling fronts overlay under the un-gated
+  `severe-weather-2024`, and how `mrms-storm3d-{cloudtop,outages,warnings,reports}` later
+  stalled `storm-3d-conus` behind a 200 primary. Both are fixed by syncing, but the shape
+  recurs: the worst version of this failure is a **200 primary with 404 overlays**, because the
+  demo mounts and the governor starts before anything fails. The r2-sync-both-or-neither rule
+  for `wpc-fronts` + `wpc-fronts-pips` predates both instances.
+- **Open — the atlas generator sidecar 404s.** `/data/neural-atlas.json` is the one atlas
+  artefact `r2-sync.sh` still cannot upload; **L1** in the [roadmap README](./README.md) owns it,
+  and it is why `ATLAS_ARCHIVES_SYNCED` is still `false`.
 - **`flights` / `adsb-paths` are OpenSky-derived and live on R2** (both 200).
   `crates/stt-generate/src/datasets/flights.rs` pulls `s3.opensky-network.org/data-samples/`.
   That is in tension with §1.1's HARD BLOCKER verdict on OpenSky. Either the data-samples
@@ -89,9 +91,12 @@ on the Hub with no token on this machine, so the weights are unfetchable
 regardless of the Gemma Terms verdict. Not a licence blocker; an access one. See
 [neural-atlas-2026-07.md](./neural-atlas-2026-07.md) §14.2.
 
-Gate status: the four `neural-atlas-*` stems are **LOCAL-ONLY** pending B2, held
-off the public deploy by `ATLAS_AVAILABLE` in `datasets.ts` — the surface is not a
-`Dataset`, so `LOCAL_ONLY_DATASETS` cannot reach it and needed its own flag.
+Gate status: still **LOCAL-ONLY**, held off the public deploy by `ATLAS_AVAILABLE`
+in `datasets.ts` — the surface is not a `Dataset`, so `LOCAL_ONLY_DATASETS` cannot
+reach it and it needed its own flag. The archives, their `.meta.json` files and
+both `.bin` blobs are synced and return 200; the one artefact still missing is the
+generator sidecar `/data/neural-atlas.json`, which is **L1** in the
+[roadmap README](./README.md).
 
 ## 2. AV cockpit (`/drive`)
 
