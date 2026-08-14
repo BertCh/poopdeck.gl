@@ -172,8 +172,44 @@ encoding of almost no data. NIFC now returns 15 source perimeters for 2020–202
 where it once returned hundreds; `tools/stt-generate/src/datasets/wildfires.rs`
 has carried a warning about exactly this since 2026-07-29. `scripts/rebuild-fleet-v3.sh`
 therefore compares `feature_count` against the archive currently serving and
-fails a dataset on a material shortfall. Measured so far: `earthquakes-v2`
-1.000×, `hurricanes` 1.037×, `wildfires` **0.038× (refused)**.
+fails a dataset on a material shortfall, and reports anything above 1.5× for
+review rather than passing it silently.
+
+**The API tier, measured (2026-08-14).** Eight datasets, and only three were the
+boring case:
+
+| dataset          | wall   | features vs live         | verdict                              |
+| ---------------- | ------ | ------------------------ | ------------------------------------ |
+| `earthquakes-v2` | 231 s  | 522,978 / 522,982 1.000× | accepted                             |
+| `hurricanes`     | 370 s  | 200,074 / 193,020 1.037× | accepted (fresh IBTrACS storms)      |
+| `animals`        | 1227 s | 11.19 M / 10.58 M 1.058× | accepted                             |
+| `drifters`       | 3006 s | 9.64 M / 9.05 M 1.066×   | accepted                             |
+| `ais-all-us`     | 1916 s | 124.8 M / 19.3 M 6.453×  | **REVIEW** — recipe drift, see below |
+| `satellites`     | 66 s   | 8.28 M / 24.2 M 0.342×   | **refused** — bucket drift, not loss |
+| `wildfires`      | 2 s    | 175 / 4,600 0.038×       | **refused** — genuine upstream loss  |
+| `flights`        | 74 min | —                        | killed on DISK at zoom 8; retryable  |
+
+Three distinct failure modes, none of which is "the format migration went
+wrong":
+
+- **`wildfires` — the data is gone upstream.** Unfixable here; it stays v2.
+- **`satellites` — the shipped archive used a 5-minute temporal bucket and
+  today's builder auto-picks 1 hour**, so the same 16,087 satellites (MORE than
+  the live archive's ~12,700) land in 2,125 tiles instead of 24,480. The
+  generator does not expose `--temporal-bucket`, so reproducing it needs
+  `--skip-build` plus a direct `stt-build`, AND a pinned `--start-time` with a
+  matching `datasets.ts` `timeRange` — propagation runs from _now_, and a
+  mismatched range renders the demo empty.
+- **`ais-all-us` — the opposite drift.** Today's default `--sample-minutes 0`
+  preserves every usable row, which is this document's own no-thinning ground
+  rule; the shipped archive was built thinned. 6.45× the features and 2.2 GB
+  against 0.51 GB. The rebuild is arguably the more correct artifact and the
+  size is the reason it is a decision rather than a detail.
+
+**`stt-build` spills to the OUTPUT dir**, so a large global build needs far more
+transient disk than its finished archive implies — `flights` (23.4 M features)
+was SIGKILLed at zoom 8 with 19 GB free while shipping at 0.85 GB. The driver
+now refuses below 25 GB instead of dying mid-build.
 
 Three tiers, and they are not equally tractable:
 
