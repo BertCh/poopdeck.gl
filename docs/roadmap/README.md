@@ -252,10 +252,41 @@ additionally declares `triangles-partial`, which a client without the decoder
 backfill refuses at open — loud by design, and another reason the client ships
 first.
 
-**Accept:** every archive with a working recipe rebuilt at v3 and accepted by
-the feature-count gate, uploaded, manifests flipped after the client deploy, and
-the no-path list above recorded in
-[demos-and-datasets.md](./demos-and-datasets.md) with its evidence.
+**DISCHARGED 2026-08-14, by not rebuilding.** The rebuild framing above was
+wrong, and the table that proves it is the reason: v2 → v3 is **container-only**,
+so an archive can be promoted without re-deriving anything. `stt-core`'s
+`migrate_dataset_v2_to_v3` re-encodes the directory under codec v6 and rewrites
+the manifest, and **touches no pack** — legal because a reader accepts object
+magic `2..=3` on every `.sttp` independently of `formatVersion` (packed spec
+§9.4, written in the same pass).
+
+Result: **59 of 64 local datasets migrated, 76 MB of new directory objects, zero
+packs rewritten**, versus days of compute and a ~5× larger fleet. It also reached
+two archives a rebuild never could — `lines-v2` (synthetic, no recipe) and
+`osm-nyc-nodes` (login-gated source). Verification was decode-based, not
+parse-based: every dataset reopened and decoded entry-by-entry against its
+pre-migration content, the run aborting on the first difference.
+
+Live as of 2026-08-14: client deployed first (it reads v2 AND v3, so there was
+no exposure window), then 59/59 datasets synced and probed — all serving
+`formatVersion: 3` + directory v6 + a variants registry, with pack objects still
+answering `STTP\x02`, which is the migration's whole thesis visible on the wire.
+The 12-demo render probe passes against live R2.
+
+**What remains open, and it is small:**
+
+- **The five summary-tier archives stay v2** (`earthquakes-summary`,
+  `goes-glm-lightning`, `nyc-od-quadbin`, `nyc-taxi-od-summary`,
+  `osm-nyc-changesets`). Migration refuses them on purpose — a v2 directory has
+  no column saying which entries are aggregates, so the raw/summary split v3
+  needs cannot be recovered. They serve correctly through the reader's v2
+  window; reaching v3 requires a rebuild.
+- **Two staged rebuilds await a density decision**, not a technical one:
+  `ais-all-us` 6.45× and `flights` 5.93× against what ships, because today's
+  defaults honour the no-thinning rule and the shipped archives were built
+  thinned. Both are built, validated and NOT published.
+- **`wildfires` and `satellites` rebuilds are refused/parked** per the table
+  above; both remain live and correct at their migrated v3 container.
 
 ### L — Live defects on poopdeck.gl today
 
