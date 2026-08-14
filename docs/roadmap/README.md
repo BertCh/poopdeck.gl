@@ -187,7 +187,7 @@ boring case:
 | `ais-all-us`     | 1916 s | 124.8 M / 19.3 M 6.453×  | **REVIEW** — recipe drift, see below |
 | `satellites`     | 66 s   | 8.28 M / 24.2 M 0.342×   | **refused** — bucket drift, not loss |
 | `wildfires`      | 2 s    | 175 / 4,600 0.038×       | **refused** — genuine upstream loss  |
-| `flights`        | 74 min | —                        | killed on DISK at zoom 8; retryable  |
+| `flights`        | 27 min | 257.9 M / 43.5 M 5.925×  | **REVIEW** — needed `--streaming`    |
 
 Three distinct failure modes, none of which is "the format migration went
 wrong":
@@ -206,10 +206,28 @@ wrong":
   against 0.51 GB. The rebuild is arguably the more correct artifact and the
   size is the reason it is a decision rather than a detail.
 
-**`stt-build` spills to the OUTPUT dir**, so a large global build needs far more
-transient disk than its finished archive implies — `flights` (23.4 M features)
-was SIGKILLed at zoom 8 with 19 GB free while shipping at 0.85 GB. The driver
-now refuses below 25 GB instead of dying mid-build.
+**Both of the two biggest archives come back 5–6× larger, and that is the
+finding that decides this item's scope.** `ais-all-us` 6.45× / 2.2 GB vs
+0.51 GB; `flights` 5.93× / 4.2 GB vs 0.81 GB. Neither is a defect — today's
+defaults preserve every usable row at every zoom, which is this document's own
+no-thinning ground rule, while the shipped archives were built when thinning was
+applied at the source. The rebuilds are the more honest artifacts. They are also
+**~5× the bytes** against a fleet that is ~18 GB today, so a wholesale rebuild at
+current defaults plausibly lands near 60–90 GB of R2 storage, with a
+correspondingly heavier client load on those demos. Decide the density per
+dataset BEFORE uploading; the gate prints the ratio precisely so that choice is
+explicit rather than discovered on the bill.
+
+**Peak RAM, not disk, is what kills a large build.** `flights` (23.4 M features)
+was SIGKILLed at zoom 8 twice — first with 19 GB free, then again with 28 GB
+free, which is what disproved the disk theory the first failure suggested.
+`--streaming` (write each zoom as it completes, at some parallelism cost) cleared
+zooms 8/9/10 on the first attempt and finished in 27 minutes. Carry the trade the
+conformance record notes: `--streaming` builds emit no content fingerprint.
+`stt-build` separately spills pack payloads past `--pack-memory-budget` to a temp
+file in the OUTPUT dir, so a large build still needs far more transient disk than
+its finished archive implies; the driver refuses below 25 GB rather than dying
+mid-build.
 
 Three tiers, and they are not equally tractable:
 
