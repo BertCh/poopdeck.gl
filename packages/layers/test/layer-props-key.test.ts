@@ -17,7 +17,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+// `typescript-api` is TypeScript 5.x under an alias: this suite PARSES
+// source with the compiler API, which the TypeScript 7 native package no
+// longer ships. Compilation itself (tsc, typecheck, build) is on 7.
+import ts from 'typescript-api';
 import {
   buildLayerPropsKey,
   type PropEffects,

@@ -52,6 +52,9 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.2"
   }
 }

@@ -10,8 +10,11 @@
  * wraps it and supplies the coupling video players have and data players
  * historically lacked: it gates `play()` on a buffered runway ahead of the
  * playhead, freezes the clock (instead of advancing into unloaded time) when
- * the runway drains, applies resume hysteresis so stall/resume never
- * oscillates, and turns seeks/scrubs into preview-vs-commit operations with a
+ * the runway drains, applies resume hysteresis (a resumeFactor× gate after a
+ * stall, so one honest stall replaces a burst of micro-stalls — it bounds
+ * oscillation, it does not abolish it: a link whose throughput sits at the
+ * consumption rate still alternates stall and resume at the hysteresis
+ * period), and turns seeks/scrubs into preview-vs-commit operations with a
  * post-seek gate. See docs/roadmap/playback-and-loading.md for the full rationale
  * and the SOTA survey behind the default thresholds.
  *
@@ -58,6 +61,17 @@ export interface BufferedRunway {
    * must never stall on it.
    */
   complete: boolean;
+  /**
+   * Optional (audit B8): true when the runway ends at a tile the loader has
+   * classified as PERMANENTLY unavailable (a 4xx pack, a written-off fetch).
+   * Nothing further will ever arrive for it, so gating on it would hold the
+   * clock until the escape hatch: the governor treats such a runway as
+   * buffered for gating purposes (it never stalls on it, like `complete`)
+   * and counts the write-off in
+   * {@link PlaybackQoeStats.blockedPermanentlyCount}. Absent on loaders
+   * that predate the flag, and read as `false` then.
+   */
+  blockedPermanently?: boolean;
 }
 
 /**
@@ -304,6 +318,14 @@ export interface PlaybackGovernorOptions {
    * {@link BufferSource.getTemporalBucketMs}. Sources that declare nothing keep
    * this default, so the derivation can only ever WIDEN the band — never
    * narrow it — and never below the probe-staleness residue it is built on.
+   *
+   * The derived widening is only applied when the leading source is
+   * MEASURABLE — its runway is inside the horizon the probe asked for (audit
+   * B7). A probe capped at the watermark or gate window reports a healthy
+   * leader AT that cap, which says nothing about how far ahead it really is,
+   * and a bucket-sized band measured against it lifted a starved laggard
+   * past the watermark on every bucket-coarse composite. Against a capped
+   * leader the band is the wall default above.
    * @default 200
    */
   runwayToleranceMs?: number;
@@ -454,6 +476,47 @@ export interface PlaybackQoeStats {
    * frontier, advancing at data-arrival rate), including in-progress creep.
    */
   creepMs: number;
+  /** {@link totalStallMs} under the tile-loading audit's canonical name (G2). */
+  stallMs: number;
+  /**
+   * Committed seeks: `seekTo`, an `endScrub` release, a replay restart. A
+   * loop wrap is a teleport the clock performed on its own, not a seek, and
+   * is not counted here (it is a `seeking` gate entry below).
+   */
+  seekCount: number;
+  /**
+   * Median wall ms from a committed seek to its post-seek gate passing
+   * (nearest-rank over the last {@link SEEK_SETTLE_SAMPLE_CAP} seeks). A
+   * seek committed while paused opens no gate and contributes no sample.
+   * Null until one seek has settled.
+   */
+  seekSettleMsP50: number | null;
+  /**
+   * Gate entries by reason — every time the clock was frozen and why.
+   * `buffering` equals {@link stallCount}; `starting` and `seeking` are the
+   * start gate and the post-seek / post-wrap gate.
+   */
+  gateEntriesByReason: { starting: number; buffering: number; seeking: number };
+  /**
+   * Gate HOLDS by reason (G3-4c): the subset of {@link gateEntriesByReason}
+   * whose first evaluation did not pass — the clock actually stayed frozen
+   * past `enterGate`. An entry that passes synchronously (a wrap or a seek
+   * into resident time) is an entry but not a hold; a real stall is both.
+   */
+  gateHoldsByReason: { starting: number; buffering: number; seeking: number };
+  /**
+   * Backward playhead snaps to the buffered frontier on the per-tick clamp
+   * path — each is a visible jump followed by a stall (audit B6/G3). Creep
+   * pins are the design, not a defect, and are not counted.
+   */
+  frontierSnapBacks: number;
+  /**
+   * Sources whose runway flipped to {@link BufferedRunway.blockedPermanently}
+   * (edge-triggered per source, so a re-probe of the same block is not a new
+   * event): every count is a range the clock played through because nothing
+   * will ever arrive for it (audit B8).
+   */
+  blockedPermanentlyCount: number;
 }
 
 /**
@@ -563,6 +626,16 @@ const TICK_PROBE_INTERVAL_MS = 200;
  * SEEK_DETECTION_REAL_MS reasoning.
  */
 const CLAMP_MAX_OVERRUN_REAL_MS = 1000;
+/** Ring size for {@link PlaybackQoeStats.seekSettleMsP50}'s samples. */
+const SEEK_SETTLE_SAMPLE_CAP = 64;
+/**
+ * How many stalls the anti-flap check may swallow back-to-back before the
+ * governor says so. A few are ordinary — the watermark and the resume gate
+ * measure different windows, so they disagree at the margin. A stream of them
+ * means they disagree STRUCTURALLY, and that is a threshold bug worth a line
+ * in the console rather than a silently thinner runway.
+ */
+const FLAP_WARN_THRESHOLD = 20;
 /** Auto-speed lookahead: cost of the next N wall-seconds at current speed. */
 const AUTO_SPEED_HORIZON_WALL_MS = 8000;
 /** Auto-speed safety factor (rise cautiously — same spirit as ABR's 0.7×). */
@@ -570,9 +643,10 @@ const AUTO_SPEED_SAFETY = 0.7;
 /**
  * Floor for the canplaythrough predictor: when the missing remainder of a
  * gate/watermark window is predicted to download within this wall time, treat
- * it as ready even with zero buffered runway (a cold seek on a fast network
- * must start instantly, not wait for a speed-scaled runway that can be huge
- * at high sim-speeds).
+ * it as ready with only a thin buffered runway (a cold seek on a fast network
+ * must start as soon as its own bucket is resident, not wait for a
+ * speed-scaled runway that can be huge at high sim-speeds). Never with NO
+ * runway: see {@link PlaybackGovernor.predictsPlaythrough} (G3-4a).
  */
 const PLAYTHROUGH_MIN_WALL_MS = 250;
 /**
@@ -749,6 +823,15 @@ export class PlaybackGovernor {
   private gateFactor = 1;
   /** Wall timestamp the current gate was entered (drives maxStartWaitMs). */
   private gateStartedAtWall = 0;
+  /**
+   * Watermark stalls suppressed by the anti-flap check since the runway was
+   * last healthy. Diagnostic: a healthy session leaves this at 0, and a
+   * persistent disagreement between the resume gate and the watermark reports
+   * itself once instead of oscillating silently.
+   */
+  private flapSuppressedStalls = 0;
+  /** One-shot latch for the flap warning (never warn per frame). */
+  private warnedGateFlap = false;
   private evalTimer: ReturnType<typeof setInterval> | null = null;
   private scrubbing = false;
   /**
@@ -798,6 +881,28 @@ export class PlaybackGovernor {
   private qoeStartupMs: number | null = null;
   private qoeDegradedResumeCount = 0;
   private qoeCreepMs = 0;
+  private qoeSeekCount = 0;
+  private qoeFrontierSnapBacks = 0;
+  private qoeBlockedPermanentlyCount = 0;
+  private readonly qoeGateEntries = { starting: 0, buffering: 0, seeking: 0 };
+  private readonly qoeGateHolds = { starting: 0, buffering: 0, seeking: 0 };
+  /** Wall ms from commit to gate pass, newest last (bounded ring). */
+  private readonly qoeSeekSettleSamples: number[] = [];
+  /**
+   * Wall timestamp of the seek awaiting its post-seek gate, or null when no
+   * committed seek is pending a settle sample (paused seeks, loop wraps).
+   */
+  private seekCommittedAtWall: number | null = null;
+  /** Sources currently reporting a permanent block (edge detection). */
+  private readonly blockedSourceIds = new Set<string>();
+  /**
+   * A source WITHOUT the buffering API was offered (and rejected). The
+   * registry stays empty by design, but the escape hatch must still resolve
+   * the gate — that is the documented degrade for a loader predating the
+   * API — whereas an empty registry nobody has offered anything to must NOT
+   * hatch (audit G8 / CS-9: there is nothing to be degraded about).
+   */
+  private hatchArmedByRejectedSource = false;
   /** Wall timestamp the current 'buffering' state was entered. */
   private stallEnteredAtWall = 0;
   /** Wall timestamp the current degraded creep began. */
@@ -892,6 +997,16 @@ export class PlaybackGovernor {
    *    from the true frontier instead of from a point in the void.
    * 3. In degraded-creep mode, (2) pins without re-gating: playback advances
    *    at data-arrival rate instead of looping 8 s freezes.
+   * 4. A crossing is checked against a FRESH frontier before it snaps or
+   *    gates (audit B6/G3): the cached one can be up to a probe interval
+   *    old, and a bucket that landed inside that window (with no buffer
+   *    event, or one the coalescing below absorbed) used to cost a spurious
+   *    one-frame stall plus a backward jump of one frame × |speed|. The
+   *    re-probe is taken AT the cached frontier — not at the overrun
+   *    playhead, where a runway honestly reads zero and would move the
+   *    frontier onto the playhead itself, a stall in the void. One probe per
+   *    crossing, never per frame: the clock stops (gate) or the frontier
+   *    moved ahead (no crossing until it is reached again).
    */
   private readonly tickHandler = (time: number): void => {
     if (this.disposed || this.suppressTickClamp || this.scrubbing) return;
@@ -902,19 +1017,31 @@ export class PlaybackGovernor {
     if (speed === 0) return;
     const direction: 1 | -1 = speed < 0 ? -1 : 1;
 
+    let probedThisTick = false;
     if (
       this.bufferedUntil === null ||
       direction !== this.frontierDirection ||
       nowWall() - this.lastFrontierProbeWall >= TICK_PROBE_INTERVAL_MS
     ) {
       this.refreshFrontier();
-      if (!this.degradedCreep) this.checkLowWatermark();
-      if (this._state !== 'playing') return; // the watermark gated; clock frozen
+      probedThisTick = true;
+      // A fresh probe that found the head PAST the frontier — its own bucket
+      // is not resident, and refreshFrontier anchored the frontier at the end
+      // of the data behind it (G3-4b) — belongs to the clamp below: snap
+      // back onto loaded data, then gate THERE. Running the watermark first
+      // would freeze the clock where it stands, in the void.
+      if (
+        !this.degradedCreep &&
+        !this.headPastFrontier(time, direction, Math.abs(speed))
+      ) {
+        this.checkLowWatermark();
+        if (this._state !== 'playing') return; // the watermark gated; clock frozen
+      }
     }
 
-    const frontier = this.bufferedUntil;
+    let frontier = this.bufferedUntil;
     if (frontier === null || !Number.isFinite(frontier)) return;
-    const overrunSimMs = direction > 0 ? time - frontier : frontier - time;
+    let overrunSimMs = direction > 0 ? time - frontier : frontier - time;
     if (overrunSimMs <= 0) return;
     if (overrunSimMs > Math.abs(speed) * CLAMP_MAX_OVERRUN_REAL_MS) {
       // Far past the frontier in one step: an external seek, not playback —
@@ -922,8 +1049,18 @@ export class PlaybackGovernor {
       this.bufferedUntil = null;
       return;
     }
+    if (!this.degradedCreep && !probedThisTick) {
+      // (4) above. Creep is exempt: its pin IS the design (no gate, no
+      // stall), and re-probing it per frame would be per-frame O(N) work —
+      // creep keeps the data-paced refresh in evaluateNow instead.
+      frontier = this.reprobeFrontierFrom(frontier, direction, Math.abs(speed));
+      if (!Number.isFinite(frontier)) return;
+      overrunSimMs = direction > 0 ? time - frontier : frontier - time;
+      if (overrunSimMs <= 0) return; // the data landed — nothing to snap
+    }
     this.setClockTime(frontier);
     if (!this.degradedCreep) {
+      this.qoeFrontierSnapBacks++;
       this.enterGate('buffering', this.resumeFactor);
     }
   };
@@ -949,8 +1086,21 @@ export class PlaybackGovernor {
     // The frontier is stale after a wrap regardless of machine state.
     this.bufferedUntil = null;
     if (this._state !== 'playing' || !this.userWantsPlayback) return;
-    for (const source of this.allSources()) source.flushPrefetch();
+    // Only a source that never received the loop window has STALE prefetch at
+    // a wrap. A source that accepts `setLoopWindow` plans its runway modulo
+    // the loop (tile-loading audit 2026-08, B5): the buckets after the wrap
+    // are exactly the ones it warmed while the head approached the end, and
+    // its in-flight lookahead is the loop start — flushing it here would turn
+    // every lap into a cold seek, which is the defect B5 removed. The gate
+    // below still re-checks the frontier, so a loop-aware source that is
+    // genuinely behind is caught the same way as before.
+    for (const source of this.allSources()) {
+      if (typeof source.setLoopWindow !== 'function') source.flushPrefetch();
+    }
     this.setDegradedCreep(false);
+    // A wrap is the clock's own teleport, not a committed seek: it must not
+    // contribute a seek-settle sample (QoE G2).
+    this.seekCommittedAtWall = null;
     this.enterGate('seeking', 1);
   };
 
@@ -1098,7 +1248,22 @@ export class PlaybackGovernor {
         '[PlaybackGovernor] source lacks the buffering API (getBufferedRunway); ' +
           'gating degrades to the maxStartWaitMs escape hatch.',
       );
+      if (!this.hasAnySource()) {
+        // Something WAS offered, so the degrade applies — timed from the
+        // offer, like a real registration (see hatchArmedByRejectedSource).
+        this.hatchArmedByRejectedSource = true;
+        if (this.isGated()) this.gateStartedAtWall = nowWall();
+      }
       return;
+    }
+    if (!this.hasAnySource()) {
+      // First source into an empty registry (audit G8 / CS-9): the escape
+      // hatch is timed from HERE, not from a requestPlay that may have been
+      // issued seconds earlier by an embed's visibility autoplay — until now
+      // there was no runway to probe, so none of that time was a gate the
+      // runway failed to fill. A real source also supersedes the legacy arm.
+      this.hatchArmedByRejectedSource = false;
+      if (this.isGated()) this.gateStartedAtWall = nowWall();
     }
     // Replacing an existing id must not inherit its predecessor's throttle
     // memos: the write throttle would treat the replacement source as
@@ -1114,6 +1279,7 @@ export class PlaybackGovernor {
       // too: the replacement has been told nothing and has measured nothing.
       this.lastSentLoopRanges.delete(id);
       this.betaMemo.delete(id);
+      this.blockedSourceIds.delete(id);
     }
     this.sources.set(id, {
       source,
@@ -1157,6 +1323,7 @@ export class PlaybackGovernor {
       }
       this.lastSentCaps.delete(id);
       this.lastSentWeights.delete(id);
+      this.blockedSourceIds.delete(id);
       // A departing source must not keep a loop window either: no future
       // sync can reach it, and a stale wrap boundary would keep rotating its
       // eviction scores around a range it is no longer being played through.
@@ -1205,6 +1372,7 @@ export class PlaybackGovernor {
     this.deactivateFairness();
     this.clearLoopWindows();
     this.betaMemo.clear();
+    this.blockedSourceIds.clear();
     this.sources.clear();
     // addSource calls evaluateNow on success; on a bad-source rejection it
     // returns early WITHOUT evaluating, so re-evaluate here unconditionally.
@@ -1440,6 +1608,9 @@ export class PlaybackGovernor {
   /**
    * Consumer-forwarded buffer event (layer `onBufferChange` → here). Triggers
    * an immediate gate/stall evaluation in addition to the 250 ms cadence.
+   * While playing, the frontier walk it would otherwise trigger is coalesced
+   * to one per {@link TICK_PROBE_INTERVAL_MS} per source (see
+   * {@link evaluateNow}); the stall check itself always runs.
    */
   notifyBufferChange(runway: BufferedRunway): void {
     if (this.disposed) return;
@@ -1640,6 +1811,13 @@ export class PlaybackGovernor {
       startupMs: this.qoeStartupMs,
       degradedResumeCount: this.qoeDegradedResumeCount,
       creepMs,
+      stallMs: totalStallMs,
+      seekCount: this.qoeSeekCount,
+      seekSettleMsP50: nearestRankMedian(this.qoeSeekSettleSamples),
+      gateEntriesByReason: { ...this.qoeGateEntries },
+      gateHoldsByReason: { ...this.qoeGateHolds },
+      frontierSnapBacks: this.qoeFrontierSnapBacks,
+      blockedPermanentlyCount: this.qoeBlockedPermanentlyCount,
     };
   }
 
@@ -2089,13 +2267,75 @@ export class PlaybackGovernor {
     absSpeed = 0,
   ): BufferedRunway {
     const entries: RunwayFoldEntry[] = [];
-    for (const source of this.requiredSources()) {
-      entries.push({
-        runway: source.getBufferedRunway(time, direction, horizonSimMs),
-        bucketMs: declaredBucketMs(source),
-      });
+    for (const [id, entry] of this.sources) {
+      if (!entry.required) continue;
+      const runway = entry.source.getBufferedRunway(
+        time,
+        direction,
+        horizonSimMs,
+      );
+      this.noteBlockedRunway(id, runway);
+      entries.push({ runway, bucketMs: declaredBucketMs(entry.source) });
     }
     return this.foldRequiredRunways(entries, horizonSimMs, tolSimMs, absSpeed);
+  }
+
+  /**
+   * Audit B6: re-probe the required frontier FROM a cached frontier the
+   * playhead just crossed. Asks the one question the clamp needs answered —
+   * "did data land past the frontier I know about?" — by probing at that
+   * frontier, so a runway that has moved on is found and one that has not
+   * confirms the snap target as loaded data. Returns the fresh absolute
+   * frontier (±Infinity when complete) and caches it like
+   * {@link refreshFrontier} does; no fairness pass (one probe, one purpose).
+   */
+  private reprobeFrontierFrom(
+    frontier: number,
+    direction: 1 | -1,
+    absSpeed: number,
+  ): number {
+    const runway = this.combinedRequiredRunway(
+      frontier,
+      direction,
+      undefined,
+      this.toleranceSimMs(absSpeed),
+      absSpeed,
+    );
+    const fresh = runway.complete
+      ? direction * Infinity
+      : frontier + direction * runway.simMs;
+    this.frontierDirection = direction;
+    this.bufferedUntil = fresh;
+    this.lastFrontierProbeWall = nowWall();
+    return fresh;
+  }
+
+  /**
+   * Audit B8 bookkeeping: count a source's runway flipping INTO a permanent
+   * block once, however many probes see it, and forget the block when the
+   * source reports past it again (so a later block is a new event).
+   */
+  private noteBlockedRunway(id: string, runway: BufferedRunway): void {
+    if (isBlockedForGating(runway)) {
+      if (!this.blockedSourceIds.has(id)) {
+        this.blockedSourceIds.add(id);
+        this.qoeBlockedPermanentlyCount++;
+      }
+    } else {
+      this.blockedSourceIds.delete(id);
+    }
+  }
+
+  /**
+   * Whether the maxStartWaitMs escape hatch may fire (audit G8 / CS-9). With
+   * nothing registered and nothing offered there is no runway the gate is
+   * failing to fill — a hatch then free-runs the clock into the timeline
+   * with no clamp, and the eventual `addSource` pins creep wherever it got
+   * to. The hatch waits for a source; the first registration re-bases its
+   * clock.
+   */
+  private hatchArmed(): boolean {
+    return this.hasAnySource() || this.hatchArmedByRejectedSource;
   }
 
   /**
@@ -2112,16 +2352,28 @@ export class PlaybackGovernor {
    * (`Δ = 0` / no method) falls straight back to it, which is the whole
    * degradation contract — an undeclared `temporalBucketMs` must land on the
    * wall default, never on τ = 0.
+   *
+   * `leadCapped` (audit B7 / G2): the leader's runway sits AT the horizon the
+   * probe asked for. The watermark probe asks for `600 ms × |speed|` and the
+   * source floors that at its own bucket, so on every bucket-coarse composite
+   * a healthy leader reads exactly `max(watermark, Δ_L)` — and `τ_i ≥ Δ_L +
+   * 200 ms × |speed|` then lifted EVERY incomplete laggard to it, a starved
+   * one at zero included: the min-gate degenerated to a max-gate and the
+   * laggard played through its missing bucket. A capped leader carries no
+   * information about how far ahead it really is, so the bucket-derived
+   * widening cannot be measured against it; the band is the wall default
+   * there, which is exactly the authored-default fold.
    */
   private liftBandSimMs(
     bucketMs: number | null,
     leadBucketMs: number | null,
     tolSimMs: number,
     absSpeed: number,
+    leadCapped: boolean,
   ): number {
     if (this.runwayToleranceAuthored) return tolSimMs;
     const declared = Math.max(bucketMs ?? 0, leadBucketMs ?? 0);
-    if (!(declared > 0)) return tolSimMs;
+    if (!(declared > 0) || leadCapped) return tolSimMs;
     return declared + TICK_PROBE_INTERVAL_MS * absSpeed;
   }
 
@@ -2158,7 +2410,10 @@ export class PlaybackGovernor {
     for (const e of entries) {
       const r = e.runway;
       bytesPending += r.bytesPending;
-      if (r.complete) continue;
+      // A permanently-blocked runway (audit B8) is buffered for gating
+      // purposes: nothing will ever arrive, so waiting is a hold until the
+      // escape hatch, not a stall that data can end.
+      if (r.complete || isBlockedForGating(r)) continue;
       allComplete = false;
       incomplete.push(e);
       if (r.simMs > leadSimMs) {
@@ -2182,6 +2437,13 @@ export class PlaybackGovernor {
     // sources against the leader — never against the gate or the watermark
     // (the §11.2 structural constraint) — and complete sources are still
     // excluded from both the lead and the min.
+    // The leader is "capped" when it reads at/over the horizon this probe
+    // asked for (see liftBandSimMs). The frontier path asks for no horizon
+    // and is never capped; the gate and watermark paths are.
+    const leadCapped =
+      horizonSimMs !== undefined &&
+      Number.isFinite(horizonSimMs) &&
+      leadSimMs >= horizonSimMs;
     let minSimMs = Infinity;
     for (const e of incomplete) {
       const simMs = e.runway.simMs;
@@ -2190,6 +2452,7 @@ export class PlaybackGovernor {
         leadBucketMs,
         tolSimMs,
         absSpeed,
+        leadCapped,
       );
       const effective = leadSimMs - simMs <= tau ? leadSimMs : simMs;
       if (effective < minSimMs) minSimMs = effective;
@@ -2296,9 +2559,13 @@ export class PlaybackGovernor {
     this.bufferedUntil = null;
     this.setDegradedCreep(false);
     this.timeController.setTime(time);
+    this.qoeSeekCount++;
     if (this.userWantsPlayback) {
+      // The settle sample closes when this seek's gate passes (evaluateGate).
+      this.seekCommittedAtWall = nowWall();
       this.enterGate('seeking', 1);
     } else {
+      this.seekCommittedAtWall = null;
       this.stopEvalTimer();
       this.setState('idle');
     }
@@ -2310,6 +2577,7 @@ export class PlaybackGovernor {
   ): void {
     this.gateFactor = factor;
     this.gateStartedAtWall = nowWall();
+    this.qoeGateEntries[state]++;
     this.pauseClock();
     // Freezing the clock makes the layer report "paused" to the loader, which
     // would shut down ahead-of-playhead prefetch — the very thing that must
@@ -2331,7 +2599,9 @@ export class PlaybackGovernor {
     });
     // Evaluate once immediately (the gate may already be satisfied — e.g. a
     // backward seek into cached time); otherwise poll at the gated cadence.
+    // Only the latter is a HOLD (G3-4c): the clock stayed frozen.
     if (!this.evaluateGate()) {
+      this.qoeGateHolds[state]++;
       this.startEvalTimer();
     }
   }
@@ -2417,12 +2687,79 @@ export class PlaybackGovernor {
     if (this.isGated()) {
       this.evaluateGate();
     } else if (this._state === 'playing' && !this.scrubbing) {
-      // Keep the frontier fresh on every buffer/speed event too (not just the
-      // throttled tick path) — it also re-arms normal stalling after a
-      // degraded creep once the runway recovers.
-      this.refreshFrontier();
+      // The frontier walk is coalesced to the tick-probe cadence (audit G6):
+      // N sources each firing ≤10 Hz buffer events made this O(N²) runway
+      // walks per second on composites, and the frontier only feeds the
+      // per-tick clamp, which re-probes before it snaps anyway (B6). Creep
+      // is the exception — there the frontier IS the playhead (the pin
+      // advances at data-arrival rate), so it stays data-paced, and the
+      // creep re-arm rides it. The watermark check is the honest part and
+      // still runs on every event.
+      if (
+        this.degradedCreep ||
+        this.bufferedUntil === null ||
+        nowWall() - this.lastFrontierProbeWall >= TICK_PROBE_INTERVAL_MS
+      ) {
+        this.refreshFrontier();
+      }
       if (!this.degradedCreep) this.checkLowWatermark();
     }
+  }
+
+  /**
+   * Would a gate of multiplier `gateFactor` pass RIGHT NOW, on the runway
+   * alone (no escape hatch, no state change)? The single implementation of
+   * "is there enough buffered to run", shared by the gate that waits on it and
+   * by the watermark, which must never stall into a state this answers `true`
+   * for.
+   *
+   * `applyFairness` is the gated-cadence piggyback and belongs to the gate's
+   * own evaluation only: the watermark asks this question mid-playback, where
+   * the tick probe already drives the fairness pass, and a second intervention
+   * per stall decision would re-cap leaders off a probe capped at the gate
+   * window.
+   */
+  private gateWouldPass(
+    gateFactor: number,
+    absSpeed: number,
+    applyFairness: boolean,
+  ): boolean {
+    const requiredSimMs = this.startGateWallMs * absSpeed * gateFactor;
+    // Zero speed consumes no data — nothing to gate on.
+    if (requiredSimMs <= 0) return true;
+    if (!this.hasAnySource()) return false;
+    const direction: 1 | -1 = this.timeController.getSpeed() < 0 ? -1 : 1;
+    const time = this.timeController.getTime();
+    // Combined over REQUIRED sources: min runway (cadence-tolerance-banded),
+    // AND complete. With zero required sources this reports complete (never
+    // gates).
+    const runway = this.combinedRequiredRunway(
+      time,
+      direction,
+      requiredSimMs,
+      this.toleranceSimMs(absSpeed),
+      absSpeed,
+    );
+    let passed = runway.complete || runway.simMs >= requiredSimMs;
+    if (!passed) {
+      // canplaythrough-style predictor (HAVE_ENOUGH_DATA): start when the
+      // MISSING remainder of the gate window is predicted to download in less
+      // wall time than the already-buffered runway plays out (with a small
+      // floor so an instant network passes a cold gate). Without this, gates
+      // scale linearly with |speed| and a 10× sweep can demand sim-years of
+      // runway that no loader is meant to hold up front.
+      passed = this.predictsPlaythrough(
+        time,
+        direction,
+        requiredSimMs,
+        runway,
+        absSpeed,
+      );
+    }
+    // Self-probing: the probe above is capped at the gate window, which would
+    // misread every leader as tied at that horizon.
+    if (applyFairness) this.applyMultiSourceFairness(null, absSpeed);
+    return passed;
   }
 
   /**
@@ -2451,52 +2788,18 @@ export class PlaybackGovernor {
       return false;
     }
 
-    const speed = this.timeController.getSpeed();
-    const absSpeed = Math.abs(speed);
-    const requiredSimMs = this.startGateWallMs * absSpeed * this.gateFactor;
+    const absSpeed = Math.abs(this.timeController.getSpeed());
 
-    let passed = false;
+    // Fairness piggybacks on the GATED eval cadence (the tick probe is frozen
+    // with the clock, and a gate is exactly when leaders extending runway past
+    // a buffering laggard hurts most).
+    let passed = this.gateWouldPass(this.gateFactor, absSpeed, true);
     let degraded = false;
-    if (requiredSimMs <= 0) {
-      // Zero speed consumes no data — nothing to gate on.
-      passed = true;
-    } else if (this.hasAnySource()) {
-      const direction: 1 | -1 = speed < 0 ? -1 : 1;
-      const time = this.timeController.getTime();
-      // Combined over REQUIRED sources: min runway (cadence-tolerance-banded),
-      // AND complete. With zero required sources this reports complete (never
-      // gates).
-      const runway = this.combinedRequiredRunway(
-        time,
-        direction,
-        requiredSimMs,
-        this.toleranceSimMs(absSpeed),
-        absSpeed,
-      );
-      passed = runway.complete || runway.simMs >= requiredSimMs;
-      if (!passed) {
-        // canplaythrough-style predictor (HAVE_ENOUGH_DATA): start when the
-        // MISSING remainder of the gate window is predicted to download in
-        // less wall time than the already-buffered runway plays out (with a
-        // small floor so an instant network passes a cold gate). Without
-        // this, gates scale linearly with |speed| and a 10× sweep can demand
-        // sim-years of runway that no loader is meant to hold up front.
-        passed = this.predictsPlaythrough(
-          time,
-          direction,
-          requiredSimMs,
-          runway,
-          absSpeed,
-        );
-      }
-      // Fairness piggyback on the gated eval cadence (the tick probe is
-      // frozen with the clock, and a gate is exactly when leaders extending
-      // runway past a buffering laggard hurts most). Self-probing: the gate's
-      // own probe above is capped at the gate window, which would misread
-      // every leader as tied at that horizon.
-      this.applyMultiSourceFairness(null, absSpeed);
-    }
-    if (!passed && nowWall() - this.gateStartedAtWall >= this.maxStartWaitMs) {
+    if (
+      !passed &&
+      this.hatchArmed() &&
+      nowWall() - this.gateStartedAtWall >= this.maxStartWaitMs
+    ) {
       // Escape hatch — never hard-lock playback on a broken network.
       passed = true;
       degraded = true;
@@ -2504,6 +2807,16 @@ export class PlaybackGovernor {
     if (!passed) return false;
 
     this.stopEvalTimer();
+    // QoE (G2): a committed seek settles when ITS gate passes. A wrap or a
+    // stall gate in between nulls the stamp, so the sample is never charged
+    // to the wrong gate.
+    if (this._state === 'seeking' && this.seekCommittedAtWall !== null) {
+      this.qoeSeekSettleSamples.push(nowWall() - this.seekCommittedAtWall);
+      if (this.qoeSeekSettleSamples.length > SEEK_SETTLE_SAMPLE_CAP) {
+        this.qoeSeekSettleSamples.shift();
+      }
+    }
+    this.seekCommittedAtWall = null;
     // The gate filled (or the hatch fired) — the pre-gate frontier is stale,
     // and trusting it would clamp the freshly-resumed playback straight back.
     // Null it; the first tick re-probes.
@@ -2582,9 +2895,15 @@ export class PlaybackGovernor {
       absSpeed,
     );
     this.frontierDirection = direction;
+    // A zero runway means the head's OWN bucket is not resident: the frontier
+    // is then behind the head, not at it (G3-4b) — anchoring it at the head
+    // made the clamp snap the clock to where it already was, one frame
+    // further into unloaded data per probe.
     this.bufferedUntil = runway.complete
       ? direction * Infinity
-      : time + direction * runway.simMs;
+      : runway.simMs > 0
+        ? time + direction * runway.simMs
+        : this.residentFrontierBehind(time, direction);
     if (this.degradedCreep) {
       const required = this.startGateWallMs * absSpeed * this.resumeFactor;
       if (runway.complete || runway.simMs >= required) {
@@ -2592,6 +2911,45 @@ export class PlaybackGovernor {
       }
     }
     this.applyMultiSourceFairness(probes, absSpeed);
+  }
+
+  /**
+   * G3-4b: where the resident data ENDS behind a head whose own bucket is not
+   * resident — the end of the last buffered range at or before the head
+   * travelling forward (the start of the first at or after it, backward),
+   * folded over the required set exactly as {@link getBufferedRanges} is.
+   * A range that contains the head (a required-set fold can read zero at a
+   * cadence seam) anchors at its far edge, never behind; with nothing
+   * resident behind at all, the head itself is the only honest answer — the
+   * pre-G3-4 behavior, which the clamp then leaves alone.
+   */
+  private residentFrontierBehind(time: number, direction: 1 | -1): number {
+    let behind = time;
+    for (const r of this.getBufferedRanges()) {
+      if (direction > 0) {
+        if (r.start <= time && time < r.end) return r.end;
+        if (r.end <= time) behind = r.end; // ascending: the last such wins
+      } else {
+        if (r.start < time && time <= r.end) return r.start;
+        if (r.start >= time) return r.start; // ascending: the first such wins
+      }
+    }
+    return behind;
+  }
+
+  /**
+   * True when `time` is past the cached frontier by a playback-sized step —
+   * within the clamp's own bound, so not an external seek.
+   */
+  private headPastFrontier(
+    time: number,
+    direction: 1 | -1,
+    absSpeed: number,
+  ): boolean {
+    const frontier = this.bufferedUntil;
+    if (frontier === null || !Number.isFinite(frontier)) return false;
+    const overrun = direction > 0 ? time - frontier : frontier - time;
+    return overrun > 0 && overrun <= absSpeed * CLAMP_MAX_OVERRUN_REAL_MS;
   }
 
   /** One {@link BufferSource.getBufferedRunway} probe per REGISTERED source
@@ -2606,12 +2964,14 @@ export class PlaybackGovernor {
     const out: SourceProbe[] = [];
     for (const [id, entry] of this.sources) {
       if (requiredOnly && !entry.required) continue;
+      const runway = entry.source.getBufferedRunway(time, direction);
+      this.noteBlockedRunway(id, runway);
       out.push({
         id,
         required: entry.required,
         baseWeight: entry.weight,
         source: entry.source,
-        runway: entry.source.getBufferedRunway(time, direction),
+        runway,
         bucketMs: declaredBucketMs(entry.source),
       });
     }
@@ -2938,22 +3298,63 @@ export class PlaybackGovernor {
       this.toleranceSimMs(absSpeed),
       absSpeed,
     );
-    if (!runway.complete && runway.simMs < watermarkSimMs) {
-      // Same canplaythrough predictor as the gate: don't stall when the
-      // loader is predicted to outrun consumption — a thin runway on a fast
-      // network is fine; a thin runway on a slow one is an imminent dry-out.
-      if (
-        this.predictsPlaythrough(
-          time,
-          direction,
-          watermarkSimMs,
-          runway,
-          absSpeed,
-        )
-      )
-        return;
-      this.enterGate('buffering', this.resumeFactor);
+    if (runway.complete || runway.simMs >= watermarkSimMs) {
+      // Healthy: whatever the floor swallowed was a resume onto a filling
+      // runway, not a standing disagreement. Start the flap count over.
+      this.flapSuppressedStalls = 0;
+      return;
     }
+    // Same canplaythrough predictor as the gate: don't stall when the loader
+    // is predicted to outrun consumption — a thin runway on a fast network is
+    // fine; a thin runway on a slow one is an imminent dry-out.
+    if (
+      this.predictsPlaythrough(
+        time,
+        direction,
+        watermarkSimMs,
+        runway,
+        absSpeed,
+      )
+    ) {
+      return;
+    }
+    // ANTI-FLAP: never stall into a state the resume gate would open again on
+    // the spot. The two thresholds are one-way ordered on the runway compare
+    // (watermark < resumeFactor × start gate) but NOT on every path that can
+    // open a gate — `predictsPlaythrough` and a probe taken at a different
+    // horizon each answer a question this check does not ask — so the two can
+    // genuinely disagree. A stall that resumes in the same instant is not a
+    // stall: it is a pause + a play, and `evaluateGate` nulls the cached
+    // frontier on the way out, so the next tick re-probes and re-decides
+    // immediately. That is an oscillation, one lap per frame, and in a React
+    // host each lap is a state update whose render draws deck.gl, which ticks
+    // this clock again — the loop terminates as "Maximum update depth
+    // exceeded" rather than as jank.
+    if (this.gateWouldPass(this.resumeFactor, absSpeed, false)) {
+      this.noteSuppressedStall();
+      return;
+    }
+    this.flapSuppressedStalls = 0;
+    this.enterGate('buffering', this.resumeFactor);
+  }
+
+  /**
+   * Count a stall the anti-flap check swallowed, and say so ONCE per session
+   * when the count can no longer be a coincidence. Suppressing is always the
+   * right call in the moment (a stall the resume gate would undo on the spot
+   * is not a stall); a standing disagreement is still a defect, and this is
+   * what makes it visible instead of merely quiet.
+   */
+  private noteSuppressedStall(): void {
+    this.flapSuppressedStalls++;
+    if (this.flapSuppressedStalls < FLAP_WARN_THRESHOLD || this.warnedGateFlap)
+      return;
+    this.warnedGateFlap = true;
+    console.warn(
+      '[PlaybackGovernor] the low watermark wants to stall in a state the ' +
+        `resume gate would re-open immediately (${this.flapSuppressedStalls} ` +
+        'in a row). Playback continues — the two thresholds want a look.',
+    );
   }
 
   /**
@@ -2987,6 +3388,20 @@ export class PlaybackGovernor {
     const required = this.requiredSources();
     if (required.length === 0) return true; // nothing gates ⇒ always plays through
     if (absSpeed <= 0) return false;
+    // HAVE_ENOUGH_DATA implies HAVE_CURRENT_DATA (G3-4a, tile-loading audit
+    // 2026-08). Both predictors price the MISSING remainder against the wall
+    // time the buffered runway buys, and with nothing under the head it buys
+    // none — a stale rate (no transfer completed since the link slowed) then
+    // "covered" the first missing buckets and the gate opened onto unloaded
+    // data: one frame of advance per two ticks, a zero-length gate and a
+    // snap-back per step (467 entries, 688 wall-ms past resident data in
+    // 60 s). The head's own data comes first — see the floor.
+    if (
+      !runway.complete &&
+      runway.simMs < this.playthroughRunwayFloorSimMs(absSpeed)
+    ) {
+      return false;
+    }
     const fluid = this.predictsPlaythroughFluid(
       required,
       time,
@@ -3013,6 +3428,23 @@ export class PlaybackGovernor {
     if (maxEtaMs == null) return false;
     const runwayWallMs = runway.simMs / absSpeed;
     return maxEtaMs <= Math.max(runwayWallMs, PLAYTHROUGH_MIN_WALL_MS);
+  }
+
+  /**
+   * The runway the canplaythrough predictor needs before it may release
+   * (G3-4a): one temporal bucket of the finest-grained required source, or
+   * one probe interval at the current speed when that is shorter — the
+   * clamp's own window, so the clock cannot outrun a fresh probe before the
+   * next one. Never zero at a non-zero speed, so HAVE_ENOUGH_DATA can no
+   * longer be claimed without HAVE_CURRENT_DATA.
+   */
+  private playthroughRunwayFloorSimMs(absSpeed: number): number {
+    let floor = TICK_PROBE_INTERVAL_MS * absSpeed;
+    for (const source of this.requiredSources()) {
+      const bucketMs = declaredBucketMs(source);
+      if (bucketMs !== null && bucketMs < floor) floor = bucketMs;
+    }
+    return floor;
   }
 
   /**
@@ -3207,6 +3639,26 @@ function nowWall(): number {
  * never set) are all "undeclared" — which routes the lift band back to the
  * wall-ms default, never to a zero band.
  */
+/**
+ * Audit B8: a runway that ends at a permanent block is buffered for gating
+ * purposes. `complete` already says "nothing to wait for"; the flag only
+ * matters when it is NOT complete (a complete-and-blocked runway is just
+ * complete, and is not counted as a block).
+ */
+function isBlockedForGating(runway: BufferedRunway): boolean {
+  return runway.blockedPermanently === true && !runway.complete;
+}
+
+/**
+ * Nearest-rank median of a sample list (no interpolation, so the figure is
+ * always an observed value); null on no samples.
+ */
+function nearestRankMedian(samples: readonly number[]): number | null {
+  if (samples.length === 0) return null;
+  const sorted = samples.slice().sort((a, b) => a - b);
+  return sorted[Math.ceil(sorted.length / 2) - 1];
+}
+
 function declaredBucketMs(source: BufferSource): number | null {
   const read = source.getTemporalBucketMs;
   if (typeof read !== 'function') return null;

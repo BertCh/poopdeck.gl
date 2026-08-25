@@ -1321,6 +1321,41 @@ function assembleTrack(groups: TileTrackGroup[]): {
 }
 
 /**
+ * A dirty track's per-tile groups in current tile-ARRAY order — the sequence a
+ * walk of the whole resident key list would produce, obtained instead by
+ * sorting the track's OWN groups (one per tile-layer holding it: typically one
+ * or two, rarely dozens) by each key's rank in that list. A group whose key
+ * has no rank is not resident this sync and is dropped, as the walk dropped it.
+ *
+ * Insertion sort, on purpose: groups arrive in absorb order, which IS array
+ * order on a cold sync and nearly so afterwards, so the common case is one
+ * pass with no shifts and no comparator closure allocated per track.
+ *
+ * Exported for the hot-spot audit benchmark; not part of the public surface.
+ * @internal
+ */
+export function orderGroups<G>(
+  byTile: ReadonlyMap<string, G>,
+  rank: ReadonlyMap<string, number>,
+): G[] {
+  const groups: G[] = [];
+  const ranks: number[] = [];
+  for (const [key, g] of byTile) {
+    const r = rank.get(key);
+    if (r === undefined) continue;
+    let i = groups.length;
+    while (i > 0 && ranks[i - 1] > r) {
+      groups[i] = groups[i - 1];
+      ranks[i] = ranks[i - 1];
+      i--;
+    }
+    groups[i] = g;
+    ranks[i] = r;
+  }
+  return groups;
+}
+
+/**
  * Incremental analogue of {@link buildTrackIndex}: a per-layer-instance object
  * that maintains the id-keyed track index across tile churn, re-pooling only
  * ADDED tiles and re-sorting only AFFECTED tracks. See the section header for
@@ -1344,12 +1379,25 @@ export class TrackIndexMaintainer {
    */
   readonly resortedTrackIds: string[] = [];
 
+  /**
+   * (dirty track, tile-layer) slots examined while ordering groups in the
+   * most recent {@link sync}: Σ over rebuilt tracks of the tile-layers holding
+   * each. Instrumentation for the complexity test — the resident-key walk this
+   * replaced examined dirty × resident instead. Reset at the start of every
+   * sync.
+   */
+  private lookups = 0;
+  get orderingLookups(): number {
+    return this.lookups;
+  }
+
   /** Drop all state — call when a feeding style prop changed (full rebuild). */
   reset(): void {
     this.tracks.clear();
     this.absorbed.clear();
     this.builtMap.clear();
     this.resortedTrackIds.length = 0;
+    this.lookups = 0;
   }
 
   /**
@@ -1362,19 +1410,19 @@ export class TrackIndexMaintainer {
   sync(tiles: Tile[], cfg: TrackFieldConfig): TrackIndexResult {
     const R = resolveTrackFields(cfg);
     this.resortedTrackIds.length = 0;
+    this.lookups = 0;
 
-    // 1. Walk the current tile set in ARRAY ORDER: record the ordered key list
-    //    and absorb any (tile, layer) not seen before. Empty layers contribute
-    //    nothing (buildTrackIndex `continue`s on count === 0), so skip them.
-    const currentKeys: string[] = [];
-    const incoming = new Set<string>();
+    // 1. Walk the current tile set in ARRAY ORDER: rank every resident
+    //    (tile, layer) key by its position and absorb any not seen before.
+    //    Empty layers contribute nothing (buildTrackIndex `continue`s on
+    //    count === 0), so skip them.
+    const rank = new Map<string, number>();
     for (const tile of tiles) {
       for (const tileLayer of tile.layers) {
         if (tileLayer.features.featureCount === 0) continue;
         const key = tileLayerKey(tile.id, tileLayer.name);
-        if (incoming.has(key)) continue; // guard a duplicated key in one array
-        incoming.add(key);
-        currentKeys.push(key);
+        if (rank.has(key)) continue; // guard a duplicated key in one array
+        rank.set(key, rank.size);
         if (this.absorbed.has(key)) continue;
 
         const pool = poolTileLayer(tileLayer, key, R);
@@ -1394,7 +1442,7 @@ export class TrackIndexMaintainer {
     // 2. Evict absorbed (tile, layer)s no longer present: drop their group from
     //    every track they fed and mark those tracks dirty.
     for (const [key, pool] of this.absorbed) {
-      if (incoming.has(key)) continue;
+      if (rank.has(key)) continue;
       for (const trackKey of pool.groups.keys()) {
         const mt = this.tracks.get(trackKey);
         if (mt) {
@@ -1406,7 +1454,11 @@ export class TrackIndexMaintainer {
     }
 
     // 3. Rebuild dirty tracks (dropping any left empty). Reassemble in current
-    //    tile-array order → identical pre-sort ordering to a full build.
+    //    tile-array order → identical pre-sort ordering to a full build. Each
+    //    dirty track orders its OWN groups by rank ({@link orderGroups}) rather
+    //    than probing `byTile` for every resident key: that walk was O(dirty ×
+    //    resident tile-layers) — 313 ms of a 1.1 s cold sync at 854 tile-layers
+    //    × 30k tracks — for tracks that live in one or two of them.
     for (const [trackKey, mt] of this.tracks) {
       if (mt.byTile.size === 0) {
         this.tracks.delete(trackKey);
@@ -1414,12 +1466,8 @@ export class TrackIndexMaintainer {
         continue;
       }
       if (!mt.dirty) continue;
-      const ordered: TileTrackGroup[] = [];
-      for (const key of currentKeys) {
-        const g = mt.byTile.get(key);
-        if (g) ordered.push(g);
-      }
-      const { track, sorted } = assembleTrack(ordered);
+      this.lookups += mt.byTile.size;
+      const { track, sorted } = assembleTrack(orderGroups(mt.byTile, rank));
       this.builtMap.set(trackKey, track);
       mt.dirty = false;
       if (sorted) this.resortedTrackIds.push(trackKey);

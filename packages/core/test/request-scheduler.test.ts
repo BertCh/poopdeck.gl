@@ -13,6 +13,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  SCHEDULER_PREFETCH_TIER_BASE,
   SharedRequestScheduler,
   isCancellationError,
 } from '../src/request-scheduler';
@@ -1513,5 +1514,137 @@ describe('SharedRequestScheduler — byteQuantum:null rollback exactness', () =>
     }
     await d.drainAll();
     expect(d.order).toEqual(['s0', 's1', 's2', 's3']);
+  });
+});
+
+// ─── B4 (tile-loading audit 2026-08): tier-gated DRR admission ──────────────
+//
+// The archive prices every need-now group below `SCHEDULER_PREFETCH_TIER_BASE`
+// and every prefetch group at or above it. Before B4 the DRR deficit gate ran
+// BEFORE the priority compare, so a source in byte arrears (it had just
+// dispatched a group larger than one quantum — routine: primary groups are
+// 0.25–15 MB) was skipped for as many rounds as the arrears took to repay, and
+// every other source's PREFETCH ran in those rounds. The tier base only ordered
+// admissible candidates; it never gated admission.
+
+describe('SharedRequestScheduler — B4 tier-gated DRR admission', () => {
+  const MiB = 1024 * 1024;
+
+  it("B4: a required source's need-now request dispatches before any other source's prefetch-tier request, even in arrears", async () => {
+    // Port of the audit's `drr-arrears3.mjs` (15 MiB, 'while-running' case)
+    // onto controllable executors: no timers, one dispatch per freed slot.
+    const s = new SharedRequestScheduler({ maxRequests: 24 });
+    const started: string[] = [];
+    const overlayRunning: Controllable[] = [];
+    const enqueue = (
+      sourceId: string,
+      costBytes: number,
+      priority: number,
+      label: string,
+    ): Controllable => {
+      const c = controllable();
+      void s
+        .schedule({
+          sourceId,
+          costBytes,
+          getPriority: () => priority,
+          execute: (sig) => {
+            started.push(label);
+            if (sourceId !== 'R') overlayRunning.push(c);
+            return c.execute(sig);
+          },
+        })
+        .catch(() => {});
+      return c;
+    };
+    const overlayStarts = () => started.filter((l) => l !== 'R').length;
+
+    // R dispatches one 15 MiB need-now group and keeps it on the wire: ~29
+    // quanta of arrears, which DRR repays one quantum per round and prunes
+    // only once R is fully idle (never, during playback).
+    const rBig = enqueue('R', 15 * MiB, 0, 'R');
+    await flush();
+    expect(rBig.started()).toBe(true);
+
+    // Three overlays queue 200 prefetch-tier groups each (250 KB).
+    for (let o = 0; o < 3; o++)
+      for (let i = 0; i < 200; i++)
+        enqueue(
+          `O${o}`,
+          250_000,
+          SCHEDULER_PREFETCH_TIER_BASE + i * 1000,
+          `O${o}`,
+        );
+    await flush();
+    // R's group plus 23 overlay groups fill the budget.
+    expect(started.length).toBe(24);
+    expect(overlayStarts()).toBe(23);
+
+    // R's NEXT need-now group arrives while its big one is still running.
+    const rNext = enqueue('R', 1 * MiB, 1000, 'R');
+    await flush();
+    const overlaysAtEnqueue = overlayStarts();
+    expect(rNext.started()).toBe(false); // no free slot yet
+
+    // Free overlay slots one at a time until R's need-now group dispatches or
+    // the overlays run dry. Each freed slot is one `selectNext` decision.
+    while (!rNext.started() && overlayRunning.length > 0) {
+      overlayRunning.shift()!.resolve(undefined);
+      await flush();
+    }
+
+    // THE INVERSION: before B4, 174 optional groups (43 MB) dispatched here
+    // while R's need-now group waited out its arrears.
+    expect(rNext.started()).toBe(true);
+    expect(overlayStarts() - overlaysAtEnqueue).toBe(0);
+
+    s.clear();
+    rBig.resolve(undefined);
+    rNext.resolve(undefined);
+    for (const c of overlayRunning) c.resolve(undefined);
+    await flush();
+  });
+
+  it('B4: arrears still yield to a SAME-tier rival, and prefetch waits behind every need-now source', async () => {
+    // Serial driver, 1000-byte quantum. R runs a 5× over-quantum need-now
+    // group, then has two more need-now groups; S has need-now work; O only
+    // prefetch. Expected: S soaks up R's arrears (same-tier byte share is the
+    // property DRR exists for), and O never runs while EITHER need-now source
+    // still has work — whatever R's arrears say.
+    const s = new SharedRequestScheduler({ maxRequests: 1, byteQuantum: 1000 });
+    const d = byteDriver(s);
+    d.enqueue({ sourceId: 'R', costBytes: 5000, priority: 0, label: 'R-big' });
+    for (let i = 0; i < 2; i++)
+      d.enqueue({
+        sourceId: 'R',
+        costBytes: 1000,
+        priority: 10,
+        label: 'R-next',
+      });
+    for (let i = 0; i < 20; i++)
+      d.enqueue({ sourceId: 'S', costBytes: 500, priority: 5, label: 'S' });
+    for (let i = 0; i < 20; i++)
+      d.enqueue({
+        sourceId: 'O',
+        costBytes: 500,
+        priority: SCHEDULER_PREFETCH_TIER_BASE,
+        label: 'O',
+      });
+    await d.drainAll();
+
+    expect(d.order[0]).toBe('R-big');
+    // Same-tier share preserved: S repays R's 5000-byte arrears (≈10 of its
+    // 500-byte groups) before R's next need-now group runs.
+    const firstRNext = d.order.indexOf('R-next');
+    const sBeforeRNext = d.order
+      .slice(0, firstRNext)
+      .filter((x) => x === 'S').length;
+    expect(sBeforeRNext).toBeGreaterThanOrEqual(8);
+    // Tier gate: the first prefetch group dispatches only after the LAST
+    // need-now group of either source.
+    const firstO = d.order.indexOf('O');
+    expect(firstO).toBeGreaterThan(d.order.lastIndexOf('R-next'));
+    expect(firstO).toBeGreaterThan(d.order.lastIndexOf('S'));
+    expect(d.order.filter((x) => x === 'O').length).toBe(20);
   });
 });

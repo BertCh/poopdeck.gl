@@ -139,3 +139,26 @@ describe('usePlayback', () => {
     disposeSpy.mockRestore();
   });
 });
+
+describe('usePlayback initialAutoSpeed', () => {
+  it('defaults Auto mode OFF', () => {
+    const { result } = renderHook(() =>
+      usePlayback({ timeRange: { start: 0, end: 1_000 } }),
+    );
+    expect(result.current.autoSpeed).toBe(false);
+  });
+
+  it('initialAutoSpeed: true seeds Auto mode at mount; an explicit preset still exits it', () => {
+    const { result } = renderHook(() =>
+      usePlayback({
+        timeRange: { start: 0, end: 1_000 },
+        initialAutoSpeed: true,
+      }),
+    );
+    expect(result.current.autoSpeed).toBe(true);
+    // A seed, not a lock: the existing exit path is untouched.
+    act(() => result.current.onSpeedChange(2));
+    expect(result.current.autoSpeed).toBe(false);
+    expect(result.current.speedMultiplier).toBe(2);
+  });
+});

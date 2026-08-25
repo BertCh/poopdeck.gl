@@ -1,5 +1,8 @@
 # @poopdeck.gl/playback
 
+> **Status: stable, pre-1.0.** See the
+> [support and compatibility policy](../../docs/intro/status-and-support.md).
+
 A **zero-dependency, renderer-agnostic playback engine** for time-series
 visualization: an animation clock, a buffering governor that gates playback
 on a buffered runway (stall/resume, seek gates, adaptive Auto speed), and an

@@ -41,6 +41,11 @@ interface PerformanceMonitorProps {
    */
   anchor?: 'bottom-right' | 'top-right';
   /**
+   * Push the top-docked chip down by N px. The phone chrome parks a back /
+   * title / ⓘ bar across the top-right corner the HUD would otherwise sit in.
+   */
+  topInset?: number;
+  /**
    * Per-source buffered-runway probe (PlaybackGovernor.getSourceRunways),
    * threaded by the viewer that owns the governor. Polled only while the HUD
    * is expanded; one compact row per registered source so a starved source
@@ -77,6 +82,7 @@ interface ArchiveSnapshot {
 const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
   getTilesetStats,
   visible = true,
+  topInset = 0,
   overviewPreload = null,
   anchor = 'bottom-right',
   getSourceRunways,
@@ -198,7 +204,7 @@ const PerformanceMonitor: React.FC<PerformanceMonitorProps> = ({
     <div
       className="absolute z-50 rounded text-[10px] select-none"
       style={{
-        top: dockTop ? 8 : 'auto',
+        top: dockTop ? 8 + topInset : 'auto',
         bottom: dockTop ? 'auto' : 8,
         right: 8,
         background: 'rgba(36, 39, 48, 0.95)',

@@ -1,9 +1,9 @@
 {
   "name": "spatiotemporal-tiles",
   "version": "0.1.0",
-  "description": "Single-file spatiotemporal tile format for interactive time-series visualization",
+  "description": "Packed spatiotemporal vector tiles for interactive time-aware visualization",
   "private": true,
-  "packageManager": "pnpm@10.19.0",
+  "packageManager": "pnpm@11.23.0",
   "workspaces": [
     "packages/*",
     "examples/*",
@@ -13,52 +13,31 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "dev": "turbo run dev --parallel",
+    "docs:links": "node scripts/check-doc-links.mjs",
     "clean": "turbo run clean && rm -rf node_modules",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
+    "project:check": "node scripts/check-project-status.mjs",
     "typecheck": "turbo run typecheck",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "turbo run build --filter='./packages/*' && pnpm -r --filter='./packages/*' publish --access public --no-git-checks && changeset tag"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.7.0",
-    "@changesets/cli": "^2.31.0",
-    "@types/node": "^20.14.0",
-    "oxfmt": "^0.58.0",
-    "oxlint": "^1.73.0",
-    "playwright": "^1.60.0",
-    "turbo": "^2.0.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "react": ">=19.2.0 <19.3.0",
-      "react-dom": ">=19.2.0 <19.3.0",
-      "@deck.gl/core": "9.3.2",
-      "@deck.gl/layers": "9.3.2",
-      "@deck.gl/react": "9.3.2",
-      "@deck.gl/aggregation-layers": "9.3.2",
-      "@deck.gl/geo-layers": "9.3.2",
-      "@deck.gl/extensions": "9.3.2",
-      "@deck.gl/mesh-layers": "9.3.2",
-      "@deck.gl/widgets": "9.3.2",
-      "@luma.gl/core": "9.3.3",
-      "@luma.gl/engine": "9.3.3",
-      "@luma.gl/constants": "9.3.3",
-      "@luma.gl/shadertools": "9.3.3",
-      "@luma.gl/webgl": "9.3.3",
-      "@luma.gl/gltf": "9.3.3"
-    },
-    "patchedDependencies": {
-      "@luma.gl/core@9.3.3": "patches/@luma.gl__core@9.3.3.patch"
-    }
+    "@changesets/changelog-github": "^1.0.0",
+    "@changesets/cli": "^3.0.1",
+    "@types/node": "^24.9.2",
+    "oxfmt": "^0.65.0",
+    "oxlint": "^1.80.0",
+    "playwright": "^1.62.1",
+    "turbo": "^2.10.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   },
   "repository": {
     "type": "git",

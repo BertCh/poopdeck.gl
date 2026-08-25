@@ -67,7 +67,12 @@ export function mockTileset(initial: Tile[] = []): MockTileset {
     },
     update(v: UpdateArg) {
       updates.push(v);
-      return 0;
+      // A FRESH frame number per pump, like the real tileset after a pass that
+      // changed something: the source gates its resident-set diff on this
+      // (audit E5), so a constant would silently skip every walk after the
+      // first. Tests that want the gate to bite hand the source a mock with
+      // a pinned frame.
+      return updates.length;
     },
     getVisibleTiles() {
       return visible;

@@ -102,9 +102,10 @@ For arbitrary GeoParquet input, use `stt-build` directly. See the
 
 Copy [`minimal/`](./minimal/) out of the repo and edit it — that is the fastest
 path, and it already carries the correct peer-dependency set. To start from
-nothing instead, all eight `@poopdeck.gl/*` packages are published to npm
-(0.5.0): `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `cesium`,
-`mcp`.
+nothing instead, seven `@poopdeck.gl/*` packages are actively published at
+`0.6.0`: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, and `mcp`.
+The Cesium backend is experimental: its last npm release is `0.5.0`, and current
+development builds only from a workspace checkout.
 
 ```bash
 mkdir ~/my-stt-app && cd ~/my-stt-app

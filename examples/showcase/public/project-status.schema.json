@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poopdeck.gl/project-status.schema.json",
+  "title": "STT project status contract",
+  "type": "object",
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "updated",
+    "release",
+    "toolchain",
+    "archive",
+    "commands",
+    "repositoryOnlyCommands",
+    "packages"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "updated": { "type": "string", "format": "date" },
+    "release": {
+      "type": "object",
+      "required": ["rust", "javascript"],
+      "properties": {
+        "rust": { "$ref": "#/$defs/version" },
+        "javascript": { "$ref": "#/$defs/version" }
+      },
+      "additionalProperties": false
+    },
+    "toolchain": {
+      "type": "object",
+      "required": ["node", "nodeMajor", "pnpm", "rust"],
+      "properties": {
+        "node": { "type": "string" },
+        "nodeMajor": { "type": "integer", "minimum": 1 },
+        "pnpm": { "$ref": "#/$defs/version" },
+        "rust": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+      },
+      "additionalProperties": false
+    },
+    "archive": {
+      "type": "object",
+      "required": ["writes", "reads"],
+      "properties": {
+        "writes": { "$ref": "#/$defs/archiveVersions" },
+        "reads": {
+          "type": "object",
+          "required": ["formatVersions", "directoryVersions"],
+          "properties": {
+            "formatVersions": { "$ref": "#/$defs/versionList" },
+            "directoryVersions": { "$ref": "#/$defs/versionList" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "commands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/surface" }
+    },
+    "repositoryOnlyCommands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/surface" }
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/surface" },
+          {
+            "type": "object",
+            "required": ["version", "published"],
+            "properties": {
+              "version": { "$ref": "#/$defs/version" },
+              "published": { "type": "boolean" }
+            }
+          }
+        ]
+      }
+    },
+    "otherSurfaces": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/surface" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "versionList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "archiveVersions": {
+      "type": "object",
+      "required": ["formatVersion", "directoryVersion"],
+      "properties": {
+        "formatVersion": { "type": "integer", "minimum": 1 },
+        "directoryVersion": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "surface": {
+      "type": "object",
+      "required": ["name", "support"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "support": { "enum": ["stable", "preview", "experimental"] }
+      }
+    }
+  }
+}

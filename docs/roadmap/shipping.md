@@ -1,24 +1,34 @@
 # Shipping & distribution — decision record
 
-_How this project is published, why the scheme looks the way it does, what was
-counted out, and the one release defect that is still open. Behavior of the CLIs
-themselves lives in [../api/cli-reference.md](../api/cli-reference.md)._
+_How this project is published, why the scheme looks the way it does, and what
+was counted out. Behavior of the CLIs themselves lives in
+[../api/cli-reference.md](../api/cli-reference.md)._
 
-**Where it stands (verified against the registries 2026-07-26).** The npm side
-is current: **eight** `@poopdeck.gl` packages, **all eight published at 0.5.0**
+> **Status note (2026-08-24).** This is a decision record, so dated registry
+> observations below are retained as history. For the current release procedure,
+> use [CONTRIBUTING.md](../../CONTRIBUTING.md#releasing). The checked-in manifests
+> currently define Rust **0.6.0** with MSRV **1.87**, seven public
+> `@poopdeck.gl/*` packages at **0.6.0**, and the private experimental Cesium
+> package at **0.5.0**. Rust crates are published manually in dependency order;
+> cargo-dist binaries require a `v{version}` tag followed by a manual **Release**
+> workflow dispatch. The deleted release-plz workflow is not part of the current
+> release path.
+
+**Historical registry snapshot (verified 2026-07-26).** The npm side
+was current: **eight** `@poopdeck.gl` packages, **all eight published at 0.5.0**
 (`core`, `playback`, `layers`, `maplibre`, `three`, `cesium`, `react`, `mcp` —
 `mcp` shipped at 0.5.0, so any note calling it "the unpublished one" is stale).
-The Rust side is **behind**: crates.io `spatiotemporal-tiles` max_version is
-**0.4.0**, published 2026-07-06. See "Open release defect" below.
+The Rust side was **behind**: crates.io `spatiotemporal-tiles` max_version was
+**0.4.0**, published 2026-07-06. See "Historical release defect" below.
 
 ## Distribution pathways (decided)
 
-| channel               | artifact                                                                                                                                                     | mechanism                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| npm `@poopdeck.gl`    | 8 packages: core, playback, layers, maplibre, three, cesium, react, mcp                                                                                      | changesets (fixed/lockstep group) + `release-npm.yml`; `pnpm -r publish` rewrites `workspace:*` |
-| crates.io             | **one public name**: `spatiotemporal-tiles` (facade lib + all 5 CLI bins, feature-gated) over 3 internal lib crates: `stt-core`, `stt-build`, `stt-optimize` | release-plz (lockstep `version_group`, tag `v{ver}`) + Trusted Publishing                       |
-| GitHub Releases       | prebuilt `stt-*` binaries, 5 targets + shell/powershell installers                                                                                           | cargo-dist 0.32.0 on tag push (`release.yml`, generated/vendored)                               |
-| Cloudflare (existing) | showcase site + R2 tile data                                                                                                                                 | unchanged (`wrangler`, `scripts/r2-sync.sh`)                                                    |
+| channel               | artifact                                                                                                                             | mechanism                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| npm `@poopdeck.gl`    | 7 public packages: core, playback, layers, maplibre, three, react, mcp; Cesium is private/experimental                               | changesets (fixed/lockstep group) + `release-npm.yml`; `pnpm -r publish` rewrites `workspace:*` |
+| crates.io             | **one user-facing name**: `spatiotemporal-tiles` (facade lib + all 5 CLI bins, feature-gated) over 3 published implementation crates | manual publish in dependency order; `sync-versions.mjs --check` gates lockstep                  |
+| GitHub Releases       | prebuilt `stt-*` binaries, 5 targets + shell/powershell installers                                                                   | cargo-dist 0.32.0 via manual `release.yml` dispatch for an existing tag                         |
+| Cloudflare (existing) | showcase site + R2 tile data                                                                                                         | unchanged (`wrangler`, `scripts/r2-sync.sh`)                                                    |
 
 ## Naming rationale
 
@@ -62,39 +72,40 @@ The Rust side is **behind**: crates.io `spatiotemporal-tiles` max_version is
 
 ## Version/tag scheme
 
-- Everything is meant to be lockstep (npm `fixed` group;
-  `[workspace.package] version`), tree currently **0.5.0**.
-- Rust tag: `v{version}` (release-plz creates on the facade; cargo-dist
-  consumes). npm tags: changesets-style `@poopdeck.gl/pkg@x.y.z`. No overlap.
-- MSRV: `rust-version = 1.88` (empirically forced by `home`/`osmpbf`/
-  `delaunator`; enforced by the CI `rust-msrv` job). Bumps are deliberate,
-  in minor releases.
+- The seven public npm packages and four published Rust crates are meant to be
+  lockstep (npm `fixed` group; `[workspace.package] version`), and the tree is
+  currently **0.6.0**. The private Cesium package is outside that release set.
+- Rust tag: `v{version}` (created manually; cargo-dist consumes it when the
+  Release workflow is dispatched). npm tags are changesets-style
+  `@poopdeck.gl/pkg@x.y.z`. No overlap.
+- MSRV: `rust-version = 1.87`, enforced by the CI `rust-msrv` job. The old 1.88
+  floor belonged to `stt-generate` before it moved to its own workspace.
 
-## Open release defect — the lockstep is currently broken
+## Historical release defect — the lockstep was broken
 
-The current instance is **B3** in the [roadmap README](./README.md), which owns
-the numbers and the sequencing. What belongs here is the two _structural_ reasons
-the lockstep keeps breaking, both of which outlive any one release:
+This was **B3** in the [roadmap README](./README.md), discharged by the 0.6.0
+release on 2026-08-13. What belongs here is the two _structural_ reasons the
+lockstep broke, both of which outlive any one release:
 
-- **An untagged release is a dead install path.** cargo-dist builds binaries **on
-  tag push**, and nothing else does. `crates/spatiotemporal-tiles/README.md` tells
-  users "prebuilt binaries and a shell installer are on the releases page", so a
-  version that ships without its `v{version}` tag turns that sentence into a 404.
-  Tag the release or stop advertising the binaries. (Same README, same pass: it
-  says `cargo install` "installs the four binaries" — defaults install five.)
+- **An unbuilt tag is a dead install path.** cargo-dist now uses
+  `dispatch-releases = true`: create the `v{version}` tag, then manually dispatch
+  `.github/workflows/release.yml` with that tag. A version that skips either step
+  has no prebuilt binaries.
 - **Every publish so far has been manual.** All commits in the repo are the
   author's; not one bot commit, not one `chore: release` PR merge. The lockstep
   rule ("crate and npm versions stay in step") has therefore always been
   aspirational rather than enforced — crates.io never even got a 0.2.0 or 0.5.0.
-  Until CI can run, the ritual has to end with a deliberate tag push by hand.
+  That history is why the current procedure gates versions with
+  `sync-versions.mjs --check` and requires an explicit Release workflow dispatch.
 
 ## Release systems: three became two (the deletion happened)
 
 The repo used to carry **three** independent release mechanisms and used none of
 them end-to-end. `release-plz.toml` and `.github/workflows/release-plz.yml` are
-now **gone** (verified 2026-07-26): changesets owns npm, cargo-dist owns the Rust
-binaries on a hand-pushed `v{version}` tag. The evidence that forced the deletion
-is kept because it is the argument against ever adding a third:
+now **gone** (verified 2026-07-26): changesets owns npm, while cargo-dist builds
+Rust binaries from a manually dispatched workflow for an existing `v{version}`
+tag. The evidence that forced the deletion is kept because it is the argument
+against ever adding a third:
 
 - `.changeset/` holds `config.json` and nothing else; the last commit to touch
   a changeset `.md` was the 0.3.0 release (`94e807b`).
@@ -112,9 +123,10 @@ is the release-PR/changelog workflow, and that workflow produced zero PRs and ze
 changelogs here — a third system whose only effect was to make the crate
 changelogs look _missing_ rather than absent-by-choice. Changesets keeps npm (it
 already owns the `fixed` group and the `@poopdeck.gl/pkg@x.y.z` tags); cargo-dist
-keeps Rust off a hand-pushed tag. **The release ritual must end with a
-`v{version}` tag push, or the binaries silently stop existing** — that is the one
-failure mode the deletion did not remove, and B3 is its current instance.
+keeps Rust binary distribution. **The release ritual must end with a
+`v{version}` tag and a successful manual Release workflow dispatch, or the
+binaries silently stop existing** — that is the failure mode the deletion did
+not remove.
 
 ## Operational constraint: publishing crates from this network
 
@@ -171,13 +183,11 @@ Three standing rules that fall out of it:
 ## Auth lifecycle (token → OIDC)
 
 Bootstrap tokens live in the gitignored root `.env` (`NPM_TOKEN`,
-`CRATES_TOKEN`). Both registries only allow Trusted-Publisher config AFTER a
-package exists, so: first publish with tokens → same day, configure GitHub
-trusted publishers (npm: each package → `release-npm.yml`; crates.io: each
-crate → `release-plz.yml`) → revoke both tokens. `RELEASE_PLZ_PAT` (a PAT, not
-`GITHUB_TOKEN`) is needed so release PRs trigger CI. npm provenance
-(`NPM_CONFIG_PROVENANCE`) requires a **public** repo — enable it when the repo
-flips public.
+`CRATES_TOKEN`). The current npm workflow is the future trusted-publisher target:
+configure each public package for `release-npm.yml`, enable provenance when the
+repository is public, then revoke `NPM_TOKEN`. Rust publishing remains the manual
+dependency-order procedure in `CONTRIBUTING.md`; there is no release-plz workflow
+to name as a trusted publisher.
 
 ## CI gates that keep publishability true
 
@@ -196,7 +206,7 @@ flips public.
 - `rust-feature-lanes`: facade `serve-postgres` / `serve-duckdb` / `cli` solo
   compiles + stt-build `--no-default-features`.
 - `rust-all-features`: tests (not just builds) the full feature surface.
-- `rust-msrv`: `cargo check --workspace` on 1.88.
+- `rust-msrv`: `cargo check --workspace` on 1.87.
 
 ## Explicit non-goals (counted out, with revival triggers)
 
@@ -208,14 +218,14 @@ flips public.
 - **Docker image / Homebrew tap**: cargo-dist's installers + `cargo install`
   cover it. Revive with a ghcr.io image for `stt-serve` if someone actually
   asks to run the server as a service.
-- Node 18 (EOL; engines `>=20`), apache-arrow stays a hard dep of core.
+- Node 20 and earlier (EOL; `.node-version`, the root, and package engines require
+  Node 24+), apache-arrow stays a hard dep of core.
 
-**Closed, do not re-litigate: MapLibre v5.** This was counted out on the
-grounds that v5 replaced the positional-matrix custom-layer `render(gl, matrix)`
-signature. The port landed — host-version dispatch normalizes both signatures
-(`packages/maplibre/src/lib/host-adapter.ts`, per `base-layer.ts`) and the
-showcase now runs 5.24.0. The declared peer range is `^3 || ^4 || ^5`; widening
-it to `^6` waits on actually testing against v6 (renderer-architecture §4.2).
+**Closed, do not re-litigate: MapLibre v5/v6.** This was counted out when v5
+replaced the positional-matrix custom-layer `render(gl, matrix)` signature. The
+host-version adapter now normalizes the supported signatures, the declared peer
+range is `^3 || ^4 || ^5 || ^6`, and the showcase runs 6.6.x
+(`packages/maplibre/src/lib/host-adapter.ts`, per `base-layer.ts`).
 
 ## Known risks / fallbacks
 

@@ -113,6 +113,13 @@ export interface UsePlaybackOptions {
    * the playhead to the new range start.
    */
   initialTime?: number;
+  /**
+   * Start in Auto-speed mode (the governor's buffer-aware multiplier) instead
+   * of the fixed 1× preset. Mount-time SEED only, like `loop`: picking any
+   * explicit preset still exits Auto, and `onAutoSpeedSelect` re-enters it.
+   * @default false
+   */
+  initialAutoSpeed?: boolean;
 }
 
 export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
@@ -121,6 +128,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
     baseSpeed,
     loop: initialLoop = true,
     initialTime,
+    initialAutoSpeed = false,
   } = options;
   const rangeStart = timeRange?.start;
   const rangeEnd = timeRange?.end;
@@ -148,7 +156,7 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
   const [currentTime, setCurrentTime] = useState(timeController.getTime());
   const [isPlaying, setIsPlaying] = useState(false);
   const [speedMultiplier, setSpeedMultiplier] = useState(1.0);
-  const [autoSpeed, setAutoSpeed] = useState(false);
+  const [autoSpeed, setAutoSpeed] = useState(initialAutoSpeed);
 
   // ── Playback governor (docs/roadmap/playback-and-loading.md) ───────────────
   // One governor per mounted demo, wrapping the shared TimeController: play /
@@ -235,9 +243,10 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
       governor?.requestPause();
       governor?.setSource(null);
       timeController.setTimeRange({ start: rangeStart, end: rangeEnd });
-      // The mount-time application honours `initialTime` (clamped into range);
-      // a LATER range change is a dataset swap and starts at the new range
-      // start — initialTime is a mount-time concept.
+      // The mount-time application honours `initialTime` (clamped into range)
+      // and the `initialAutoSpeed` seed; a LATER range change is a dataset
+      // swap and starts at the new range start on the fixed 1× preset — both
+      // are mount-time concepts.
       const startAt =
         firstApply && initialTime != null
           ? Math.min(Math.max(initialTime, rangeStart), rangeEnd)
@@ -246,11 +255,11 @@ export function usePlayback(options: UsePlaybackOptions = {}): PlaybackState {
       timeController.setSpeed(baseAnimationSpeed * speedMultiplier);
       setIsPlaying(false);
       setSpeedMultiplier(1.0);
-      setAutoSpeed(false);
+      setAutoSpeed(firstApply ? initialAutoSpeed : false);
     }
-    // speedMultiplier is read for the speed reset and initialTime only on the
-    // first application, but both are deliberately not deps — this effect must
-    // run only on range/speed/controller/governor changes.
+    // speedMultiplier is read for the speed reset, and initialTime /
+    // initialAutoSpeed only on the first application, but none are deps —
+    // this effect must run only on range/speed/controller/governor changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeStart, rangeEnd, baseAnimationSpeed, timeController, governor]);
 

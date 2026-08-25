@@ -28,6 +28,9 @@ export type TilesetFetchCallbacks = Pick<
   | 'getThroughput'
   | 'setSchedulerWeight'
   | 'setMaxConcurrentRequests'
+  // Planned RANGE bytes for a candidate set (C4): `STTArchive.planRangeBytes`,
+  // the number the overview byte gate prices on when wired.
+  | 'estimateFetchBytes'
 >;
 
 /**
@@ -58,12 +61,19 @@ export function makeTilesetCallbacks(
       archive.getTiles(tileIds, {
         signal,
         onTileReady: hooks?.onTileReady,
+        // A member's failure reason as the archive learns it (B8): the
+        // PERMANENT verdict is what lets the tileset write a 404 off on first
+        // sight instead of re-probing it from the retry ladder.
+        onTileError: hooks?.onTileError,
         fetchPriority: hooks?.fetchPriority,
         playheadTime: hooks?.playheadTime,
         playheadDirection: hooks?.playheadDirection,
         viewportCenter: hooks?.viewportCenter,
       }),
     getTileByteSize: (tileId) => archive.getTileByteSize(tileId),
+    // Planned RANGE bytes for a candidate set (C4) — what the coalescer will
+    // actually fetch, for budgets that used to price directory bytes.
+    estimateFetchBytes: (tileIds) => archive.planRangeBytes(tileIds),
     getThroughput: () => archive.getThroughputEstimate(),
     // Governor bandwidth re-balancing (tileset.setBandwidthWeight) reaches the
     // process-shared scheduler through this — without it the hook no-ops.

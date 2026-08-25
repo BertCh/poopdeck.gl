@@ -296,12 +296,14 @@ describe('PrefetchPolicy horizon bounds', () => {
       64 * 1024 * 1024 * PREFETCH_CACHE_FRACTION,
     );
 
-    // FLOOR: a tiny (or zero, or negative) cache config still leaves a
-    // workable runway rather than collapsing the enqueue to nothing.
-    expect(policy.enqueueBudgetBytes(1024, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
+    // A cap the share cannot reach the old floor under is bounded by the
+    // CAP, not lifted to the floor (G3-2, tile-loading audit 2026-08): a
+    // runway the cache cannot hold is evicted and bought back, forever. The
+    // floor stands in only for a cap that cannot be priced — zero, negative.
+    expect(policy.enqueueBudgetBytes(1024, 1)).toBe(512);
     expect(policy.enqueueBudgetBytes(0, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
     expect(policy.enqueueBudgetBytes(-1, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
-    // The floor binds exactly at 2 × itself.
+    // The share equals the old floor exactly at 2 × it.
     expect(policy.enqueueBudgetBytes(2 * PREFETCH_MIN_BUDGET_BYTES, 1)).toBe(
       PREFETCH_MIN_BUDGET_BYTES,
     );
@@ -365,10 +367,11 @@ describe('PrefetchPolicy horizon bounds', () => {
         half / PREFETCH_COLD_BYTE_EXPANSION,
       );
 
-    // The floor is already compressed currency (one dispatchable slice of
-    // network work), so it is NOT divided — it binds instead.
+    // The floor no longer binds above the share (G3-2): a 16 MiB cap at
+    // expansion 8 holds 1 MiB of compressed runway, and that IS the budget —
+    // lifting it to 4 MiB compressed admitted 32 MiB decoded against 16.
     expect(policy.enqueueBudgetBytes(4 * PREFETCH_MIN_BUDGET_BYTES, 8)).toBe(
-      PREFETCH_MIN_BUDGET_BYTES,
+      (4 * PREFETCH_MIN_BUDGET_BYTES * PREFETCH_CACHE_FRACTION) / 8,
     );
   });
 
@@ -416,7 +419,7 @@ describe('PrefetchPolicy horizon bounds', () => {
     // The byte budget is an ADDITIONAL bound, not a replacement: the count
     // budget is still the guard for byte-blind directories.
     expect(policy.enqueueBudget(1000)).toBe(500);
-    expect(policy.enqueueBudgetBytes(1000, 1)).toBe(PREFETCH_MIN_BUDGET_BYTES);
+    expect(policy.enqueueBudgetBytes(1000, 1)).toBe(500);
   });
 });
 
@@ -1120,5 +1123,358 @@ describe('PrefetchPolicy interactive bit', () => {
 
     policy.setInteractive(true);
     expect(horizon(policy)).toBe(settled);
+  });
+});
+
+/**
+ * A2 (tile-loading audit 2026-08, PR-1 / CE-2): the speed-scaled gate floor
+ * (`speed × PREFETCH_CAP_FLOOR_REAL_MS`) is a floor on sim-time with no
+ * relation to how many tiles that span addresses, and every shrinking
+ * mechanism was forbidden to cut below it — so at fast playback the horizon
+ * WAS the floor, the solve returned early, the ladder was inert, and the
+ * runway over-ran the cache forever. The floor now bends to the residency
+ * capacity `enqueueBudget(maxCacheSize) / keysPerBucket × bucketMs` when the
+ * tileset can supply a density; the window terms never bend.
+ */
+describe('PrefetchPolicy residency-capacity floor bend (A2)', () => {
+  // Fast enough that the speed floor (400 × 5 000 = 2 000 000) is the
+  // horizon: it beats windowAhead and lifts the 64-bucket cap.
+  const SPEED = 400;
+  const BUCKET = 1000;
+  const fast = (over: Partial<PrefetchPlanRequest> = {}) => ({
+    bucketMs: BUCKET,
+    timeWindow: BUCKET,
+    ...over,
+  });
+
+  it('is inert without a density or a cap (byte-identical plan)', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(true, SPEED);
+    const unbent = horizon(policy, fast());
+    expect(unbent).toBe(SPEED * PREFETCH_CAP_FLOOR_REAL_MS);
+    // Each field alone is not enough to price anything.
+    expect(horizon(policy, fast({ maxCacheSize: 400 }))).toBe(unbent);
+    expect(horizon(policy, fast({ keysPerBucket: 5 }))).toBe(unbent);
+    expect(
+      horizon(policy, fast({ maxCacheSize: 400, keysPerBucket: null })),
+    ).toBe(unbent);
+    // A capacity ABOVE the speed floor changes nothing either.
+    expect(
+      horizon(policy, fast({ maxCacheSize: 100_000, keysPerBucket: 1 })),
+    ).toBe(unbent);
+  });
+
+  it('lets the ladder cut below the speed floor once the cache cannot hold it', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(true, SPEED);
+    // 400-tile cache → 200-tile budget; 5 tiles/bucket → 40 buckets =
+    // 40 000 ms of capacity against a 2 000 000 ms speed floor.
+    const dense = fast({ maxCacheSize: 400, keysPerBucket: 5 });
+    const capacity = (policy.enqueueBudget(400) / 5) * BUCKET;
+    expect(capacity).toBe(40_000);
+
+    // The bend is a FLOOR change, not a horizon change: un-pressured, the
+    // capped horizon is exactly what it was.
+    const settled = horizon(policy, dense);
+    expect(settled).toBe(SPEED * PREFETCH_CAP_FLOOR_REAL_MS);
+
+    // Under pressure the ladder can now shrink toward the capacity instead
+    // of being pinned at the speed floor. `:930` pins the opposite for a
+    // request WITHOUT a density — both hold.
+    for (let i = 0; i < 10; i++) policy.noteRunwayEviction();
+    const pressured = horizon(policy, dense);
+    expect(pressured).toBe(Math.max(settled * PRESSURE_SCALE_MIN, capacity));
+    expect(pressured).toBeLessThan(settled);
+    // ...and never below the capacity itself.
+    expect(pressured).toBeGreaterThanOrEqual(capacity);
+  });
+
+  it('lets the byte-feasibility solve bisect below the old floor', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(true, SPEED);
+    const dense = fast({ maxCacheSize: 400, keysPerBucket: 5 });
+    // 10 bytes per sim-ms (BYTES_PER_BUCKET per 100 ms) → a 100 000-byte
+    // budget fits exactly 10 000 ms of horizon.
+    const { fn, probes } = byteOracle();
+    const solved = horizon(policy, {
+      ...dense,
+      byteBudget: 100_000,
+      bytesForHorizon: fn,
+    });
+    expect(probes.length).toBeGreaterThan(0);
+    // Without the bend the solve returned early (`effectiveAhead <=
+    // gateFloor`) and the runway claimed the full 2 000 000 ms.
+    expect(solved).toBeLessThan(SPEED * PREFETCH_CAP_FLOOR_REAL_MS);
+    // The bent floor (40 000) is above what the budget fits (10 000), so the
+    // deadlock guard keeps the FLOOR — but the bent one.
+    expect(solved).toBe(40_000);
+  });
+
+  /**
+   * The solve's deadlock guard returns the gate floor EXACTLY when nothing
+   * fits the budget, which makes it the cleanest probe of the floor's value.
+   */
+  const floorOf = (
+    policy: PrefetchPolicy,
+    over: Partial<PrefetchPlanRequest>,
+  ): number =>
+    horizon(policy, {
+      ...over,
+      byteBudget: 1,
+      bytesForHorizon: byteOracle().fn,
+    });
+
+  it('never bends below the resident window or the bucket', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(true, SPEED);
+    // A cache that cannot hold even one bucket of the viewport: capacity 0.
+    // The window terms are the play head's own data and do not bend.
+    const starved = fast({
+      maxCacheSize: 100,
+      keysPerBucket: 1000,
+      timeWindow: 3 * BUCKET,
+    });
+    expect(floorOf(policy, starved)).toBe(3 * BUCKET);
+  });
+
+  it('rounds the capacity DOWN to the bucket grid', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(true, SPEED);
+    // budget 200 / 7 keys per bucket = 28.57 → 28 buckets, not 29.
+    expect(floorOf(policy, fast({ maxCacheSize: 400, keysPerBucket: 7 }))).toBe(
+      28 * BUCKET,
+    );
+  });
+});
+
+// ─── Tile-loading audit 2026-08: B5 (loop-aware plan) and F1 (resident throttle)
+
+describe('B5: loop-aware planning', () => {
+  const LOOP = { start: 0, end: 10_000 };
+  /** 1 s buckets, a 100 ms window and a 4-bucket paused horizon. */
+  const loopRequest = (
+    over: Partial<PrefetchPlanRequest> = {},
+  ): PrefetchPlanRequest =>
+    baseRequest({
+      timeWindow: 100,
+      bucketMs: 1000,
+      prefetchAhead: 1000,
+      loop: LOOP,
+      ...over,
+    });
+
+  it('wraps a forward horizon past loop.end into a second range from loop.start', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const plan = policy.plan(loopRequest({ time: 8500 }))!;
+    expect(plan.endTime).toBe(12_500); // unwrapped: the throttle's frame
+    // The primary query is clipped at the loop edge...
+    expect(plan.queryRange).toEqual({ start: 8450, end: 10_050 });
+    // ...and the 2 500 ms overrun continues from the loop start.
+    expect(plan.wrapQueryRange).toEqual({ start: -50, end: 2550 });
+    // Distances run ALONG the loop: the wrapped buckets rank after the ones
+    // before the edge, and a bucket outside the loop keeps the sentinel.
+    expect(plan.aheadDistance(9000)).toBe(500);
+    expect(plan.aheadDistance(0)).toBe(1500);
+    expect(plan.aheadDistance(2000)).toBe(3500);
+    expect(plan.aheadDistance(-5000)).toBeGreaterThan(
+      Number.MAX_SAFE_INTEGER / 2,
+    );
+  });
+
+  it('caps the wrapped range before the play head so no bucket is enumerated twice', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    // A 12-bucket horizon from 1 500 overruns by 3 500, but only the 1 500 ms
+    // behind the head is new territory — the rest is the primary query's.
+    const plan = policy.plan(loopRequest({ time: 1500, prefetchSteps: 12 }))!;
+    expect(plan.queryRange).toEqual({ start: 1450, end: 10_050 });
+    expect(plan.wrapQueryRange).toEqual({ start: -50, end: 1550 });
+  });
+
+  it('mirrors the wrap for backward playback', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(false, -1e-6); // signed: commits the direction
+    const plan = policy.plan(loopRequest({ time: 1500 }))!;
+    expect(plan.direction).toBe(-1);
+    expect(plan.queryRange).toEqual({ start: -50, end: 1550 });
+    expect(plan.wrapQueryRange).toEqual({ start: 7450, end: 10_050 });
+    expect(plan.aheadDistance(9000)).toBe(2500);
+    expect(plan.aheadDistance(500)).toBe(1000);
+  });
+
+  it('a horizon inside the loop, or no loop at all, plans exactly as before', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const inside = policy.plan(loopRequest({ time: 2000 }))!;
+    expect(inside.wrapQueryRange).toBeNull();
+    expect(inside.queryRange).toEqual({ start: 1950, end: 6050 });
+    policy.invalidatePlan();
+    const noLoop = policy.plan(loopRequest({ time: 8500, loop: null }))!;
+    expect(noLoop.wrapQueryRange).toBeNull();
+    expect(noLoop.queryRange).toEqual({ start: 8450, end: 12_550 });
+    expect(noLoop.aheadDistance(0)).toBeGreaterThan(
+      Number.MAX_SAFE_INTEGER / 2,
+    );
+  });
+
+  it('observeLoopWrap moves the runway anchor by one loop span so the post-wrap head throttles on the warmed span', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const req = (time: number): PrefetchPlanRequest =>
+      loopRequest({ time, pipelineIdle: false });
+    expect(policy.plan(req(8500))).not.toBeNull(); // anchor 12 500
+    policy.observeLoopWrap(10_000); // anchor 2 500
+    expect(policy.plan(req(100))).toBeNull(); // 2 400 of runway > half of 4 000
+    expect(policy.plan(req(1000))).not.toBeNull(); // 1 500 ≤ 2 000: re-plan
+  });
+});
+
+describe('F1: resident-pass throttle', () => {
+  it('a resident pass keeps the throttle armed through an idle pipeline until the head consumes the reload fraction', () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const req = (time: number): PrefetchPlanRequest =>
+      baseRequest({ time, pipelineIdle: true }); // horizon 4 000
+    expect(policy.plan(req(PLAYHEAD))).not.toBeNull();
+    // Idle pipeline, no verdict: the incumbent bypass re-plans at once.
+    expect(policy.plan(req(PLAYHEAD))).not.toBeNull();
+    policy.noteResidentPass();
+    expect(policy.plan(req(PLAYHEAD))).toBeNull();
+    expect(policy.plan(req(PLAYHEAD + 1000))).toBeNull(); // 3 000 left > 2 000
+    expect(policy.plan(req(PLAYHEAD + 2500))).not.toBeNull(); // 1 500 ≤ 2 000
+    // The released pass resets the verdict: idle bypass again until told.
+    expect(policy.plan(req(PLAYHEAD + 2500))).not.toBeNull();
+    policy.noteResidentPass();
+    expect(policy.plan(req(PLAYHEAD + 2500))).toBeNull();
+    policy.invalidatePlan(); // a flush clears it
+    expect(policy.plan(req(PLAYHEAD + 2500))).not.toBeNull();
+  });
+});
+
+// ─── Tile-loading audit 2026-08: G3-2 (byte-priced residency capacity)
+
+describe('G3-2: byte-priced residency capacity', () => {
+  // The audit's TO-5 #2 parameters: 256 KiB tiles that decode 8× under an
+  // 8 MiB cap, one tile per 1 s bucket, played at 1×. The COUNT price
+  // (2 000-tile cap, one key per bucket) reads 1 000 buckets; the cache
+  // holds four tiles, so the `speed × 5 s` floor (five) could never be
+  // resident — measured as 32 MiB against the cap, 344 runway evictions and
+  // 333 refetches before the byte price existed.
+  const MiB = 1024 * 1024;
+  const BUCKET = 1000;
+  const byteBound = (
+    over: Partial<PrefetchPlanRequest> = {},
+  ): Partial<PrefetchPlanRequest> => ({
+    bucketMs: BUCKET,
+    timeWindow: 100,
+    maxCacheSize: 2000,
+    keysPerBucket: 1,
+    maxCacheBytes: 8 * MiB,
+    bytesPerBucket: 256 * 1024,
+    byteExpansion: 8,
+    ...over,
+  });
+  /** The gate floor, read through the solve's deadlock guard (see A2 above). */
+  const floorOf = (
+    policy: PrefetchPolicy,
+    over: Partial<PrefetchPlanRequest>,
+  ): number =>
+    horizon(policy, {
+      ...over,
+      byteBudget: 1,
+      bytesForHorizon: byteOracle().fn,
+    });
+  const atUnitSpeed = (): PrefetchPolicy => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    policy.setAnimationState(true, 1); // speed floor = 5 000 ms = five tiles
+    return policy;
+  };
+
+  it('bends the speed floor to what the BYTE cache can hold when that is the smaller price', () => {
+    const policy = atUnitSpeed();
+    // ½ × 8 MiB ÷ (8 × 256 KiB) = 2 buckets.
+    expect(floorOf(policy, byteBound())).toBe(2 * BUCKET);
+    // The count price alone would not have bent at all (1 000 ≫ 5).
+    expect(
+      floorOf(
+        policy,
+        byteBound({ maxCacheBytes: undefined, bytesPerBucket: null }),
+      ),
+    ).toBe(5 * BUCKET);
+    expect(policy.enqueueBudgetBytes(8 * MiB, 8)).toBe(512 * 1024);
+  });
+
+  it('takes the SMALLER of the count and byte prices', () => {
+    const policy = atUnitSpeed();
+    // Dense viewport: 500 keys per bucket → 1 000 / 500 = 2 buckets by
+    // count; a 64 MiB cap → 16 by bytes. Count wins.
+    expect(
+      floorOf(
+        policy,
+        byteBound({ keysPerBucket: 500, maxCacheBytes: 64 * MiB }),
+      ),
+    ).toBe(2 * BUCKET);
+    // Sparse viewport, tight cap: ½ × 4 MiB ÷ 2 MiB = 1 bucket. Bytes win.
+    expect(floorOf(policy, byteBound({ maxCacheBytes: 4 * MiB }))).toBe(
+      1 * BUCKET,
+    );
+  });
+
+  it('is inert without a byte density or a byte cap it can price with', () => {
+    const policy = atUnitSpeed();
+    const countOnly = floorOf(
+      policy,
+      byteBound({ maxCacheBytes: undefined, bytesPerBucket: null }),
+    );
+    expect(countOnly).toBe(5 * BUCKET);
+    expect(floorOf(policy, byteBound({ bytesPerBucket: null }))).toBe(
+      countOnly,
+    );
+    expect(floorOf(policy, byteBound({ bytesPerBucket: 0 }))).toBe(countOnly);
+    expect(floorOf(policy, byteBound({ maxCacheBytes: undefined }))).toBe(
+      countOnly,
+    );
+    expect(
+      floorOf(policy, byteBound({ maxCacheBytes: Number.POSITIVE_INFINITY })),
+    ).toBe(countOnly);
+    // No expansion ⇒ the cold value, which is what the fixture declares.
+    expect(floorOf(policy, byteBound({ byteExpansion: undefined }))).toBe(
+      2 * BUCKET,
+    );
+  });
+
+  it('prices the byte capacity with the expansion, rounded DOWN to the bucket grid', () => {
+    const policy = atUnitSpeed();
+    // Expansion 2: ½ × 8 MiB ÷ (2 × 256 KiB) = 8 buckets → above the speed
+    // floor, so the floor stands at five.
+    expect(floorOf(policy, byteBound({ byteExpansion: 2 }))).toBe(5 * BUCKET);
+    // Expansion 3: 4 MiB ÷ 768 KiB = 5.33 → 5, not 6.
+    expect(floorOf(policy, byteBound({ byteExpansion: 3 }))).toBe(5 * BUCKET);
+    // Expansion 5: 4 MiB ÷ 1.25 MiB = 3.2 → 3.
+    expect(floorOf(policy, byteBound({ byteExpansion: 5 }))).toBe(3 * BUCKET);
+  });
+
+  it("never bends the window terms — the play head's own data does not shrink", () => {
+    const policy = atUnitSpeed();
+    // A cap that cannot hold one bucket: byte capacity 0. The resident
+    // window (3 buckets) still loads whatever the cache size.
+    expect(
+      floorOf(
+        policy,
+        byteBound({ maxCacheBytes: 1 * MiB, timeWindow: 3 * BUCKET }),
+      ),
+    ).toBe(3 * BUCKET);
+  });
+
+  it("caps a prefetch slice at the runway's share of the byte cache", () => {
+    const policy = new PrefetchPolicy(fakeClock().now);
+    const share = policy.enqueueBudgetBytes(8 * MiB, 8);
+    expect(share).toBe(512 * 1024);
+    // Cold and measured slices alike yield to the share…
+    expect(policy.sliceBytes(null, share)).toBe(share);
+    expect(policy.sliceBytes(4000, share)).toBe(share);
+    // …a share above the slice changes nothing…
+    expect(policy.sliceBytes(4000, 64 * MiB)).toBe(policy.sliceBytes(4000));
+    expect(policy.sliceBytes(null, 64 * MiB)).toBe(PREFETCH_SLICE_COLD_BYTES);
+    // …and a ceiling that cannot be priced is ignored.
+    for (const none of [undefined, null, 0, -1, Number.NaN]) {
+      expect(policy.sliceBytes(4000, none)).toBe(policy.sliceBytes(4000));
+    }
   });
 });

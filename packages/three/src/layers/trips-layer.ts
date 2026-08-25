@@ -145,7 +145,7 @@ export class STTTripsLayer extends BaseSTTLayer implements STTIdPickable {
     this.provenance = buf.provenance;
     this.binaryByTileKey = buf.binaryByTileKey;
 
-    this.disposeGpu();
+    this.disposeGeometry();
     if (buf.count === 0) {
       this.object.geometry = makeSegmentQuadGeometry();
       this.object.visible = false;
@@ -196,16 +196,29 @@ export class STTTripsLayer extends BaseSTTLayer implements STTIdPickable {
       );
     }
 
-    this.bundle = createWideLineMaterial({
-      mode: 'trail',
-      additive: this.opts.additive ?? false,
-      depthWrite: this.opts.depthWrite,
-      alphaCutoff: this.opts.alphaCutoff,
-      dataFilter: !!this.opts.filterProperty,
-    });
+    const bundle = this.ensureBundle();
     this.object.geometry = geometry;
-    this.object.material = this.bundle.material;
+    this.object.material = bundle.material;
     this.pushUniforms(this.timeOrigin);
+  }
+
+  /**
+   * The material, built ONCE per layer (audit E5): every input is fixed at
+   * construction, and disposing it per `setTiles` evicted three's
+   * `nodeBuilderCache` entry, program and pipeline — a shader rebuild per
+   * tile arrival. Only the geometry churns now.
+   */
+  private ensureBundle(): WideLineMaterialBundle {
+    if (!this.bundle) {
+      this.bundle = createWideLineMaterial({
+        mode: 'trail',
+        additive: this.opts.additive ?? false,
+        depthWrite: this.opts.depthWrite,
+        alphaCutoff: this.opts.alphaCutoff,
+        dataFilter: !!this.opts.filterProperty,
+      });
+    }
+    return this.bundle;
   }
 
   setTime(absoluteTimeMs: number): void {
@@ -312,13 +325,18 @@ export class STTTripsLayer extends BaseSTTLayer implements STTIdPickable {
     return this.resolvePick(index, [cssX, cssY]);
   }
 
-  private disposeGpu(): void {
+  /** Release the geometry (and the per-geometry pick attribute flag) only. */
+  private disposeGeometry(): void {
     if (this.object.geometry) this.object.geometry.dispose();
+    this.idColorsPresent = false;
+  }
+
+  private disposeGpu(): void {
+    this.disposeGeometry();
     this.bundle?.material.dispose();
     this.bundle = null;
     this.idBundle?.material.dispose();
     this.idBundle = null;
-    this.idColorsPresent = false;
   }
 
   dispose(): void {

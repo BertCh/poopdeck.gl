@@ -5,6 +5,7 @@ import DemoViewer from './DemoViewer';
 import { useDemoPlayback } from './useDemoPlayback';
 import { PlaybackControls } from '@poopdeck.gl/react';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import { useIsMobile } from '../../lib/useMediaQuery';
 
 /**
  * Framed live-map embed for the per-demo landing pages.
@@ -47,6 +48,9 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
   const playback = useDemoPlayback(dataset);
   const frameRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
+  // Phone widths get the transport's compact layout — the wide one wraps into
+  // five rows here and pushes the editorial body a screen further down.
+  const isMobile = useIsMobile();
 
   // An explicit pause from the transport bar must not be undone by scrolling.
   const userPausedRef = useRef(false);
@@ -104,7 +108,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
         {/* Open-fullscreen affordance, top-right over the map. */}
         <Link
           to={fullscreen.to}
-          className="absolute top-3 right-3 px-2.5 py-1.5 rounded text-xs glass inline-flex items-center gap-1.5"
+          className="absolute top-2 right-2 sm:top-3 sm:right-3 px-2.5 py-2 sm:py-1.5 rounded text-xs glass inline-flex items-center gap-1.5"
           style={{ color: 'rgba(255,255,255,0.9)' }}
           title="Open the fullscreen viewer"
         >
@@ -179,6 +183,7 @@ const DemoEmbed: React.FC<{ dataset: Dataset }> = ({ dataset }) => {
           // NO keyboardShortcuts: this is a scrolling page, so it deliberately
           // does not mount usePlaybackHotkeys — advertising keys that do
           // nothing here would be worse than saying nothing.
+          compact={isMobile}
         />
       </div>
     </div>

@@ -1,5 +1,9 @@
 # @poopdeck.gl/maplibre
 
+> **Status: preview.** Published and tested, with a narrower compatibility
+> surface than the primary deck.gl renderer. See the
+> [support policy](../../docs/intro/status-and-support.md).
+
 A **MapLibre GL custom-layer adapter for SpatioTemporal Tiles** — animated
 STT rendering with no deck.gl dependency. Fifteen layer classes implement
 MapLibre's `CustomLayerInterface` and draw with raw WebGL inside MapLibre's

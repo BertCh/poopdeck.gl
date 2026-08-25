@@ -161,7 +161,7 @@ gate — they continue-and-degrade. **One scheduler is the authority** — EDF o
 exact time-to-playhead, laggard required sources promoted (rank-and-redistribute),
 weighted-fair slots, optional = best-effort. Gate, tolerance band,
 `addSource`/`removeSource`, and the `SharedRequestScheduler` +
-`configureSharedScheduler({enabled})` kill-switch:
+`configureSharedScheduler({maxRequests})` budget (there is no kill-switch):
 [`playback-governor.md`](../api/playback-governor.md).
 
 ## 6. Implementation
@@ -355,8 +355,9 @@ multi-source composite (radar / AV cockpit) plays with all REQUIRED sources
 locked, no overlay racing ahead of unloaded required data; (2) single-dataset
 demos unchanged — no throughput regression, identical bar; (3) under a slow
 network the buffered strip shows the gating source held, recovery smooth (no
-catch-up lurch); (4) rollback drill — `configureSharedScheduler({enabled:false})`
-reverts loading to the per-instance path with no gate behavior change.
+catch-up lurch); (4) rollback drill — `configureSharedScheduler({byteQuantum: null})`
+restores slot-metered DRR with no gate behavior change (there is no per-instance
+path to revert to: every archive draws from the shared scheduler).
 
 Counted out: **player-level "exposure"/trail-length knob** (a feature ask touching
 runway-horizon math — build only against a concrete UX request) · **StrictMode

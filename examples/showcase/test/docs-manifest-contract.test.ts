@@ -10,11 +10,14 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { matchPath } from 'react-router';
 import {
   docSections,
   flatDocEntries,
   EXCLUDED_DOC_FILES,
+  getDocEntry,
   getPrevNext,
+  normalizeDocSlug,
 } from '../src/docs/manifest';
 import { bundledDocFiles } from '../src/docs/content';
 import { rewriteHref } from '../src/docs/links';
@@ -86,6 +89,43 @@ describe('docs manifest ↔ glob contract', () => {
     for (const s of docSections) {
       expect(s.entries.length, `section ${s.id}`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('doc slug normalization (trailing slash)', () => {
+  // Why this matters: pages prerender to `docs/<slug>/index.html`, so a hard
+  // load of the canonical URL can be redirected onto the slashed form by the
+  // static host. Unlike a dynamic segment, a SPLAT param keeps that slash — so
+  // the lookup must survive it or the page renders its own 404.
+  it('react-router keeps a trailing slash in the /docs/* splat param', () => {
+    expect(
+      matchPath({ path: '/docs/*' }, '/docs/spec/stt-packed-format/')?.params[
+        '*'
+      ],
+    ).toBe('spec/stt-packed-format/');
+  });
+
+  it('strips surrounding slashes', () => {
+    expect(normalizeDocSlug('spec/stt-packed-format/')).toBe(
+      'spec/stt-packed-format',
+    );
+    expect(normalizeDocSlug('/spec/stt-packed-format')).toBe(
+      'spec/stt-packed-format',
+    );
+    expect(normalizeDocSlug('spec/stt-packed-format')).toBe(
+      'spec/stt-packed-format',
+    );
+    expect(normalizeDocSlug('')).toBe('');
+  });
+
+  it('resolves every published slug with a trailing slash', () => {
+    for (const e of flatDocEntries) {
+      expect(getDocEntry(`${e.slug}/`)?.slug, `${e.slug}/`).toBe(e.slug);
+    }
+  });
+
+  it('still rejects an unknown slug', () => {
+    expect(getDocEntry('spec/does-not-exist/')).toBeUndefined();
   });
 });
 

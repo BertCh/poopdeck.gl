@@ -352,12 +352,40 @@ interface BaseDataset {
    * `'#0a0d14'`.
    */
   basemapRoadColor?: string;
+  /**
+   * Render the basemap with 3D terrain (Mapbox `raster-dem`) under this demo,
+   * and put the demo on the INTERLEAVED render path: deck draws inside the
+   * map's own frame (`MapboxOverlay`), sharing its terrain-aware camera and
+   * depth buffer, so data with real z sits exactly ON the relief and is
+   * occluded behind ridges. Layers that support a terrain probe (currently
+   * `tripHeads`) additionally drape their moving dots onto the surface via
+   * per-frame `queryTerrainElevation` sampling.
+   *
+   * Distinct from `use3D`, which keeps the classic deck-over-map compositing
+   * (no occlusion, camera diverges over high relief when pitched) and doubles
+   * as "lift data by its elevation column" — that path suits data flying WELL
+   * ABOVE terrain (flights); this one suits data ON the terrain.
+   *
+   * `true` = default 1.5× exaggeration; pass `{ exaggeration }` to pin it.
+   * Mercator viewer only (ignored on the globe / maplibre / three paths).
+   */
+  basemapTerrain?: boolean | { exaggeration?: number };
 
   /** Property name containing elevation data (e.g., 'altitude', 'elevation') */
   elevationProperty?: string;
 
   /** Scale factor for elevation values (e.g., for unit conversion) */
   elevationScale?: number;
+
+  /**
+   * The archive's per-vertex `vertexValues` channel is BAKED elevation in
+   * metres (built with `stt-generate gtfs --bake-elevation`): trip-head dots
+   * are lifted by the value interpolated at their live position ×
+   * `elevationScale`. Set `elevationScale` to the `basemapTerrain`
+   * exaggeration so data and relief agree. When set, the viewer does NOT
+   * build the runtime `queryTerrainElevation` drape probe — baked wins.
+   */
+  elevationFromVertexValues?: boolean;
 
   /**
    * Vertical extent of the RENDERED scene, `[minMetres, maxMetres]` above the

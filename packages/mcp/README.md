@@ -1,10 +1,14 @@
 # @poopdeck.gl/mcp
 
+> **Status: preview.** Published and supported on a best-effort basis while its
+> pre-1.0 tool surface evolves. See the
+> [support policy](../../docs/intro/status-and-support.md).
+
 **An MCP (Model Context Protocol) server for SpatioTemporal Tiles (STT).**
 Open and self-hostable: plain TypeScript, MIT, and runs entirely against a
 local directory of packed STT datasets — no account, no network dependency
-beyond the datasets themselves. Design record:
-[`docs/roadmap/ai-suite.md`](../../docs/roadmap/ai-suite.md).
+beyond the datasets themselves. See the [MCP reference](../../docs/api/stt-mcp.md)
+and [AI Suite guide](../../docs/guides/ai-suite.md).
 
 ## Install
 
@@ -24,6 +28,11 @@ Usage: stt-mcp [options]
   --data-root <dir>          Directory scanned for packed datasets
                               (default: $STT_DATA_ROOT, else
                               ./examples/showcase/public/data)
+  --docs-root <dir>          Directory holding the published docs corpus,
+                              served via stt://docs/<path> resources and the
+                              search_docs/get_doc tools (default:
+                              $STT_DOCS_ROOT, else the docs/ bundled beside the
+                              package, else ./docs)
   --allow-cli                Enable shell-out tools (build_dataset,
                               validate_dataset, generate_dataset, and the
                               CLI mode of
@@ -34,18 +43,22 @@ Usage: stt-mcp [options]
   --port <port>              HTTP transport bind port (default: 3900)
   --public-base-url <url>    Base URL datasets are served from, used by
                               view_map to build manifest URLs
-  --allowed-host <host>      Extra Host allowed on the HTTP transport
-                              (repeatable; DNS-rebinding allow-list — the
-                              bind host + 127.0.0.1/localhost:<port> are
-                              always allowed)
-  --allowed-origin <origin>  Extra Origin allowed on the HTTP transport
-                              (repeatable)
+  --allowed-host <host>      Add a Host header value (host:port) to the
+                              DNS-rebinding allow-list (repeatable). The bind
+                              host plus 127.0.0.1/localhost on the bind port
+                              are always allowed.
+  --allowed-origin <origin>  Add an Origin header value to the DNS-rebinding
+                              allow-list (repeatable).
   --stt-optimize-bin <path>  Override the stt-optimize binary path
   --stt-build-bin <path>     Override the stt-build binary path
   --stt-validate-bin <path>  Override the stt-validate binary path
   --stt-generate-bin <path>  Override the stt-generate binary path
   -h, --help                 Show this help
 ```
+
+The HTTP transport enforces DNS-rebinding protection with these Host and Origin
+allow-lists. Do not combine a non-localhost `--host` with `--allow-cli` outside
+a trusted, access-controlled network.
 
 `--data-root` is scanned for packed datasets: any directory containing a
 `manifest.json` counts as one dataset (AV-cockpit bundles nest one level
@@ -132,6 +145,10 @@ branching on `isError` can trust it. The spawned child is also killed when the
 client cancels or times out the request (no orphaned `stt-optimize`/`stt-build`
 processes).
 
+The always-available `search_docs` and `get_doc` tools search and read the
+published documentation corpus configured by `--docs-root`. They perform
+in-process file reads and do not require `--allow-cli`.
+
 ## Resources
 
 Datasets are also exposed as read-only MCP **resources** (0 tokens until read;
@@ -140,6 +157,7 @@ enumerable and cacheable without a tool call):
 | URI                     | Content                                                                                                                                                                                                                                                            |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `stt://datasets/<name>` | The same full parsed-manifest payload as `describe_dataset`, as `application/json`. `resources/list` enumerates datasets under `--data-root` (capped at 100 entries with a `_meta` note pointing at `list_datasets` for the full catalog); `<name>` is URL-encoded |
+| `stt://docs/<path>`     | One published Markdown page or machine-readable `spec/*.json` schema from `--docs-root`; use `search_docs` when the capped resource list does not show the desired path                                                                                            |
 
 `view_map`'s `@@type` values are the STT layer class names (e.g.
 `SpatioTemporalLayer`, `AnimatedTripsLayer`) exported from
@@ -187,16 +205,16 @@ when the MCP client is trusted and the server isn't exposed beyond a single
 trusted operator (e.g. local stdio to your own coding agent) — the write tools
 in particular can touch anywhere the process has filesystem access, and
 `--transport http` with `--allow-cli` on a non-localhost bind is a real risk.
-`dataset_report` and `describe_dataset` never shell out unless `--allow-cli`
-is set; `list_datasets`/`describe_dataset`/`view_map`/`set_time`/`play_pause`
-never shell out at all — they only read `manifest.json` files.
+`dataset_report` shells out only when `--allow-cli` is set.
+`list_datasets`/`describe_dataset`/`view_map`/`set_time`/`play_pause` and the two
+docs tools never shell out at all.
 
 Binary resolution (`--stt-optimize-bin`/`--stt-build-bin`/
-`--stt-validate-bin`/`--stt-generate-bin`): an explicit override always wins; otherwise the
-server searches `target/release/<name>` walking up from `--data-root` and
-the process CWD (this repo's Cargo workspace build output); otherwise it
-falls back to the bare command name, resolved via `PATH` (works once the
-binaries are `cargo install`ed or otherwise on `PATH`).
+`--stt-validate-bin`/`--stt-generate-bin`): an explicit override always wins;
+otherwise the server searches `target/release/<name>` walking up from
+`--data-root` and the process CWD (this repo's Cargo workspace build output);
+otherwise it falls back to the bare command name, resolved via `PATH` (works
+once the binaries are `cargo install`ed or otherwise on `PATH`).
 
 ## The `poopdeck-ai` plugin (MCP + Skills together)
 
@@ -225,12 +243,9 @@ Claude Code is launched from the repo root, so the CWD is the repo root by
 construction) and requires `pnpm --filter @poopdeck.gl/mcp build` first, since
 `packages/mcp/dist/` is gitignored.
 
-## Design & scope
+## Docs
 
-Implements the agentic surface of
-[`docs/roadmap/ai-suite.md`](../../docs/roadmap/ai-suite.md):
-the MCP server (this package) and the skills suite (the `poopdeck-ai` plugin).
-STT layer classes for `view_map` specs come from `@poopdeck.gl/layers`;
-register them in a `@deck.gl/json` `JSONConfiguration` to render.
+- [MCP tools, resources, configuration, and security](../../docs/api/stt-mcp.md)
+- [MCP + Agent Skills workflow](../../docs/guides/ai-suite.md)
 
 MIT.

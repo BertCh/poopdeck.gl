@@ -56,7 +56,18 @@ const state: SharedSchedulerState = {
 };
 
 /** Configuration accepted by {@link configureSharedScheduler}. */
-export type ConfigureSharedSchedulerOptions = SharedRequestSchedulerOptions;
+export interface ConfigureSharedSchedulerOptions extends SharedRequestSchedulerOptions {
+  /**
+   * There is NO kill-switch. Every `STTArchive` draws from the shared scheduler
+   * unconditionally — no legacy per-instance runner ever sat behind a flag — so
+   * an `enabled` field would be silently ignored, which is exactly what nine
+   * test call sites and two docs did for a year (G4 / TO-8, tile-loading audit
+   * 2026-08). Typed `never` so passing one, even via spread from an untyped
+   * bag, is a compile error instead of a no-op. To bound the scheduler, tune
+   * `maxRequests`; the DRR rollback is `byteQuantum: null`.
+   */
+  enabled?: never;
+}
 
 /**
  * Get the process-shared request scheduler, creating it lazily on first use.

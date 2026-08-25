@@ -4,6 +4,10 @@
 
 Report privately — do **not** open a public issue.
 
+For usage questions, ordinary defects, and feature requests, follow
+[SUPPORT.md](SUPPORT.md) instead. The security channel is only for suspected
+vulnerabilities.
+
 - Preferred: GitHub's private vulnerability reporting on this repository
   (**Security → Report a vulnerability**).
 - Fallback, if that is unavailable: email <rgcgeog@gmail.com> with `[security]`

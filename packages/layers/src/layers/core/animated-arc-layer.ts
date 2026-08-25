@@ -51,7 +51,7 @@ import {
   appendNullCategorySlot,
   categoryIndicesToFloat32,
 } from '../../extensions/category-color-extension.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   colorListDigest,
@@ -570,8 +570,18 @@ export class AnimatedArcLayer<
     );
   }
 
+  /**
+   * Pre-`renderLayers()` prepare for one tile, so the chassis can meter
+   * tile commits per frame (`tileCommitBudgetMs`); the result lands in the
+   * prepared-tile cache the render loop reads.
+   */
+  protected warmTile(tile: Tile): void {
+    for (const tileLayer of tile.layers) this.prepareTile(tile, tileLayer);
+  }
+
   renderLayers(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       // Drop the derived buffers too (endpoint Float64Arrays, expanded RGBA)
@@ -608,7 +618,11 @@ export class AnimatedArcLayer<
     }
 
     const sublayers: Layer[] = [];
-    for (const tile of tiles) {
+    // Draw only the tiles whose covering time range can intersect the render
+    // window; the rest stay resident (caches intact) until the playhead wakes
+    // them — see SpatioTemporalLayer.cullTilesByTimeRange.
+    const liveTiles = this.cullTilesByTimeRange(tiles);
+    for (const tile of liveTiles) {
       for (const tileLayer of tile.layers) {
         const prepared = this.prepareTile(tile, tileLayer);
         if (!prepared) continue;
@@ -631,12 +645,15 @@ export class AnimatedArcLayer<
       }
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedArcLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedArcLayer',
+        tiles: tiles.length,
+        liveTiles: liveTiles.length,
+        sublayers: sublayers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(
@@ -701,17 +718,20 @@ export class AnimatedArcLayer<
 
     const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
+    const probe = isProbeEnabled();
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', {
-        layer: 'AnimatedArcLayer',
-        tileKey,
-        cached: true,
-        ms: 0,
-      });
+      if (probe) {
+        emit('tilePrepare', {
+          layer: 'AnimatedArcLayer',
+          tileKey,
+          cached: true,
+          ms: 0,
+        });
+      }
       return cached;
     }
 
-    const t0 = performance.now();
+    const t0 = probe ? performance.now() : 0;
     // Collapse each LineString feature to its source (first) / target (last)
     // endpoint — ArcLayer is an instanced source→target layer (one instance per
     // feature), so the intermediate vertices of a polyline are dropped.
@@ -821,14 +841,16 @@ export class AnimatedArcLayer<
       features: binary,
     };
     this.preparedTileCache.set(tileKey, prepared);
-    emit('tilePrepare', {
-      layer: 'AnimatedArcLayer',
-      tileKey,
-      cached: false,
-      features: binary.featureCount,
-      gpuPalette: gpuPalette !== null,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedArcLayer',
+        tileKey,
+        cached: false,
+        features: binary.featureCount,
+        gpuPalette: gpuPalette !== null,
+        ms: performance.now() - t0,
+      });
+    }
     return prepared;
   }
 

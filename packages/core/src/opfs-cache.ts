@@ -137,6 +137,20 @@ const ADMIT_MIN_BYTES = 4096;
 const DOORKEEPER_MAX_ENTRIES = 4096;
 
 /**
+ * Fraction of the byte budget an over-budget `set()` evicts DOWN TO.
+ *
+ * Evicting to exactly the budget left every steady-state `set()` over budget
+ * again, and each one paid a full ranking pass over all N entries to free one
+ * tile's worth: 58 ms per set at 128k entries, 1.8 s for a 200-tile pan.
+ * Ranking once and evicting the extra 10 % lets the next ~10 % of sets land
+ * under budget for free. The victim ORDER is unchanged — the pass walks
+ * further down the same ranked sequence — so which tiles survive long-term
+ * does not move. Per-instance override: {@link OpfsTileCacheOptions.evictLowWater};
+ * `1` is the evict-to-the-budget rollback.
+ */
+export const OPFS_EVICT_LOW_WATER = 0.9;
+
+/**
  * Sanitize a cache key into something OPFS will accept as a filename.
  *
  * `getFileHandle` rejects `/`, `:`, `?`, etc. — which is exactly what shows
@@ -145,7 +159,7 @@ const DOORKEEPER_MAX_ENTRIES = 4096;
  * for distinct inputs.
  */
 function safeFileName(key: string): string {
-  // TextEncoder is universally available in browsers and Node 18+.
+  // TextEncoder is universally available in browsers and the supported Node 24+ runtime.
   const bytes = new TextEncoder().encode(key);
   let hex = '';
   for (let i = 0; i < bytes.length; i++) {
@@ -180,10 +194,19 @@ export interface OpfsTileCacheOptions {
   directory?: string;
   /**
    * Soft byte budget. When exceeded after a `set()`, entries are deleted
-   * until the cache fits (see {@link OpfsTileCache.evict}). Defaults to
-   * 512 MB.
+   * until the cache fits `evictLowWater × maxBytes` (see
+   * {@link OpfsTileCache.evict}). Defaults to 512 MB.
    */
   maxBytes?: number;
+  /**
+   * Low-water mark, as a fraction of the budget in (0, 1], that an
+   * over-budget `set()` evicts down to. Defaults to
+   * {@link OPFS_EVICT_LOW_WATER}; `1` restores evict-to-exactly-the-budget.
+   * Out-of-range or non-finite values fall back to the default. A manual
+   * {@link OpfsTileCache.evict} call is unaffected — it stops at the target
+   * it was given.
+   */
+  evictLowWater?: number;
   /**
    * Live link-rate estimate in BYTES PER MILLISECOND, or `null` when the
    * estimator is still cold (BH-9). Normally wired to the owning archive's
@@ -289,6 +312,8 @@ export class OpfsTileCache {
   private readonly admissionFilter: boolean;
   /** First-touch admission threshold in bytes. */
   private readonly admitMinBytes: number;
+  /** Fraction of the budget an automatic (set-triggered) eviction stops at. */
+  private readonly evictLowWater: number;
   /**
    * SESSION-ONLY second-touch gate: keys offered to {@link set} and turned
    * away. The next offer of the same key is admitted, so a tile that is
@@ -313,6 +338,13 @@ export class OpfsTileCache {
       options.admitMinBytes >= 0
         ? options.admitMinBytes
         : ADMIT_MIN_BYTES;
+    this.evictLowWater =
+      typeof options.evictLowWater === 'number' &&
+      Number.isFinite(options.evictLowWater) &&
+      options.evictLowWater > 0 &&
+      options.evictLowWater <= 1
+        ? options.evictLowWater
+        : OPFS_EVICT_LOW_WATER;
   }
 
   /** Whether this cache will actually persist anything. */
@@ -655,7 +687,9 @@ export class OpfsTileCache {
       this.markDirty();
 
       if (this.index.totalBytes > this.budgetBytes) {
-        await this.evict(this.budgetBytes);
+        // One ranked pass down to the LOW-WATER mark, not to the budget
+        // itself, so the next ~10 % of sets do not each pay a pass again.
+        await this.evict(Math.floor(this.budgetBytes * this.evictLowWater));
       }
     } catch (err) {
       // Most likely cause: quota exceeded. Eviction inside the catch lets a
@@ -702,7 +736,7 @@ export class OpfsTileCache {
   /**
    * Evict until the total fits in `maxBytes`. Safe to call manually — the
    * cache is also evicted automatically on `set()` when it grows past its
-   * budget.
+   * budget, down to {@link OpfsTileCacheOptions.evictLowWater} × budget.
    *
    * Victims are taken in ASCENDING GreedyDual-Size value ({@link gdsValue}),
    * ties broken by ascending `lastAccess` and then by file name, so a given

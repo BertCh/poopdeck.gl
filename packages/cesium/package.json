@@ -34,9 +34,9 @@
     "@poopdeck.gl/core": "workspace:*"
   },
   "devDependencies": {
-    "cesium": "^1.142.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "cesium": "^1.144.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
@@ -56,6 +56,6 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   }
 }

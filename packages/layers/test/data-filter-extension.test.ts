@@ -174,8 +174,11 @@ describe('STTDataFilterExtension draw() uniform forwarding', () => {
   function drawUniforms(props: Record<string, any>) {
     const ext = new STTDataFilterExtension();
     let captured: any;
+    const model = {};
     const fakeLayer = {
       props,
+      state: {},
+      getModels: () => [model],
       setShaderModuleProps: (u: any) => {
         captured = u;
       },
@@ -323,9 +326,12 @@ describe('STTDataFilterExtension filterSoftRange is independent of filterRange',
   function softUniform(props: Record<string, any>) {
     const ext = new STTDataFilterExtension();
     let captured: any;
+    const model = {};
     (ext.draw as any).call(
       {
         props,
+        state: {},
+        getModels: () => [model],
         setShaderModuleProps: (u: any) => {
           captured = u;
         },
@@ -637,5 +643,53 @@ describe('filterProperty naming a categorical column', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('STTDataFilterExtension draw() push cache (tile-loading audit 2026-08)', () => {
+  function host(props: Record<string, any>) {
+    const ext = new STTDataFilterExtension();
+    const push = vi.fn();
+    const models = [{}];
+    const layer = {
+      props,
+      state: {} as Record<string, unknown>,
+      getModels: () => models,
+      setShaderModuleProps: push,
+    };
+    const draw = () => (ext.draw as any).call(layer, {}, ext);
+    return { layer, push, models, draw };
+  }
+
+  it('pushes the full block once per model set and nothing on unchanged frames', () => {
+    const { push, draw } = host({ filterRange: [2, 8] });
+    draw();
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0][0].sttFilter).toMatchObject({
+      filterMin: 2,
+      filterMax: 8,
+      enabled: 1,
+    });
+    for (let i = 0; i < 10; i++) draw();
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-pushes when a range value moves, then goes quiet again', () => {
+    const { layer, push, draw } = host({ filterRange: [2, 8] });
+    draw();
+    layer.props = { filterRange: [3, 8] };
+    draw();
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(push.mock.calls[1][0].sttFilter.filterMin).toBe(3);
+    draw();
+    expect(push).toHaveBeenCalledTimes(2);
+  });
+
+  it('a model swap (deck rebuilt the shaders) forces a full push again', () => {
+    const { push, models, draw } = host({ filterRange: [2, 8] });
+    draw();
+    models[0] = {}; // fresh model starts from module defaults
+    draw();
+    expect(push).toHaveBeenCalledTimes(2);
   });
 });

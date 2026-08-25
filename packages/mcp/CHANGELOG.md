@@ -2,6 +2,18 @@
 
 ## 0.6.0
 
+### Minor Changes
+
+- Understand packed `formatVersion: 3` manifests and their required variant
+  registry when inspecting datasets and composing views. The server retains the
+  reader-facing v2 compatibility behavior documented by the core toolchain.
+
+### Patch Changes
+
+- Generate the MCP `serverInfo.version` from `package.json` at build time. This
+  fixes the 0.5.0 tarball reporting `0.4.0` during initialization and adds a
+  contract test so the generated value cannot drift again.
+
 ## 0.5.0
 
 The first published tarball. This package had lived in the monorepo since the AI

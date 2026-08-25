@@ -42,11 +42,11 @@
   "dependencies": {
     "@poopdeck.gl/core": "workspace:*",
     "@poopdeck.gl/playback": "workspace:*",
-    "earcut": "^3.0.0",
-    "h3-js": "^4.1.0"
+    "earcut": "^3.2.3",
+    "h3-js": "^4.5.0"
   },
   "peerDependencies": {
-    "3d-tiles-renderer": "^0.4.28",
+    "3d-tiles-renderer": "^0.5.2",
     "@react-three/drei": ">=10.0.0",
     "@react-three/fiber": ">=9.0.0",
     "@takram/three-atmosphere": "^0.19.1",
@@ -71,18 +71,18 @@
     }
   },
   "devDependencies": {
-    "3d-tiles-renderer": "^0.4.28",
-    "@react-three/drei": "^10.7.0",
-    "@react-three/fiber": "^9.6.0",
+    "3d-tiles-renderer": "^0.5.2",
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
     "@takram/three-atmosphere": "^0.19.1",
-    "@types/earcut": "^2.1.4",
-    "@types/react": "^19.2.0",
-    "@types/three": "^0.184.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "three": "^0.184.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "@types/earcut": "^3.0.0",
+    "@types/react": "^19.2.18",
+    "@types/three": "^0.185.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "three": "^0.185.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
@@ -108,6 +108,6 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   }
 }

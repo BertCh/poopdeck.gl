@@ -182,6 +182,19 @@ export {
   STTArchive,
   estimateTileSize,
   KNOWN_MANIFEST_CAPABILITIES,
+  // Tile-loading audit 2026-08 (docs/roadmap/tile-loading-audit-2026-08.md):
+  // B8 permanent-4xx classification, C3 amplification-bounded range planning,
+  // A6 shared byte-cache observation.
+  PermanentFetchError,
+  planCoalescedRanges,
+  COALESCE_AMPLIFICATION_K,
+  getSharedByteCacheStats,
+} from './archive.js';
+export type {
+  TileBatchErrorHook,
+  TransferFailureStats,
+  RangeExtent,
+  CoalescedRange,
 } from './archive.js';
 // Packed-format manifest contract (mirrors Rust `pack::Manifest`; schema at
 // docs/spec/manifest.schema.json). `ManifestSchemaTemplate` is the
@@ -202,6 +215,23 @@ export type {
   TileTier,
   TilesetCacheStats,
 } from './spatiotemporal-tileset.js';
+// Process-wide DECODED-byte budget every live tileset registers with
+// (tile-loading audit 2026-08, A4) — the decoded-side sibling of the
+// archive's shared compressed byte cache.
+export {
+  DecodedMemoryBudget,
+  decodedMemoryBudget,
+  deviceDefaultDecodedBudgetBytes,
+  DECODED_BUDGET_LOW_DEVICE_BYTES,
+  DECODED_BUDGET_MID_DEVICE_BYTES,
+  DECODED_BUDGET_LARGE_DEVICE_BYTES,
+  DECODED_BUDGET_UNKNOWN_DEVICE_BYTES,
+} from './memory-budget.js';
+export type {
+  DecodedMemoryOwner,
+  DecodedMemoryBudgetConfig,
+  DeviceMemoryHints,
+} from './memory-budget.js';
 
 // ─── Deprecated spelling aliases (`Spatiotemporal*` → `SpatioTemporal*`) ─────
 // The project noun was published two ways: `SpatioTemporal` (capital T) in
@@ -226,11 +256,20 @@ export type {
   SpatioTemporalTileHeader as SpatiotemporalTileHeader,
 } from './spatiotemporal-tileset.js';
 
-export { decodeTile, getFeatureProperties, toGeoArrowTable } from './tile.js';
+export {
+  decodeTile,
+  getFeatureProperties,
+  toGeoArrowTable,
+  readTemporalColumnInfo,
+} from './tile.js';
 // Packed formatVersion-3 decode plumbing: the schema-template registry built
 // from `manifest.schemas` at open (spec §3.2) and the decodeTile options that
 // carry it + the declared formatVersion (spec §5.2 authority rule).
-export type { TemplateRegistry, DecodeTileOptions } from './tile.js';
+export type {
+  TemplateRegistry,
+  DecodeTileOptions,
+  TemporalColumnInfo,
+} from './tile.js';
 
 // ─── Throughput estimation (player buffering) ───────────────────────────────
 export {

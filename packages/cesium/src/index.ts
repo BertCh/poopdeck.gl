@@ -88,6 +88,16 @@ export {
   type TilePublishGateOptions,
   type TilePublishReason,
 } from './lib/tile-publish-gate.js';
+// Rate limiter over `tileset.update()` for the per-frame playhead hook: the
+// tileset's fast path cannot short-circuit a moving clock, so an unthrottled
+// preRender hook is a full selection pass per drawn frame (audit E2).
+export {
+  createThrottledTilesetUpdate,
+  type ThrottledTileset,
+  type ThrottledTilesetUpdate,
+  type ThrottledTilesetUpdateOptions,
+  type TilesetViewport,
+} from './lib/tileset-update-throttle.js';
 
 // Render-loop clock bridge: drive the STT playhead from Cesium's render loop
 // (scene.preRender) instead of per-frame React state, and pump requestRender so

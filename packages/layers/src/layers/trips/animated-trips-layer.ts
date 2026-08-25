@@ -1146,6 +1146,28 @@ export class AnimatedTripsLayer<
     return Math.max(super.getEffectiveTimeWindow(), this.props.trailLength * 2);
   }
 
+  /**
+   * Trail mode lights vertex times in `[now − trailLength, now]` and nothing
+   * ahead of the head; `fadeTrail` only picks the alpha ramp — the cull at
+   * `trailStart` is unconditional (see its prop doc). `trailLength: 0` is
+   * window mode (the flow subclasses): base.
+   */
+  protected getRenderReach(): { before: number; after: number } {
+    const trailLength = this.props.trailLength;
+    return trailLength > 0
+      ? { before: trailLength, after: 0 }
+      : super.getRenderReach();
+  }
+
+  /**
+   * Pre-`renderLayers()` prepare for one tile, so the chassis can meter tile
+   * commits per frame (`tileCommitBudgetMs`); the result lands in the
+   * prepared-tile cache the render loop reads.
+   */
+  protected warmTile(tile: Tile): void {
+    for (const tileLayer of tile.layers) this.prepareTile(tile, tileLayer);
+  }
+
   renderLayers(): Layer[] {
     // `emit` no-ops when the probe is off; building its payload and calling
     // performance.now() unconditionally would not.
@@ -1192,8 +1214,13 @@ export class AnimatedTripsLayer<
       this.sublayerCache.clear();
     }
 
+    // Draw only the tiles whose covering time range can intersect the trail;
+    // the forward half of the `2 × trailLength` load window never can. The
+    // rest stay resident (caches intact) until the playhead wakes them — see
+    // SpatioTemporalLayer.cullTilesByTimeRange.
+    const liveTiles = this.cullTilesByTimeRange(tiles);
     const sublayers: Layer[] = [];
-    for (const tile of tiles) {
+    for (const tile of liveTiles) {
       for (const tileLayer of tile.layers) {
         const prepared = this.prepareTile(tile, tileLayer, archiveKey);
         if (!prepared) continue;
@@ -1227,6 +1254,7 @@ export class AnimatedTripsLayer<
       emit('renderLayers', {
         layer: 'AnimatedTripsLayer',
         tiles: tiles.length,
+        liveTiles: liveTiles.length,
         sublayers: sublayers.length,
         ms: performance.now() - t0,
       });

@@ -76,6 +76,10 @@ import {
   type HostFrame,
 } from './lib/host-adapter.js';
 import type { SharedTilesetSource } from './lib/streaming-source.js';
+import {
+  TilesetUpdateThrottle,
+  type ThrottledViewport,
+} from './lib/update-throttle.js';
 import { granularityForZoom } from './lib/globe.js';
 import {
   isMapboxHost,
@@ -1269,6 +1273,11 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     // so a retained frame number could match the new tileset's first frame and
     // suppress the very first visible-set derivation — an empty first paint.
     this.lastVisibleFrame = -1;
+    // Same for the update throttle: the new tileset has seen no viewport, so
+    // the first frame after a re-add must drive it. And no trailing pass may
+    // outlive the layer — it would drive a finalized tileset.
+    this.cancelTrailingUpdate();
+    this.updateThrottle.reset();
     // Shared-source mode: the tileset/archive belong to the source (and to
     // its other consumers) — just stop receiving fan-out. A styledata re-add
     // re-registers in onAdd.
@@ -1379,18 +1388,94 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
       // is still drawing.
       timeWindow: this.getEffectiveTimeWindow(),
     };
-    // Shared mode routes through the source so its resident-set diff runs
-    // and N sibling layers stay cheap: the source is left UNARMED (no
-    // beginFrame/frameId — every update drives) because the core tileset
-    // short-circuits identical-param selections via lastSelectKey AND the
-    // source gates its getVisibleTiles/resident-diff walk on the tileset's
-    // frame number, so redundant sibling updates allocate nothing; hosts
-    // wanting strict once-per-frame driving may call `source.beginFrame()`
-    // from their own frame hook. The source publishes the visible set back
-    // through `handleSharedTiles`; per-layer mode derives it here.
-    if (this.source) this.source.update(viewport);
-    else this.syncVisibleTiles(this.tileset.update(viewport));
+    // Throttled (audit E2): the core tileset's identical-params fast path
+    // keys on the RAW selection time range, so it can only short-circuit a
+    // FROZEN clock — during playback every frame would otherwise be a full
+    // selection pass. `driveTileset` applies the deck chassis's rule (sim
+    // threshold AND wall floor; spatial changes always through; one trailing
+    // pass so the last tick is never lost) and skipped frames draw from
+    // `loadedTiles` unchanged. Shared mode routes through the source so its
+    // resident-set diff runs and N sibling layers stay cheap: the source is
+    // left UNARMED (no beginFrame/frameId) because it gates its
+    // getVisibleTiles/resident-diff walk on the tileset's frame number, so a
+    // sibling's redundant update allocates nothing; hosts wanting strict
+    // once-per-frame driving may call `source.beginFrame()` from their own
+    // frame hook. The source publishes the visible set back through
+    // `handleSharedTiles`; per-layer mode derives it here.
+    this.driveTileset(viewport);
     return frame;
+  }
+
+  /**
+   * Rate limiter over `tileset.update()` — see {@link TilesetUpdateThrottle}
+   * for the rule. One per layer even in shared-source mode: each sibling's
+   * own frames are what it must bound, and the source's frame gate keeps the
+   * survivors cheap.
+   */
+  private readonly updateThrottle = new TilesetUpdateThrottle();
+  /** Armed by a throttled frame; runs the trailing selection pass. */
+  private trailingUpdateTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Drive the tileset with `viewport` if the throttle allows, else arm the
+   * trailing pass. `force` bypasses the throttle (the trailing pass itself).
+   */
+  private driveTileset(viewport: ThrottledViewport, force = false): void {
+    if (!this.tileset) return;
+    const decision = force
+      ? ({ kind: 'drive' } as const)
+      : this.updateThrottle.decide(viewport);
+    if (decision.kind === 'drive') {
+      this.cancelTrailingUpdate();
+      this.updateThrottle.markDriven(viewport);
+      if (this.source) this.source.update(viewport);
+      else this.syncVisibleTiles(this.tileset.update(viewport));
+    } else if (decision.kind === 'hold') {
+      this.armTrailingUpdate(decision.waitMs);
+    }
+  }
+
+  /**
+   * Queue ONE trailing pass for when the wall floor has elapsed. A blocked
+   * frame while the clock keeps running is superseded by the next frame that
+   * drives (which cancels this); a blocked frame that turns out to be the
+   * LAST one — the clock paused, a seek settled — is what this exists for.
+   */
+  private armTrailingUpdate(waitMs: number): void {
+    if (this.trailingUpdateTimer !== undefined) return;
+    this.trailingUpdateTimer = setTimeout(() => {
+      this.trailingUpdateTimer = undefined;
+      this.flushTrailingUpdate();
+    }, waitMs);
+  }
+
+  private cancelTrailingUpdate(): void {
+    if (this.trailingUpdateTimer === undefined) return;
+    clearTimeout(this.trailingUpdateTimer);
+    this.trailingUpdateTimer = undefined;
+  }
+
+  /**
+   * The trailing pass: re-resolve the viewport from CURRENT state (the
+   * playhead may have moved again since the frame that armed this) and
+   * drive unconditionally. The one repaint afterwards is what lets a host
+   * that stopped animating draw the tiles the pass selected; its own
+   * `beginFrame` then finds nothing moved and arms nothing.
+   */
+  private flushTrailingUpdate(): void {
+    if (!this.tileset || !this.map || this.contextLost) return;
+    const bounds = this.lastViewportBounds;
+    if (!bounds) return;
+    this.driveTileset(
+      {
+        bounds,
+        zoom: Math.floor(this.map.getZoom()),
+        time: this.opts.currentTime,
+        timeWindow: this.getEffectiveTimeWindow(),
+      },
+      true,
+    );
+    if (this.opts.autoRepaint) this.map.triggerRepaint();
   }
 
   /**

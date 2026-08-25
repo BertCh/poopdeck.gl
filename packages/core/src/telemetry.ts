@@ -64,6 +64,22 @@ interface ProbeBag {
 }
 
 const MAX_SAMPLES = 4096;
+/**
+ * Trim in batches, never one `shift()` per sample: once a channel is full a
+ * per-sample shift copies ~4k slots on EVERY sample (measured 90 µs/decode,
+ * ~18 ms/s at 200 decodes/s — a probe that changes what it measures, and only
+ * after the 4,096th sample, so a long probe-on run is non-stationary). The
+ * layers shim already trims a quarter buffer at a time; this is the same rule.
+ */
+const SAMPLE_TRIM_BATCH = MAX_SAMPLES / 4;
+/**
+ * The decode-wait roll-up only needs a RECENT window (the pool controller reads
+ * a p50/p95 of the last few hundred decodes, not of the session), so the ring
+ * is kept far smaller than a sample channel: the per-roll-up sort is over 512
+ * values, not 4,096, and the batched trim copies 128 slots, not 1,024.
+ */
+const DECODE_WAIT_WINDOW = 512;
+const DECODE_WAIT_TRIM_BATCH = DECODE_WAIT_WINDOW / 4;
 
 export type CoreProbeChannel =
   | 'decode'
@@ -218,7 +234,7 @@ export function emit<T>(channel: CoreProbeChannel, payload: T): void {
     bag[channel] = arr;
   }
   arr.push(payload);
-  if (arr.length > MAX_SAMPLES) arr.shift();
+  if (arr.length > MAX_SAMPLES) arr.splice(0, SAMPLE_TRIM_BATCH);
 }
 
 /** Publish a latest-value snapshot under `name`. No-op when probe is unset. */
@@ -277,7 +293,8 @@ export function recordDecodeWait(waitMs: number, pending: number): void {
   }
   const waits = ring.waits;
   waits.push(waitMs >= 0 ? waitMs : 0);
-  if (waits.length > MAX_SAMPLES) waits.shift();
+  if (waits.length > DECODE_WAIT_WINDOW)
+    waits.splice(0, DECODE_WAIT_TRIM_BATCH);
   ring.since++;
   if (waits.length >= DECODE_ROLLUP_EVERY && ring.since < DECODE_ROLLUP_EVERY) {
     return;

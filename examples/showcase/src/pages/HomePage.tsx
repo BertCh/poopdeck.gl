@@ -1,8 +1,17 @@
 import React, { Suspense, useEffect, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, type MetaFunction } from 'react-router';
 import { navDatasets } from '../datasets';
 import { SourceLogo } from '../components/SourceLogo';
 import { ClientOnly } from '../lib/ClientOnly';
+import { createSeoMeta, DEFAULT_DESCRIPTION } from '../lib/seo';
+
+export const meta: MetaFunction = () =>
+  createSeoMeta({
+    title: 'poopdeck.gl — SpatioTemporal Tiles for moving data',
+    description: DEFAULT_DESCRIPTION,
+    path: '/',
+    absoluteTitle: true,
+  });
 
 // The live rotating globe carries all the deck.gl/playback deps; lazy + client
 // only so the statically prerendered landing HTML stays deck-free (a poster
@@ -100,6 +109,13 @@ const HomePage: React.FC = () => {
                 }
               >
                 View demos <span>→</span>
+              </Link>
+              <Link
+                to="/docs/guides/csv-quickstart"
+                className="inline-flex items-center gap-2 px-1 py-2.5 text-sm font-medium transition-colors"
+                style={{ color: 'var(--accent)' }}
+              >
+                Build your first archive <span>→</span>
               </Link>
             </div>
           </div>

@@ -62,7 +62,7 @@ import {
   inheritedPropsDigest,
   updateTriggersDigest,
 } from '../../lib/style-digest.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import { tileLayerKey } from '@poopdeck.gl/core';
 import type {
@@ -938,7 +938,8 @@ export class BundledFlowmapLayer<
   }
 
   renderLayers(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state as { tiles?: Tile[] };
     if (!tiles || tiles.length === 0) {
       this.lastTilesRef = null;
@@ -1044,14 +1045,16 @@ export class BundledFlowmapLayer<
     const nodeLayer = this.buildNodeSublayer(table, stepKey, propsKey);
     if (nodeLayer) sublayers.push(nodeLayer);
 
-    emit('renderLayers', {
-      layer: 'BundledFlowmapLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      edges: this.bundle?.edgeCount ?? 0,
-      nodes: activeNodes,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'BundledFlowmapLayer',
+        tiles: tiles.length,
+        sublayers: sublayers.length,
+        edges: this.bundle?.edgeCount ?? 0,
+        nodes: activeNodes,
+        ms: performance.now() - t0,
+      });
+    }
     return sublayers;
   }
 

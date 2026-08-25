@@ -10,6 +10,13 @@ history, not here.
 **These are not part of the published docs site.** The showcase `/docs` viewer
 bundles only `docs/{intro,architecture,spec,api,guides}`.
 
+> **Current-state rule (2026-08-24).** This directory preserves dated evidence
+> and decision history; it is not the source of truth for versions, supported
+> features, or release commands. Use the workspace manifests for versions and
+> toolchain floors, `CONTRIBUTING.md` for the release procedure, and `docs/spec/`
+> plus `docs/api/` for shipped behavior. An older claim below remains historical
+> unless its item has an explicit later status line.
+
 Three house rules:
 
 - **Every measurement keeps its units and its source.** If a number cannot be
@@ -26,6 +33,9 @@ Three house rules:
 
 ## Records
 
+- [**launch-readiness-2026-08.md**](./launch-readiness-2026-08.md) — the short,
+  active launch contract and gate list; use this instead of mining historical
+  records for current launch status.
 - [**shipping.md**](./shipping.md) — versioning and registries, the naming
   rationale, the feature/install matrix, publish auth, the two release systems,
   the R2 fleet-publish ordering rule, and the explicit non-goals.
@@ -127,10 +137,10 @@ Three house rules:
 
 ## The backlog
 
-The single source of open work. Every item was re-verified against the tree, the
-registries and the live deployment on **2026-08-03**, carries the check that
-proves it, and states the condition that closes it. Ordered by what blocks what,
-not by size.
+The single source of open work at the time of each dated update. The baseline was
+re-verified against the tree, registries and live deployment on **2026-08-03**;
+later status lines supersede it. Items carry the check that proves them and the
+condition that closes them. Ordered by what blocks what, not by size.
 
 **Where this actually stands.** The B1 → B2 → B3 chain that dominated the last
 four registers is **discharged**. The payload byte break landed and is pushed;
@@ -138,11 +148,12 @@ the fleet was republished at 68/68 `formatVersion: 2`; and **0.6.0 shipped on
 2026-08-13** — crates.io and npm both show it, `v0.6.0` is tagged and pushed,
 and the emitter decision the cut was holding open was resolved by removal.
 
-What replaced that chain is a **fleet rebuild at `formatVersion: 3`**, and its
-first finding is the reason it gets its own item (B4) rather than a checkbox:
-a rebuild is not automatically a replacement.
+The proposed **fleet rebuild at `formatVersion: 3`** became B4. B4 was then
+discharged on 2026-08-14 by a container-only v2→v3 migration; its investigation
+is retained below because it explains why rebuilding was rejected.
 
-Green, stated honestly, means: **45 Rust test targets at `--all-features`
+The last whole-repo green baseline recorded here (2026-07-31) was: **45 Rust
+test targets at `--all-features`
 (1,264 tests), the six feature lanes, the curated clippy set, `cargo fmt
 --check`, the MSRV check, 35 Python tests, oxlint, `oxfmt --check`, the
 version-sync gate, the roadmap-citation gate, the golden-pin gate and its own
@@ -154,12 +165,13 @@ four red jobs — is recorded in T2 and in
 The remaining queue is dominated by **manual verification and data**, not
 library code: browser sign-off has been accumulating since 2026-07-22 (L2), the
 repository the whole published surface points at is still private (T1), and the
-fleet is still v2 on the wire (B4).
+five summary-tier archives listed in B4 remain v2 by design.
 
-### B — Blocking
+### B — Blocking (retained discharge record)
 
-**B4. The published fleet is still `formatVersion: 2`, and rebuilding it is a
-program, not a batch job.** 0.6.0's writer emits v3 only; its reader opens v2
+**B4 (discharged 2026-08-14). Historical premise: the published fleet was still
+`formatVersion: 2`, and rebuilding it was a program, not a batch job.** 0.6.0's
+writer emits v3 only; its reader opens v2
 and v3, so the live fleet keeps working untouched and this is an upgrade rather
 than an outage. 54 of the 60 referenced archives are v2 (~18 GB, ~380 M
 features); `storm-cells`, `storm-field` and `storm-tracks` are already v3.
@@ -316,8 +328,8 @@ aesthetically unverified, in rough priority order:
   the 3D tile-selection fix (`storm-4d-isolines`, `earthquake-columns` and the
   storm/BIXI families were missing 20–44% of on-screen tiles; the code landed and
   the pitch×bearing matrix test is green, so what remains is looking at it).
-- The maplibre **v5 globe** (the showcase pin moved to `^5.24.0`, so the
-  backend's `globe: true` is exercised for the first time).
+- The MapLibre **globe** path on the current v6 host (the showcase now runs
+  6.6.x, within the backend's declared `^3 || ^4 || ^5 || ^6` peer range).
 - **Polygon seam-wall masking** and the new **per-ring outline** path (holed
   polygons should stop drawing the bridge segment).
 - Shipped **pixel-behavior changes**: `AnimatedBoundingBoxLayer` boxes now
@@ -339,13 +351,13 @@ aesthetically unverified, in rough priority order:
 ### T — Claims the repo makes that the world does not back
 
 **T1. The published repository URL 404s.** `https://github.com/BertCh/spatiotemporal-tiles`
-returns **404** (re-verified 2026-08-03; the repo is private). It is the
+returns **404** (re-verified 2026-08-24; the repo is private). It is the
 `repository`/`homepage`/`bugs` on all four published crates and all eight
 published npm packages, the `GITHUB_BLOB_BASE` the docs site uses for source
 links, the releases page both READMEs send `cargo install` users to, and a
 precondition for npm provenance (which requires a public repo). Every ordering
 constraint that once made this awkward is discharged, so it is a straight switch
-— and it wants to happen **before** B3, so 0.6.0 ships pointing at something real.
+— and it should happen before the next public release.
 
 **T2. GitHub Actions has never run; the CI gates are config that only ever
 executed by hand.** Zero bot commits across the repo's history and no release PR.
@@ -364,7 +376,7 @@ GitHub's own runners.
 ### K — Known defects with a named fix
 
 Each is small, real, and has its analysis written down where it belongs. None
-blocks B3.
+blocked the completed 0.6.0 release.
 
 **K2. `stt-validate` reports structural drift on correct archives.** The per-tile
 exact-integer quantizer refuses a column on outlier-inflated inputs, which
@@ -395,7 +407,7 @@ and gate (c) keeps the copy from coming back.)_
 
 **K4. Capability resolution is not host-aware.** maplibre declares
 `capabilities.globe: true`, which is true only on a v5+ host. The showcase pin has
-moved to `^5.24.0`, so the deployment half is fixed — but a boolean still cannot
+moved to 6.6.x, so the deployment half is fixed — but a boolean still cannot
 express "true on v5+", and `hostApiRange` remains absent from the tree (grep,
 2026-08-03). Either descriptors gain a host-range qualifier or `globe` is declared
 `false` with the v5 capability documented separately. The over-claim gate
@@ -467,6 +479,49 @@ the real geometry bbox, `z_range` lands as an additive
 `skip_serializing_if = "Option::is_none"` field (existing manifests round-trip
 byte-identically), and both ride the next rebuild rather than a dedicated one.
 ([tile-loading-3d-2026-07.md §6, §6b](./tile-loading-3d-2026-07.md))
+
+### TL — Tile loading (full audit, 2026-08-24)
+
+**TL1. Four shipped demos are in a permanent fetch → evict → refetch loop, and
+five reproduced mechanisms turn a healthy loader into a stall.** The 2026-08-24
+whole-pipeline audit ([tile-loading-audit-2026-08.md](./tile-loading-audit-2026-08.md);
+raw evidence in [tile-loading-audit-2026-08-evidence.md](./tile-loading-audit-2026-08-evidence.md))
+probed 21 demos live and re-verified every critical/high finding. The loops:
+the overview pin is byte-budgeted but counts against the 2,000-**tile** cap
+(`earthquakes-v2` pins 8,927, `hurricanes` 17,899, `rainfall-2019` 4,380 vs a
+1,000 split) so every selection pass evicts the entire non-pinned cache (A1);
+at fast playback the runway floor `speed × 5 s` exceeds the cache and the
+ladder may not cut below it (`nyc-taxi-paths` 719 MB in 10 s, A2); eviction is
+unreachable while the select key is unchanged (A3). The stalls: phantom
+coverage-index keys after a sub-⅛-viewport drift (B1), a committed seek that
+never reaches the tileset (B2), EDF ranking the playhead's own bucket as
+"passed" (B3), DRR arrears letting optional prefetch jump required need-now
+(B4), loop wrap = cold seek (B5). Also: the 20 s transfer timeout is a total
+deadline, so a 16 MB `gtfs-ch` z6 tile is unloadable below ~6 Mbit/s (C1);
+every fleet zstd frame declares an 8 MiB window with no content size, costing
+69–92 % of decode time — reader-side fix, no rebuild (D1); the M2 dictionary
+hoist is inert in browsers (A5); memory is 2 GiB per tileset with no device
+awareness (A4). Small and medium archives measured clean. **Plan:** five
+waves in the doc's §6, ~11 days, no format change. **Accept:** the §1 table
+re-run reads `runwayEvictions = 0`, `pressure = 1.0` on all five rows; the
+proof scripts named in §8 exist as green vitest cases; a real-object loading
+QoE gate (G1) runs in CI.
+
+**Status 2026-08-24 (same day): implemented and measured — see the doc's §9.**
+Every wave landed test-first (core 1,358 → 1,455+, playback 308 → 322,
+layers 1,592 → 1,673, three/maplibre/cesium/react +27, showcase 645 → 811),
+all dists rebuilt, `nwm-rivers-2019` rebuilt time-major. The acceptance re-run
+on a quiet machine reads runway evictions **0** and pressure **1.0** on all
+five rows (from 8,023 / 7,940 / 4,249 / 25,557 and 0.25), stalls **0** (from
+286 / 126 / 176 / 1,123), refetches 0 everywhere, `nyc-taxi-paths` 719 → 22 MB
+per 10 s, worker decompress p50 2.3 → 0.1 ms on `earthquakes`. The QoE gate is
+in the core suite and pinned three residuals the same day (byte-priced runway
+capacity, zero-runway gate release, unbuilt-index cost) — being closed as this
+entry is written; the remaining open items are listed in §9.3.5 (A5 and D3 ride
+the peer session's BH-7 decoder change; the overview storyboard on the three
+long-sparse archives is now rejected `over-count` by design). Not yet:
+browser sign-off of the fixed demos (L2), and a re-measure on a low-memory
+device for A4.
 
 ### Discharged
 

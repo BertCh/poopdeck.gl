@@ -912,3 +912,62 @@ describe('eviction attribution — cacheStats + the `evict` probe channel', () =
     tileset.finalize();
   });
 });
+
+/**
+ * A3 (tile-loading audit 2026-08): eviction was reachable only from a
+ * selection pass that got past the identical-params fast path (or from
+ * `setOptions`). A still camera on a frozen clock — a start gate holding the
+ * playhead while the runway fills — therefore let deliveries land with no
+ * eviction at all (13 741 headers / 1.67 GB observed against a 1 GiB cap on
+ * the flow-and-riders heads overlay). The delivery path now schedules one
+ * coalesced over-limit pass of its own.
+ */
+describe('A3: eviction is reachable from tile delivery, not only from a selection pass', () => {
+  it('a prefetch burst past the byte cap is trimmed back under it with no further update()', async () => {
+    // `fakeTile` carries no buffers, so every decoded tile is the 1 000-byte
+    // base: a 20-tile byte cap against a 64-bucket paused prefetch horizon.
+    const CAP_BYTES = 20 * 1000;
+    const wide = makeAvailableTiles(200);
+    let selections = 0;
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      prefetchAhead: 10 * BUCKET_MS,
+      prefetchSteps: 10, // paused horizon = 100 buckets, bucket-capped to 64
+      maxCacheSize: 1000, // count budget 500/pass: the tile cap never binds
+      maxCacheByteSize: CAP_BYTES,
+      // Compressed prices tiny — one byte — so the runway's BYTE budget never
+      // truncates the burst either and only the cache cap is in play. (Since
+      // G3-2 that budget is the cache SHARE, ½ × 20 000 ÷ the cold 8×
+      // expansion = 1 250 compressed bytes; at the previous 100 B per tile
+      // it capped the runway at 12 tiles and there was no burst to trim.)
+      getTileByteSize: () => 1,
+      getAvailableTiles: async (b, z, r) => {
+        selections++;
+        return wide(b, z, r);
+      },
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (ids: TileId[]) => ids.map(fakeTile),
+    });
+
+    // ONE selection pass; the select key never changes again.
+    tileset.update({ bounds: WEST, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settle(150);
+
+    const st = tileset.getCacheStats();
+    // The burst really landed past the cap (≥ 64 prefetched + the head
+    // tile), so the trim below is not vacuous...
+    expect(st.evictions).toBeGreaterThan(0);
+    // ...and the cache came back under the cap with no `update()` to drive
+    // it: pre-fix `cacheBytes` sat at ~65 000 against a 20 000 cap forever.
+    expect(st.cacheBytes).toBeLessThanOrEqual(CAP_BYTES);
+    expect(st.tileCount).toBeLessThanOrEqual(CAP_BYTES / 1000);
+    // The only directory scan was the first pass's (single zoom, no-overlap).
+    expect(selections).toBeGreaterThan(0);
+
+    tileset.finalize();
+  });
+});

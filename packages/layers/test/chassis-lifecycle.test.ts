@@ -26,6 +26,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { _resetWarnOnce } from '../src/lib/log';
+import * as actualCore from '@poopdeck.gl/core';
 
 // ---------------------------------------------------------------------------
 // @poopdeck.gl/core mock — records every constructed archive/tileset, and lets
@@ -72,8 +73,12 @@ vi.mock('@poopdeck.gl/core', async () => {
         ? captured.metadataGate(this)
         : Promise.resolve(METADATA),
     );
+    planRangeBytes = vi.fn(() => 0);
+    /** Every construction option, for the wiring tests (tile-loading audit 2026-08). */
+    opts: any;
     constructor(opts: { url: string }) {
       this.url = opts.url;
+      this.opts = opts;
       captured.archives.push(this);
     }
   }
@@ -722,5 +727,303 @@ describe('SpatioTemporalLayer isLoaded', () => {
 
     layer.state.tileset.isLoaded = false;
     expect(layer.isLoaded).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tile-loading audit 2026-08 — C4 (deferred overview kick), E7 (commit budget)
+// ---------------------------------------------------------------------------
+
+describe('SpatioTemporalLayer overview preload timing (C4)', () => {
+  const flags = {
+    propsChanged: 'x',
+    dataChanged: false,
+    viewportChanged: false,
+  };
+
+  it('C4: is not kicked at attach; kicked exactly once after the first viewport load settles', async () => {
+    const layer = await makeLayer({ overviewPreload: true });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    expect(tileset.preloadOverviewTier).not.toHaveBeenCalled();
+
+    // A selection exists but has not settled → still nothing.
+    tileset.selectionVersion = 1;
+    tileset.isLoaded = false;
+    layer._updateTileset({ ...flags });
+    expect(tileset.preloadOverviewTier).not.toHaveBeenCalled();
+
+    // The first viewport load settles → one kick, with the opts contract.
+    tileset.isLoaded = true;
+    layer._updateTileset({ ...flags });
+    expect(tileset.preloadOverviewTier).toHaveBeenCalledTimes(1);
+    expect(tileset.preloadOverviewTier).toHaveBeenCalledWith(undefined);
+
+    // Later settles never re-kick.
+    tileset.selectionVersion = 2;
+    layer._updateTileset({ ...flags });
+    expect(tileset.preloadOverviewTier).toHaveBeenCalledTimes(1);
+  });
+
+  it('C4: keeps the onOverviewPreload result contract and the object-form opts', async () => {
+    const onOverviewPreload = vi.fn();
+    const result = { loaded: true, tileCount: 12, bytes: 4096 };
+    const layer = await makeLayer({
+      overviewPreload: { budgetBytes: 1024, maxZoom: 2 },
+      onOverviewPreload,
+    });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    tileset.preloadOverviewTier.mockReturnValue(Promise.resolve(result));
+    tileset.selectionVersion = 1;
+    tileset.isLoaded = true;
+    layer._updateTileset({ ...flags });
+    expect(tileset.preloadOverviewTier).toHaveBeenCalledWith({
+      budgetBytes: 1024,
+      maxZoom: 2,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onOverviewPreload).toHaveBeenCalledWith(result);
+    expect(layer.state.overviewPreloadResult).toBe(result);
+  });
+
+  it('C4: overviewPreload off never kicks, even after settle', async () => {
+    const layer = await makeLayer({ overviewPreload: false });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    tileset.selectionVersion = 1;
+    tileset.isLoaded = true;
+    layer._updateTileset({ ...flags });
+    expect(tileset.preloadOverviewTier).not.toHaveBeenCalled();
+  });
+});
+
+describe('SpatioTemporalLayer per-frame commit budget (E7)', () => {
+  const { tileKey } = actualCore;
+
+  function fakeTiles(n: number, z = 5) {
+    return Array.from({ length: n }, (_, i) => ({
+      id: { z, x: i, y: 0, t: 0 },
+      timeRange: { start: 0, end: 1000 },
+      layers: [],
+    }));
+  }
+  /** ~1 ms of CPU, as a `prepareTile` would cost. */
+  function busy(ms: number) {
+    const end = performance.now() + ms;
+    while (performance.now() < end) {
+      /* spin */
+    }
+  }
+  function stubRaf() {
+    const callbacks: (() => void)[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      callbacks.push(cb);
+      return callbacks.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    return callbacks;
+  }
+  const keys = (tiles: any[]) => tiles.map((t) => tileKey(t.id));
+
+  it('E7: 50 arrivals at 1 ms each commit ~6 per rAF, all within 10 frames, never un-committing', async () => {
+    const layer = await makeLayer({ tileCommitBudgetMs: 6 });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    tileset.getVisibleTiles.mockReturnValue(fakeTiles(50));
+    // Deterministic clock: each warm costs exactly 1 ms of the budget's own
+    // clock. A real 1 ms busy-wait measured by the real `performance.now`
+    // drifted under CI-scale load (a loaded box stretched each spin past
+    // 1 ms and the first frame committed fewer than 5) — the budget's
+    // arithmetic is what this pins, not the machine's scheduler.
+    let fakeNow = 0;
+    const realPerformance = globalThis.performance;
+    vi.stubGlobal('performance', {
+      ...realPerformance,
+      now: () => fakeNow,
+    });
+    layer.warmTile = vi.fn(() => {
+      fakeNow += 1;
+    });
+    const callbacks = stubRaf();
+
+    layer._scheduleTileLoadUpdate(tileset);
+    let frames = 0;
+    const seen = new Set<string>();
+    while (callbacks.length > 0 && frames < 20) {
+      frames++;
+      callbacks.shift()!();
+      const committed = keys(layer.state.tiles);
+      for (const k of seen) expect(committed).toContain(k);
+      for (const k of committed) seen.add(k);
+      if (frames === 1) {
+        expect(committed.length).toBeGreaterThanOrEqual(5);
+        expect(committed.length).toBeLessThanOrEqual(7);
+      }
+    }
+    expect(layer.state.tiles).toHaveLength(50);
+    expect(frames).toBeLessThanOrEqual(10);
+    expect(layer.warmTile).toHaveBeenCalledTimes(50);
+    expect(callbacks).toHaveLength(0); // nothing left armed
+    vi.unstubAllGlobals();
+  });
+
+  it('E7: tileCommitBudgetMs 0 commits the whole batch in one frame', async () => {
+    const layer = await makeLayer({ tileCommitBudgetMs: 0 });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    tileset.getVisibleTiles.mockReturnValue(fakeTiles(50));
+    layer.warmTile = vi.fn(() => busy(1));
+    const callbacks = stubRaf();
+    layer._scheduleTileLoadUpdate(tileset);
+    callbacks.shift()!();
+    expect(layer.state.tiles).toHaveLength(50);
+    expect(callbacks).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('E7: a parent the selection dropped keeps standing in until its children have all landed', async () => {
+    const layer = await makeLayer({ tileCommitBudgetMs: 6 });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    const parent = fakeTiles(1, 4)[0];
+    // The parent is committed (it was drawn while the children loaded).
+    tileset.getVisibleTiles.mockReturnValue([parent]);
+    layer._updateTileset({ propsChanged: 'x', dataChanged: false });
+    expect(keys(layer.state.tiles)).toEqual([tileKey(parent.id)]);
+
+    // The tileset now hands back only the 50 loaded children.
+    const children = fakeTiles(50);
+    tileset.getVisibleTiles.mockReturnValue(children);
+    layer.warmTile = vi.fn(() => busy(1));
+    const callbacks = stubRaf();
+    layer._scheduleTileLoadUpdate(tileset);
+
+    callbacks.shift()!();
+    const first = keys(layer.state.tiles);
+    expect(first).toContain(tileKey(parent.id)); // still covering
+    expect(first.length).toBeLessThan(51);
+
+    let frames = 1;
+    while (callbacks.length > 0 && frames < 20) {
+      frames++;
+      callbacks.shift()!();
+    }
+    const final = keys(layer.state.tiles);
+    expect(final).not.toContain(tileKey(parent.id));
+    expect(final).toHaveLength(50);
+    vi.unstubAllGlobals();
+  });
+
+  it('E7: the carried remainder is committed nearest-to-playhead first', async () => {
+    const layer = await makeLayer({ tileCommitBudgetMs: 2 });
+    await layer._initArchiveAndTileset();
+    const tileset = layer.state.tileset;
+    layer.state.currentTime = 5_000;
+    const far = {
+      id: { z: 5, x: 0, y: 0, t: 0 },
+      timeRange: { start: 20_000, end: 21_000 },
+      layers: [],
+    };
+    const near = {
+      id: { z: 5, x: 1, y: 0, t: 0 },
+      timeRange: { start: 4_000, end: 6_000 },
+      layers: [],
+    };
+    const mid = {
+      id: { z: 5, x: 2, y: 0, t: 0 },
+      timeRange: { start: 8_000, end: 9_000 },
+      layers: [],
+    };
+    tileset.getVisibleTiles.mockReturnValue([far, mid, near]);
+    const warmed: string[] = [];
+    layer.warmTile = (t: any) => {
+      warmed.push(tileKey(t.id));
+      busy(2);
+    };
+    const callbacks = stubRaf();
+    layer._scheduleTileLoadUpdate(tileset);
+    while (callbacks.length > 0) callbacks.shift()!();
+    expect(warmed).toEqual([
+      tileKey(near.id),
+      tileKey(mid.id),
+      tileKey(far.id),
+    ]);
+    vi.unstubAllGlobals();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Archive <-> tileset wiring (tile-loading audit 2026-08): the option-level
+// hand-offs the chassis owes its neighbours — `sparsePrimary` from the
+// archive's partition, `estimateFetchBytes` + the batch `onTileError` hook
+// through the core adapter, and `schedulerWeight` into the archive.
+// ---------------------------------------------------------------------------
+
+describe('SpatioTemporalLayer archive/tileset wiring (tile-loading audit 2026-08)', () => {
+  it('sparsePrimary: a home-zoom archive builds the tileset with sparsePrimary: true', async () => {
+    captured.metadataGate = () =>
+      Promise.resolve({ ...METADATA, partition: 'home-zoom' });
+    const layer = await makeLayer();
+    await layer._initArchiveAndTileset();
+    expect(layer.state.tileset.options.sparsePrimary).toBe(true);
+  });
+
+  it('sparsePrimary: a replicated (default) archive builds the tileset with sparsePrimary: false', async () => {
+    const layer = await makeLayer();
+    await layer._initArchiveAndTileset();
+    expect(layer.state.tileset.options.sparsePrimary).toBe(false);
+  });
+
+  it('C4: the tileset receives estimateFetchBytes, routed to archive.planRangeBytes', async () => {
+    const layer = await makeLayer();
+    await layer._initArchiveAndTileset();
+    const archive = captured.archives[0];
+    const tileset = layer.state.tileset;
+    expect(typeof tileset.options.estimateFetchBytes).toBe('function');
+    archive.planRangeBytes.mockReturnValue(4242);
+    const ids = [{ z: 3, x: 1, y: 2, t: 0 }];
+    expect(tileset.options.estimateFetchBytes(ids)).toBe(4242);
+    expect(archive.planRangeBytes).toHaveBeenCalledWith(ids);
+  });
+
+  it('B8: a batch member failure the archive reports reaches the tileset batch hook unchanged', async () => {
+    const layer = await makeLayer();
+    await layer._initArchiveAndTileset();
+    const archive = captured.archives[0];
+    const tileset = layer.state.tileset;
+    const failure = new Error('x');
+    archive.getTiles.mockImplementation(async (ids: unknown[], opts: any) => {
+      opts.onTileError?.(0, failure);
+      return ids.map(() => null);
+    });
+    const onTileError = vi.fn();
+    const onTileReady = vi.fn();
+    const ids = [{ z: 3, x: 1, y: 2, t: 0 }];
+    const signal = new AbortController().signal;
+    await tileset.options.getTileDataBatch(ids, signal, {
+      onTileError,
+      onTileReady,
+      fetchPriority: 'low',
+    });
+    expect(onTileError).toHaveBeenCalledWith(0, failure);
+    // The archive saw the SAME hook objects — no re-wrapping in between.
+    const [, forwarded] = archive.getTiles.mock.calls[0];
+    expect(forwarded.onTileError).toBe(onTileError);
+    expect(forwarded.onTileReady).toBe(onTileReady);
+    expect(forwarded.signal).toBe(signal);
+    expect(forwarded.fetchPriority).toBe('low');
+  });
+
+  it('schedulerWeight: the prop reaches the STTArchive constructor', async () => {
+    const layer = await makeLayer({ schedulerWeight: 3 });
+    await layer._initArchiveAndTileset();
+    expect(captured.archives[0].opts.schedulerWeight).toBe(3);
+  });
+
+  it('schedulerWeight: absent, nothing is forced on the archive (its own default stands)', async () => {
+    const layer = await makeLayer();
+    await layer._initArchiveAndTileset();
+    expect(captured.archives[0].opts.schedulerWeight).toBeUndefined();
   });
 });

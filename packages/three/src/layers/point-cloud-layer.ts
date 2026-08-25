@@ -324,7 +324,9 @@ export class STTPointCloudLayer extends BaseSTTLayer implements STTIdPickable {
     this.provenance = buf.provenance;
     this.binaryByTileKey = buf.binaryByTileKey;
 
-    this.disposeGpu();
+    this.disposeGeometry();
+    const bundle = this.ensureStaticBundle();
+    this.object.material = bundle.material;
     if (buf.count === 0) {
       // No points: hide rather than draw the bare quad with no instances.
       this.object.geometry = makeBillboardQuadGeometry();
@@ -359,18 +361,37 @@ export class STTPointCloudLayer extends BaseSTTLayer implements STTIdPickable {
       );
     }
 
-    this.bundle = createPointMaterial({
-      mode: this.opts.mode,
-      splat: this.opts.splat,
-      alphaCutoff: this.opts.alphaCutoff,
-      sizeUnits: this.opts.sizeUnits,
-    });
     this.object.geometry = geometry;
-    this.object.material = this.bundle.material;
     // RTC: centres are relative to `origin`; lift the mesh by it. For the AV/ENU
     // frame origin ≈ [0,0,0] so this is a no-op (AV stays byte-identical).
     this.object.position.set(buf.origin[0], buf.origin[1], buf.origin[2]);
     this.pushUniforms(this.timeOrigin);
+  }
+
+  /**
+   * The static-path material, built ONCE per layer (audit E5). Every input is
+   * fixed at construction, and disposing it per `setTiles` — as this used to —
+   * evicted three's `nodeBuilderCache` entry, program and pipeline: a shader
+   * rebuild per tile arrival (256 arrivals → 256 materials). Only the geometry
+   * churns now. The glide path still rebuilds, because it bakes its keyframe
+   * texture into the node graph.
+   */
+  private ensureStaticBundle(): PointMaterialBundle {
+    if (!this.bundle) {
+      this.bundle = createPointMaterial({
+        mode: this.opts.mode,
+        splat: this.opts.splat,
+        alphaCutoff: this.opts.alphaCutoff,
+        sizeUnits: this.opts.sizeUnits,
+      });
+    }
+    return this.bundle;
+  }
+
+  /** Release the geometry (and the per-geometry pick attribute flag) only. */
+  private disposeGeometry(): void {
+    if (this.object.geometry) this.object.geometry.dispose();
+    this.idColorsPresent = false;
   }
 
   /**

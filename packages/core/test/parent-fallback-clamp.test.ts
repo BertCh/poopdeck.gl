@@ -191,29 +191,49 @@ describe('the z10/z11 double-draw contract, under the cover DP', () => {
 });
 
 describe('pass 2: an EMPTY viewport intersection skips the clamp', () => {
+  // A zero-width box parked exactly on the antimeridian: `lonToTileX(180)`
+  // is 2^z, one past the last column, so the wrap-aware span comes back
+  // EMPTY. It is finite and ordered, so it survives normalizeViewportBounds
+  // and reaches the render-side clamp intact — which is the point: this is
+  // the second line of defence, behind a producer that has already been
+  // repaired.
+  const SEAM: BoundingBox = {
+    minLon: 180,
+    minLat: 1,
+    maxLon: 180,
+    maxLat: 10,
+  };
+
   it('keeps the parent instead of dropping it', async () => {
-    // A zero-width box parked exactly on the antimeridian: `lonToTileX(180)`
-    // is 2^z, one past the last column, so the wrap-aware span comes back
-    // EMPTY. It is finite and ordered, so it survives normalizeViewportBounds
-    // and reaches the render-side clamp intact — which is the point: this is
-    // the second line of defence, behind a producer that has already been
-    // repaired.
-    const SEAM: BoundingBox = {
-      minLon: 180,
-      minLat: 1,
-      maxLon: 180,
-      maxLat: 10,
-    };
+    // P10 and P12 are withheld: existing primaries the viewport asked for
+    // and has not received.
+    const tileset = makeTileset({ deliver: [P11, PARENT] });
+    tileset.update(view(SEAM), true);
+    await settle();
+
+    const ids = tileset.getVisibleTiles().map((t) => t.id);
+    // Falling back to the unclamped child scan finds the PENDING cells in the
+    // parent's block (x = 10 and 12 exist and are still missing), so the
+    // parent stays. With the clamp applied to an empty intersection the inner
+    // loops never ran and it was discarded outright. (This used to deliver
+    // all three primaries and lean on the block's EMPTY cells x = 8, 9 to
+    // keep the parent; since E3 a cell with no tile at all keeps nothing.)
+    expect(ids).toContainEqual(PARENT);
+
+    tileset.finalize();
+  });
+
+  it('...and still drops it once every EXISTING child has arrived (E3)', async () => {
     const tileset = makeTileset({ deliver: [P10, P11, P12, PARENT] });
     tileset.update(view(SEAM), true);
     await settle();
 
     const ids = tileset.getVisibleTiles().map((t) => t.id);
-    // Falling back to the unclamped child scan finds uncovered cells in the
-    // parent's block (it spans x 8..11, and only 10 and 11 ever load), so the
-    // parent stays. With the clamp applied to an empty intersection the inner
-    // loops never ran and it was discarded outright.
-    expect(ids).toContainEqual(PARENT);
+    // The block's empty cells (x = 8, 9) are empty in the parent too: with
+    // all three existing children on screen the parent would only draw them
+    // a second time. Fail-open covers "I cannot tell what you see", not
+    // "draw everything twice to be safe".
+    expect(ids).not.toContainEqual(PARENT);
 
     tileset.finalize();
   });
@@ -287,11 +307,11 @@ describe('pass 2 under a frustum cut: the cut member is not a parent', () => {
   });
 
   it('keeps the coarse cut member when its block is inside the box', () => {
-    // The case the clamp gets right, and the reason it is not simply disabled
-    // under a cut: the far cell's z8 child block (x 188…191, y 124…127) lands
-    // inside the viewport's z8 range and holds no covered cell, so pass 2 keeps
-    // it. Coverage of the far field survives — by coincidence of geometry, not
-    // by contract.
+    // The far cut member is delivered because it IS the cover for its patch
+    // of ground, not because its z8 child block (x 188…191, y 124…127)
+    // happens to land inside the box: pass 2 never judges a cut member as a
+    // placeholder. (Before E3 it survived by coincidence of geometry — the
+    // any-in-box-cell rule found its block's empty z8 cells "uncovered".)
     return (async () => {
       const tileset = cutTileset({ strategy: 'no-overlap' });
       tileset.update(cutView(WIDE), true);
@@ -306,17 +326,15 @@ describe('pass 2 under a frustum cut: the cut member is not a parent', () => {
     })();
   });
 
-  it.fails('PENDING FS-3 REPAIR: drops a coarse cut member whose block is outside the box', async () => {
-    // The under-delivery half, minimally. Narrow the box to the near field and
-    // the far cut member's block no longer intersects it — even with the
-    // one-tile slack ring (z8 columns 175…179 against the block's 188…191).
-    // The inner loops never execute, `needed` stays false, and a cell the CUT
-    // says the camera is looking at is discarded while loaded and resident.
+  it('delivers a coarse cut member whose block is OUTSIDE the box (FS-3, under-delivery half)', async () => {
+    // Narrow the box to the near field and the far cut member's block no
+    // longer intersects it — even with the one-tile slack ring (z8 columns
+    // 175…179 against the block's 188…191). Under the old cell scan the inner
+    // loops never executed, `needed` stayed false, and a cell the CUT says
+    // the camera is looking at was discarded while loaded and resident. A
+    // cut member is now delivered on its own account, whatever the box says.
     //
-    // `no-overlap` so no stand-in band can mask it; under `best-available` the
-    // redundant ancestors happen to paint the same ground, which is why this
-    // does not currently show up as a blank frame. Fixing the over-delivery
-    // without fixing this would convert one bug into the worse one.
+    // `no-overlap` so no stand-in band can mask it.
     const tileset = cutTileset({ strategy: 'no-overlap' });
     tileset.update(cutView(NARROW_TO_NEAR), true);
     await settle(8);
@@ -326,30 +344,39 @@ describe('pass 2 under a frustum cut: the cut member is not a parent', () => {
     expect(ids).toContainEqual(FAR);
   });
 
-  it('records that the drop is real, so the pending case is measured', async () => {
-    // The live counterpart of the `it.fails` above: today the far cut member is
-    // fetched, decoded, held resident and then NOT delivered. Stated positively
-    // so that the day it changes, one of these two tests goes red whichever way
-    // the behaviour moves.
-    const tileset = cutTileset({ strategy: 'no-overlap' });
-    tileset.update(cutView(NARROW_TO_NEAR), true);
+  it('a PENDING coarse cut member keeps its OWN ancestor stand-in (per node, not per cell)', async () => {
+    // The far member is withheld; its z5 ancestor (47 >> 1, 31 >> 1) is in
+    // the `best-available` stand-in band and lands. No z8 cell of that
+    // ancestor's block is pending — the cut never asked for z8 there — so the
+    // per-CELL test alone would drop it (E3) and blank the far field while
+    // the z6 member streams. The per-NODE test keeps it: a stand-in stays
+    // while any cut member it covers, at whatever zoom, is still pending.
+    const FAR_ANCESTOR: TileId = { z: 5, x: 23, y: 15, t: 0 };
+    const tileset = cutTileset({
+      strategy: 'best-available',
+      deliver: [NEAR_A, NEAR_B, FAR_ANCESTOR],
+    });
+    tileset.update(cutView(WIDE), true);
     await settle(8);
 
     const delivered = tileset.getVisibleTiles().map((t) => t.id);
     expect(delivered).toContainEqual(NEAR_A);
+    expect(delivered).toContainEqual(NEAR_B);
+    expect(delivered).toContainEqual(FAR_ANCESTOR);
     expect(delivered).not.toContainEqual(FAR);
 
     tileset.finalize();
   });
 
-  it.fails('PENDING FS-3 REPAIR: no stand-in ancestor ships alongside a loaded cut member', async () => {
-    // The over-delivery half, minimally — the z10/z11 double-draw in its
-    // mixed-zoom form. `best-available` adds a per-branch ancestor band
-    // (`cutAncestors`), and the z7 ancestor of NEAR_A covers z8 cells
-    // 176…177 × 124…125, of which only (177, 124) is in the cut. The other
-    // three can never be covered — the cut never asked for them — so the
-    // ancestor passes "some child uncovered" forever and draws straight over
-    // its own loaded child.
+  it('no stand-in ancestor ships alongside a loaded cut member (FS-3, over-delivery half)', async () => {
+    // The z10/z11 double-draw in its mixed-zoom form. `best-available` adds a
+    // per-branch ancestor band (`cutAncestors`), and the z7 ancestor of
+    // NEAR_A covers z8 cells 176…177 × 124…125, of which only (177, 124) is
+    // in the cut. The other three are never asked for — so under the old
+    // any-in-box-cell rule the ancestor passed "some child uncovered"
+    // forever and drew straight over its own loaded child. Since E3 a cell
+    // keeps a parent only while a tile EXISTS there and is pending (and, on
+    // the cut path, a stand-in only while a cut member it covers is pending).
     const tileset = cutTileset({ strategy: 'best-available' });
     tileset.update(cutView(WIDE), true);
     await settle(10);
@@ -384,6 +411,101 @@ describe('pass 2 under a frustum cut: the cut member is not a parent', () => {
     expect(ids).toContainEqual(NEAR_A);
     expect(ids).toContainEqual(FAR);
     expect(ids).not.toContainEqual(NEAR_B);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * E3 (tile-loading audit 2026-08, SEL-2): pass 2 counted ANY uncovered in-box
+ * cell as a reason to keep a parent — including a cell the archive has no tile
+ * for at all. On a replicated (full-duplication) archive an empty primary
+ * cell means the parent has nothing there either, so the parent covered
+ * nothing and was drawn ON TOP of its loaded siblings' children for as long
+ * as the camera stood still: water at the coasts, Alpine cells at night,
+ * sparse event sets. The flow-riders campaign worked around the symptom in
+ * demo config (`no-overlap` on overlays); this pins the core rule: an in-box
+ * cell keeps a parent only while the directory says a tile exists there and
+ * it has not arrived. Archives that omit deep-zoom tiles in sparse regions
+ * (`stt-build --min-features-per-tile > 1`) declare `sparsePrimary: true` and
+ * keep the any-cell rule.
+ */
+describe('E3: an in-box cell with NO archive tile does not keep a parent', () => {
+  // z11 box: x ∈ {1024, 1025}, y ∈ {1022, 1023}. The archive has THREE of the
+  // four z11 children (the fourth cell is empty — say, water) and the z10
+  // parent above them.
+  const VIEW: BoundingBox = {
+    minLon: 0.1,
+    minLat: 0.1,
+    maxLon: 0.3,
+    maxLat: 0.3,
+  };
+  const CHILDREN: TileId[] = [
+    { z: 11, x: 1024, y: 1022, t: 0 },
+    { z: 11, x: 1025, y: 1022, t: 0 },
+    { z: 11, x: 1024, y: 1023, t: 0 },
+  ];
+  const PARENT: TileId = { z: 10, x: 512, y: 511, t: 0 };
+  const key = (id: TileId): string => `${id.z}/${id.x}/${id.y}/${id.t}`;
+
+  function makeTileset(opts: { deliver?: TileId[]; sparsePrimary?: boolean }) {
+    const wanted = opts.deliver
+      ? new Set(opts.deliver.map((id) => `${id.z}/${id.x}/${id.y}`))
+      : null;
+    return new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 14,
+      enablePrefetch: false,
+      refinementStrategy: 'best-available',
+      temporalBucketMs: 1000,
+      sparsePrimary: opts.sparsePrimary,
+      getAvailableTiles: async (_b, z) =>
+        z === 11 ? CHILDREN : z === 10 ? [PARENT] : [],
+      getTileData: (id: TileId) =>
+        !wanted || wanted.has(`${id.z}/${id.x}/${id.y}`)
+          ? Promise.resolve(fakeTile(id))
+          : new Promise<Tile>(() => {}),
+    });
+  }
+
+  it('drops the parent once the three children that EXIST are loaded (3-of-4)', async () => {
+    const tileset = makeTileset({});
+    tileset.update({ bounds: VIEW, zoom: 11, time: 0, timeWindow: 100 }, true);
+    await settle(8);
+
+    const keys = tileset
+      .getVisibleTiles()
+      .map((t) => key(t.id))
+      .sort();
+    // Exactly the three children — the parent no longer double-draws them.
+    expect(keys).toEqual(CHILDREN.map(key).sort());
+
+    tileset.finalize();
+  });
+
+  it('keeps the parent while one EXISTING child is still pending', async () => {
+    const tileset = makeTileset({
+      deliver: [CHILDREN[0], CHILDREN[1], PARENT],
+    });
+    tileset.update({ bounds: VIEW, zoom: 11, time: 0, timeWindow: 100 }, true);
+    await settle(8);
+
+    const keys = tileset.getVisibleTiles().map((t) => key(t.id));
+    expect(keys).toContain(key(PARENT));
+    expect(keys).toContain(key(CHILDREN[0]));
+    expect(keys).not.toContain(key(CHILDREN[2]));
+
+    tileset.finalize();
+  });
+
+  it('sparsePrimary: true preserves the any-in-box-cell rule (the parent is the only holder)', async () => {
+    const tileset = makeTileset({ sparsePrimary: true });
+    tileset.update({ bounds: VIEW, zoom: 11, time: 0, timeWindow: 100 }, true);
+    await settle(8);
+
+    const keys = tileset.getVisibleTiles().map((t) => key(t.id));
+    expect(keys).toContain(key(PARENT));
+    for (const c of CHILDREN) expect(keys).toContain(key(c));
 
     tileset.finalize();
   });

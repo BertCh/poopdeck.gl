@@ -264,7 +264,7 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
   it('queued-then-aborted page groups do not leak pageFetchPromises or deadlock waiters', async () => {
     const GLOBAL = 1; // one slot → all but one page-group stays queued
     const PAGES = 9;
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const url = 'mem://paged/manifest.json';
     const ds = makePagedDataset(PAGES, url);
@@ -359,10 +359,16 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
     ).toBe(true);
   });
 
-  it('disabled (kill-switch) path: page groups still settle on abort (no regression)', async () => {
-    // The legacy path always invokes executeGroup per group, so its deferred
-    // always settles via d.reject on abort — confirm it stays clean too.
-    configureSharedScheduler({ enabled: false, maxRequests: 24 });
+  it('per-archive cap path: page groups queued behind maxConcurrentRequests still settle on abort', async () => {
+    // G4 / TO-8 (tile-loading audit 2026-08): this case used to pass
+    // `configureSharedScheduler({ enabled: false })` and call itself the
+    // "disabled (kill-switch) / legacy path". No such option or path exists —
+    // every archive draws from the shared scheduler unconditionally — so it
+    // re-ran the case above under a false name. What it actually exercises is
+    // the OTHER cap: the global budget is wide open (24) and the archive's own
+    // `maxConcurrentRequests` (1) is what keeps groups queued; those must
+    // settle on abort exactly like globally-queued ones.
+    configureSharedScheduler({ maxRequests: 24 });
 
     const url = 'mem://paged-off/manifest.json';
     const ds = makePagedDataset(5, url);
@@ -390,6 +396,12 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
 
     await flush();
     await flush();
+    // The per-archive cap, not the global budget, is what holds the rest back:
+    // the archive runs a sliding window of `maxConcurrentRequests` groups, so
+    // the other two never reach the scheduler (nothing queued there).
+    expect(shared.inFlight).toBe(1);
+    expect(getSharedScheduler().getStats().active).toBe(1);
+    expect(getSharedScheduler().getStats().queued).toBe(0);
     ctrl.abort();
     while (shared.gates.length > 0) {
       shared.gates.shift()!();
@@ -403,5 +415,6 @@ describe('paged page-fetch + SharedRequestScheduler supersession (Wave 3)', () =
       archive as unknown as { pageFetchPromises: Map<number, unknown> }
     ).pageFetchPromises;
     expect(leaked.size).toBe(0);
+    expect(shared.peak).toBe(1);
   });
 });

@@ -149,6 +149,12 @@ export interface FakePathTileOptions {
    * explicitly to model a tile the playhead has already left.
    */
   timeRange?: { start: number; end: number };
+  /**
+   * Per-vertex scalar channel (`BinaryFeatures.vertexValues`), flattened
+   * vertex-major across all paths — the channel gradient coloring and baked
+   * elevation read. Length must equal the total vertex count.
+   */
+  vertexValues?: number[];
 }
 
 export function makePathTile(opts: FakePathTileOptions): Tile {
@@ -182,6 +188,9 @@ export function makePathTile(opts: FakePathTileOptions): Tile {
     timeOffset: opts.timeOffset,
     numericProps: {},
     categoricalProps: {},
+    ...(opts.vertexValues && {
+      vertexValues: new Float32Array(opts.vertexValues),
+    }),
   };
 
   return {

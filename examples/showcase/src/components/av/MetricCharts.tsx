@@ -26,6 +26,11 @@ import {
   type AvTelemetry,
   type AvTelemetryField,
 } from './sceneTypes';
+import {
+  createTraceCache,
+  traceOffset,
+  type TraceGeometry,
+} from './stripTrace';
 
 export interface MetricChartsProps {
   telemetry: AvTelemetry;
@@ -50,6 +55,14 @@ const DEFAULT_WINDOW_MS = 8000;
 const W = 220;
 const H = 34;
 const PAD_Y = 4; // vertical inset so the trace doesn't touch the edges
+/**
+ * Point budget per scrolling trace: 2 per user unit of width. The strip
+ * renders at ~256 px (`w-64`) to ~400 px (mobile `w-full`), so this is ≈ 1–2
+ * points per rendered pixel — past what a 1.5 px stroke can show. A 160 Hz
+ * field held ~1,300 samples in an 8 s window (≈ 5× oversampled); see
+ * stripTrace.ts for the min/max decimation that keeps every extremum.
+ */
+const MAX_TRACE_POINTS = 2 * W;
 
 /** Min/max of a field's values across ALL samples (the strip's y-domain). */
 function fieldExtent(field: AvTelemetryField): { min: number; max: number } {
@@ -127,6 +140,17 @@ const Strip: React.FC<{
 
   useEffect(() => {
     const samples = field.samples;
+    // The trace is built once per visible index range (in a frame anchored at
+    // its first sample) and SLID per tick with a translate — a per-tick `d`
+    // rebuild of ~1,300 points per field was the cockpit's inferred churn.
+    const geom: TraceGeometry = {
+      W,
+      windowMs,
+      yOf,
+      maxPoints: MAX_TRACE_POINTS,
+    };
+    const traces = createTraceCache(samples, geom);
+    let lastD: string | null = null;
 
     const render = (t: number) => {
       // Value readout tracks the playhead in both modes.
@@ -137,32 +161,33 @@ const Strip: React.FC<{
       }
       if (reducedMotion) return; // static trace is drawn declaratively
 
-      // Build the scrolling trace over [t - windowMs, t], pinned to the right.
+      // Visible range over [t - windowMs, t], pinned to the right.
       const t0 = t - windowMs;
       // First sample at-or-after the window start (one before the right edge of
       // the lower bound), via the shared binary search.
       const before = sampleIndexAtOrBefore(samples, t0);
       const start = before < 0 ? 0 : before; // include the bracketing sample so the line enters from the left
       const end = sampleIndexAtOrBefore(samples, t); // last sample at-or-before now
-      if (pathRef.current) {
-        if (end < 0 || samples.length === 0) {
-          pathRef.current.setAttribute('d', '');
-        } else {
-          let d = '';
-          let first = true;
-          for (let i = start; i <= end; i++) {
-            const x = ((samples[i][0] - t0) / windowMs) * W;
-            const y = yOf(samples[i][1]);
-            d += `${first ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
-            first = false;
-          }
-          // Extend the trace to the right edge (the playhead "now") by holding
-          // the last value, so the line always reaches the pinned cursor.
-          const lastY = yOf(samples[end][1]);
-          d += `L${W} ${lastY.toFixed(1)}`;
-          pathRef.current.setAttribute('d', d);
+      const path = pathRef.current;
+      if (!path) return;
+      if (end < 0 || samples.length === 0) {
+        if (lastD !== '') {
+          path.setAttribute('d', '');
+          lastD = '';
         }
+        return;
       }
+      const trace = traces.get(start, end);
+      if (trace.d !== lastD) {
+        path.setAttribute('d', trace.d);
+        lastD = trace.d;
+      }
+      // The hold segment past the last sample runs far off the right edge, so
+      // the slide alone keeps the line reaching the pinned cursor.
+      path.setAttribute(
+        'transform',
+        `translate(${traceOffset(trace.tBase, t, windowMs, W).toFixed(2)} 0)`,
+      );
     };
 
     render(timeController.getTime());

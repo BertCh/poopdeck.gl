@@ -1,0 +1,89 @@
+{
+  "$schema": "./project-status.schema.json",
+  "schemaVersion": 1,
+  "updated": "2026-08-24",
+  "release": {
+    "rust": "0.6.0",
+    "javascript": "0.6.0"
+  },
+  "toolchain": {
+    "node": ">=24.0.0",
+    "nodeMajor": 24,
+    "pnpm": "11.23.0",
+    "rust": "1.87"
+  },
+  "archive": {
+    "writes": {
+      "formatVersion": 3,
+      "directoryVersion": 6
+    },
+    "reads": {
+      "formatVersions": [2, 3],
+      "directoryVersions": [5, 6]
+    }
+  },
+  "commands": [
+    { "name": "stt-build", "support": "stable" },
+    { "name": "stt-optimize", "support": "stable" },
+    { "name": "stt-validate", "support": "stable" },
+    { "name": "stt-bundle", "support": "preview" },
+    { "name": "stt-serve", "support": "preview" }
+  ],
+  "repositoryOnlyCommands": [
+    { "name": "stt-generate", "support": "experimental" }
+  ],
+  "packages": [
+    {
+      "name": "@poopdeck.gl/core",
+      "version": "0.6.0",
+      "published": true,
+      "support": "stable"
+    },
+    {
+      "name": "@poopdeck.gl/layers",
+      "version": "0.6.0",
+      "published": true,
+      "support": "stable"
+    },
+    {
+      "name": "@poopdeck.gl/playback",
+      "version": "0.6.0",
+      "published": true,
+      "support": "stable"
+    },
+    {
+      "name": "@poopdeck.gl/react",
+      "version": "0.6.0",
+      "published": true,
+      "support": "stable"
+    },
+    {
+      "name": "@poopdeck.gl/three",
+      "version": "0.6.0",
+      "published": true,
+      "support": "preview"
+    },
+    {
+      "name": "@poopdeck.gl/maplibre",
+      "version": "0.6.0",
+      "published": true,
+      "support": "preview"
+    },
+    {
+      "name": "@poopdeck.gl/mcp",
+      "version": "0.6.0",
+      "published": true,
+      "support": "preview"
+    },
+    {
+      "name": "@poopdeck.gl/cesium",
+      "version": "0.5.0",
+      "published": false,
+      "support": "experimental"
+    }
+  ],
+  "otherSurfaces": [
+    { "name": "stt-wasm", "support": "experimental" },
+    { "name": "specialized showcase demos", "support": "experimental" }
+  ]
+}

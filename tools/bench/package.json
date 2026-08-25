@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@poopdeck.gl/core": "workspace:*",
-    "fflate": "^0.7.4",
+    "fflate": "^0.8.3",
     "fzstd": "^0.1.1",
-    "pako": "^2.1.0"
+    "pako": "^3.0.1"
   }
 }

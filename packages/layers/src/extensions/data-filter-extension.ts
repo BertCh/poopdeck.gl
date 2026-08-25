@@ -299,10 +299,14 @@ export class STTDataFilterExtension extends LayerExtension<
   static extensionName = 'STTDataFilterExtension';
 
   /**
-   * Memoized shader-injection object. deck.gl calls `getShaders()` per sublayer
-   * construction; a fresh literal each time would miss the shader cache and
-   * re-link per tile. Building once per extension instance preserves identity
-   * across every sublayer sharing the singleton (see TimeFilterExtension).
+   * Memoized shader-injection object. deck.gl calls `getShaders()` per
+   * sublayer construction — one per visible tile here. luma 9.3.3 keys its
+   * shader and pipeline caches on SOURCE TEXT, so a fresh literal carrying the
+   * same strings still hits both caches (there is no re-link); what the memo
+   * saves is the per-sublayer allocation of the modules array + inject
+   * strings and deck's `mergeShaders` pass over them. Cheap, and it keeps
+   * identity stable across every sublayer sharing the singleton (see
+   * TimeFilterExtension).
    */
   private cachedShaders: {
     modules: unknown[];
@@ -492,6 +496,67 @@ export class STTDataFilterExtension extends LayerExtension<
       transformColor: filterTransformColor ? 1.0 : 0.0,
     };
 
+    // ── Push only when something moved ───────────────────────────────────
+    // `draw()` runs once per MODEL per FRAME — one call per visible tile —
+    // and all eight of these are constants for the layer's lifetime (they
+    // change only with a prop edit). `setShaderModuleProps` clones every
+    // value it is handed (`ShaderInputs.setProps`), so the unconditional push
+    // paid eight clones per sublayer per frame for nothing. Same guard as
+    // TimeFilterExtension: the block is pushed in full once per MODEL SET (a
+    // fresh model starts from the module defaults, so a skipped push there
+    // would render with `enabled: 0`… or worse, stale edges) and thereafter
+    // only when a value differs from what that model set was last given.
+    const models = this.getModels();
+    const cache = this.state?.dataFilterPush as DataFilterPushCache | undefined;
+    if (
+      cache &&
+      cache.model === models[0] &&
+      cache.modelCount === models.length &&
+      uniformsEqual(cache.uniforms, uniforms)
+    ) {
+      return;
+    }
+    if (this.state) {
+      this.state.dataFilterPush = {
+        model: models[0],
+        modelCount: models.length,
+        uniforms,
+      } satisfies DataFilterPushCache;
+    }
     this.setShaderModuleProps({ sttFilter: uniforms });
   }
+}
+
+/**
+ * What the last uniform push covered, cached on the host layer's state.
+ * `model`/`modelCount` pin it to the model set it was applied to — see the
+ * note in `draw()`.
+ */
+interface DataFilterPushCache {
+  model: unknown;
+  modelCount: number;
+  uniforms: DataFilterUniformProps;
+}
+
+const UNIFORM_KEYS = [
+  'filterMin',
+  'filterMax',
+  'filterSoftMin',
+  'filterSoftMax',
+  'enabled',
+  'useSoftMargin',
+  'transformSize',
+  'transformColor',
+] as const satisfies readonly (keyof DataFilterUniformProps)[];
+
+/** Allocation-free field-wise compare of two uniform blocks. */
+function uniformsEqual(
+  a: DataFilterUniformProps,
+  b: DataFilterUniformProps,
+): boolean {
+  for (let i = 0; i < UNIFORM_KEYS.length; i++) {
+    const key = UNIFORM_KEYS[i];
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
 }

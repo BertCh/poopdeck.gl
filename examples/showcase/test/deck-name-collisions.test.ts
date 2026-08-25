@@ -25,9 +25,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as path from 'node:path';
-import ts from 'typescript';
+// `typescript-api` is TypeScript 5.x under an alias: this suite PARSES
+// source with the compiler API, which the TypeScript 7 native package no
+// longer ships. Compilation itself (tsc, typecheck, build) is on 7.
+import ts from 'typescript-api';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '../../..');
@@ -73,8 +76,15 @@ const IDENTITY_REEXPORTS: Array<{
     pkg: '@poopdeck.gl/layers',
     name: 'CollisionFilterExtension',
     deckModule: '@deck.gl/extensions',
-    ourModule:
-      '../../../packages/layers/src/extensions/collision-filter-extension',
+    // An absolute file URL, not a `../../..` specifier: Vite 8 resolves a
+    // relative dynamic import that escapes the project root against the
+    // filesystem root, which turned this into `/packages/layers/...`.
+    ourModule: pathToFileURL(
+      path.join(
+        REPO,
+        'packages/layers/src/extensions/collision-filter-extension.ts',
+      ),
+    ).href,
   },
 ];
 

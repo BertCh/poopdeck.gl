@@ -1,7 +1,16 @@
 import React from 'react';
-import { Link } from 'react-router';
+import { Link, type MetaFunction } from 'react-router';
 import { docSections } from './manifest';
 import CodeBlock from './CodeBlock';
+import { createSeoMeta } from '../lib/seo';
+
+export const meta: MetaFunction = () =>
+  createSeoMeta({
+    title: 'SpatioTemporal Tiles documentation',
+    description:
+      'Learn the STT format, build and validate archives, stream them from object storage or databases, and render them across supported web backends.',
+    path: '/docs',
+  });
 
 const QUICK_START = `npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback
 

@@ -13,6 +13,11 @@ shipped 2-hourly _with_ that flag. Do not re-add commands to this file.
 Normative behaviour is owned elsewhere: archive/sidecar format in `../spec/`, layer props in
 `../api/`, CLI flags in `../api/cli-reference.md`.
 
+> **Historical register.** Dated fleet counts and format versions below record
+> the state when a decision was made; they are not the current project
+> contract. Use [`project-status.json`](../../project-status.json) and the live
+> archive manifest for current facts.
+
 ---
 
 ## 1. Standing license register
@@ -49,7 +54,7 @@ nothing about license (nuScenes is the counterexample).
 - **NODD labeling duties** — derived tiles must not be presented as original NOAA data; no
   implied endorsement; attribute.
 
-### 1.3 Live defects (verified against tiles.poopdeck.gl, 2026-08-03)
+### 1.3 Fleet snapshot (verified against tiles.poopdeck.gl, 2026-08-03)
 
 The fleet-wide defects this section carried through July are **closed** — all 68
 registered manifests return `formatVersion: 2`, `wpc-fronts` / `wpc-fronts-pips` are synced,
@@ -67,7 +72,7 @@ and `LOCAL_ONLY_DATASETS` is empty. What survives is the standing lesson and one
   artefact `r2-sync.sh` still cannot upload; **L1** in the [roadmap README](./README.md) owns it,
   and it is why `ATLAS_ARCHIVES_SYNCED` is still `false`.
 - **`flights` / `adsb-paths` are OpenSky-derived and live on R2** (both 200).
-  `crates/stt-generate/src/datasets/flights.rs` pulls `s3.opensky-network.org/data-samples/`.
+  `tools/stt-generate/src/datasets/flights.rs` pulls `s3.opensky-network.org/data-samples/`.
   That is in tension with §1.1's HARD BLOCKER verdict on OpenSky. Either the data-samples
   distribution carries different terms (unverified) or these demos should move to the CC-BY
   Zenodo derivative. Unresolved; recorded so it is not discovered by someone else.
@@ -314,8 +319,17 @@ collapses the field into the faint tier.
 opentransportdata.swiss — open with attribution plus a keep-updated duty. `gtfs-ch` currently
 404s on R2 — see §1.3.
 
-- **The Swiss feed publishes no `shapes.txt`**, so every CH trip uses stop-to-stop geometry. A
-  geOps mirror adds shapes if that ever becomes worth the extra dependency.
+- **The Swiss feed publishes no `shapes.txt`** (and the geOps mirror doesn't add them either), so
+  the CH rebuild map-matches the feed onto OSM with **pfaedle** first (ad-freiburg/pfaedle, built
+  from source; Geofabrik `switzerland-latest.osm.pbf`). Pipeline: day-filter the feed
+  (`scripts/data-generation/gtfs_filter_day.py` — pfaedle needs ~1/8th the rows and referential
+  integrity, so transfers/frequencies are dropped) → `pfaedle -x <osm> -o <out> <feed>` (~5 min,
+  100% of trips shaped incl. gondolas/funiculars, `shape_dist_traveled` in both files) →
+  `stt-generate gtfs --bake-elevation` on the shaped feed. Trains ride tracks, buses ride roads,
+  and each vertex carries a BAKED terrain elevation (AWS Terrarium DEM → the `vertex_values`
+  channel, shaped per mode: grade-capped modes tunnel ridges / bridge gorges, gondolas span
+  station-to-station); the demo renders it over 3D basemap terrain (`basemapTerrain` +
+  `elevationFromVertexValues` in datasets.ts, `elevationScale` = the terrain exaggeration).
 - **Schedule expansion is a build stage**: a trip runs iff its `service_id` is active on `--date`
   (weekly `calendar.txt` plus `calendar_dates.txt` exceptions, removals win — the NL feed is
   calendar_dates-only). Stops are positioned by `shape_dist_traveled`; shape vertices between

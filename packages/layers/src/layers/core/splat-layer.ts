@@ -51,7 +51,7 @@ import {
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
 import { SplatPrimitiveLayer } from '../internal/splat-primitive-layer.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   inheritedPropsDigest,
@@ -365,8 +365,20 @@ export class SplatLayer<
     ].join('|');
   }
 
+  /**
+   * Pre-`renderLayers()` prepare for one tile, so the chassis can meter
+   * tile commits per frame (`tileCommitBudgetMs`); the result lands in the
+   * prepared-tile cache the render loop reads.
+   */
+  protected warmTile(tile: Tile): void {
+    const styleKey = this.computeStyleKey();
+    for (const tileLayer of tile.layers)
+      this.prepareTile(tile, tileLayer, styleKey);
+  }
+
   renderLayers(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       this.lastTilesRef = null;
@@ -423,12 +435,14 @@ export class SplatLayer<
       }
     }
 
-    emit('renderLayers', {
-      layer: 'SplatLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'SplatLayer',
+        tiles: tiles.length,
+        sublayers: sublayers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(
@@ -507,7 +521,9 @@ export class SplatLayer<
       return null;
     }
 
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+
+    const t0 = probe ? performance.now() : 0;
     const num = binary.numericProps;
     const vec = binary.vectorProps ?? {};
 
@@ -590,13 +606,15 @@ export class SplatLayer<
       tile,
       layerName: tileLayer.name,
     };
-    emit('tilePrepare', {
-      layer: 'SplatLayer',
-      tileKey: prepared.tileKey,
-      cached: false,
-      features: count,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'SplatLayer',
+        tileKey: prepared.tileKey,
+        cached: false,
+        features: count,
+        ms: performance.now() - t0,
+      });
+    }
     return prepared;
   }
 

@@ -161,6 +161,10 @@ describe('A6.1 — the drawn set is the VISIBLE set, not the resident cache', ()
     layer.render(gl, new Float32Array(16));
     expect(visible).toHaveBeenCalledTimes(1);
 
+    // Re-blessed for audit E2: an unchanged viewport no longer reaches the
+    // tileset at all (the render-path throttle holds it), so the frame number
+    // can only move on a pass that actually runs — give it a zoom change.
+    layer.map.getZoom = vi.fn(() => 3);
     layer.tileset.update = vi.fn(() => 8);
     layer.render(gl, new Float32Array(16));
     expect(visible).toHaveBeenCalledTimes(2);
@@ -578,12 +582,19 @@ describe('A6.4 — the camera box goes through normalizeViewportBounds', () => {
     layer.render(gl, new Float32Array(16));
     const good = update.mock.calls[0][0].bounds;
 
-    layer.map = mapReporting({
-      west: Number.NaN,
-      south: -20,
-      east: -10,
-      north: 20,
-    });
+    // Re-blessed for audit E2: with the previous box reused, the viewport is
+    // identical and the render-path throttle would (correctly) not drive at
+    // all — a zoom change makes the pass run so the box it carries is
+    // observable.
+    layer.map = {
+      ...mapReporting({
+        west: Number.NaN,
+        south: -20,
+        east: -10,
+        north: 20,
+      }),
+      getZoom: vi.fn(() => 5),
+    };
     layer.render(gl, new Float32Array(16));
 
     expect(update).toHaveBeenCalledTimes(2);

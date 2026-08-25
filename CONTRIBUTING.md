@@ -19,12 +19,13 @@ crates/                 # cargo workspace — the 4 PUBLISHED crates
   spatiotemporal-tiles/ #   umbrella crate: re-exports the libs + ships the CLIs
     src/bin/            #     stt-build, stt-optimize, stt-validate,
                         #     stt-bundle, stt-serve
-packages/               # pnpm workspace — 8 @poopdeck.gl packages
+packages/               # pnpm workspace — 7 published packages + Cesium preview
   core/                 #   reader, decoder pool, cache, render kernel
   layers/               #   deck.gl backend (primary)
-  three/ maplibre/ cesium/   #   alternate renderer backends
+  three/ maplibre/       #   published alternate renderer backends
+  cesium/                #   experimental workspace-only backend (private)
   playback/ react/      #   clock + governor + React UI
-  mcp/                  #   MCP server (`stt-mcp`) — not yet on npm
+  mcp/                  #   published MCP server (`stt-mcp`)
 examples/showcase/      # React Router demo site (dozens of real datasets)
 tools/                  # bench, perf, render-test harnesses
   stt-generate/         #   reference-dataset generators — its OWN cargo
@@ -40,7 +41,7 @@ are bins inside `spatiotemporal-tiles` and are feature-gated (a bare
 
 ## Setup
 
-- **Node 20+** (`packages/mcp` requires `>=20`) and **pnpm** — the version is
+- **Node 24+** and **pnpm** — the Node major is pinned by `.node-version`, and pnpm is
   pinned by `packageManager` in `package.json`, so `corepack enable` is enough.
 - **Rust 1.87+** — the MSRV in `[workspace.package]`, enforced by a CI job that
   checks the four published crates on exactly that toolchain.

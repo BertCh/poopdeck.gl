@@ -67,6 +67,21 @@ export interface PlaybackControlsProps {
    * the hovered timestamp. Omit it and nothing about the bar changes.
    */
   renderPreview?: (time: number) => React.ReactNode;
+  /**
+   * Phone-sized layout. The default bar is authored for a desktop-width
+   * surface: five speed radios, a fine slider, the range endpoints and the
+   * elapsed/total readout add up to ~640px of content, which on a ~360px
+   * viewport wraps into a five-row block that buries whatever it floats over.
+   * `compact` keeps every capability but spends one row less and collapses the
+   * speed group behind a single chip, and grows the touch targets while it is
+   * at it (a phone has no hover, so the mouse-only affordances — the preview
+   * toggle and the keyboard-shortcut sheet — drop out).
+   *
+   * It is a PROP, not an internal media query: this is a published component
+   * and only the host knows whether its bar is narrow because the viewport is
+   * a phone or because it was placed in a 320px sidebar on a desktop.
+   */
+  compact?: boolean;
   /** Merged onto the root element (the bar is otherwise unopinionated). */
   className?: string;
   /** Merged onto the root element — the usual place to re-map the theme tokens. */
@@ -378,7 +393,9 @@ const SpeedOption: React.FC<{
   title?: string;
   checked: boolean;
   onSelect: () => void;
-}> = ({ name, label, title, checked, onSelect }) => {
+  /** Merged onto the label — the compact menu grids these and grows the target. */
+  style?: React.CSSProperties;
+}> = ({ name, label, title, checked, onSelect, style }) => {
   const { hovered, focusRing, handlers } = useInteractiveState();
   return (
     <label
@@ -403,6 +420,7 @@ const SpeedOption: React.FC<{
             : 'var(--ink-500)',
         border: `1px solid ${checked ? 'var(--accent)' : 'var(--hairline)'}`,
         ...focusOutline(focusRing),
+        ...style,
       }}
     >
       <input
@@ -526,6 +544,126 @@ const SPEED_PRESETS = [
   { label: '10x', value: 10 },
 ] as const;
 
+/** `2x`, `0.5x`, `1.25x` — the shortest honest rendering of a multiplier. */
+const formatMultiplier = (v: number): string => `${Number(v.toFixed(2))}x`;
+
+/**
+ * The compact bar's speed control: one chip carrying the live multiplier that
+ * opens the SAME radio group the wide bar lays out inline. Five presets, Auto
+ * and the fine slider are ~280px of the ~330px a phone bar has to spend, so on
+ * that surface they live behind this instead of pushing the transport cluster
+ * onto its own row.
+ *
+ * The group inside is still a real <fieldset> of real radios — collapsing the
+ * layout must not cost the arrow-key traversal or the checked state — and the
+ * popover dismisses on outside-pointerdown and Escape, matching the shortcuts
+ * disclosure below it.
+ */
+const SpeedMenu: React.FC<{
+  name: string;
+  value: number;
+  autoSpeed: boolean;
+  onSpeedChange: (multiplier: number) => void;
+  onAutoSpeedSelect: () => void;
+}> = ({ name, value, autoSpeed, onSpeedChange, onAutoSpeedSelect }) => {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const menuId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    // Captured at the document so Escape closes from wherever focus is and a
+    // host handler doesn't win — same contract as the shortcuts disclosure.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [open]);
+
+  const label = autoSpeed
+    ? `Auto ${value.toFixed(1)}x`
+    : formatMultiplier(value);
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={menuId}
+        aria-label={`Playback speed — ${label}`}
+        title="Playback speed"
+        className="text-[11px] font-medium tabular-nums"
+        style={{
+          minHeight: 34,
+          minWidth: 44,
+          padding: '0 10px',
+          borderRadius: 8,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          background:
+            open || autoSpeed ? 'var(--accent-soft)' : 'var(--surface)',
+          color: open || autoSpeed ? 'var(--accent)' : 'var(--ink-700)',
+          border: `1px solid ${open || autoSpeed ? 'var(--accent)' : 'var(--hairline)'}`,
+        }}
+      >
+        {label}
+      </button>
+      {open && (
+        <fieldset
+          id={menuId}
+          className="absolute m-0 p-0"
+          style={{
+            right: 0,
+            bottom: '100%',
+            marginBottom: 8,
+            zIndex: 70,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, minmax(44px, 1fr))',
+            gap: 6,
+            padding: 8,
+            borderRadius: 10,
+            background: 'var(--surface)',
+            border: '1px solid var(--hairline)',
+            boxShadow: '0 6px 20px rgba(0, 0, 0, 0.28)',
+          }}
+        >
+          <legend className="sr-only">Playback speed</legend>
+          {SPEED_PRESETS.map((preset) => (
+            <SpeedOption
+              key={preset.value}
+              name={name}
+              label={preset.label}
+              checked={!autoSpeed && Math.abs(value - preset.value) < 0.01}
+              onSelect={() => onSpeedChange(preset.value)}
+              style={{ minHeight: 34, fontSize: 11 }}
+            />
+          ))}
+          <SpeedOption
+            name={name}
+            label={autoSpeed ? `Auto ${value.toFixed(1)}x` : 'Auto'}
+            title="Match playback speed to what the network can sustain"
+            checked={autoSpeed}
+            onSelect={onAutoSpeedSelect}
+            style={{ minHeight: 34, fontSize: 11, gridColumn: '1 / -1' }}
+          />
+        </fieldset>
+      )}
+    </div>
+  );
+};
+
 export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   currentTime,
   timeRange,
@@ -544,6 +682,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   onLoopToggle,
   keyboardShortcuts = false,
   renderPreview,
+  compact = false,
   className,
   style,
 }) => {
@@ -906,8 +1045,18 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   }, [previewEnabled]);
 
   // Settle-debounce: only advance the rendered frame once the cursor rests.
+  //
+  // Depends on WHETHER a renderer is supplied, never on its identity: callers
+  // pass `renderPreview` as a fresh arrow on every render, and the parent
+  // re-renders ~10×/s during playback (the throttled React clock). With the
+  // function itself in the deps the effect re-armed — and its cleanup killed —
+  // the 120 ms settle timer on every one of those renders, so while PLAYING
+  // the preview never advanced at all (measured: 40 arms, 0 fires over a 4 s
+  // motionless hover; paused: 2 arms, 1 fire). The renderer is only ever
+  // invoked, never compared, so its identity carries no information here.
+  const hasPreviewRenderer = renderPreview != null;
   useEffect(() => {
-    if (!previewEnabled || !renderPreview || hover == null) return;
+    if (!previewEnabled || !hasPreviewRenderer || hover == null) return;
     const t = hover.time;
     if (previewSettleRef.current) clearTimeout(previewSettleRef.current);
     previewSettleRef.current = setTimeout(() => {
@@ -917,7 +1066,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     return () => {
       if (previewSettleRef.current) clearTimeout(previewSettleRef.current);
     };
-  }, [hover, previewEnabled, renderPreview]);
+  }, [hover, previewEnabled, hasPreviewRenderer]);
 
   // ── Shortcuts disclosure ────────────────────────────────────────────────────
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -1029,7 +1178,17 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
     // candidate, finds it invalid, and silently drops the class from the
     // compiled stylesheet. Keep every utility inside a self-contained literal.
     <div
-      className={className ? `space-y-3 ${className}` : 'space-y-3'}
+      className={
+        // NOTE: never write a utility immediately before `${` (see above) —
+        // hence the fully-formed literals rather than an interpolated prefix.
+        compact
+          ? className
+            ? `space-y-2 ${className}`
+            : 'space-y-2'
+          : className
+            ? `space-y-3 ${className}`
+            : 'space-y-3'
+      }
       style={style}
     >
       {/* Time display */}
@@ -1044,13 +1203,18 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
           </span>
           {/* elapsed / total, in DATASET time — the readout a video user looks
               for. Unlike the countdown on the right it does not move with the
-              speed multiplier, exactly like a video's currentTime/duration. */}
-          <span
-            className="text-[10px] font-mono whitespace-nowrap tabular-nums"
-            style={{ color: 'var(--ink-500)' }}
-          >
-            {formatSpan(displayTime - timeRange.start)} / {formatSpan(rangeMs)}
-          </span>
+              speed multiplier, exactly like a video's currentTime/duration.
+              Dropped on the compact bar: the playhead timestamp beside it and
+              the countdown opposite already fill a phone-width row. */}
+          {!compact && (
+            <span
+              className="text-[10px] font-mono whitespace-nowrap tabular-nums"
+              style={{ color: 'var(--ink-500)' }}
+            >
+              {formatSpan(displayTime - timeRange.start)} /{' '}
+              {formatSpan(rangeMs)}
+            </span>
+          )}
         </div>
         <span
           className="text-[10px] flex items-center gap-1.5 shrink-0"
@@ -1270,23 +1434,35 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       </div>
 
       {/* Time range labels. --ink-400 is a DECORATIVE token (≈2.6:1 on the
-          default light surface); text uses --ink-500, which clears 4.5:1. */}
-      <div className="flex justify-between">
-        <span className="text-[10px]" style={{ color: 'var(--ink-500)' }}>
-          {formatDate(timeRange.start)}
-        </span>
-        <span className="text-[10px]" style={{ color: 'var(--ink-500)' }}>
-          {formatDate(timeRange.end)}
-        </span>
-      </div>
+          default light surface); text uses --ink-500, which clears 4.5:1.
+          The compact bar drops the row: two full timestamps do not fit a phone
+          width side by side, and the playhead label above already names the
+          date the viewer is looking at. */}
+      {!compact && (
+        <div className="flex justify-between">
+          <span className="text-[10px]" style={{ color: 'var(--ink-500)' }}>
+            {formatDate(timeRange.start)}
+          </span>
+          <span className="text-[10px]" style={{ color: 'var(--ink-500)' }}>
+            {formatDate(timeRange.end)}
+          </span>
+        </div>
+      )}
 
       {/* Controls */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div
+        className={
+          compact
+            ? 'flex items-center gap-2'
+            : 'flex items-center gap-3 flex-wrap'
+        }
+      >
         {/* Transport cluster. Geometry is inline (not via Tailwind w-/h-
             utilities) so the buttons keep their dimensions in any consumer — a
             published package can't rely on the host app's Tailwind content
-            scan reaching node_modules. */}
-        <div className="flex items-center" style={{ gap: 8 }}>
+            scan reaching node_modules. Compact grows every target (34px, and
+            44px for play) because the surface it lands on is a thumb. */}
+        <div className="flex items-center" style={{ gap: compact ? 6 : 8 }}>
           <IconButton
             onClick={() => {
               onSeek(timeRange.start);
@@ -1298,6 +1474,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             // No key hint: `Home` seeks to the start without resuming, so it
             // is not the same action as this button.
             title="Restart from beginning"
+            size={compact ? 34 : 32}
           >
             <ToStartIcon />
           </IconButton>
@@ -1305,13 +1482,14 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             onClick={() => seekBy(-LONG_STEP_FRACTION)}
             label="Back 10 percent"
             title={`Back 10%${keyHint('J')}`}
+            size={compact ? 34 : 32}
           >
             <RewindIcon />
           </IconButton>
           <IconButton
             onClick={onPlayPause}
             tone="primary"
-            size={40}
+            size={compact ? 44 : 40}
             radius={12}
             label={ended ? 'Replay' : isPlaying ? 'Pause' : 'Play'}
             title={`${ended ? 'Replay' : isPlaying ? 'Pause' : 'Play'}${keyHint('Space')}`}
@@ -1322,6 +1500,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
             onClick={() => seekBy(LONG_STEP_FRACTION)}
             label="Forward 10 percent"
             title={`Forward 10%${keyHint('L')}`}
+            size={compact ? 34 : 32}
           >
             <ForwardIcon />
           </IconButton>
@@ -1331,6 +1510,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
               active={loop === true}
               label="Loop at the end of the range"
               title={loop ? 'Looping — click to stop at the end' : 'Loop'}
+              size={compact ? 34 : 32}
             >
               <LoopIcon />
             </IconButton>
@@ -1340,132 +1520,158 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         {/* Speed. A real <fieldset> of real radios: the presets and Auto are
             mutually exclusive, so this is a radio group, not five independent
             toggles — and native radios bring arrow-key traversal and the
-            checked state instead of faking both with aria-pressed. */}
-        <fieldset className="flex items-center gap-1 m-0 p-0 border-0 min-w-0">
-          <legend className="sr-only">Playback speed</legend>
-          <span
-            aria-hidden="true"
-            className="text-[10px] mr-1 hidden sm:inline"
-            style={{ color: 'var(--ink-500)' }}
-          >
-            Speed:
-          </span>
-          {SPEED_PRESETS.map((preset) => (
-            <SpeedOption
-              key={preset.value}
+            checked state instead of faking both with aria-pressed. The compact
+            bar folds the identical group into SpeedMenu's popover. */}
+        {compact ? (
+          <div className="ml-auto">
+            <SpeedMenu
               name={speedGroup}
-              label={preset.label}
-              // Tight epsilon: the slider steps at 0.25, so exact preset values
-              // are representable — a loose 0.1 epsilon lit presets for values
-              // they don't equal.
-              checked={
-                !autoSpeed &&
-                Math.abs(currentSpeedMultiplier - preset.value) < 0.01
-              }
-              onSelect={() => onSpeedChange(preset.value)}
+              value={currentSpeedMultiplier}
+              autoSpeed={autoSpeed}
+              onSpeedChange={onSpeedChange}
+              onAutoSpeedSelect={onAutoSpeedSelect}
             />
-          ))}
-          {/* Opt-in Auto speed: the governor caps speed at what the measured
+          </div>
+        ) : (
+          <fieldset className="flex items-center gap-1 m-0 p-0 border-0 min-w-0">
+            <legend className="sr-only">Playback speed</legend>
+            <span
+              aria-hidden="true"
+              className="text-[10px] mr-1 hidden sm:inline"
+              style={{ color: 'var(--ink-500)' }}
+            >
+              Speed:
+            </span>
+            {SPEED_PRESETS.map((preset) => (
+              <SpeedOption
+                key={preset.value}
+                name={speedGroup}
+                label={preset.label}
+                // Tight epsilon: the slider steps at 0.25, so exact preset values
+                // are representable — a loose 0.1 epsilon lit presets for values
+                // they don't equal.
+                checked={
+                  !autoSpeed &&
+                  Math.abs(currentSpeedMultiplier - preset.value) < 0.01
+                }
+                onSelect={() => onSpeedChange(preset.value)}
+              />
+            ))}
+            {/* Opt-in Auto speed: the governor caps speed at what the measured
               network can sustain; the resolved value is shown ("Auto 2.5x").
               Selecting any explicit preset/slider value exits Auto. */}
-          <SpeedOption
-            name={speedGroup}
-            label={
-              autoSpeed ? `Auto ${currentSpeedMultiplier.toFixed(1)}x` : 'Auto'
-            }
-            title="Match playback speed to what the network can sustain"
-            checked={autoSpeed}
-            onSelect={onAutoSpeedSelect}
-          />
-        </fieldset>
+            <SpeedOption
+              name={speedGroup}
+              label={
+                autoSpeed
+                  ? `Auto ${currentSpeedMultiplier.toFixed(1)}x`
+                  : 'Auto'
+              }
+              title="Match playback speed to what the network can sustain"
+              checked={autoSpeed}
+              onSelect={onAutoSpeedSelect}
+            />
+          </fieldset>
+        )}
 
-        {/* Fine slider — max matches the presets and Auto's clamp. */}
-        <div className="flex-1 items-center gap-2 min-w-0 hidden md:flex">
-          <input
-            type="range"
-            aria-label="Playback speed multiplier"
-            aria-valuetext={`${currentSpeedMultiplier.toFixed(2)}x`}
-            min="0.25"
-            max="10"
-            step="0.25"
-            value={currentSpeedMultiplier}
-            onChange={(e) => onSpeedChange(Number(e.target.value))}
-            className="flex-1 h-1 cursor-pointer"
-            style={{ accentColor: 'var(--accent)' }}
-          />
-          <span
-            className="text-[10px] font-medium min-w-[32px] text-right tabular-nums"
-            style={{ color: 'var(--ink-900)' }}
-          >
-            {currentSpeedMultiplier.toFixed(1)}x
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1.5 ml-auto">
-          {/* Opt-in hover preview toggle (only when the parent can render one). */}
-          {renderPreview && (
-            <IconButton
-              onClick={() => setPreviewEnabled((v) => !v)}
-              active={previewEnabled}
-              size={24}
-              radius={6}
-              label="Scrubber hover preview"
-              title="Show a rendered preview of the map at the hovered time"
+        {/* Fine slider — max matches the presets and Auto's clamp. Never on the
+            compact bar: its whole range lives in the speed popover's presets. */}
+        {!compact && (
+          <div className="flex-1 items-center gap-2 min-w-0 hidden md:flex">
+            <input
+              type="range"
+              aria-label="Playback speed multiplier"
+              aria-valuetext={`${currentSpeedMultiplier.toFixed(2)}x`}
+              min="0.25"
+              max="10"
+              step="0.25"
+              value={currentSpeedMultiplier}
+              onChange={(e) => onSpeedChange(Number(e.target.value))}
+              className="flex-1 h-1 cursor-pointer"
+              style={{ accentColor: 'var(--accent)' }}
+            />
+            <span
+              className="text-[10px] font-medium min-w-[32px] text-right tabular-nums"
+              style={{ color: 'var(--ink-900)' }}
             >
-              <PreviewIcon />
-            </IconButton>
-          )}
-          {keyboardShortcuts && (
-            <div className="relative" ref={shortcutsWrapRef}>
-              {/* Escape is handled document-wide while open (see the effect),
+              {currentSpeedMultiplier.toFixed(1)}x
+            </span>
+          </div>
+        )}
+
+        {/* Mouse/keyboard-only affordances. Both are dead weight on the compact
+            bar: a hover preview needs a hover, and a phone has no key map to
+            document — so the whole cluster drops rather than shrinking. */}
+        {!compact && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            {/* Opt-in hover preview toggle (only when the parent can render one). */}
+            {renderPreview && (
+              <IconButton
+                onClick={() => setPreviewEnabled((v) => !v)}
+                active={previewEnabled}
+                size={24}
+                radius={6}
+                label="Scrubber hover preview"
+                title="Show a rendered preview of the map at the hovered time"
+              >
+                <PreviewIcon />
+              </IconButton>
+            )}
+            {keyboardShortcuts && (
+              <div className="relative" ref={shortcutsWrapRef}>
+                {/* Escape is handled document-wide while open (see the effect),
                   so no wrapper needs a keydown handler — and it closes from
                   wherever focus happens to be. The panel holds no focusable
                   content, so focus is still on this button afterwards. */}
-              <IconButton
-                onClick={() => setShowShortcuts((v) => !v)}
-                active={showShortcuts}
-                size={24}
-                radius={6}
-                label="Keyboard shortcuts"
-                ariaExpanded={showShortcuts}
-                ariaControls={shortcutsId}
-              >
-                <HelpIcon />
-              </IconButton>
-              {showShortcuts && (
-                <div
-                  id={shortcutsId}
-                  className="absolute right-0 rounded px-2.5 py-2"
-                  style={{
-                    bottom: '100%',
-                    marginBottom: 8,
-                    zIndex: 70,
-                    minWidth: 214,
-                    background: 'var(--surface)',
-                    border: '1px solid var(--hairline)',
-                    boxShadow: '0 6px 20px rgba(0, 0, 0, 0.28)',
-                  }}
+                <IconButton
+                  onClick={() => setShowShortcuts((v) => !v)}
+                  active={showShortcuts}
+                  size={24}
+                  radius={6}
+                  label="Keyboard shortcuts"
+                  ariaExpanded={showShortcuts}
+                  ariaControls={shortcutsId}
                 >
-                  <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px]">
-                    {PLAYBACK_SHORTCUTS.map((s) => (
-                      <React.Fragment key={s.keys}>
-                        <dt
-                          className="font-mono whitespace-nowrap"
-                          style={{ color: 'var(--ink-900)' }}
-                        >
-                          {s.keys}
-                        </dt>
-                        <dd className="m-0" style={{ color: 'var(--ink-500)' }}>
-                          {s.action}
-                        </dd>
-                      </React.Fragment>
-                    ))}
-                  </dl>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+                  <HelpIcon />
+                </IconButton>
+                {showShortcuts && (
+                  <div
+                    id={shortcutsId}
+                    className="absolute right-0 rounded px-2.5 py-2"
+                    style={{
+                      bottom: '100%',
+                      marginBottom: 8,
+                      zIndex: 70,
+                      minWidth: 214,
+                      background: 'var(--surface)',
+                      border: '1px solid var(--hairline)',
+                      boxShadow: '0 6px 20px rgba(0, 0, 0, 0.28)',
+                    }}
+                  >
+                    <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px]">
+                      {PLAYBACK_SHORTCUTS.map((s) => (
+                        <React.Fragment key={s.keys}>
+                          <dt
+                            className="font-mono whitespace-nowrap"
+                            style={{ color: 'var(--ink-900)' }}
+                          >
+                            {s.keys}
+                          </dt>
+                          <dd
+                            className="m-0"
+                            style={{ color: 'var(--ink-500)' }}
+                          >
+                            {s.action}
+                          </dd>
+                        </React.Fragment>
+                      ))}
+                    </dl>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

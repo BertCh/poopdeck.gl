@@ -38,6 +38,7 @@ import {
   verticalFovRadians,
   TilePublishGate,
   attachCesiumClock,
+  createThrottledTilesetUpdate,
   type CesiumViewOptions,
 } from '@poopdeck.gl/cesium';
 import type { TimeController } from '@poopdeck.gl/playback';
@@ -149,6 +150,10 @@ export default function CesiumRenderer({
     // ---- Streaming + time-hook shared state (closed over by the callbacks) ----
     let disposed = false;
     let tileset: SpatioTemporalTileset | null = null;
+    // Per-frame `update()` calls go through the package's throttle so the
+    // preRender clock hook does not re-run selection every drawn frame.
+    let throttled: ReturnType<typeof createThrottledTilesetUpdate> | null =
+      null;
     let view: { bounds: BoundingBox; zoom: number } | null = null;
     const scratchRect = new Rectangle();
     const archive = new STTArchive({ url: dataset.url });
@@ -164,8 +169,8 @@ export default function CesiumRenderer({
       timeController,
       (t) => {
         layer.setTime(t);
-        if (tileset && view) {
-          tileset.update(
+        if (tileset && throttled && view) {
+          throttled.update(
             {
               bounds: view.bounds,
               zoom: view.zoom,
@@ -264,6 +269,7 @@ export default function CesiumRenderer({
           onTileLoad: republish,
           onTileUnload: republish,
         });
+        throttled = createThrottledTilesetUpdate(tileset);
 
         const applyView = (
           next: { bounds: BoundingBox; zoom: number } | null,
@@ -275,8 +281,8 @@ export default function CesiumRenderer({
           // one, so there is simply nothing to select yet — the next camera
           // event retries.
           if (next) view = next;
-          if (!tileset || !view) return;
-          tileset.update(
+          if (!tileset || !throttled || !view) return;
+          throttled.update(
             {
               bounds: view.bounds,
               zoom: view.zoom,
@@ -326,6 +332,8 @@ export default function CesiumRenderer({
       removeMoveEnd();
       removePreRender();
       detachClock();
+      throttled?.dispose();
+      throttled = null;
       const ts = tileset;
       tileset = null;
       ts?.clear(); // aborts in-flight fetches; fires onTileUnload (guarded by `disposed`)

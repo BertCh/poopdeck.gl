@@ -1,123 +1,82 @@
 # SpatioTemporal Tiles (STT)
 
-> **A cloud-native, edge-cacheable tile format for interactive spatiotemporal data visualization**
+> Stream full-fidelity vector data by map viewport **and** time window from a
+> static host or live database.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE)
 [![MSRV](https://img.shields.io/crates/msrv/spatiotemporal-tiles?label=msrv)](./Cargo.toml)
-[![TypeScript](https://img.shields.io/badge/typescript-5.4+-blue.svg)](https://www.typescriptlang.org/)
 
-**→ [poopdeck.gl](https://poopdeck.gl)** — the live showcase: dozens of
-real-dataset demos, the rendered docs, and the AV cockpit.
+**STT** is the open format and Rust toolchain. **poopdeck.gl** is the TypeScript
+rendering ecosystem and [live showcase](https://poopdeck.gl). Together they
+turn GeoParquet, PostGIS, or DuckDB data into interactive points, paths,
+polygons, trips, flows, and events over time.
 
-| Live surface                                                     | What it is                                            |
-| ---------------------------------------------------------------- | ----------------------------------------------------- |
-| [poopdeck.gl/demos](https://poopdeck.gl/demos)                   | Demo gallery — every dataset below, animating         |
-| [poopdeck.gl/how-it-works](https://poopdeck.gl/how-it-works)     | Illustrated explainer of the space×time tile model    |
-| [poopdeck.gl/docs](https://poopdeck.gl/docs)                     | This repo's `docs/` tree, rendered                    |
-| [poopdeck.gl/drive](https://poopdeck.gl/drive)                   | AV cockpit — nuScenes / Argoverse 2 LIDAR scenes      |
-| [poopdeck.gl/story/drifters](https://poopdeck.gl/story/drifters) | Scrollytelling data story: 40 years of ocean drifters |
-| [poopdeck.gl/worlds](https://poopdeck.gl/worlds)                 | NVIDIA Cosmos Drive Dreams world-model scenarios      |
+An archive is a small `manifest.json`, a compact directory, and immutable,
+content-addressed packs. A client requests only the spatial tiles and time
+buckets it needs; ordinary HTTP Range support and CDN caching are enough for a
+static deployment.
 
-**Three names, one project:** **STT** is the format; **`spatiotemporal-tiles`**
-is the Rust toolchain that writes it; **`@poopdeck.gl/*`** are the TypeScript
-packages that render it.
+## Is STT a fit?
 
----
+Choose STT when you need to:
 
-> **For AI coding agents:** start with [`AGENTS.md`](./AGENTS.md) — repo map,
-> the build→render pipeline, a routing table to the CLIs/packages/docs, and the
-> ground rules (no-thinning, the manifest is the contract, deck.gl pinned 9.3.x).
+- animate or scrub large **vector** datasets without loading the full history;
+- publish immutable data to object storage or a CDN;
+- serve the same archive to deck.gl, Three.js, or MapLibre applications; or
+- build tiles dynamically from PostGIS or DuckDB with the same client contract.
 
-## What is STT?
-
-STT is a tile format for spatiotemporal data. A dataset is a small
-`manifest.json` plus many immutable, content-addressed **pack** objects, so it
-deploys to any static host or CDN — no tile server, no Worker. It adds a temporal
-axis to a spatial tile pyramid: each tile is addressed by
-`(zoom, x, y, time-bucket)`, so a client streams only the tiles in the current
-viewport _and_ time window, and animates over time.
-
-Tile payloads are Apache Arrow IPC with GeoArrow-encoded geometry, which
-interops directly with `@geoarrow/deck.gl-layers`, Lonboard, and kepler.gl 3.x.
-
-**Scope:** temporally-tiled _vector_ data — trajectories, events, and
-time-varying features. Time-varying rasters and datacubes are out of scope; use
-[GeoZarr](https://github.com/zarr-developers/geozarr-spec) or COG for those.
-
-**See it live:** everything in the table above is one app —
-`examples/showcase`, deployed to [poopdeck.gl](https://poopdeck.gl) on
-Cloudflare — running against the same packed archives this repo builds.
-
-### Key features
-
-- **Packed, content-addressed** — `manifest.json` + immutable `packs/*.sttp`
-  (≤64 MiB each by default) + a directory object. Deploy to R2 / S3 / GCS /
-  nginx. Immutable packs cache forever on a plain CDN; only the manifest is
-  mutable.
-- **HTTP Range reads** — tiles are fetched by range request, coalesced within
-  each pack.
-- **Apache Arrow payloads** — GeoArrow geometry + columnar properties, per-blob
-  zstd-compressed (no shared dictionary), CRC32C integrity tag per tile.
-- **Temporal tiling** — features are bucketed into fixed time intervals, with an
-  optional coarser-bucket pyramid (`--temporal-lod`) for multi-scale animation.
-- **Locality-aware layout** — directory entries are Hilbert-sorted and tile blobs
-  are packed in locality-preserving order (`--blob-ordering auto` picks
-  3D-Hilbert or spatial-major per dataset), so a viewport touches few packs.
-- **H3 summary tier** — optional pre-aggregated low-zoom tier for 100M+ point
-  datasets.
-- **Stack** — Rust (`arrow`, `geo`, `geozero`) builder; TypeScript
-  (`apache-arrow`, deck.gl, MapLibre) reader and layers.
-
----
+Choose another format when your data is a time-varying raster or datacube (use
+GeoZarr or COG), a small GeoJSON file already performs well, or you need edits
+to individual records rather than immutable published snapshots. See
+[Choosing STT](./docs/intro/choosing.md) for a fuller decision guide.
 
 ## Quick start
 
-Starting from a CSV? The [CSV → animated map guide](./docs/guides/csv-quickstart.md)
-is the fastest end-to-end path (DuckDB one-liner included).
+The fastest complete tutorial is
+[CSV to an animated map](./docs/guides/csv-quickstart.md).
 
-### 1. Install the CLIs
+### Build and validate an archive
 
 ```bash
 cargo install spatiotemporal-tiles
-```
 
-`cargo install spatiotemporal-tiles` installs five binaries — `stt-build`,
-`stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` — and **not**
-`stt-generate`, which is `publish = false` and builds only from a repo
-checkout. (Or build the whole toolchain from a checkout with
-`cargo build --release` and use `./target/release/stt-build`.) The minimum
-supported Rust version is whatever `rust-version` says in
-[`Cargo.toml`](./Cargo.toml) — that field is the single source of truth and CI
-enforces it.
-
-### 2. Build a packed dataset from GeoParquet
-
-```bash
 stt-build \
   --input data.parquet \
   --output tiles \
   --time-field timestamp \
   --time-format unix-ms \
-  --min-zoom 0 --max-zoom 8 \
+  --min-zoom 0 \
+  --max-zoom 8 \
   --temporal-bucket 1h
+
+stt-validate tiles
 ```
 
-Not sure about the knobs? `--auto` analyzes the input and picks the zoom
-range, temporal bucket, and compression for you (explicit flags still win).
-Keep `--max-zoom` honest for dense point data — deep zooms multiply tile
-counts fast. Check the result with `stt-validate tiles`.
+Use `stt-build --auto` when you want the toolchain to recommend the zoom range,
+temporal bucket, and compression. Explicit flags still win.
 
-This writes a `tiles/` directory (`manifest.json` + `index/*.sttd` +
-`packs/*.sttp`). The input must be a Parquet file with either a WKB/GeoArrow
-geometry column or separate `lon`/`lat` columns, plus a timestamp column.
-Convert other formats first, e.g. `ogr2ogr -f Parquet data.parquet data.geojson`.
-Then sync the `tiles/` tree to any static host (`scripts/r2-sync.sh` sets the
-immutable-pack / short-TTL-manifest cache headers).
+Builds preserve every usable feature by default. STT does **not** silently
+sample, thin, or aggregate data to meet a byte target. Control size first with
+an honest maximum zoom and temporal bucketing. Summary and raster tiers are
+explicit, coarse-zoom additions; they do not replace the raw tier.
 
-### 3. Visualize with deck.gl
+The installed package provides five CLIs:
+
+| Command        | Purpose                                                |
+| -------------- | ------------------------------------------------------ |
+| `stt-build`    | Build packed archives from GeoParquet/PostGIS/DuckDB   |
+| `stt-optimize` | Analyze inputs and inspect, lint, or compare archives  |
+| `stt-validate` | Verify integrity, schemas, decoding, and time metadata |
+| `stt-bundle`   | Pack or unpack a single-file `.sttb` interchange file  |
+| `stt-serve`    | Serve STT tiles dynamically from a live database       |
+
+`stt-generate` is a separate, repository-only tool for rebuilding showcase
+datasets; it lives in [`tools/stt-generate`](./tools/stt-generate).
+
+### Render it
 
 ```bash
-npm install @poopdeck.gl/layers @poopdeck.gl/playback deck.gl   # renderer + clock + peer
+npm install @poopdeck.gl/layers @poopdeck.gl/playback deck.gl
 ```
 
 ```typescript
@@ -127,16 +86,16 @@ import { SttPlayer } from '@poopdeck.gl/playback';
 
 const player = new SttPlayer({
   timeRange: { start, end },
-  baseRate: (end - start) / 60_000, // dataset plays in ~60 s at 1×
+  baseRate: (end - start) / 60_000,
   loop: true,
 });
 
 const layer = new AnimatedPointLayer({
-  id: 'earthquakes',
-  data: 'https://tiles.example.com/earthquakes/manifest.json',
-  timeController: player.timeController, // layers READ the clock; the player drives it
+  id: 'events',
+  data: 'https://tiles.example.com/events/manifest.json',
+  timeController: player.timeController,
   timeWindow: 86_400_000,
-  onTilesetReady: (tileset) => player.setSource(tileset), // buffering gates playback
+  onTilesetReady: (tileset) => player.setSource(tileset),
   onBufferChange: (runway) => player.notifyBufferChange(runway),
 });
 
@@ -144,149 +103,82 @@ new Deck({ layers: [layer] });
 player.play();
 ```
 
-[`SttPlayer`](./docs/api/stt-player.md) is the recommended entry point — an
-`HTMLMediaElement`-style facade that owns the clock _and_ the buffering
-governor, so playback stalls instead of skipping over tiles that have not
-arrived. Reach for the bare [`TimeController`](./docs/api/time-controller.md)
-only when you are driving the clock from something else.
+`SttPlayer` connects the clock to the loading runway so playback buffers instead
+of skipping unloaded time. See the
+[player](./docs/api/stt-player.md) and
+[layer](./docs/api/spatiotemporal-layer.md) references for the complete API.
 
-See [`docs/api/`](./docs/api/) for the full layer catalog
-(paths, trips, polygons, heatmap, H3 summary).
+## How the pieces fit
 
-React apps get the clock, buffering governor, and a ready-made transport bar
-from [`@poopdeck.gl/react`](./packages/react) (`usePlayback` +
-`<PlaybackControls {...pb} />` + one CSS import).
-
-### …or with native MapLibre GL
-
-```typescript
-import maplibregl from 'maplibre-gl';
-import { STTPointLayer } from '@poopdeck.gl/maplibre';
-
-const map = new maplibregl.Map({ container: 'map', style: '...' });
-const layer = new STTPointLayer({
-  id: 'earthquakes',
-  url: '/data/earthquakes/manifest.json',
-  currentTime: Date.now(),
-  timeWindow: 24 * 60 * 60 * 1000,
-});
-map.on('load', () => map.addLayer(layer));
+```text
+GeoParquet / PostGIS / DuckDB
+            │
+            ├─ stt-build ──────> static packed archive ──> CDN/object storage
+            └─ stt-serve ──────> dynamic tile endpoint
+                                      │
+                                      v
+                            @poopdeck.gl/core
+                                      │
+                    deck.gl / Three.js / MapLibre
+                                      │
+                              playback + React UI
 ```
 
-See [`docs/api/stt-maplibre.md`](./docs/api/stt-maplibre.md) for the full
-adapter API.
+The archive manifest is the contract. It declares the temporal model,
+capabilities, pack table, and optional style hints; clients should inspect it
+rather than infer dataset behavior. Packs and directories are content-addressed
+and must never be rewritten in place.
 
----
+## Project status
 
-## Dataset format
+The current release line is **0.6.0** and remains pre-1.0. Writers produce
+packed format v3 with directory codec v6; reference readers also open published
+format-v2/directory-v5 archives read-only. The deck.gl integration targets the
+pinned 9.3.x line.
 
-A dataset is a directory of small, immutable, content-addressed objects plus a
-tiny manifest:
+Seven `@poopdeck.gl/*` packages are published: `core`, `layers`, `playback`,
+`react`, `three`, `maplibre`, and `mcp`. The Cesium backend is private,
+source-only, and experimental. See
+[Status, support, and compatibility](./docs/intro/status-and-support.md) before
+depending on a pre-1.0 API or alternate renderer, and the
+[project changelog](./CHANGELOG.md) before upgrading.
 
-```
-data/<dataset>/
-  manifest.json          # metadata + directory pointer + pack table (mutable, short TTL)
-  index/<blake3>.sttd    # the directory: varint tile index, RLE over shared blobs (immutable)
-  packs/<blake3>.sttp    # tile-blob data, ≤64 MiB each by default (immutable)
-  packs/<blake3>.sttp
-  ...
-```
+## Documentation
 
-The reader fetches `manifest.json`, then the directory object, then each tile via
-a Range request against the right pack. A cold load is one manifest, one
-directory, and N pack ranges; a warm load is served entirely from edge cache.
-Full spec: [`docs/spec/stt-packed-format.md`](./docs/spec/stt-packed-format.md)
-(machine-checkable manifest schema:
-[`manifest.schema.json`](./docs/spec/manifest.schema.json)).
+- [Documentation index](./docs/README.md)
+- [Core concepts](./docs/intro/concepts.md)
+- [Choose a deployment, backend, and layer](./docs/intro/choosing.md)
+- [System overview](./docs/architecture/system-overview.md)
+- [CLI reference](./docs/api/cli-reference.md)
+- [Packed-format specification](./docs/spec/stt-packed-format.md)
+- [Deployment guide](./docs/guides/deploying.md)
+- [Live demos](https://poopdeck.gl/demos)
 
-Each tile blob is a small _layer frame_ (`[u16 count]` then per-layer
-`[name][Arrow IPC]`); every layer is one Arrow `RecordBatch` whose `geometry`
-column is GeoArrow-encoded. The directory and every tile decode with one Arrow
-implementation across the Rust writer and the TypeScript reader.
+AI coding agents should start with [`AGENTS.md`](./AGENTS.md). It contains the
+repository map, invariant rules, and routing table to canonical documentation.
 
----
+## Development and contributing
 
-## Repository structure
-
-```
-spatiotemporal-tiles/
-├── crates/                 # Rust workspace — the 4 PUBLISHED crates
-│   ├── stt-core/           # Archive + Arrow tile format library
-│   ├── stt-build/          # Library: GeoParquet / PostGIS / DuckDB -> packed dataset
-│   ├── stt-optimize/       # Input analysis + recommendations (powers --auto)
-│   └── spatiotemporal-tiles/  # Umbrella crate: re-exports the libraries above and
-│       └── src/bin/           #   ships every other CLI: stt-build, stt-optimize,
-│                              #   stt-validate (content-address + CRC32C + decode check over
-│                              #   packed dirs or .sttb bundles), stt-bundle (pack/unpack
-│                              #   single-file .sttb interchange bundles), stt-serve (dynamic
-│                              #   per-request STT tile server over PostGIS/DuckDB)
-├── packages/               # TypeScript
-│   ├── core/               # Archive reader, decoder pool, OPFS cache + the
-│   │                       #   framework-free RENDER KERNEL every backend shares:
-│   │                       #   core/{time-filter,style,geometry,geo,picking,
-│   │                       #   tileset-adapter,shader-codegen,capabilities}
-│   ├── layers/             # deck.gl backend (layers + extensions)
-│   ├── three/              # Three.js + TSL (WebGPU) backend
-│   ├── maplibre/           # MapLibre GL custom-layer backend
-│   ├── cesium/             # CesiumJS (WGS84 globe) backend
-│   ├── playback/           # Time controller + playback governor (zero-dep)
-│   └── react/              # React playback hooks + UI controls
-├── examples/showcase/      # Interactive demo app (deck.gl + MapLibre + Three)
-├── tools/
-│   ├── stt-generate/       # Bundled showcase-dataset generators (+ the stt-generate
-│   │                       #   CLI). Repo-only (publish = false) and its OWN cargo
-│   │                       #   workspace, so its dep tree's MSRV never reaches the
-│   │                       #   published crates.
-│   ├── bench/              # @poopdeck.gl/core load + decode benchmark (Node)
-│   ├── perf/               # Real-WebGL Playwright perf harness
-│   └── render-test/        # Playwright fidelity sweep (baselines + diffs)
-└── docs/                   # Format spec, API reference, guides
-```
-
----
-
-## Development
+The root is a Cargo and pnpm workspace. The common verification commands are:
 
 ```bash
-cargo test --workspace          # Rust tests (the 4 published crates)
-cargo build --release           # CLI binaries (stt-build, stt-validate, ...)
-cargo test --manifest-path tools/stt-generate/Cargo.toml   # the generator's own workspace
-
+cargo test --workspace
 pnpm install
 pnpm --filter @poopdeck.gl/core build
-pnpm --filter @poopdeck.gl/core test    # TS reader tests against a real archive
+pnpm --filter @poopdeck.gl/core test
 pnpm --filter @poopdeck.gl/layers build
-pnpm --filter @poopdeck.gl/three build
-pnpm --filter @poopdeck.gl/maplibre build
-pnpm --filter @poopdeck.gl/cesium build
-
-pnpm --filter @poopdeck.gl/showcase dev # Run the showcase locally
 ```
 
-### Rendering backends
-
-STT renders through multiple, interchangeable backends (deck.gl, Three.js+TSL,
-MapLibre, CesiumJS) that all consume the same decoded tiles and playback clock.
-Shared logic (time-filter, color, projection, geometry, picking, tileset glue)
-lives in a framework-free **render kernel** under `@poopdeck.gl/core`
-sub-paths; each backend is a thin adapter that publishes a capability
-`BackendDescriptor`. Shaders are hand-written per dialect — the kernel holds
-the time-filter alpha _definition_ twice (a CPU oracle plus an independent
-expression-AST evaluator), and each backend's shader math is pinned to both by
-a conformance test. See
-[docs/roadmap/renderer-architecture.md](docs/roadmap/renderer-architecture.md)
-for the design and [docs/spec/backend-capabilities.md](docs/spec/backend-capabilities.md)
-for the generated capability matrix.
-
-Tooling:
+The showcase generator has its own Rust workspace:
 
 ```bash
-pnpm --filter @poopdeck.gl/bench bench                   # @poopdeck.gl/core load/decode benchmark
-pnpm --filter @poopdeck.gl/render-test sweep             # fidelity + perf sweep
-pnpm --filter @poopdeck.gl/perf perf -- <demo-id>        # real-WebGL perf harness
+cargo test --manifest-path tools/stt-generate/Cargo.toml
 ```
 
----
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) before submitting a change. Project
+policies cover [support](./SUPPORT.md), [governance](./GOVERNANCE.md), the
+[Code of Conduct](./CODE_OF_CONDUCT.md), and private
+[security reporting](./SECURITY.md).
 
 ## License
 

@@ -313,7 +313,7 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const { blob, meta, e } = await fixtureBlobAndMeta();
     const GLOBAL = 5;
     const K = 8;
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const urlA = 'mem://a/manifest.json';
     const urlB = 'mem://b/manifest.json';
@@ -381,7 +381,7 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     // Equal weights → roughly equal slot share; the key invariant is that while
     // BOTH have work queued, BOTH appear in flight (one source can't monopolize
     // every slot for the whole drain).
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const urlA = 'mem://fa/manifest.json';
     const urlB = 'mem://fb/manifest.json';
@@ -485,7 +485,7 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const { blob, meta, e } = await fixtureBlobAndMeta();
     const GLOBAL = 6;
     const K = 12;
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const url = 'mem://one/manifest.json';
     const obj = makeDataset(K, blob, meta, e);
@@ -526,7 +526,7 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const GLOBAL = 12;
     const PER_ARCHIVE_CAP = 3;
     const K = 10;
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const url = 'mem://capped/manifest.json';
     const obj = makeDataset(K, blob, meta, e);
@@ -578,7 +578,7 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const GLOBAL = 4;
     const PER_ARCHIVE_CAP = 3;
     const K = 8;
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const urlA = 'mem://capA/manifest.json';
     const urlB = 'mem://capB/manifest.json';
@@ -644,7 +644,7 @@ describe('STTArchive + SharedRequestScheduler (Phase 2 integration)', () => {
     const { blob, meta, e } = await fixtureBlobAndMeta();
     const GLOBAL = 3;
     const K = 9;
-    configureSharedScheduler({ enabled: true, maxRequests: GLOBAL });
+    configureSharedScheduler({ maxRequests: GLOBAL });
 
     const url = 'mem://abrt/manifest.json';
     const obj = makeDataset(K, blob, meta, e);

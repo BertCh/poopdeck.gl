@@ -2,11 +2,14 @@
  * Selection-path hardening (audit 2026-06):
  *
  * 1. Coverage-index spatial debounce — the buffered-runway coverage index is
- *    rebuilt only when the viewport moves past ~SPATIAL_FLUSH_TOLERANCE of its
- *    own extent (or the zoom changes), NOT on every sub-tile camera drift. The
+ *    rebuilt only when the viewport's primary-zoom TILE BOX changes (a tile
+ *    boundary crossed, or the zoom), NOT on every sub-tile camera drift. The
  *    rebuild is the heaviest directory query in the system (the whole dataset
  *    time range for the viewport), so a smoothly drifting camera must not
- *    re-run it ~10×/s.
+ *    re-run it ~10×/s. (Re-blessed for B1, tile-loading audit 2026-08: the
+ *    key used to be the bounds rounded to 1/8 of their span, which left
+ *    phantom trailing-edge keys in the index after a sub-1/8 drift that
+ *    crossed a tile boundary.)
  *
  * 2. selectAndLoadTiles generation guard — the pass is async (the directory
  *    slice can be a real network round-trip for paged archives), so a stale
@@ -55,7 +58,7 @@ describe('coverage-index spatial debounce', () => {
         isCoverageRange(c[2] as { start: number }),
       ).length;
 
-    // 1°-wide viewport, so the 1/8 tolerance is ~0.125°.
+    // 1°-wide viewport inside one 5.625°-wide z6 tile column (x = 32).
     const at = (lon: number): BoundingBox => ({
       minLon: lon,
       minLat: 0,
@@ -68,19 +71,24 @@ describe('coverage-index spatial debounce', () => {
     const base = coverageCount();
     expect(base).toBeGreaterThanOrEqual(1);
 
-    // Drift 0.05° (< 1/8 of the 1° span): selection re-runs (exact bounds + time
-    // differ) but the quantized coverage signature is unchanged → NO rebuild.
+    // Drift 0.05°: selection re-runs (exact bounds + time differ) but the
+    // viewport is still inside the same tile box → NO rebuild. So is a 0.5°
+    // pan — the old 1/8-span key rebuilt here for a slice that could not
+    // differ (B1).
     tileset.update({ bounds: at(0.05), zoom: 6, time: 600, timeWindow: 100 });
     await settle();
     expect(coverageCount()).toBe(base);
+    tileset.update({ bounds: at(0.5), zoom: 6, time: 650, timeWindow: 100 });
+    await settle();
+    expect(coverageCount()).toBe(base);
 
-    // Pan 0.5° (> 1/8 span) → the coverage signature moves → rebuild.
-    tileset.update({ bounds: at(0.5), zoom: 6, time: 700, timeWindow: 100 });
+    // Pan across the column edge at 5.625° → the tile box changes → rebuild.
+    tileset.update({ bounds: at(5), zoom: 6, time: 700, timeWindow: 100 });
     await settle();
     expect(coverageCount()).toBe(base + 1);
 
-    // Zoom change at the same (drifted-tolerant) bounds → rebuild.
-    tileset.update({ bounds: at(0.5), zoom: 7, time: 800, timeWindow: 100 });
+    // Zoom change at the same bounds → rebuild.
+    tileset.update({ bounds: at(5), zoom: 7, time: 800, timeWindow: 100 });
     await settle();
     expect(coverageCount()).toBe(base + 2);
 

@@ -143,3 +143,88 @@ describe('TimeController external-driver mode', () => {
     expect(wraps.length).toBe(1);
   });
 });
+
+/**
+ * Per-frame coalescing. deck.gl's React wrapper redraws SYNCHRONOUSLY from a
+ * dependency-less layout effect, so `onBeforeRender` — and therefore
+ * `advanceFrame()` — fires once per React COMMIT, not once per frame. The
+ * controller must still advance once per frame: without that, a state change a
+ * tick produces re-enters React from inside its own commit → render → draw →
+ * tick chain, which React reports as "Maximum update depth exceeded".
+ *
+ * The frame identity comes from `document.timeline.currentTime`, which the
+ * browser holds constant for every task between two rendering opportunities.
+ */
+describe('TimeController advanceFrame coalescing', () => {
+  let h: ReturnType<typeof installFrameHarness>;
+  const timeline = { currentTime: 0 };
+
+  beforeEach(() => {
+    h = installFrameHarness();
+    timeline.currentTime = 1000;
+    vi.stubGlobal('document', {
+      timeline,
+      visibilityState: 'visible',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+  });
+  afterEach(() => {
+    h.restore();
+  });
+
+  it('advances once per frame however many times the host draws', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.attachExternalClock();
+    tc.play();
+
+    // One frame, three draws (the React commit chain deck.gl redraws from).
+    h.setNow(16);
+    tc.advanceFrame();
+    h.setNow(4); // wall time DOES pass between commits — it must not be billed
+    tc.advanceFrame();
+    h.setNow(4);
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(16, 0);
+
+    // Next frame: one draw, and the skipped wall time is still billed — the
+    // step integrates from the last ACCEPTED advance, so no sim-time is lost.
+    timeline.currentTime += 16;
+    h.setNow(8);
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(32, 0);
+  });
+
+  it('lets a listener draw re-entrantly without advancing again', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.attachExternalClock();
+    tc.play();
+    // The shape of the crash: a tick listener changes React state, the render
+    // draws deck.gl, and the draw calls back in — inside the same frame.
+    let reentries = 0;
+    tc.on('tick', () => {
+      if (reentries++ > 3) return;
+      h.setNow(1);
+      tc.advanceFrame();
+    });
+    h.setNow(16);
+    tc.advanceFrame();
+    expect(reentries).toBe(1); // the re-entrant draws never reached _step
+    expect(tc.getTime()).toBeCloseTo(16, 0);
+  });
+
+  it('a fresh attach is never suppressed by the frame it attaches in', () => {
+    const tc = new TimeController({ initialTime: 0, speed: 1 });
+    tc.attachExternalClock();
+    tc.play();
+    h.setNow(16);
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(16, 0);
+    // Same frame: a surface unmounts and another mounts onto the same clock.
+    tc.detachExternalClock();
+    tc.attachExternalClock();
+    h.setNow(8);
+    tc.advanceFrame();
+    expect(tc.getTime()).toBeCloseTo(24, 0);
+  });
+});

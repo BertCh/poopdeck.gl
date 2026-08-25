@@ -128,7 +128,7 @@ export class STTSurfelLayer extends BaseSTTLayer {
       fallbackColor: this.opts.fallbackColor,
     });
 
-    this.disposeGpu();
+    if (this.object.geometry) this.object.geometry.dispose();
     if (buf.count === 0) {
       // No surfels: hide rather than draw the bare hexagon with no instances.
       this.object.geometry = makeHexDiskGeometry();
@@ -175,16 +175,28 @@ export class STTSurfelLayer extends BaseSTTLayer {
       );
     }
 
-    const { material, uniforms } = createSurfelMaterial({
-      packed: buf.packed,
-      alphaCutoff: this.opts.alphaCutoff,
-    });
-    this.material = material;
-    this.uniforms = uniforms;
+    // Built ONCE per packing variant (audit E5): `packed` is a property of
+    // the archive's columns, so it is constant across an archive's tiles and
+    // the material survives every `setTiles`. Disposing it per call evicted
+    // three's nodeBuilderCache entry, program and pipeline — a shader rebuild
+    // per tile arrival.
+    if (!this.material || this.materialPacked !== buf.packed) {
+      this.material?.dispose();
+      const { material, uniforms } = createSurfelMaterial({
+        packed: buf.packed,
+        alphaCutoff: this.opts.alphaCutoff,
+      });
+      this.material = material;
+      this.uniforms = uniforms;
+      this.materialPacked = buf.packed;
+    }
     this.object.geometry = geometry;
-    this.object.material = material;
+    this.object.material = this.material;
     this.pushUniforms(this.timeOrigin); // seed at t0 so first frame is valid
   }
+
+  /** The `packed` variant the live material was built for. */
+  private materialPacked: boolean | null = null;
 
   setTime(absoluteTimeMs: number): void {
     this.pushUniforms(absoluteTimeMs);

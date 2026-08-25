@@ -27,7 +27,12 @@ import {
   makeData,
   tableToIPC,
 } from 'apache-arrow';
-import { decodeTile, getFeatureProperties } from '../src/tile';
+import {
+  decodeTile,
+  getFeatureProperties,
+  readTemporalColumnInfo,
+  toGeoArrowTable,
+} from '../src/tile';
 import { type TileId } from '../src/types';
 import { frameFromIpc } from './helpers/fixtures';
 
@@ -76,8 +81,12 @@ function buildTimeTile(opts: {
   vertexTime?: {
     deltas: number[];
     perFeature: number;
-    /** Wire width of the list child. Defaults to `u32` (the original harness). */
-    width?: 'u16' | 'u32';
+    /**
+     * Wire width of the list child. Defaults to `u32` (the original harness).
+     * `i64` is the ABSOLUTE fallback tier — no `TILE_META.vt` anchor, the
+     * values are whole Unix ms.
+     */
+    width?: 'u16' | 'u32' | 'i64';
   };
 }): Uint8Array {
   const n = opts.start.values.length;
@@ -128,8 +137,13 @@ function buildTimeTile(opts: {
 
   if (opts.vertexTime) {
     const { deltas, perFeature, width } = opts.vertexTime;
-    const narrow = width === 'u16';
-    const item = new Field('item', narrow ? new Uint16() : new Uint32(), true);
+    const leaf =
+      width === 'u16'
+        ? new Uint16()
+        : width === 'i64'
+          ? new Int64()
+          : new Uint32();
+    const item = new Field('item', leaf, true);
     const vtData = makeData({
       type: new List(item),
       length: n,
@@ -138,9 +152,15 @@ function buildTimeTile(opts: {
         { length: n + 1 },
         (_, i) => i * perFeature,
       ),
-      child: narrow
-        ? makeData({ type: new Uint16(), data: Uint16Array.from(deltas) })
-        : makeData({ type: new Uint32(), data: Uint32Array.from(deltas) }),
+      child:
+        width === 'u16'
+          ? makeData({ type: new Uint16(), data: Uint16Array.from(deltas) })
+          : width === 'i64'
+            ? makeData({
+                type: new Int64(),
+                data: BigInt64Array.from(deltas.map(BigInt)),
+              })
+            : makeData({ type: new Uint32(), data: Uint32Array.from(deltas) }),
     });
     fields.push(new Field('vertex_time', vtData.type, true));
     children.push(vtData);
@@ -412,5 +432,124 @@ describe('vertex_time feature-anchored tier (vtf)', () => {
       Math.round(f.timeOffset + v),
     );
     expect(absolute).toEqual([T0, T0 + 40, T0 + 100, T0, T0 + 40, T0 + 100]);
+  });
+});
+
+/**
+ * The `visgl:temporal-*` descriptor across every compact wire form.
+ *
+ * These are the shapes that make the descriptor non-trivial. `start_time` and
+ * `end_time` reach the hand-off RE-INFLATED to absolute, so they can state
+ * `origin: 0` however they were written; `vertex_time` is the one column decode
+ * leaves compact, so its delta forms must advertise the domain and stay SILENT
+ * about origin — their anchor is `stt:vertex_time_origin_ms`, which is per-tile
+ * and therefore not a property of the column at all.
+ */
+describe('vis.gl temporal metadata across the compact forms', () => {
+  const cases = [
+    {
+      label: 'absolute Int64 pair',
+      opts: {
+        start: { kind: 'i64' as const, values: [T0, T0 + 1000, T0 + 5000] },
+        end: { kind: 'i64' as const, values: [T0 + 100, T0 + 1000, T0 + 9000] },
+        tileMeta: { sorted: true },
+      },
+    },
+    {
+      label: 'u32 start offsets against t0',
+      opts: {
+        start: { kind: 'u32' as const, values: [0, 1000, 5000] },
+        end: { kind: 'i64' as const, values: [T0 + 100, T0 + 1000, T0 + 9000] },
+        tileMeta: { sorted: true, st: 'u32', t0: T0 },
+      },
+    },
+    {
+      label: 'u32 durations against each start',
+      opts: {
+        start: { kind: 'u32' as const, values: [0, 1000, 5000] },
+        end: { kind: 'u32' as const, values: [100, 0, 4000] },
+        tileMeta: { sorted: true, et: 'dur32', st: 'u32', t0: T0 },
+      },
+    },
+    {
+      label: 'omitted end_time (et=zero)',
+      opts: {
+        start: { kind: 'u32' as const, values: [0, 1000, 5000] },
+        end: null,
+        tileMeta: { sorted: true, et: 'zero', st: 'u32', t0: T0 },
+      },
+    },
+  ];
+
+  for (const { label, opts } of cases) {
+    it(`describes ${label} as absolute Unix ms`, () => {
+      const layer = decodeTile(buildTimeTile(opts), tileId).layers[0];
+      const table = toGeoArrowTable(layer);
+      for (const column of ['start_time', 'end_time']) {
+        const info = readTemporalColumnInfo(table, column);
+        expect(info, `${column} must be described`).not.toBeNull();
+        expect(info!.unit).toBe('millisecond');
+        expect(info!.timezone).toBe('UTC');
+        expect(info!.origin, `${column} origin`).toBe(0);
+        expect(info!.originPolicy).toBe('zero');
+      }
+      // The descriptor is only worth anything if it is TRUE: the column must
+      // hold the same absolute instants the render path reconstructs.
+      const { timeOffset, startTimes } = layer.features;
+      expect(Number(table.getChild('start_time')!.get(0))).toBe(
+        Math.round(timeOffset + startTimes[0]),
+      );
+    });
+  }
+
+  it('describes an absolute List<Int64> vertex_time as origin 0', () => {
+    // The fallback tier: no `TILE_META.vt`, so the list already holds whole
+    // Unix ms. This is the positive branch of the same check the delta case
+    // below pins negatively.
+    const layer = decodeTile(
+      buildTimeTile({
+        start: { kind: 'i64', values: [T0, T0 + 1000] },
+        end: { kind: 'i64', values: [T0 + 500, T0 + 1500] },
+        tileMeta: { sorted: true },
+        vertexTime: {
+          deltas: [T0, T0 + 500, T0 + 1000, T0 + 1500],
+          perFeature: 2,
+          width: 'i64',
+        },
+      }),
+      tileId,
+    ).layers[0];
+    const info = readTemporalColumnInfo(toGeoArrowTable(layer), 'vertex_time')!;
+    expect(info.origin).toBe(0);
+    expect(info.originPolicy).toBe('zero');
+  });
+
+  it('never claims an origin for delta-encoded vertex_time', () => {
+    const layer = decodeTile(
+      buildTimeTile({
+        start: { kind: 'i64', values: [T0, T0 + 1000] },
+        end: { kind: 'i64', values: [T0 + 500, T0 + 1500] },
+        tileMeta: {
+          sorted: true,
+          vt: [T0, 1000] as [number, number],
+        },
+        vertexTime: { deltas: [0, 1, 2, 3], perFeature: 2, width: 'u16' },
+      }),
+      tileId,
+    ).layers[0];
+    const table = toGeoArrowTable(layer);
+
+    const info = readTemporalColumnInfo(table, 'vertex_time');
+    expect(info, 'the domain is still worth stating').not.toBeNull();
+    expect(info!.unit).toBe('millisecond');
+    // A per-tile anchor is not a column origin: claiming one here would place
+    // every vertex of every OTHER tile at the wrong instant.
+    expect(info!.origin).toBeUndefined();
+    expect(info!.originPolicy).toBeUndefined();
+
+    // The anchor a consumer MUST use instead is right there on the schema.
+    expect(table.schema.metadata.get('stt:vertex_time_origin_ms')).toBe(
+      String(T0),
+    );
   });
 });

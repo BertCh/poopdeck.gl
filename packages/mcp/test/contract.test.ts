@@ -22,7 +22,6 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as path from 'node:path';
@@ -48,20 +47,13 @@ const MCP_DOC = path.join(REPO_ROOT, 'docs', 'api', 'stt-mcp.md');
 const COPY_DOCS_SCRIPT = path.join(PKG_ROOT, 'scripts', 'copy-docs.mjs');
 const execFileAsync = promisify(execFile);
 /**
- * `stt-generate`'s clap enum, wherever the generator currently lives. It moved
- * out of the published Cargo workspace (`crates/stt-generate`) to
- * `tools/stt-generate`, which carries its own `[workspace]` — so this gate
- * accepts either location rather than going ENOENT on whichever half of the
- * move it meets. Neither present is a hard failure, not a silent skip: a
- * vanished generator means `generate_dataset`'s enum has nothing left to
- * verify against, and that must be noticed.
+ * `stt-generate`'s clap enum. The repo-only generator lives in
+ * `tools/stt-generate`, which carries its own `[workspace]`; a missing source is
+ * a hard failure rather than a silent skip because `generate_dataset`'s enum
+ * would otherwise have nothing to verify against.
  */
 const GENERATE_MAIN_RS = (() => {
-  const candidates = [
-    path.join(REPO_ROOT, 'tools', 'stt-generate', 'src', 'main.rs'),
-    path.join(REPO_ROOT, 'crates', 'stt-generate', 'src', 'main.rs'),
-  ];
-  return candidates.find((p) => existsSync(p)) ?? candidates[0];
+  return path.join(REPO_ROOT, 'tools', 'stt-generate', 'src', 'main.rs');
 })();
 
 // --------------------------------------------------------------------------
@@ -333,7 +325,7 @@ function variantToSubcommand(variant: string): string {
 
 /**
  * Extracts the top-level variant names of `enum Commands { … }` from
- * `crates/stt-generate/src/main.rs`.
+ * `tools/stt-generate/src/main.rs`.
  *
  * Scans characters rather than matching line shapes: variants come in both
  * tuple (`Earthquakes(datasets::earthquakes::Args)`) and struct

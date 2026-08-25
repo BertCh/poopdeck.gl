@@ -46,8 +46,9 @@ The bundled `.mcp.json` launches the built server over stdio, scanning
 pnpm --filter @poopdeck.gl/mcp build
 ```
 
-Once `@poopdeck.gl/mcp` is published to npm you can switch the command in
-`.mcp.json` to `npx -y @poopdeck.gl/mcp` and drop the local build step.
+To use the published MCP server instead of a workspace build, switch the
+command in `.mcp.json` to `npx -y @poopdeck.gl/mcp` and drop the local build
+step.
 
 ### What you get out of the box
 

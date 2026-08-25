@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Everything at once: facade `cli` (all four bins, both serve
+      # Everything at once: facade `cli` (all five bins, both serve
       # backends), `projection` (proj-sys vendors libproj via cmake), etc.
       # This is a TEST job — the old CI built --all-features but never ran
       # the feature-gated tests.
@@ -231,7 +231,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Correctness class, not taste: .oxlintrc.json enables the correctness
@@ -262,7 +262,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: pnpm
       # Version gate: the cargo workspace version and the Claude Code plugin
       # surface (plugin.json, the marketplace entry, every skill's
@@ -272,6 +272,10 @@ jobs:
       # run it first so drift fails in seconds instead of after the whole build.
       - name: cargo/plugin/skill versions in sync
         run: node scripts/sync-versions.mjs --check
+      - name: project status matches manifests and format constants
+        run: node scripts/check-project-status.mjs
+      - name: documentation links resolve
+        run: node scripts/check-doc-links.mjs
       # Doc-drift gate: source comments cite docs/roadmap/*.md by name, and the
       # last roadmap consolidation stranded 39 of them. git grep + existsSync,
       # ~50 ms.
@@ -387,7 +391,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # --with-deps: the runner image does not carry chromium's shared libs.

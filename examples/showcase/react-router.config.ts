@@ -1,4 +1,7 @@
 import type { Config } from '@react-router/dev/config';
+import path from 'node:path';
+import { getPublicIndexPaths } from './src/lib/publicPaths.ts';
+import { finalizeStaticAssets } from './scripts/finalize-static-assets.ts';
 
 export default {
   // Keep the app in src/ (no file moves) so the vitest contract tests, the
@@ -11,32 +14,16 @@ export default {
   // falls back to the client-rendered SPA shell.
   ssr: false,
 
-  async prerender() {
-    // Dynamic import so these modules evaluate in the Vite SSR pipeline (where
-    // import.meta.env is populated for datasets.ts), not in the raw config
-    // loader.
-    const { DEMO_META } = await import('./src/content/demoMeta');
-    const { getDatasetById } = await import('./src/datasets');
-    const { flatDocEntries } = await import('./src/docs/manifest');
+  async buildEnd({ reactRouterConfig }) {
+    await finalizeStaticAssets(
+      path.join(reactRouterConfig.buildDirectory, 'client'),
+    );
+  },
 
-    return [
-      '/',
-      '/demos',
-      '/how-it-works',
-      '/docs',
-      // Every curated catalog id whose dataset actually ships has a /demos/:id
-      // detail page (the exact set DemoDetailPage renders). Filter through the
-      // registry so prerender agrees with it: on the production build the
-      // registry drops Waymo (local-only, no R2 tiles), so those keys resolve to
-      // no dataset and DemoDetailPage would `<Navigate>` away — prerendering
-      // them would reference a route with no dataset. NOT SHIPPED_DATASET_IDS
-      // (the nav subset).
-      ...Object.keys(DEMO_META)
-        .filter((id) => getDatasetById(id))
-        .map((id) => `/demos/${id}`),
-      // Every published docs slug (includes two-segment api/* slugs and the
-      // spec/manifest-schema JSON page).
-      ...flatDocEntries.map((e) => `/docs/${e.slug}`),
-    ];
+  async prerender() {
+    // This includes every curated demo whose dataset actually ships and every
+    // published docs slug. The same source generates sitemap.xml, so a route
+    // cannot become indexable without also receiving static HTML.
+    return getPublicIndexPaths();
   },
 } satisfies Config;

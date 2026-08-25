@@ -1,0 +1,71 @@
+name: Feature request
+description: Propose a user-facing capability or a substantial design change.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the user problem. For usage help, read
+        [SUPPORT.md](https://github.com/BertCh/spatiotemporal-tiles/blob/main/SUPPORT.md).
+        Report vulnerabilities privately through
+        [SECURITY.md](https://github.com/BertCh/spatiotemporal-tiles/blob/main/SECURITY.md).
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which part?
+      options:
+        - STT archive format or specification
+        - CLI toolchain
+        - Dynamic server
+        - TypeScript core or playback
+        - deck.gl renderer
+        - Three.js, MapLibre, or Cesium renderer
+        - React package
+        - MCP or AI tooling
+        - Showcase or documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow, limitation, and who encounters it.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior without requiring a specific implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include current workarounds and related tools or standards.
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and data-preservation impact
+      description: >-
+        Note effects on the manifest/archive contract, existing readers,
+        public APIs, or the no-default-thinning guarantee. Write "none known"
+        when not applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add small examples, links, screenshots, or benchmark evidence.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and documentation for this request.
+          required: true
+        - label: This report contains no credentials, private URLs, or confidential data.
+          required: true

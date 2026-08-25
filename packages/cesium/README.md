@@ -1,7 +1,7 @@
 # @poopdeck.gl/cesium
 
-> **⚠️ Experimental — no longer published to npm.** This package is `"private":
-true` in the workspace: `0.5.0` stays on npm, but no new versions ship. It is a
+> **Status: experimental — no longer published to npm.** This package is
+> `"private": true` in the workspace: `0.5.0` stays on npm, but no new versions ship. It is a
 > fourth-backend spike we keep in-tree as the honest price tag on "just add
 > another renderer" — ~2,000 lines for **6 of the 23** layer kinds
 > (`point`/`path`/`line`/`arc`/`trips`/`tripHeads`); the other 17 degrade to a
@@ -32,26 +32,49 @@ pnpm --filter @poopdeck.gl/cesium build
 ```ts
 import { STTArchive, SpatioTemporalTileset } from '@poopdeck.gl/core';
 import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
-import { CesiumPointLayer, attachCesiumClock } from '@poopdeck.gl/cesium';
+import {
+  CesiumPointLayer,
+  TilePublishGate,
+  attachCesiumClock,
+  createThrottledTilesetUpdate,
+} from '@poopdeck.gl/cesium';
 
 const layer = new CesiumPointLayer(viewer.scene, { pixelSize: 6 });
 const archive = new STTArchive({ url: manifestUrl });
 const meta = await archive.getMetadata();
 
+// Every layer's `setTiles` is a REPLACE-ALL rebuild, and the tileset fires
+// `onTileLoad` once per tile — so never call `setTiles` from the callback
+// itself. Arm a flag and flush ONCE per drawn frame through the gate, which
+// refuses an unchanged set (and holds a transiently empty one).
+const gate = new TilePublishGate();
+let republish = false;
 const tileset = new SpatioTemporalTileset({
   minZoom: meta.minZoom,
   maxZoom: meta.maxZoom,
   temporalBucketMs: meta.temporalBucketMs,
   ...makeTilesetCallbacks(archive),
-  onTileLoad: () => layer.setTiles(tileset.getVisibleTiles()),
-  onTileUnload: () => layer.setTiles(tileset.getVisibleTiles()),
+  onTileLoad: () => (republish = true),
+  onTileUnload: () => (republish = true),
+});
+viewer.scene.preRender.addEventListener(() => {
+  if (!republish) return;
+  republish = false;
+  const tiles = tileset.getVisibleTiles();
+  if (gate.offer(tiles).publish) layer.setTiles(tiles);
 });
 
-// drive the playhead from Cesium's render loop:
+// The playhead hook runs every drawn frame, but the tileset's fast path cannot
+// short-circuit a MOVING clock — so route `update` through the throttle
+// (deck's rule: ≥ timeWindow/20 of sim travel AND ≥ 100 ms wall; camera
+// changes always pass; one trailing pass so the last tick is never lost).
+const update = createThrottledTilesetUpdate(tileset);
 const detach = attachCesiumClock(viewer.scene, timeController, (t) => {
   layer.setTime(t);
-  tileset.update({ bounds, zoom, time: t, timeWindow }, true);
+  update.update({ bounds, zoom, time: t, timeWindow }, true);
+  republish = true; // the gate will refuse an unchanged set
 });
+// on teardown: detach(); update.dispose();
 ```
 
 Every layer class has the same surface — swap `CesiumPointLayer` for

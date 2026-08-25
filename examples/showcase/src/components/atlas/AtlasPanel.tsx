@@ -64,24 +64,49 @@ export interface AtlasPanelProps {
   onDepth: (next: number) => void;
   selection: AtlasSelection | null;
   neuronpediaHref: (layer: number, feature: number) => string;
+  /**
+   * `rail` (default) is the 372px full-height right column. `sheet` is the
+   * phone form: the same content, docked to the bottom as a rounded overlay
+   * the page opens and closes — a 372px rail on a 390px screen IS the screen.
+   */
+  variant?: 'rail' | 'sheet';
 }
+
+const PANEL_BASE = {
+  overflowY: 'auto' as const,
+  background: 'rgba(10,12,20,0.86)',
+  backdropFilter: 'blur(10px)',
+  color: '#e6ebf5',
+  font: '13px/1.5 ui-sans-serif, system-ui, sans-serif',
+  boxSizing: 'border-box' as const,
+};
 
 const css = {
   panel: {
+    ...PANEL_BASE,
     position: 'absolute' as const,
     top: 0,
     right: 0,
     width: 372,
     maxWidth: '100%',
     height: '100%',
-    overflowY: 'auto' as const,
-    background: 'rgba(10,12,20,0.86)',
-    backdropFilter: 'blur(10px)',
     borderLeft: '1px solid rgba(150,170,220,0.18)',
-    color: '#e6ebf5',
-    font: '13px/1.5 ui-sans-serif, system-ui, sans-serif',
     padding: '18px 18px 40px',
-    boxSizing: 'border-box' as const,
+  },
+  panelSheet: {
+    ...PANEL_BASE,
+    position: 'absolute' as const,
+    left: 8,
+    right: 8,
+    bottom: 8,
+    // Of the shell, which is already the visible area (see NeuralAtlas).
+    maxHeight: '72%',
+    borderRadius: 16,
+    border: '1px solid rgba(150,170,220,0.18)',
+    padding: '16px 14px 24px',
+    marginBottom: 'env(safe-area-inset-bottom)',
+    overscrollBehavior: 'contain' as const,
+    boxShadow: '0 -12px 40px rgba(0,0,0,0.55)',
   },
   h1: { font: '600 17px/1.25 inherit', margin: '0 0 4px' },
   sub: { color: '#98a4bd', margin: '0 0 16px', fontSize: 12 },
@@ -148,6 +173,7 @@ const AtlasPanel: React.FC<AtlasPanelProps> = ({
   onDepth,
   selection,
   neuronpediaHref,
+  variant = 'rail',
 }) => {
   const spec = ATLAS_METRICS[metric];
   const v = sidecar.validation ?? {};
@@ -164,7 +190,7 @@ const AtlasPanel: React.FC<AtlasPanelProps> = ({
 
   return (
     <aside
-      style={css.panel}
+      style={variant === 'sheet' ? css.panelSheet : css.panel}
       aria-label="Neural-State Atlas controls and methodology"
     >
       <h1 style={css.h1}>Neural-State Atlas</h1>

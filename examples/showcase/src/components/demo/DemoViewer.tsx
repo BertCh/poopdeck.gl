@@ -15,17 +15,20 @@ import React, {
 import DeckGL from '@deck.gl/react';
 import { _GlobeView as GlobeView } from '@deck.gl/core';
 import { LineLayer, SolidPolygonLayer } from '@deck.gl/layers';
-import { Map } from 'react-map-gl';
+import { MapboxOverlay } from '@deck.gl/mapbox';
+import { Map, useControl } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import type { BufferSource } from '@poopdeck.gl/playback';
 import type { Dataset, SummaryToggleOption } from '../../types';
 import Legend from '../Legend';
 import PerformanceMonitor from '../PerformanceMonitor';
 import { buildDemoLayers } from './buildDemoLayers';
+import { MAX_SAFE_PITCH } from './cameraLimits';
 import type { DemoCamera } from './previewBasemap';
 import { useDeckClock } from '@poopdeck.gl/react';
 import type { PlaybackState } from '@poopdeck.gl/react';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import { useIsMobile } from '../../lib/useMediaQuery';
 import { MAPBOX_ACCESS_TOKEN } from '../../lib/mapboxToken';
 
 /**
@@ -43,6 +46,86 @@ function tileLat(y: number, n: number): number {
   return (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
 }
 
+/**
+ * deck-inside-mapbox bridge for the `basemapTerrain` path: an INTERLEAVED
+ * `MapboxOverlay` renders the deck layers inside the map's own frame, sharing
+ * its terrain-aware projection and depth buffer — data with real z sits exactly
+ * on the relief and is occluded behind ridges, neither of which the classic
+ * deck-over-map compositing can do. `interleaved` is a construction-time
+ * setting; everything else (layers, the `useDeckClock` trio) flows through
+ * `setProps` every render, exactly like spreading onto `<DeckGL>` — Deck
+ * accepts `userData`/`_animate`/`onBeforeRender` directly, so the shared
+ * playback clock works unchanged on this path.
+ */
+function DeckGLOverlay(props: Record<string, unknown>) {
+  const overlay = useControl<MapboxOverlay>(
+    () => new MapboxOverlay({ ...props, interleaved: true }),
+  );
+  overlay.setProps(props);
+  return null;
+}
+
+/**
+ * Per-dataset basemap tuning shared by BOTH render paths: hide labels (all
+ * symbol layers), sink the base/land fills to a near-black backdrop, and darken
+ * the road/street lines, leaving water geometry for context. Type-based (not
+ * layer-id) so it survives Mapbox style revisions; property differs per layer
+ * type.
+ */
+function applyBasemapTuning(map: any, selectedDataset: Dataset): void {
+  const hideLabels = selectedDataset.basemapHideLabels;
+  const bg = selectedDataset.basemapBackgroundColor;
+  const roadColor = selectedDataset.basemapRoadColor;
+  if (!hideLabels && !bg && !roadColor) return;
+  try {
+    for (const layer of map.getStyle().layers ?? []) {
+      if (hideLabels && layer.type === 'symbol') {
+        map.setLayoutProperty(layer.id, 'visibility', 'none');
+      }
+      if (bg) {
+        if (layer.type === 'background') {
+          map.setPaintProperty(layer.id, 'background-color', bg);
+        } else if (layer.type === 'fill' && /land|earth/i.test(layer.id)) {
+          map.setPaintProperty(layer.id, 'fill-color', bg);
+        }
+      }
+      if (
+        roadColor &&
+        layer.type === 'line' &&
+        /road|street|bridge|tunnel/i.test(layer.id)
+      ) {
+        map.setPaintProperty(layer.id, 'line-color', roadColor);
+      }
+    }
+  } catch {
+    // A style without the expected layers → leave the basemap as-is.
+  }
+}
+
+/**
+ * Anti-sink lift for terrain-draped dots, metres. With the interleaved depth
+ * buffer a dot centred exactly ON the surface has half its disk clipped by the
+ * slope behind it; a small constant lift keeps it legible. Sub-pixel at the
+ * national zooms the ballet demos play at (~0.15 px/m even at z13).
+ */
+const TERRAIN_DOT_LIFT_M = 15;
+
+/**
+ * The embed's tap-to-interact shield, map-owned-camera edition: the classic
+ * path passes `controller={false}` to deck; on the terrain path the map owns
+ * the camera, so every mapbox interaction handler is switched off instead.
+ */
+const NONINTERACTIVE_MAP_PROPS = {
+  dragPan: false,
+  dragRotate: false,
+  scrollZoom: false,
+  boxZoom: false,
+  doubleClickZoom: false,
+  keyboard: false,
+  touchZoomRotate: false,
+  touchPitch: false,
+} as const;
+
 export interface DemoViewerProps {
   dataset: Dataset;
   playback: PlaybackState;
@@ -56,6 +139,12 @@ export interface DemoViewerProps {
    * doesn't overlap them. Default 0 (the embed frame has no floating header).
    */
   topLeftInset?: number;
+  /**
+   * Push the bottom-right legend up by N px so a host's floating transport bar
+   * — which on phone widths spans the full width — doesn't cover it. Default 0
+   * (the embed frame's transport sits BELOW the map, not on it).
+   */
+  bottomInset?: number;
   /**
    * Observe the live camera (for the scrubber hover-preview deck). Fired on
    * mount with the initial camera and on every user view-state change. Passing
@@ -71,8 +160,12 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   showPerfHud = false,
   interactive = true,
   topLeftInset = 0,
+  bottomInset = 0,
   onCameraChange,
 }) => {
+  // Phone widths get collapsed in-map chips: a legend that opens on tap
+  // instead of a permanently-parked card, and a narrower cube panel.
+  const isMobile = useIsMobile();
   const {
     timeController,
     isPlaying,
@@ -118,6 +211,58 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   // the discrete render for viewers who asked the OS to reduce motion; the
   // globe auto-rotation effect below reads the same value.
   const reducedMotion = useReducedMotion();
+
+  // ── Terrain basemap (`basemapTerrain` demos, Mercator viewer only) ────────
+  // These demos render on the INTERLEAVED path (see DeckGLOverlay) and drape
+  // their moving dots onto the relief with a per-frame height probe backed by
+  // mapbox `queryTerrainElevation`. The probe must exist BEFORE the layers
+  // memo below, which threads it into `buildDemoLayers`.
+  const terrainEnabled =
+    !useGlobe &&
+    !selectedDataset.hideBasemap &&
+    Boolean(selectedDataset.basemapTerrain);
+  const terrainExaggeration =
+    typeof selectedDataset.basemapTerrain === 'object'
+      ? (selectedDataset.basemapTerrain.exaggeration ?? 1.5)
+      : 1.5;
+  const [terrainMap, setTerrainMap] = useState<any>(null);
+  // Bumped on map idle: terrain DEM tiles land asynchronously, so a probe
+  // answer for the same (lon, lat) refines over time. The bump (a) rebuilds
+  // the probe closure, dropping its memo cache, and (b) rides into the layer
+  // props so a PAUSED frame re-drapes (while playing, renderLayers runs every
+  // frame anyway and 'idle' rarely fires).
+  const [terrainRevision, setTerrainRevision] = useState(0);
+  useEffect(() => {
+    // Demo switched away from the terrain path — drop the map handle so the
+    // probe memo can't outlive its map instance.
+    if (!terrainEnabled && terrainMap) setTerrainMap(null);
+  }, [terrainEnabled, terrainMap]);
+  const getTerrainElevation = useMemo(() => {
+    if (!terrainEnabled || !terrainMap) return null;
+    // Baked-elevation archives carry their z in the tiles (vertexValues
+    // channel) — no runtime probe, and no layer-array churn on map idle.
+    if (selectedDataset.elevationFromVertexValues) return null;
+    // Probe answers memoized on ~1e-4° cells (≤ 11 m at 47°N): sub-pixel at
+    // the zooms these demos play at, and it turns the per-dot-per-frame
+    // queryTerrainElevation traffic into cache hits for slow movers. Rebuilt
+    // (cache dropped) on every terrainRevision bump as DEM coverage refines.
+    // (`globalThis.Map`: the bare name is shadowed by react-map-gl's <Map>.)
+    const cache = new globalThis.Map<number, number>();
+    void terrainRevision;
+    return (lon: number, lat: number): number | null => {
+      const key = Math.round(lon * 1e4) * 4_000_000 + Math.round(lat * 1e4);
+      const hit = cache.get(key);
+      if (hit !== undefined) return hit;
+      const z = terrainMap.queryTerrainElevation([lon, lat], {
+        exaggerated: true,
+      });
+      if (z == null) return null; // DEM not resident here — don't cache unknowns
+      if (cache.size > 200_000) cache.clear();
+      const lifted = z + TERRAIN_DOT_LIFT_M;
+      cache.set(key, lifted);
+      return lifted;
+    };
+  }, [terrainEnabled, terrainMap, terrainRevision, selectedDataset]);
 
   // ── Space-time cube (time = height) ────────────────────────────────────────
   // `heightFactor` is the squash slider: 0 = flat map, 1 = full cube. It feeds
@@ -183,6 +328,8 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
         timeHeightScale,
         activeSummaryToggle,
         reducedMotion,
+        getTerrainElevation,
+        terrainRevision,
         plumbing: {
           registry,
           onOverviewPreload: handleOverviewPreload,
@@ -197,6 +344,8 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       handleOverviewPreload,
       timeHeightScale,
       reducedMotion,
+      getTerrainElevation,
+      terrainRevision,
     ],
   );
 
@@ -484,6 +633,98 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
   // backdrop has to come from the container.
   const hideBasemap = Boolean(selectedDataset.hideBasemap) && !useGlobe;
 
+  // ── Terrain-path map handlers ──────────────────────────────────────────────
+  // On this path the MAP owns the camera (deck renders inside it), so the
+  // scrubber hover-preview camera/size reporting hangs off map events instead
+  // of the DeckGL callbacks the classic path uses.
+  const handleTerrainMapLoad = useCallback(
+    (evt: any) => {
+      const map = evt.target;
+      if (!map.getSource('mapbox-dem')) {
+        map.addSource('mapbox-dem', {
+          type: 'raster-dem',
+          url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+          tileSize: 512,
+          maxzoom: 14,
+        });
+      }
+      // Subtle hillshade so the relief reads even face-on — the dark styles
+      // ship no terrain shading of their own, and 3D silhouettes alone vanish
+      // at low pitch. Its OWN raster-dem source: sharing the terrain's source
+      // between setTerrain and a hillshade layer is a known mapbox-gl footgun.
+      // Inserted below the first line/symbol layer so roads stay legible.
+      try {
+        if (!map.getSource('stt-hillshade-dem')) {
+          map.addSource('stt-hillshade-dem', {
+            type: 'raster-dem',
+            url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+            tileSize: 512,
+            maxzoom: 14,
+          });
+        }
+        if (!map.getLayer('stt-hillshade')) {
+          const styleLayers = map.getStyle().layers ?? [];
+          const before = styleLayers.find(
+            (l: any) => l.type === 'line' || l.type === 'symbol',
+          )?.id;
+          map.addLayer(
+            {
+              id: 'stt-hillshade',
+              type: 'hillshade',
+              source: 'stt-hillshade-dem',
+              paint: {
+                'hillshade-exaggeration': 0.55,
+                'hillshade-shadow-color': '#000000',
+                'hillshade-highlight-color': '#26354c',
+                'hillshade-accent-color': '#000000',
+              },
+            },
+            before,
+          );
+        }
+      } catch {
+        // Style without the expected layers — the relief still shows in 3D.
+      }
+      applyBasemapTuning(map, selectedDataset);
+      const container = map.getContainer?.();
+      if (container) {
+        sizeRef.current = {
+          width: container.clientWidth,
+          height: container.clientHeight,
+        };
+      }
+      setTerrainMap(map);
+    },
+    [selectedDataset],
+  );
+  const handleTerrainMove = useCallback(
+    (evt: any) => {
+      cameraRef.current = evt.viewState;
+      emitCamera();
+    },
+    [emitCamera],
+  );
+  const handleTerrainIdle = useCallback(() => {
+    // DEM coverage refined (or an interaction settled) — invalidate the probe
+    // cache and nudge the layers so paused frames re-drape. See terrainRevision.
+    // Baked-elevation demos don't use the probe; skip the churn entirely.
+    if (selectedDataset.elevationFromVertexValues) return;
+    setTerrainRevision((r) => r + 1);
+  }, [selectedDataset]);
+  const handleTerrainResize = useCallback(
+    (evt: any) => {
+      const container = evt?.target?.getContainer?.();
+      if (container) {
+        sizeRef.current = {
+          width: container.clientWidth,
+          height: container.clientHeight,
+        };
+        emitCamera();
+      }
+    },
+    [emitCamera],
+  );
+
   return (
     <div
       className="w-full h-full map-viewport"
@@ -493,92 +734,102 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
           : undefined
       }
     >
-      <DeckGL
-        {...(autoRotate
-          ? { viewState: viewState ?? initialViewState }
-          : { initialViewState })}
-        {...deckClock}
-        onViewStateChange={handleViewStateChange}
-        onResize={handleResize}
-        controller={interactive}
-        layers={allLayers}
-        views={views}
-        parameters={useGlobe ? ({ cull: true } as any) : undefined}
-      >
-        {!useGlobe && !hideBasemap && (
-          <Map
-            reuseMaps
-            mapStyle={
-              selectedDataset.basemapStyle ?? 'mapbox://styles/mapbox/dark-v11'
-            }
-            mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
-            projection={{ name: 'mercator' }}
-            terrain={
-              selectedDataset.use3D
-                ? { source: 'mapbox-dem', exaggeration: 1.5 }
-                : undefined
-            }
-            onLoad={(evt) => {
-              const map = evt.target;
-              if (selectedDataset.use3D && !map.getSource('mapbox-dem')) {
-                map.addSource('mapbox-dem', {
-                  type: 'raster-dem',
-                  url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
-                  tileSize: 512,
-                  maxzoom: 14,
-                });
+      {terrainEnabled ? (
+        // ── Interleaved terrain path (`basemapTerrain` demos) ─────────────
+        // The MAP owns the camera; deck renders inside its frame via the
+        // MapboxOverlay control, sharing the terrain-aware projection and
+        // depth buffer (dots sit ON the relief, occluded behind ridges).
+        // A keyed, non-reused map so `onLoad` (dem source + hillshade +
+        // tuning + probe handle) reliably runs for every mount.
+        <Map
+          key={selectedDataset.id}
+          initialViewState={initialViewState}
+          maxPitch={(initialViewState as any)?.maxPitch ?? MAX_SAFE_PITCH}
+          style={{ width: '100%', height: '100%' }}
+          mapStyle={
+            selectedDataset.basemapStyle ?? 'mapbox://styles/mapbox/dark-v11'
+          }
+          mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
+          projection={{ name: 'mercator' }}
+          terrain={{
+            source: 'mapbox-dem',
+            exaggeration: terrainExaggeration,
+          }}
+          onLoad={handleTerrainMapLoad}
+          onMove={handleTerrainMove}
+          onIdle={handleTerrainIdle}
+          onResize={handleTerrainResize}
+          {...(!interactive && NONINTERACTIVE_MAP_PROPS)}
+        >
+          <DeckGLOverlay {...deckClock} layers={allLayers} />
+        </Map>
+      ) : (
+        <DeckGL
+          {...(autoRotate
+            ? { viewState: viewState ?? initialViewState }
+            : { initialViewState })}
+          {...deckClock}
+          onViewStateChange={handleViewStateChange}
+          onResize={handleResize}
+          controller={interactive}
+          layers={allLayers}
+          views={views}
+          parameters={useGlobe ? ({ cull: true } as any) : undefined}
+        >
+          {!useGlobe && !hideBasemap && (
+            <Map
+              reuseMaps
+              mapStyle={
+                selectedDataset.basemapStyle ??
+                'mapbox://styles/mapbox/dark-v11'
               }
-              // Per-dataset basemap tuning: hide labels (all symbol layers),
-              // sink the base/land fills to a near-black backdrop, and darken
-              // the road/street lines, leaving water geometry for context.
-              // Type-based (not layer-id) so it survives Mapbox style revisions;
-              // property differs per layer type.
-              const hideLabels = selectedDataset.basemapHideLabels;
-              const bg = selectedDataset.basemapBackgroundColor;
-              const roadColor = selectedDataset.basemapRoadColor;
-              if (hideLabels || bg || roadColor) {
-                try {
-                  for (const layer of map.getStyle().layers ?? []) {
-                    if (hideLabels && layer.type === 'symbol') {
-                      map.setLayoutProperty(layer.id, 'visibility', 'none');
-                    }
-                    if (bg) {
-                      if (layer.type === 'background') {
-                        map.setPaintProperty(layer.id, 'background-color', bg);
-                      } else if (
-                        layer.type === 'fill' &&
-                        /land|earth/i.test(layer.id)
-                      ) {
-                        map.setPaintProperty(layer.id, 'fill-color', bg);
-                      }
-                    }
-                    if (
-                      roadColor &&
-                      layer.type === 'line' &&
-                      /road|street|bridge|tunnel/i.test(layer.id)
-                    ) {
-                      map.setPaintProperty(layer.id, 'line-color', roadColor);
-                    }
-                  }
-                } catch {
-                  // A style without the expected layers → leave the basemap as-is.
+              mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
+              projection={{ name: 'mercator' }}
+              terrain={
+                selectedDataset.use3D
+                  ? { source: 'mapbox-dem', exaggeration: 1.5 }
+                  : undefined
+              }
+              onLoad={(evt) => {
+                const map = evt.target;
+                if (selectedDataset.use3D && !map.getSource('mapbox-dem')) {
+                  map.addSource('mapbox-dem', {
+                    type: 'raster-dem',
+                    url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+                    tileSize: 512,
+                    maxzoom: 14,
+                  });
                 }
-              }
-            }}
-          />
-        )}
-      </DeckGL>
+                applyBasemapTuning(map, selectedDataset);
+              }}
+            />
+          )}
+        </DeckGL>
+      )}
 
-      {/* Legend */}
+      {/* Legend. On a phone it collapses to a tap-to-open pill and is lifted
+          clear of the host's full-width transport bar (see bottomInset). */}
       {selectedDataset.legend && (
-        <div className="absolute bottom-3 right-3">
-          <Legend legend={selectedDataset.legend} />
+        <div
+          className="absolute right-3"
+          style={{
+            // On a phone the same bottomInset has just lifted the basemap's
+            // attribution row to sit directly under this corner, so clear it
+            // too: a 24px control plus mapbox's own 10px margin.
+            bottom: 12 + bottomInset + (isMobile ? 34 : 0),
+            maxWidth: 'calc(100% - 1.5rem)',
+          }}
+        >
+          <Legend legend={selectedDataset.legend} collapsible={isMobile} />
         </div>
       )}
 
       {/* Space-time cube controls: squash slider + tile-lattice toggle. */}
       {timeHeight && (
-        <div className="absolute left-3" style={{ top: 12 + topLeftInset }}>
+        <div
+          className="absolute left-3 right-3 sm:right-auto"
+          style={{ top: 12 + topLeftInset }}
+        >
           <CubeControls
             heightFactor={heightFactor}
             onHeightFactor={setHeightFactor}
@@ -586,13 +837,17 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
             onShowLattice={
               timeHeight.tileLattice !== false ? setShowLattice : undefined
             }
+            compact={isMobile}
           />
         </div>
       )}
 
       {/* Summary-tier weight toggle (pickup ↔ dropoff style). */}
       {summaryToggleOptions && summaryToggleOptions.length > 1 && (
-        <div className="absolute left-3" style={{ top: 12 + topLeftInset }}>
+        <div
+          className="absolute left-3 max-w-[calc(100%-1.5rem)]"
+          style={{ top: 12 + topLeftInset }}
+        >
           <SummaryToggle
             options={summaryToggleOptions}
             value={activeSummaryToggle?.id}
@@ -607,6 +862,9 @@ const DemoViewer: React.FC<DemoViewerProps> = ({
       {showPerfHud && (
         <PerformanceMonitor
           anchor="top-right"
+          // Desktop's floating header is top-LEFT only, so the HUD keeps the
+          // corner; the phone bar spans the full width and must be cleared.
+          topInset={isMobile ? topLeftInset : 0}
           overviewPreload={overviewPreload}
           getSourceRunways={getSourceRunways}
         />
@@ -628,14 +886,24 @@ const CubeControls: React.FC<{
   onHeightFactor: (f: number) => void;
   showLattice: boolean;
   onShowLattice?: (show: boolean) => void;
-}> = ({ heightFactor, onHeightFactor, showLattice, onShowLattice }) => {
+  /** Phone layout: the panel spans the gutter instead of a fixed 170px box. */
+  compact?: boolean;
+}> = ({
+  heightFactor,
+  onHeightFactor,
+  showLattice,
+  onShowLattice,
+  compact = false,
+}) => {
   return (
     <div
       className="rounded px-3 py-2 flex flex-col gap-1.5"
       style={{
         background: 'rgba(36, 39, 48, 0.95)',
         border: '1px solid #3A414C',
-        minWidth: 170,
+        // A fixed min-width plus a full-width phone gutter would overflow the
+        // map; let it be the gutter instead.
+        minWidth: compact ? undefined : 170,
       }}
     >
       <div
@@ -727,7 +995,9 @@ const SummaryToggle: React.FC<{
               className="inline-block w-2 h-2 rounded-full shrink-0"
               style={{ background: swatch }}
             />
-            <span className="font-semibold leading-tight">{opt.label}</span>
+            <span className="font-semibold leading-tight truncate">
+              {opt.label}
+            </span>
           </button>
         );
       })}

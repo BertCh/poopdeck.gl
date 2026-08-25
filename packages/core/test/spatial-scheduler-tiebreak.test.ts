@@ -280,7 +280,7 @@ describe('spatial tie-break in the shared scheduler', () => {
 
     // Single global slot: the scheduler can only ever dispatch ONE range-group
     // at a time, so dispatchOrder is an exact priority-order trace.
-    configureSharedScheduler({ enabled: true, maxRequests: 1 });
+    configureSharedScheduler({ maxRequests: 1 });
 
     const gate: Gate = { gates: [], dispatchOrder: [], inFlight: 0 };
     const archive = new STTArchive({
@@ -324,7 +324,7 @@ describe('spatial tie-break in the shared scheduler', () => {
     ];
     const url = 'mem://spatial-none/manifest.json';
     const objects = makeSpatialDataset(tiles, ZOOM, TIME_START, blob, meta, e);
-    configureSharedScheduler({ enabled: true, maxRequests: 1 });
+    configureSharedScheduler({ maxRequests: 1 });
 
     const gate: Gate = { gates: [], dispatchOrder: [], inFlight: 0 };
     const archive = new STTArchive({

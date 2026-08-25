@@ -25,5 +25,12 @@
     "directory": "./build/client",
     "binding": "ASSETS",
     "not_found_handling": "none",
+    // Canonical URLs carry NO trailing slash — every in-app link is written
+    // that way (`/docs/${slug}`, `/demos/${id}`). The prerender emits
+    // `docs/<slug>/index.html`, and the default "auto-trailing-slash" answered
+    // a hard load of `/docs/spec/stt-packed-format` with a 307 ONTO the slashed
+    // form, so a refresh silently rewrote the address bar. Redirect the other
+    // way instead, so the URL a reader shares is the URL they get back.
+    "html_handling": "drop-trailing-slash",
   },
 }

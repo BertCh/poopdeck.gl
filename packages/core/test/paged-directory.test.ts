@@ -824,3 +824,64 @@ describe('paged directory: point query near the dataset start does not fetch eve
     ]);
   });
 });
+
+// ── H2 (core hot-spot audit 2026-08): leaf decode on the Number fast path ───
+describe('H2: leaf decode is container-independent', () => {
+  it('every paged-golden leaf decoded directly yields the same entries as the whole-load single directory', () => {
+    const singleManifest = JSON.parse(
+      new TextDecoder().decode(single.objects.get('manifest.json')!),
+    );
+    const unframe = (b: Uint8Array, enc: string): Uint8Array =>
+      enc === 'zstd' ? unzstdSync(b) : b;
+    const pagedObj = paged.objects
+      .get(PAGED_DIR_KEY)!
+      .subarray(OBJECT_MAGIC_LEN);
+    const root = decodePagedRoot(
+      unframe(
+        pagedObj.subarray(0, PAGED_ROOT_LEN),
+        pagedManifest.directory.encoding,
+      ),
+    );
+    const fromLeaves = root.pages.flatMap((p) =>
+      decodeDirectory(
+        unframe(
+          pagedObj.subarray(
+            PAGED_ROOT_LEN + p.relOffset,
+            PAGED_ROOT_LEN + p.relOffset + p.length,
+          ),
+          pagedManifest.directory.encoding,
+        ),
+      ),
+    );
+    const whole = decodeDirectory(
+      unframe(
+        single.objects
+          .get(singleManifest.directory.key)!
+          .subarray(OBJECT_MAGIC_LEN),
+        singleManifest.directory.encoding,
+      ),
+    );
+    const key = (e: {
+      zoom: number;
+      x: number;
+      y: number;
+      timeStart: number;
+      variantId: number;
+    }): string => `${e.zoom}/${e.x}/${e.y}/${e.timeStart}#${e.variantId}`;
+    const byKey = (
+      a: {
+        zoom: number;
+        x: number;
+        y: number;
+        timeStart: number;
+        variantId: number;
+      },
+      b: typeof a,
+    ): number => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+    expect(fromLeaves.length).toBe(252);
+    expect(whole.length).toBe(252);
+    // Both builds share byte-identical blobs, so the entries — offsets, CRCs,
+    // covering bounds and all — must agree entry for entry.
+    expect([...fromLeaves].sort(byKey)).toEqual([...whole].sort(byKey));
+  });
+});

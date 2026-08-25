@@ -122,7 +122,7 @@ import {
   SpatioTemporalLayerProps,
   SpatioTemporalPickingInfo,
 } from '../spatiotemporal-layer.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   colorMappingDigest,
@@ -656,7 +656,8 @@ export class AnimatedBoundingBoxLayer<
    * re-pools from scratch.
    */
   private syncTrackIndex(tiles: Tile[], indexKey: string): Map<string, Track> {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const cfg = this.trackFieldConfig();
     if (!this.indexMaintainer)
       this.indexMaintainer = new TrackIndexMaintainer();
@@ -674,12 +675,14 @@ export class AnimatedBoundingBoxLayer<
     }
 
     this.hasSpeedColumn = result.hasSpeedColumn;
-    emit('tilePrepare', {
-      layer: 'AnimatedBoundingBoxLayer',
-      tracks: result.tracks.size,
-      snapshots: result.totalSnapshots,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedBoundingBoxLayer',
+        tracks: result.tracks.size,
+        snapshots: result.totalSnapshots,
+        ms: performance.now() - t0,
+      });
+    }
     return result.tracks;
   }
 
@@ -699,7 +702,8 @@ export class AnimatedBoundingBoxLayer<
   }
 
   renderLayers(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       this.trackIndex = null;
@@ -728,12 +732,14 @@ export class AnimatedBoundingBoxLayer<
       if (s) samples.push(s);
     }
     if (samples.length === 0) {
-      emit('renderLayers', {
-        layer: 'AnimatedBoundingBoxLayer',
-        tiles: tiles.length,
-        sublayers: 0,
-        ms: performance.now() - t0,
-      });
+      if (probe) {
+        emit('renderLayers', {
+          layer: 'AnimatedBoundingBoxLayer',
+          tiles: tiles.length,
+          sublayers: 0,
+          ms: performance.now() - t0,
+        });
+      }
       return [];
     }
 
@@ -756,14 +762,16 @@ export class AnimatedBoundingBoxLayer<
     if (this.props.showVelocity && this.hasSpeedColumn)
       layers.push(this.buildVelocity(samples));
 
-    emit('renderLayers', {
-      layer: 'AnimatedBoundingBoxLayer',
-      tiles: tiles.length,
-      tracks: this.trackIndex.size,
-      active: samples.length,
-      sublayers: layers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedBoundingBoxLayer',
+        tiles: tiles.length,
+        tracks: this.trackIndex.size,
+        active: samples.length,
+        sublayers: layers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(

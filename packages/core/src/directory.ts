@@ -3,17 +3,17 @@
 //
 // Decoder for the STT directory — the compact columnar run-length tile index
 // for the packed format. Mirrors the Rust codec in
-// `crates/stt-core/src/directory.rs`. The client is packed-only: it reads v5
-// directories (per-run `pack_id` column + pack-relative offsets). The retired
-// single-file v4 layout (one implicit pack, no `pack_id`) is never handed to
-// the client and is no longer decoded here.
+// `crates/stt-core/src/directory.rs`. The client is packed-only: it writes v6
+// and reads v5/v6. v5 introduced per-run `pack_id` + pack-relative offsets; v6
+// adds per-entry `variant_id`. The retired single-file v4 layout (one implicit
+// pack, no `pack_id`) is never handed to the client and is no longer decoded.
 //
-//   u8      version_tag = 5
+//   u8      version_tag = 6
 //   uvarint N            entry count
 //   uvarint R            run count
 //   per-entry × N:  Δzoom Δhilbert Δx Δy Δtime_start (zig-zag), duration
 //                   (zig-zag), feature_count (uvarint), bucket presence flag
-//                   (+ value uvarint when present)
+//                   (+ value uvarint when present), variant_id (uvarint)
 //   per-run × R:    run_length (uvarint), Δpack_id (zig-zag),
 //                   offset flag (+ raw offset uvarint when non-contiguous),
 //                   length, uncompressed_size, crc32c (u32 LE)
@@ -23,9 +23,10 @@
 // (`expectedOffset`) resets to 0 whenever the pack changes, so offsets are
 // pack-relative and the first run of each pack rides the cheap `0` sentinel.
 //
-// Varints are LEB128; signed columns use zig-zag. Values are accumulated as
-// BigInt for exactness, then narrowed to JS numbers for the fields the reader
-// uses (offsets/timestamps within 2^53, as elsewhere in the reader).
+// Varints are LEB128; signed columns use zig-zag. Values decode as JS Numbers,
+// exact below 2^53 — which every surfaced field (offsets/timestamps) must
+// satisfy anyway; a wider value is re-read exactly as a BigInt so it can be
+// rejected with its true value. See `Cursor`.
 
 /** Directory codec version the TS encoder emits (matches the Rust writer). */
 export const DIRECTORY_VERSION = 6;
@@ -310,11 +311,136 @@ export interface DirectoryEntry {
   coverTMin?: number;
 }
 
+/** 2^53 — the first integer a double cannot represent exactly. */
+const TWO_POW_53 = 9007199254740992;
+
+function safeNumber(value: number, field: string): number {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(
+      `STT directory: ${field} ${value} is outside JavaScript's safe integer range`,
+    );
+  }
+  return value;
+}
+
+/** Zig-zag → signed. Exact for `v` < 2^53 (`v + 1` ≤ 2^53 is still exact). */
+function unzigzag(v: number): number {
+  return v % 2 === 1 ? -(v + 1) / 2 : v / 2;
+}
+
+function unzigzagBig(v: bigint): bigint {
+  return (v >> 1n) ^ -(v & 1n);
+}
+
+/**
+ * Byte cursor over one directory payload.
+ *
+ * Varints decode as JS Numbers, not BigInts. This is the per-entry hot loop of
+ * every leaf decode — 4,096 entries per leaf, 4–8 leaves per viewport settle,
+ * on the main thread — and BigInt accumulation cost ~7× Number arithmetic per
+ * varint, about a third of the decode. A Number is exact below 2^53, and every
+ * field the reader surfaces must be a safe integer anyway (the BigInt path
+ * narrowed each with `safeBigInt`), so the fast path cannot accept a value the
+ * old path rejected or vice versa: a wire value at or above 2^53 is re-read
+ * exactly as a BigInt (`readBig`) and then accumulated or rejected with the
+ * same message the narrowing produced.
+ */
 class Cursor {
   pos = 0;
   constructor(public readonly bytes: Uint8Array) {}
 
-  uvarint(): bigint {
+  /** Unsigned varint. A value ≥ 2^53 is rejected, with its exact value, as `field`. */
+  uvarint(field: string): number {
+    const start = this.pos;
+    const v = this.readNumber();
+    if (v < TWO_POW_53) return v;
+    this.pos = start;
+    return safeBigInt(this.readBig(), field);
+  }
+
+  /** Signed (zig-zag) varint standing alone; rejected as `field` when unsafe. */
+  ivarint(field: string): number {
+    const start = this.pos;
+    const v = this.readNumber();
+    if (v < TWO_POW_53) return unzigzag(v);
+    this.pos = start;
+    return safeBigInt(unzigzagBig(this.readBig()), field);
+  }
+
+  /**
+   * `prev` plus a signed (zig-zag) varint — a delta-coded column's running
+   * value. Only the SUM is range-checked, as the BigInt accumulators were: a
+   * delta too wide for the fast path is added exactly, so a swing that lands
+   * back inside the safe range is accepted as before. On the fast path the sum
+   * comes back unchecked for the caller to narrow with {@link safeNumber}; it
+   * is never silently wrong, because a sum of two safe integers that leaves
+   * the safe range is not a safe integer either.
+   */
+  delta(prev: number, field: string): number {
+    const start = this.pos;
+    const v = this.readNumber();
+    if (v < TWO_POW_53) return prev + unzigzag(v);
+    this.pos = start;
+    return safeBigInt(BigInt(prev) + unzigzagBig(this.readBig()), field);
+  }
+
+  /** A presence / contiguity flag: non-zero at any width, never narrowed. */
+  flag(): boolean {
+    return this.readNumber() !== 0;
+  }
+
+  /**
+   * Consume a varint whose value is never used — the Hilbert column, a 2·zoom
+   * bit key that exceeds 2^53 from zoom 27. Same truncation and 64-bit width
+   * checks as a read, no accumulation.
+   */
+  skip(): void {
+    for (let k = 0; ; k++) {
+      if (this.pos >= this.bytes.length) {
+        throw new Error('STT directory: truncated varint');
+      }
+      const byte = this.bytes[this.pos++];
+      if ((byte & 0x80) === 0) return;
+      if (k >= 9) {
+        throw new Error('STT directory: varint exceeds 64 bits');
+      }
+    }
+  }
+
+  /**
+   * LEB128 → Number. Exact below 2^53; at or above it the result is only
+   * guaranteed to compare ≥ 2^53 (each 7-bit group is added at an exact
+   * power-of-two scale, so rounding cannot pull a wide value under the edge),
+   * which is all a caller needs to divert to {@link readBig}.
+   */
+  private readNumber(): number {
+    const bytes = this.bytes;
+    let pos = this.pos;
+    // Single-byte values are the bulk of a delta-coded directory.
+    if (pos < bytes.length && bytes[pos] < 0x80) {
+      this.pos = pos + 1;
+      return bytes[pos];
+    }
+    let result = 0;
+    let scale = 1;
+    for (let k = 0; ; k++) {
+      if (pos >= bytes.length) {
+        throw new Error('STT directory: truncated varint');
+      }
+      const byte = bytes[pos++];
+      result += (byte & 0x7f) * scale;
+      if ((byte & 0x80) === 0) break;
+      scale *= 128;
+      if (k >= 9) {
+        throw new Error('STT directory: varint exceeds 64 bits');
+      }
+    }
+    this.pos = pos;
+    return result;
+  }
+
+  /** LEB128 → BigInt, exact up to 64 bits. The wide / reject path only. */
+  private readBig(): bigint {
     let result = 0n;
     let shift = 0n;
     for (;;) {
@@ -330,12 +456,6 @@ class Cursor {
       }
     }
     return result;
-  }
-
-  /** Signed (zig-zag) varint. */
-  ivarint(): bigint {
-    const v = this.uvarint();
-    return (v >> 1n) ^ -(v & 1n);
   }
 
   u32le(): number {
@@ -372,8 +492,8 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
   const c = new Cursor(bytes);
   c.pos = 1;
 
-  const n = safeBigInt(c.uvarint(), 'entry count');
-  const runCount = safeBigInt(c.uvarint(), 'run count');
+  const n = c.uvarint('entry count');
+  const runCount = c.uvarint('run count');
   // Every key consumes at least eight one-byte varints. Reject an impossible
   // count before allocating attacker-sized arrays.
   if (n > Math.floor((bytes.length - c.pos) / 8)) {
@@ -391,42 +511,40 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     zoom: number;
     x: number;
     y: number;
-    timeStart: bigint;
-    timeEnd: bigint;
+    timeStart: number;
+    timeEnd: number;
     featureCount: number;
     temporalBucketMs?: number;
     variantId: number;
   }
   const keys: Key[] = new Array(n);
 
-  // Delta accumulators (BigInt). `hilbert` is delta-coded too and must be
-  // consumed to stay aligned even though the reader never surfaces it.
-  let pz = 0n;
-  let ph = 0n;
-  let px = 0n;
-  let py = 0n;
-  let pt = 0n;
+  // Delta accumulators. `hilbert` is delta-coded too and must be consumed to
+  // stay aligned, but the reader never surfaces it, so it is skipped rather
+  // than accumulated.
+  let pz = 0;
+  let px = 0;
+  let py = 0;
+  let pt = 0;
   for (let i = 0; i < n; i++) {
-    pz += c.ivarint();
-    ph += c.ivarint(); // hilbert delta — consumed, not stored
-    px += c.ivarint();
-    py += c.ivarint();
-    pt += c.ivarint();
-    const duration = c.ivarint();
-    const featureCount = safeBigInt(c.uvarint(), `entry ${i} featureCount`);
-    const bucketPresent = c.uvarint();
+    pz = c.delta(pz, `entry ${i} zoom`);
+    c.skip(); // hilbert delta — consumed, not stored
+    px = c.delta(px, `entry ${i} x`);
+    py = c.delta(py, `entry ${i} y`);
+    pt = c.delta(pt, `entry ${i} timeStart`);
+    const timeEndRaw = c.delta(pt, `entry ${i} timeEnd`); // pt + duration
+    const featureCount = c.uvarint(`entry ${i} featureCount`);
+    const bucketPresent = c.flag();
     let temporalBucketMs: number | undefined;
-    if (bucketPresent !== 0n) {
-      temporalBucketMs = safeBigInt(c.uvarint(), `entry ${i} temporalBucketMs`);
+    if (bucketPresent) {
+      temporalBucketMs = c.uvarint(`entry ${i} temporalBucketMs`);
     }
-    const variantId = hasVariantColumn
-      ? safeBigInt(c.uvarint(), `entry ${i} variantId`)
-      : 0;
-    const zoom = safeBigInt(pz, `entry ${i} zoom`);
-    const x = safeBigInt(px, `entry ${i} x`);
-    const y = safeBigInt(py, `entry ${i} y`);
-    const timeStart = safeBigInt(pt, `entry ${i} timeStart`);
-    const timeEnd = safeBigInt(pt + duration, `entry ${i} timeEnd`);
+    const variantId = hasVariantColumn ? c.uvarint(`entry ${i} variantId`) : 0;
+    const zoom = safeNumber(pz, `entry ${i} zoom`);
+    const x = safeNumber(px, `entry ${i} x`);
+    const y = safeNumber(py, `entry ${i} y`);
+    const timeStart = safeNumber(pt, `entry ${i} timeStart`);
+    const timeEnd = safeNumber(timeEndRaw, `entry ${i} timeEnd`);
     if (zoom < 0 || x < 0 || y < 0 || timeEnd < timeStart) {
       throw new Error(`STT directory: entry ${i} has invalid coordinates/time`);
     }
@@ -434,8 +552,8 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
       zoom,
       x,
       y,
-      timeStart: pt,
-      timeEnd: pt + duration,
+      timeStart,
+      timeEnd,
       featureCount,
       temporalBucketMs,
       variantId,
@@ -444,32 +562,28 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
 
   const entries: DirectoryEntry[] = new Array(n);
   let cursor = 0;
-  let expectedOffset = 0n;
-  let prevPackId = 0n;
+  let expectedOffset = 0;
+  let prevPackId = 0;
   for (let r = 0; r < runCount; r++) {
-    const runLen = safeBigInt(c.uvarint(), `run ${r} length`);
+    const runLen = c.uvarint(`run ${r} length`);
     // Δpack_id (zig-zag) precedes the offset sentinel. Reset the offset
     // contiguity expectation when the pack changes, so the first run of each
     // pack hits the cheap `0` sentinel (offsets are pack-relative).
-    const packId = prevPackId + c.ivarint();
+    const packId = c.delta(prevPackId, `run ${r} packId`);
     if (packId !== prevPackId) {
-      expectedOffset = 0n;
+      expectedOffset = 0;
     }
     prevPackId = packId;
-    const offFlag = c.uvarint();
-    const offset = offFlag === 0n ? expectedOffset : c.uvarint();
-    const length = safeBigInt(c.uvarint(), `run ${r} length bytes`);
-    const uncompressedSize = safeBigInt(
-      c.uvarint(),
-      `run ${r} uncompressedSize`,
-    );
+    const offset = c.flag() ? c.uvarint(`run ${r} offset`) : expectedOffset;
+    const length = c.uvarint(`run ${r} length bytes`);
+    const uncompressedSize = c.uvarint(`run ${r} uncompressedSize`);
     const crc32c = c.u32le();
 
     if (cursor + runLen > n) {
       throw new Error('STT directory: run length exceeds entry count');
     }
-    const packIdNum = safeBigInt(packId, `run ${r} packId`);
-    const offsetNum = safeBigInt(offset, `run ${r} offset`);
+    const packIdNum = safeNumber(packId, `run ${r} packId`);
+    const offsetNum = safeNumber(offset, `run ${r} offset`);
     if (packIdNum < 0 || length < 0 || uncompressedSize < 0 || offsetNum < 0) {
       throw new Error(`STT directory: run ${r} has invalid blob fields`);
     }
@@ -479,8 +593,8 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
         zoom: key.zoom,
         x: key.x,
         y: key.y,
-        timeStart: safeBigInt(key.timeStart, `entry ${cursor} timeStart`),
-        timeEnd: safeBigInt(key.timeEnd, `entry ${cursor} timeEnd`),
+        timeStart: key.timeStart,
+        timeEnd: key.timeEnd,
         variantId: key.variantId,
         packId: packIdNum,
         offset: offsetNum,
@@ -492,8 +606,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
       };
       cursor++;
     }
-    expectedOffset = offset + BigInt(length);
-    safeBigInt(expectedOffset, `run ${r} ending offset`);
+    expectedOffset = safeNumber(offsetNum + length, `run ${r} ending offset`);
   }
 
   if (cursor !== n) {
@@ -510,7 +623,7 @@ export function decodeDirectory(bytes: Uint8Array): DirectoryEntry[] {
     if (tag === COVER_SECTION_TMIN) {
       parsedKnownTrailingSection = true;
       for (let i = 0; i < n; i++) {
-        const delta = safeBigInt(c.ivarint(), `entry ${i} coverTMin delta`);
+        const delta = c.ivarint(`entry ${i} coverTMin delta`);
         const coverTMin = entries[i].timeStart + delta;
         if (!Number.isSafeInteger(coverTMin)) {
           throw new Error(

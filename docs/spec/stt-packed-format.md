@@ -274,14 +274,15 @@ the schema **template** is written once, embedded in the manifest:
   failure mode that bricks a dataset, no extra cold-start fetch — every
   session already fetches the manifest.
 
-## 4. Directory format v5
+## 4. Directory format v6
 
 The directory (`index/<hash>.sttd`) is a pure columnar binary buffer
 (`crates/stt-core/src/directory.rs`), inspired by PMTiles v3: delta + zig-zag
 varint key columns plus blob-run RLE. v5 is the pack-aware directory codec
-(`DIRECTORY_VERSION = 5`), extending the earlier single-file v4 codec with
-pack awareness. Specified in full here since this is the codec's only
-deployment.
+that introduced per-run pack identity and pack-relative offsets. The current
+v6 codec (`DIRECTORY_VERSION = 6`) adds `variant_id` to every entry so raw and
+derived representations can share one archive without address collisions.
+Specified in full here since this is the codec's only deployment.
 
 **Varints.** Unsigned values use LEB128; signed deltas use LEB128 over a zig-zag
 mapping `zz(v) = (v << 1) ^ (v >> 63)`. Deltas are computed with wrapping
@@ -1013,8 +1014,8 @@ rule generalized):
   _trailing section tag_ (like the covering section's tag 1) is additive —
   old decoders stop at the first unrecognized tag — but because trailing
   sections carry no length prefix, an unrecognized tag hides every section
-  after it; a second section therefore effectively spends the remaining
-  headroom, and the planned v6 moves to length-prefixed tagged sections.
+  after it; a second section therefore requires a future codec revision or a
+  length-prefixed extension design.
   A new root-page `descriptor_kind` (§4.1) is additive the same way: the
   byte is reserved precisely so new descriptor shapes don't bump the codec.
 - **Tile payload** evolves per its own spec
@@ -1119,6 +1120,16 @@ classified; no current reader opens one (§9.1). The `.sttb` bundle (§13)
 carries its own `STTB` magic prelude from day one.
 
 ### 9.3 Changelog
+
+- **vis.gl temporal column metadata (2026-08-25)** — a READER contract, not a
+  wire change (§10.7). Both decoders stamp `visgl:temporal-*` onto the time
+  columns of the batch they hand out. **Nothing in the encoder changed**: no
+  `formatVersion` bump, no capability, no content-address churn, and every
+  archive ever written gains the descriptor without a rebuild. Encoding the
+  keys was measured and rejected — a self-contained frame (`stt-serve`'s
+  inline-schema shape) would carry them on every tile, +65 to +181 B compressed
+  per tile on `stt-optimize`'s sample layouts, to restate what the reader can
+  derive.
 
 - **v3 (2026-08)** — clean archive cutover. `variants` is now a required
   manifest registry; raw is variant 0 and every directory address includes
@@ -1401,6 +1412,59 @@ tile opens directly in geoarrow-python / GeoPandas / Lonboard. The container
 described in this spec is format-agnostic above the blob level; GeoArrow is
 the normative payload contract (see
 [`docs/architecture/data-format.md`](../architecture/data-format.md)).
+
+### 10.7 vis.gl temporal column metadata
+
+GeoArrow describes _where_; nothing in it describes _when_. An `Int64` column
+named `start_time` is indistinguishable from an opaque counter, so a generic
+Arrow consumer has no way to learn that STT's time columns are absolute UTC
+epoch milliseconds.
+
+Both STT readers therefore stamp the `visgl:temporal-*` field-metadata
+vocabulary that luma.gl's `@luma.gl/arrow` writes onto a prepared temporal
+field (`modules/arrow/src/arrow/vectors/arrow-temporal-gpu-vector.ts`), and
+that the
+[deck.gl v10 Arrow API direction](https://github.com/visgl/luma.gl/blob/master/docs/api-reference/arrow/deck-target-api.mdx)
+assumes under _Time Handling_. It is applied to `start_time`, `end_time` and
+`vertex_time`:
+
+| key                            | value                                         |
+| ------------------------------ | --------------------------------------------- |
+| `visgl:temporal-kind`          | `timestamp`                                   |
+| `visgl:temporal-unit`          | `millisecond`                                 |
+| `visgl:temporal-timezone`      | `UTC`                                         |
+| `visgl:temporal-origin`        | `0` — **only on absolute columns**, see below |
+| `visgl:temporal-origin-policy` | `zero` — present exactly when `origin` is     |
+
+**This is a decode-side contract; the keys never appear on the wire.** Every
+value is derivable from the decoded column, so encoding them would be paying to
+restate what the reader already knows — and a self-contained frame (§5.2, the
+inline-schema shape `stt-serve` emits) would pay it on every tile. Deriving
+instead means the descriptor covers archives written long before it existed,
+and that no content address moves. Rust applies it in
+`arrow_tile::layer::decorate_temporal_fields`, TypeScript in
+`toGeoArrowTable()`; the two agree key for key.
+
+**The origin rule.** An origin is stated only for a column that actually holds
+absolute values, which is decided from the column's own type: signed `Int64`
+(or `List<Int64>`), never one of the unsigned compact forms. Re-inflation
+(§5.2.4) has already turned compact `start_time`/`end_time` back into whole
+milliseconds by the time the descriptor is applied, so those two say
+`origin = 0` however they were written. `vertex_time` is _not_ re-inflated —
+its `List<UInt16>`/`List<UInt32>` deltas stay deltas — so it states the domain
+and stays silent about the origin, leaving the per-tile
+`stt:vertex_time_origin_ms` as the sole authority for its anchor. Advertising a
+per-tile anchor as a column origin would place every vertex of every other tile
+at the wrong instant.
+
+**Batch stability.** The deck.gl v10 direction requires that for streamed
+`RecordBatch` inputs "the temporal origin should be stable across all
+batches… later batches should not silently shift the animation clock for
+already uploaded data." STT satisfies this by construction: the hand-off is
+absolute, so every tile of an archive reports origin `0` and tiles may be
+concatenated into one Arrow-backed layer freely. The per-tile
+`BinaryFeatures.timeOffset` is an internal float32-precision device for STT's
+own render path and is deliberately absent from this surface.
 
 ## 11. Security considerations
 

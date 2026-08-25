@@ -15,11 +15,13 @@
 import { describe, it, expect } from 'vitest';
 import { makePointTile, categorical } from './helpers/track-tiles';
 import {
+  TrackIndexMaintainer,
   buildTrackIndex,
   sampleTrack,
   lerpAngle,
   resolveColor,
 } from '../src/render/track-kernel';
+import type { Tile } from '../src/types';
 import type {
   TrackColor,
   TrackFieldConfig,
@@ -399,5 +401,113 @@ describe('track-kernel resolveColor', () => {
     const track = buildTrackIndex([tile], cfg).tracks.get('A')!;
     expect(track.category).toBe('car');
     expect(track.color).toEqual([12, 34, 56, 200]);
+  });
+});
+
+// ── H1 (core hot-spot audit 2026-08): dirty-track ordering is per-holder ────
+//
+// `TrackIndexMaintainer.sync` used to order each dirty track's per-tile groups
+// by walking EVERY resident tile-layer key and probing the track's `byTile`
+// map for each — O(dirty tracks × resident tile-layers) per sync, 313 ms of a
+// 1.1 s cold sync at 854 tile-layers × 30k tracks. A track lives in one or two
+// tile-layers, so the maintainer now ranks the resident keys once per sync and
+// sorts each dirty track's OWN groups by rank. `orderingLookups` is the seam
+// that counts how many (dirty track, tile-layer) slots the ordering examined.
+
+/**
+ * `tileLayers` point tiles holding `tracks` two-keyframe tracks: track j starts
+ * (t=0) in tile j % tileLayers and ends (t=1000) in tile (j+1) % tileLayers.
+ */
+function trackChurnFixture(tileLayers: number, tracks: number): Tile[] {
+  const ids: string[][] = Array.from({ length: tileLayers }, () => []);
+  const times: number[][] = Array.from({ length: tileLayers }, () => []);
+  for (let j = 0; j < tracks; j++) {
+    const a = j % tileLayers;
+    const b = (j + 1) % tileLayers;
+    ids[a].push(`T${j}`);
+    times[a].push(0);
+    ids[b].push(`T${j}`);
+    times[b].push(1000);
+  }
+  return ids.map((trackIds, i) => {
+    const tile = makePointTile({
+      positions: trackIds.map((_, f) => [i, f]),
+      startTimes: times[i],
+      endTimes: times[i],
+      timeOffset: 0,
+      tileId: { z: 10, x: i % 64, y: Math.floor(i / 64), t: 0 },
+    });
+    tile.layers[0].features.categoricalProps['track_id'] =
+      categorical(trackIds);
+    return tile;
+  });
+}
+
+describe('H1: TrackIndexMaintainer orders a dirty track by rank, not by scanning every resident tile-layer', () => {
+  const TILE_LAYERS = 800;
+  const TRACKS = 20_000;
+
+  it('cold sync over 800 tile-layers × 20k tracks examines only the tile-layers that hold each track', () => {
+    const tiles = trackChurnFixture(TILE_LAYERS, TRACKS);
+    const m = new TrackIndexMaintainer();
+    const t0 = performance.now();
+    const r = m.sync(tiles, CFG);
+    const ms = performance.now() - t0;
+    console.log(
+      `H1 cold sync ${TILE_LAYERS}×${TRACKS}: ${ms.toFixed(1)} ms, orderingLookups=${m.orderingLookups}`,
+    );
+    expect(r.tracks.size).toBe(TRACKS);
+    expect(r.totalSnapshots).toBe(2 * TRACKS);
+    expect(m.resortedTrackIds.length).toBe(TRACKS);
+    // Every track is held by exactly two tile-layers → 40k holdings. The
+    // resident-key scan examined TRACKS × TILE_LAYERS = 16,000,000 slots.
+    expect(m.orderingLookups).toBeLessThanOrEqual(2 * TRACKS);
+    expect(m.orderingLookups).toBe(2 * TRACKS);
+    // Byte-for-byte the one-shot build, including the cross-tile keyframe order.
+    const full = buildTrackIndex(tiles, CFG);
+    for (const id of ['T0', 'T799', 'T800', 'T12345', 'T19999']) {
+      expect(r.tracks.get(id)).toEqual(full.tracks.get(id));
+      expect(Array.from(r.tracks.get(id)!.times)).toEqual([0, 1000]);
+    }
+  });
+
+  it('a churn step examines only the holders of the tracks the churned tiles fed', () => {
+    const tiles = trackChurnFixture(TILE_LAYERS, TRACKS);
+    const m = new TrackIndexMaintainer();
+    m.sync(tiles, CFG);
+    // Evict the first 8 tiles. Tracks with BOTH keyframes there vanish; the
+    // 50 tracks with one keyframe left become singletons → 50 lookups, one
+    // per surviving group, not 50 × 792 resident keys.
+    const t0 = performance.now();
+    const r = m.sync(tiles.slice(8), CFG);
+    const ms = performance.now() - t0;
+    console.log(
+      `H1 churn step (−8 tiles): ${ms.toFixed(2)} ms, orderingLookups=${m.orderingLookups}`,
+    );
+    expect(r.tracks.size).toBe(TRACKS - 7 * 25);
+    expect(m.orderingLookups).toBeGreaterThan(0);
+    expect(m.orderingLookups).toBeLessThanOrEqual(50);
+    expect(r.tracks.get('T7')!.singleton).toBe(true);
+    expect(r.tracks.get('T3')).toBeUndefined();
+    expect(r.tracks.get('T8')).toEqual(
+      buildTrackIndex(tiles.slice(8), CFG).tracks.get('T8'),
+    );
+  });
+
+  it('re-syncing a re-ordered tile array reassembles in the NEW array order (rank map is per sync)', () => {
+    const tiles = trackChurnFixture(16, 64);
+    const m = new TrackIndexMaintainer();
+    m.sync(tiles, CFG);
+    // Same tiles, reversed. Nothing is dirty, so no track is rebuilt…
+    const rev = m.sync([...tiles].reverse(), CFG);
+    expect(m.orderingLookups).toBe(0);
+    // …but a track dirtied AFTER the reorder must assemble in reversed order,
+    // which the sort/de-dup then normalises identically to a full build.
+    const dropped = [...tiles].reverse().slice(1);
+    const r = m.sync(dropped, CFG);
+    const full = buildTrackIndex(dropped, CFG);
+    for (const [id, track] of r.tracks)
+      expect(track).toEqual(full.tracks.get(id));
+    expect(rev.tracks.size).toBe(64);
   });
 });

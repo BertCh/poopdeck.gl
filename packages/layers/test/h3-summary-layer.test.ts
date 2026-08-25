@@ -9,6 +9,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { latLngToCell, cellToLatLng } from 'h3-js';
 import { splitLongToH3Index, h3IndexToSplitLong } from 'h3-js';
 
+// `splitLongToH3Index` is spied on (not replaced) so the cell-id decode can be
+// COUNTED — see 'decodes each tile's cell ids once'. Hoisted above the layer
+// import so the module registry hands the layer the wrapped binding.
+vi.mock('h3-js', async () => {
+  const actual = await vi.importActual<typeof import('h3-js')>('h3-js');
+  return { ...actual, splitLongToH3Index: vi.fn(actual.splitLongToH3Index) };
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Render-path harness (mirrors quadbin-summary-layer.test.ts). The full layer
 // can't run under vitest (no WebGL, no real archive), so `renderLayers()` is
@@ -416,6 +424,44 @@ describe('H3SummaryLayer: sub-bucket animation within a tile', () => {
     const [sub] = layer.renderLayers() as CapturedLayer[];
     expect(sub.props.id).toBe('h3-hexagons-2/0/0/0#0:count');
     expect(sub.props.data).toHaveLength(2);
+  });
+
+  /**
+   * The prepared-tile cache is keyed by `(tile, weightProperty, subBucket)`,
+   * so every sub-bucket the play head crosses is a cache MISS that rebuilds
+   * the tile's rows. The cell ids are not part of what changed — they are a
+   * pure function of the tile's `id` column — so they must survive that miss.
+   *
+   * Without the separate hex-id cache this decodes `cells × sub-buckets`
+   * times per tile instead of `cells`, allocating a 15-char string each time,
+   * for every resident tile, for the whole of playback.
+   */
+  it("decodes each tile's cell ids once, not once per sub-bucket", async () => {
+    const decode = vi.mocked(splitLongToH3Index);
+    const layer = await makeH3Layer({}, subBucketState());
+
+    decode.mockClear();
+    layer._currentTime = 500; // sub-bucket 0 — first prepare of this tile
+    layer.renderLayers();
+    const firstPass = decode.mock.calls.length;
+    expect(firstPass, 'the tile has 2 cells to decode').toBe(2);
+
+    // Walk the remaining sub-buckets: each is a fresh prepared-tile key.
+    decode.mockClear();
+    for (const t of [1500, 2500, 3500]) {
+      layer._currentTime = t;
+      layer.renderLayers();
+    }
+    expect(
+      decode.mock.calls.length,
+      'cell ids are invariant across sub-buckets and must be reused',
+    ).toBe(0);
+
+    // …and the rows are still correct, i.e. the reuse is not staleness.
+    layer._currentTime = 2500; // sub-bucket 2
+    const sub = layer.renderLayers()[0] as CapturedLayer;
+    expect(sub.props.data).toHaveLength(1);
+    expect(sub.props.data[0].weight).toBe(9);
   });
 });
 

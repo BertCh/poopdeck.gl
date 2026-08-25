@@ -35,7 +35,7 @@
   },
   "peerDependencies": {
     "h3-js": "^4.1.0",
-    "maplibre-gl": "^3 || ^4 || ^5"
+    "maplibre-gl": "^3 || ^4 || ^5 || ^6"
   },
   "peerDependenciesMeta": {
     "h3-js": {
@@ -43,9 +43,9 @@
     }
   },
   "devDependencies": {
-    "maplibre-gl": "^4.7.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "maplibre-gl": "^6.6.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
@@ -65,6 +65,6 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   }
 }

@@ -764,15 +764,11 @@ descriptor said globe; the deployment could not do globe; nothing failed. It is 
 cleanest example in this repo of a capability that is true in the package and false
 in the product.
 
-**Fixed on the deployment side (verified 2026-07-26):** the showcase now pins
-`maplibre-gl: ^5.24.0` and resolves 5.24.0, so the prelude path the backend already
-implements is exercised for the first time — and is therefore also unverified in a
-browser (L2 in the [roadmap README](./README.md)). v6 was deliberately **not**
-taken: it shipped 2026-07-22, is ESM-only and WebGL2-only, and adopting it here
-would bundle a packaging migration into a defect fix. _(Note a live inconsistency:
-`packages/maplibre` declares peer `^3 || ^4 || ^5` — no `^6` — while the layer code
-is v6-ready via runtime shape detection. Widen the peer in the same pass that first
-tests against v6, not before.)_
+**Fixed on the deployment side (current state 2026-08-24):** the showcase runs
+`maplibre-gl` 6.6.x, and `packages/maplibre` declares the tested peer range
+`^3 || ^4 || ^5 || ^6`. Runtime host-shape detection keeps the v5/v6 projection
+prelude path compatible. Browser sign-off remains tracked as L2 in the
+[roadmap README](./README.md).
 
 **Structural fix, still open:** capability resolution is not host-aware. The
 `hostApiRange` idea was counted out "until maplibre v5/globe is actually

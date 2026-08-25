@@ -184,3 +184,10 @@ scripts/data-generation/waymo-raw/
 
 # Local MCP server config (machine-specific absolute paths)
 /.mcp.json
+
+# Local pnpm store created when a store path is set inside the repo; never an
+# input to a build, and the real store lives under ~/Library/pnpm.
+.pnpm-store/
+# Scratch HEAD-state snapshot of a package's src/, used for A/B measurement
+# runs (tile-loading audit). Unreferenced by any build or test.
+**/.headsrc/

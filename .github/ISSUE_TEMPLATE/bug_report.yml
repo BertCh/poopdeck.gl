@@ -51,6 +51,6 @@ body:
         Crate or CLI version (`stt-build --version`) and/or `@poopdeck.gl/*`
         version, plus OS. For renderer bugs add browser and GPU
         (chrome://gpu → "GL Renderer").
-      placeholder: 'stt-build 0.5.0, @poopdeck.gl/layers 0.5.0, macOS 14, Chrome 138, Apple M2'
+      placeholder: 'stt-build 0.6.0, @poopdeck.gl/layers 0.6.0, macOS 14, Chrome 138, Apple M2'
     validations:
       required: true

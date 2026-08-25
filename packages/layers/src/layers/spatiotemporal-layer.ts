@@ -207,6 +207,21 @@ export interface _SpatioTemporalLayerProps {
   maxRequests?: number;
 
   /**
+   * This layer's weight for the process-shared request scheduler's
+   * weighted-fair (Deficit-Round-Robin) slot share when several archives
+   * composite into one scene: a higher weight takes a larger share of the
+   * global concurrency budget under contention. Work-conserving — a lone
+   * archive gets the whole budget whatever its weight — and the governor's
+   * bandwidth re-balancing (`tileset.setBandwidthWeight`) still adjusts it
+   * live on top of this starting share.
+   *
+   * CONSTRUCTION-ONLY: read once when the archive is built. Changing it after
+   * mount has no effect until `data` changes.
+   * @default 1
+   */
+  schedulerWeight?: number;
+
+  /**
    * Debounce time for viewport changes in ms (deck.gl `TileLayer` pattern).
    *
    * CONSTRUCTION-ONLY: read once when the tileset is built. Changing it after
@@ -390,6 +405,18 @@ export interface _SpatioTemporalLayerProps {
    * skipped). Only fires when `overviewPreload` is truthy.
    */
   onOverviewPreload?: ((result: OverviewPreloadResult) => void) | null;
+
+  /**
+   * Upper bound, in wall ms, on the per-tile prepare work (`warmTile`) the
+   * layer commits per animation frame when a batch of tiles lands. The rest
+   * is carried to the following frame(s), nearest-to-playhead first, while
+   * every already-committed tile keeps drawing — so a burst of 50 arrivals
+   * is a few short frames instead of one long one. `0` commits the whole
+   * batch at once. Kinds with no per-tile CPU prepare meter 0 ms and are
+   * unaffected.
+   * @default 6
+   */
+  tileCommitBudgetMs?: number;
 
   /**
    * loaders.gl-style options. Only `loadOptions.fetch` is consumed: the
@@ -645,6 +672,17 @@ interface SpatioTemporalLayerState {
   overviewPreloadResult?: OverviewPreloadResult | null;
   /** Once-per-settle latch: the tileset selection version `onViewportLoad` last fired for. */
   viewportLoadVersion?: number;
+  /** Handle of the single pending trailing SEEK pass (the tick-path twin of `viewportSettleTimer`). */
+  seekSettleTimer?: ReturnType<typeof setTimeout> | null;
+  /**
+   * Earliest playhead at which a tile the last `renderLayers()` culled as
+   * FUTURE becomes drawable; `Infinity` when none was. See `cullTilesByTimeRange`.
+   */
+  nextWakeMs?: number;
+  /** Latest playhead at which a tile culled as PAST becomes drawable again; `-Infinity` when none was. */
+  prevWakeMs?: number;
+  /** Once-per-tileset latch: the deferred overview preload has been kicked. */
+  overviewKicked?: boolean;
 }
 
 const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
@@ -672,6 +710,9 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   // the tuned ceiling — high enough to fill a viewport in one round-trip,
   // low enough to stay well under the per-connection stream cap.
   maxRequests: 24,
+  // Equal-share starting weight for the shared scheduler's DRR (the archive's
+  // own default); the governor re-balances live on top of it.
+  schedulerWeight: 1,
   debounceTime: 0,
   maxCacheSize: 2000,
   maxCacheByteSize: 2 * 1024 * 1024 * 1024, // 2 GiB
@@ -737,6 +778,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   // design — the gate, not the consumer, decides whether anything loads).
   overviewPreload: false,
   onOverviewPreload: { type: 'function', value: null, optional: true },
+  tileCommitBudgetMs: 6,
 
   // loaders.gl options
   loadOptions: { type: 'object', value: {}, compare: false },
@@ -944,6 +986,39 @@ export class SpatioTemporalLayer<
     this._lcWrite('viewportSettleTimer', value);
   }
 
+  // Trailing seek pass: armed when the tick-path wall throttle blocks a
+  // playhead move that crossed the reselection threshold. On a PAUSED clock
+  // no later tick would retry, so without it a seek landing inside the 100 ms
+  // window never reached the tileset. See _scheduleSeekSettle.
+  private get _seekSettleTimer(): ReturnType<typeof setTimeout> | null {
+    return this._lcRead('seekSettleTimer', null);
+  }
+  private set _seekSettleTimer(value: ReturnType<typeof setTimeout> | null) {
+    this._lcWrite('seekSettleTimer', value);
+  }
+
+  // Render-cull wake edges — written by cullTilesByTimeRange(), read on the
+  // unthrottled tick path. ±Infinity = nothing culled on that side.
+  private get _nextWakeMs(): number {
+    return this._lcRead('nextWakeMs', Infinity);
+  }
+  private set _nextWakeMs(value: number) {
+    this._lcWrite('nextWakeMs', value);
+  }
+  private get _prevWakeMs(): number {
+    return this._lcRead('prevWakeMs', -Infinity);
+  }
+  private set _prevWakeMs(value: number) {
+    this._lcWrite('prevWakeMs', value);
+  }
+
+  private get _overviewKicked(): boolean {
+    return this._lcRead('overviewKicked', false);
+  }
+  private set _overviewKicked(value: boolean) {
+    this._lcWrite('overviewKicked', value);
+  }
+
   // rAF handle for coalescing onTileLoad setState calls. Many tiles can
   // finish loading within one frame; batching avoids one full
   // renderLayers()/buildConsolidatedData() rebuild per tile. Shared through
@@ -1123,8 +1198,15 @@ export class SpatioTemporalLayer<
     // Create handler for time tick updates - this allows the layer to update
     // without React re-rendering the entire layer tree
     const tickHandler = (time: number) => {
-      // Only update if time actually changed significantly (avoid micro-updates)
-      if (Math.abs(time - this._currentTime) > 1) {
+      // Skip micro-updates while PLAYING. On a PAUSED clock every tick is a
+      // seek or a scrub, and a drag release re-sends the last preview value
+      // — that repeat must still reach `_handleTimeUpdate` so the trailing
+      // seek pass can land it; the `|Δ| > 1` guard alone swallowed it and the
+      // tileset kept selecting for the last preview that beat the throttle.
+      if (
+        Math.abs(time - this._currentTime) > 1 ||
+        !this.state.resolvedTimeController?.isPlaying()
+      ) {
         this._handleTimeUpdate(time);
       }
     };
@@ -1407,6 +1489,21 @@ export class SpatioTemporalLayer<
     // Always update internal time tracking (no setState overhead)
     this._currentTime = time;
 
+    // Render-cull wake: `renderLayers()` skips resident tiles whose covering
+    // time range cannot touch the render window and records the nearest
+    // skipped edge on each side (cullTilesByTimeRange). Nothing else re-runs
+    // `renderLayers()` until the tile SET changes, so the moment the playhead
+    // crosses one of those edges the render epoch is bumped here — two
+    // comparisons per tick. The edges are reset at once; the pass this
+    // triggers recomputes them.
+    let woke = false;
+    if (time >= this._nextWakeMs || time <= this._prevWakeMs) {
+      this._nextWakeMs = Infinity;
+      this._prevWakeMs = -Infinity;
+      this.setState({ frameNumber: (this.state.frameNumber || 0) + 1 });
+      woke = true;
+    }
+
     // Check if we need to update the tileset (throttled). Use the LOAD window,
     // not the render window: what matters here is how much of the timeline the
     // selected tiles cover, which must outlast MIN_TILESET_UPDATE_WALL_MS of
@@ -1420,15 +1517,16 @@ export class SpatioTemporalLayer<
     // window), so slow scrubbing is unchanged; only fast playback is reined in.
     const MIN_TILESET_UPDATE_WALL_MS = 100;
     const nowWall = performance.now();
+    const wallRemaining =
+      MIN_TILESET_UPDATE_WALL_MS - (nowWall - this._lastTilesetUpdateWall);
 
     let tilesChanged = false;
 
-    if (
-      timeDelta > updateThreshold &&
-      nowWall - this._lastTilesetUpdateWall >= MIN_TILESET_UPDATE_WALL_MS
-    ) {
+    if (timeDelta > updateThreshold && wallRemaining <= 0) {
       this._lastTilesetUpdateTime = time;
       this._lastTilesetUpdateWall = nowWall;
+      // A real pass is running; a trailing pass armed for this move is moot.
+      this._clearSeekSettle();
 
       const viewport = this.context.viewport;
       if (viewport) {
@@ -1452,8 +1550,10 @@ export class SpatioTemporalLayer<
           true,
         ); // skipDebounce = true for animation
 
-        // Check if tiles actually changed
-        const newTiles = tileset.getVisibleTiles();
+        // Check if tiles actually changed (admission is budgeted — _admitTiles)
+        const { tiles: newTiles, carried } = this._admitTiles(
+          tileset.getVisibleTiles(),
+        );
         if (this._tilesChanged(newTiles)) {
           // Tiles changed - use setState (this will trigger full update cycle)
           this.setState({
@@ -1466,17 +1566,29 @@ export class SpatioTemporalLayer<
         } else {
           this.state.tilesetFrameNumber = tilesetFrameNumber;
         }
+        if (carried) this._scheduleTileLoadUpdate(tileset);
         // Settle check rides the throttled block (≤10 Hz wall), NOT the raw
         // 60 Hz tick — it covers all-cache-hit selections, which never fire
         // onTileLoad and would otherwise only settle on the next updateState.
         this._maybeFireViewportLoad(tileset);
       }
+    } else if (timeDelta > updateThreshold) {
+      // The playhead crossed the reselection threshold but the wall floor
+      // blocked the pass. While playing the next tick retries within a frame;
+      // on a PAUSED clock — a `setTime` on a paused controller is by
+      // definition a seek or a scrub — no tick follows, and the tileset kept
+      // selecting for the pre-seek playhead until something else moved
+      // (the governor's seek gate then had nothing loading its window). Arm
+      // ONE trailing pass for the remaining wall ms; it re-reads
+      // `_currentTime` when it fires and is cleared by any real pass, so
+      // while playing it costs at most one redundant timer per window.
+      this._scheduleSeekSettle(wallRemaining);
     }
 
     // PERFORMANCE: For time-only changes, use setNeedsRedraw() instead of setNeedsUpdate()
     // This triggers a redraw WITHOUT calling renderLayers() - the memoized layer is reused
     // Time updates happen via the getTime() getter in TimeFilterExtension.draw()
-    if (!tilesChanged) {
+    if (!tilesChanged && !woke) {
       this.setNeedsRedraw();
     }
   }
@@ -1508,7 +1620,11 @@ export class SpatioTemporalLayer<
       // (source switch / unmount) between the schedule and the callback.
       if (this._finalized || this.state.tileset !== tileset) return;
 
-      const visibleTiles = tileset.getVisibleTiles();
+      // Admission is budgeted: a burst of arrivals is committed a few wall-ms
+      // of prepare work per frame, the rest carried to the next rAF.
+      const { tiles: visibleTiles, carried } = this._admitTiles(
+        tileset.getVisibleTiles(),
+      );
 
       // Only bump frameNumber / setState if the tile set actually changed.
       // Otherwise a setNeedsRedraw is enough and we keep the cached layers.
@@ -1525,7 +1641,93 @@ export class SpatioTemporalLayer<
       // Tile arrivals are what complete a selection — probe for the
       // viewport-load settle here, once per coalesced batch.
       this._maybeFireViewportLoad(tileset);
+
+      // Re-arm for the carried remainder (the rAF slot was released above).
+      if (carried) this._scheduleTileLoadUpdate(tileset);
     }) as unknown as number;
+  }
+
+  /**
+   * Subclass hook: do the per-tile CPU prepare for ONE tile ahead of
+   * `renderLayers()`, so the chassis can meter how much of that work lands
+   * per frame (`tileCommitBudgetMs`). Kinds with a per-tile `prepareTile`
+   * cache call it here; the result is cached, so the `renderLayers()` that
+   * follows hits it. Base: no-op — nothing to meter, the batch commits at
+   * once as it always did.
+   */
+  protected warmTile(_tile: Tile): void {}
+
+  /**
+   * Decide which of the tileset's visible tiles this pass COMMITS to
+   * `state.tiles`. Every tile already committed passes through. Fresh ones
+   * are warmed (`warmTile`) nearest-to-playhead first until
+   * `tileCommitBudgetMs` of wall time is spent; the rest is CARRIED — the
+   * tileset still holds them, `getVisibleTiles()` returns them again, and the
+   * caller re-arms the tile-load rAF. Tile-arrival work (prepare, deck's
+   * tessellation and attribute upload) used to run for the whole coalesced
+   * batch inside one deck update, so the hitch scaled with tiles-per-batch,
+   * not tile size.
+   *
+   * While a carry is open, the tiles the selection just DROPPED stay
+   * committed too — a parent that was standing in for still-uncommitted
+   * children keeps covering them — and are released with the last carried
+   * tile. A committed tile therefore never un-commits mid-carry. Returns the
+   * input array itself when nothing was withheld, so the reference-keyed
+   * caches downstream stay warm.
+   */
+  private _admitTiles(visible: Tile[]): { tiles: Tile[]; carried: boolean } {
+    const budgetMs = this.props.tileCommitBudgetMs;
+    if (!(budgetMs > 0)) return { tiles: visible, carried: false };
+
+    const committed = this._lastTileIdSet;
+    let fresh: Tile[] | null = null;
+    for (const tile of visible) {
+      if (!committed.has(tileKey(tile.id))) (fresh ??= []).push(tile);
+    }
+    if (fresh === null) return { tiles: visible, carried: false };
+
+    if (fresh.length > 1) {
+      // The bucket being drawn lands before the runway: order by distance
+      // from the playhead to the tile's covering range (0 = inside it).
+      const now = this._currentTime;
+      const dist = (t: Tile): number => {
+        const tr = t.timeRange;
+        if (!tr) return 0;
+        return tr.start > now
+          ? tr.start - now
+          : tr.end < now
+            ? now - tr.end
+            : 0;
+      };
+      fresh.sort((a, b) => dist(a) - dist(b));
+    }
+
+    const t0 = performance.now();
+    const admitted = new Set<string>();
+    let carried = false;
+    for (const tile of fresh) {
+      // Always admit at least one, or a tile slower than the whole budget
+      // would never land.
+      if (admitted.size > 0 && performance.now() - t0 >= budgetMs) {
+        carried = true;
+        break;
+      }
+      this.warmTile(tile);
+      admitted.add(tileKey(tile.id));
+    }
+    if (!carried) return { tiles: visible, carried: false };
+
+    const visibleKeys = new Set<string>();
+    const tiles: Tile[] = [];
+    for (const tile of visible) {
+      const key = tileKey(tile.id);
+      visibleKeys.add(key);
+      if (committed.has(key) || admitted.has(key)) tiles.push(tile);
+    }
+    for (const tile of this.state.tiles ?? []) {
+      if (!visibleKeys.has(tileKey(tile.id))) tiles.push(tile);
+    }
+    return { tiles, carried: true };
   }
 
   /**
@@ -1538,12 +1740,49 @@ export class SpatioTemporalLayer<
    * would report an empty viewport during init.
    */
   private _maybeFireViewportLoad(tileset: SpatioTemporalTileset): void {
-    if (!this.props.onViewportLoad) return;
     const version = tileset.selectionVersion;
     if (version === 0 || version === this._viewportLoadVersion) return;
     if (!tileset.isLoaded) return;
     this._viewportLoadVersion = version;
-    this.props.onViewportLoad(tileset.getVisibleTiles());
+    this.props.onViewportLoad?.(tileset.getVisibleTiles());
+    // The storyboard preload rides the FIRST settled viewport — kicked at
+    // attach, it shared the link and the decoder pool with the first frame.
+    this._kickOverviewPreload(tileset);
+  }
+
+  /**
+   * Storyboard tier (WS-C4): kick the budget-gated overview preload WITHOUT
+   * blocking anything — the fetches ride the lowest request tier, and the
+   * gate may reject the dataset outright (giant coarse tiles), in which case
+   * nothing is fetched at all. Once per tileset, after its first viewport
+   * load has settled; the world × all-time z0–z1 slice is the most scattered
+   * selection an archive can receive, and at attach time it went out before
+   * the first viewport selection even existed.
+   */
+  private _kickOverviewPreload(tileset: SpatioTemporalTileset): void {
+    if (this._overviewKicked || !this.props.overviewPreload) return;
+    this._overviewKicked = true;
+    const overviewOpts =
+      typeof this.props.overviewPreload === 'object'
+        ? this.props.overviewPreload
+        : undefined;
+    tileset
+      .preloadOverviewTier(overviewOpts)
+      .then((result) => {
+        // Ignore results for a tileset this layer no longer owns (re-init /
+        // unmount races) — `clear()` settles those with reason 'disabled'.
+        if (this._finalized || this.state.tileset !== tileset) return;
+        this._overviewPreload = result;
+        this.props.onOverviewPreload?.(result);
+      })
+      // The preload is best-effort and deliberately non-blocking, but a
+      // rejected directory/pack fetch inside it must not escape as an
+      // unhandled rejection. It never fails the layer — the map renders fine
+      // without a storyboard tier — so it is reported, not propagated.
+      .catch((error) => {
+        if (this._finalized || this.state.tileset !== tileset) return;
+        this._reportDatasetError(error, this.props.data);
+      });
   }
 
   /**
@@ -1681,8 +1920,10 @@ export class SpatioTemporalLayer<
       skipDebounce,
     );
 
-    // Get visible tiles (optimistic rendering - show what we have)
-    const tiles = tileset.getVisibleTiles();
+    // Get visible tiles (optimistic rendering - show what we have). Admission
+    // is budgeted — a cold pan / zoom lands whole coalesced batches here — see
+    // _admitTiles.
+    const { tiles, carried } = this._admitTiles(tileset.getVisibleTiles());
 
     // Decide whether to setState. Two conditions matter for the consolidated
     // render path: the visible tile SET changed, or the TILESET's counter
@@ -1712,6 +1953,7 @@ export class SpatioTemporalLayer<
     }
 
     this._maybeFireViewportLoad(tileset);
+    if (carried) this._scheduleTileLoadUpdate(tileset);
 
     // Publish tileset stats so the HUD / probe consumers can read them
     // without a getter callback. The arguments to snapshot() are evaluated
@@ -1783,8 +2025,33 @@ export class SpatioTemporalLayer<
   }
 
   /**
-   * Cancel the pending coalesced tile-load rAF and the trailing viewport-settle
-   * timer. Both capture / target the CURRENT tileset, so they must be dropped
+   * Arm the single trailing SEEK pass — the tick-path twin of
+   * `_scheduleViewportSettle`. Re-enters `_handleTimeUpdate` with the LIVE
+   * playhead once the wall floor has elapsed, so the throttle admits it.
+   */
+  private _scheduleSeekSettle(delayMs: number): void {
+    if (this._seekSettleTimer !== null) return; // one pending pass at a time
+    if (typeof setTimeout !== 'function') return;
+    this._seekSettleTimer = setTimeout(
+      () => {
+        this._seekSettleTimer = null;
+        if (this._finalized || !this.state.tileset) return;
+        this._handleTimeUpdate(this._currentTime);
+      },
+      Math.max(0, delayMs),
+    );
+  }
+
+  private _clearSeekSettle(): void {
+    if (this._seekSettleTimer !== null) {
+      clearTimeout(this._seekSettleTimer);
+      this._seekSettleTimer = null;
+    }
+  }
+
+  /**
+   * Cancel the pending coalesced tile-load rAF and the trailing viewport /
+   * seek settle timers. All capture / target the CURRENT tileset, so they must be dropped
    * on a data/source switch (before the old tileset is finalized in
    * `_initArchiveAndTileset`) and on teardown (`finalizeState`) — otherwise the
    * deferred callback fires against the finalized old tileset.
@@ -1801,6 +2068,7 @@ export class SpatioTemporalLayer<
       this._tileLoadRafId = null;
     }
     this._clearViewportSettle();
+    this._clearSeekSettle();
   }
 
   /**
@@ -1825,6 +2093,74 @@ export class SpatioTemporalLayer<
     return load && load > 0
       ? Math.max(load, this.props.timeWindow)
       : this.props.timeWindow;
+  }
+
+  /**
+   * How far the RENDER window reaches on either side of the playhead, in sim
+   * ms — the bound {@link cullTilesByTimeRange} tests tile ranges against.
+   * Base = window mode: the shader lights a feature iff `[start, end]`
+   * overlaps `[now − timeWindow/2, now + timeWindow/2]`, and the fades only
+   * attenuate INSIDE that. Trail / wake / reveal kinds override with
+   * `{ before: length, after: 0 }`; a side that is unbounded (cumulative, a
+   * persisting reveal) is `Infinity`, which disables the cull on that side.
+   * Playback direction is immaterial — the shader's window does not depend
+   * on it; only the wake bookkeeping does, and that records both edges.
+   */
+  protected getRenderReach(): { before: number; after: number } {
+    const half = this.props.timeWindow / 2;
+    return { before: half, after: half };
+  }
+
+  /**
+   * The tiles among `tiles` whose covering `timeRange` can intersect the
+   * render window at the current playhead — the trip-heads cull, generalised.
+   * `timeRange` is a build-time COVERING bound (the bucket edge below, the
+   * max feature end above — stt-build `tiler.rs`), so a tile outside the
+   * reach holds no feature the shader could light: the skip is exactly
+   * lossless. It matters because the RESIDENT set is sized by the LOAD
+   * window (`2 × trailLength`, `tileLoadTimeWindow`), and every resident
+   * tile used to be a draw call plus its vertex work whether or not it could
+   * contribute a fragment — half the resident set on a trail kind.
+   *
+   * Records the nearest skipped edge on each side so `_handleTimeUpdate` can
+   * wake the render the moment the playhead reaches it — the cull can never
+   * go stale between tile-set changes. A tile with no `timeRange` is never
+   * skipped. Returns `tiles` ITSELF when nothing was skipped, so callers'
+   * reference-keyed caches stay warm. Prune caches against the full resident
+   * set, not this: a culled tile is still resident and will wake.
+   */
+  protected cullTilesByTimeRange(tiles: Tile[]): Tile[] {
+    const now = this._currentTime;
+    const { before, after } = this.getRenderReach();
+    const lo = now - before;
+    const hi = now + after;
+    let nextWake = Infinity;
+    let prevWake = -Infinity;
+    let out: Tile[] | null = null;
+    for (let i = 0; i < tiles.length; i++) {
+      const tile = tiles[i];
+      const tr = tile.timeRange;
+      let skip = false;
+      if (tr) {
+        if (tr.start > hi) {
+          // Future: drawable once `now + after` reaches its start.
+          skip = true;
+          if (tr.start - after < nextWake) nextWake = tr.start - after;
+        } else if (tr.end < lo) {
+          // Past: drawable again (reverse playback) once `now − before` ≤ end.
+          skip = true;
+          if (tr.end + before > prevWake) prevWake = tr.end + before;
+        }
+      }
+      if (skip) {
+        if (out === null) out = tiles.slice(0, i);
+      } else if (out !== null) {
+        out.push(tile);
+      }
+    }
+    this._nextWakeMs = nextWake;
+    this._prevWakeMs = prevWake;
+    return out ?? tiles;
   }
 
   /**
@@ -1898,6 +2234,8 @@ export class SpatioTemporalLayer<
       // `maxRequests` never reaches the wire, and setting it has no effect on
       // actual fetch concurrency.
       maxConcurrentRequests: this.props.maxRequests,
+      // Starting DRR share in the process-shared scheduler (see the prop).
+      schedulerWeight: this.props.schedulerWeight,
     });
     this.state.initializingArchive = archive;
 
@@ -2051,6 +2389,13 @@ export class SpatioTemporalLayer<
       temporalBucketMs: metadata.temporalBucketMs,
       // Parent-fallback policy (prop pass-through; 'best-available' default).
       refinementStrategy: this.props.refinementStrategy ?? 'best-available',
+      // Sparse-archive contract (E3): a home-zoom partition omits primary
+      // tiles wherever a cell's features live only in the parent, so the
+      // tileset must keep that parent on screen for an in-box cell with no
+      // tile. The manifest exposes only `partition` to the reader (there is
+      // no min-features-per-tile capability), so that is the whole signal;
+      // a replicated archive stays on the strict exists-and-pending rule.
+      sparsePrimary: metadata.partition === 'home-zoom',
       // Additive-octree LOD: when 'additive', load + render the union of zoom
       // levels [minZoom..cameraZoom] (each point lives at one home zoom). See the
       // lodMode prop and SpatioTemporalTilesetOptions.lodMode.
@@ -2176,6 +2521,9 @@ export class SpatioTemporalLayer<
       initializingUrl: null,
       tiles: [],
     });
+    // The committed-key set mirrors `state.tiles` (it is what `_admitTiles`
+    // reads as "already committed"), so it collapses with it.
+    this._lastTileIdSet = new Set();
 
     // Hand the live tileset to the app exactly once per init, after state is
     // committed. The tileset implements the BufferSource readiness contract
@@ -2184,34 +2532,11 @@ export class SpatioTemporalLayer<
       tileset as SpatioTemporalTileset & BufferSource,
     );
 
-    // Storyboard tier (WS-C4): kick the budget-gated overview preload WITHOUT
-    // blocking init — the fetches ride the lowest request tier behind any
-    // viewport work, and the gate may reject the dataset outright (giant
-    // coarse tiles) in which case nothing is fetched at all.
+    // Storyboard tier (WS-C4): the preload is kicked once the FIRST viewport
+    // load settles (`_kickOverviewPreload`), not here — at attach it competed
+    // with the first frame for the link and the decoder pool.
     this._overviewPreload = null;
-    if (this.props.overviewPreload) {
-      const overviewOpts =
-        typeof this.props.overviewPreload === 'object'
-          ? this.props.overviewPreload
-          : undefined;
-      tileset
-        .preloadOverviewTier(overviewOpts)
-        .then((result) => {
-          // Ignore results for a tileset this layer no longer owns (re-init /
-          // unmount races) — `clear()` settles those with reason 'disabled'.
-          if (this._finalized || this.state.tileset !== tileset) return;
-          this._overviewPreload = result;
-          this.props.onOverviewPreload?.(result);
-        })
-        // The preload is best-effort and deliberately non-blocking, but a
-        // rejected directory/pack fetch inside it must not escape as an
-        // unhandled rejection. It never fails the layer — the map renders fine
-        // without a storyboard tier — so it is reported, not propagated.
-        .catch((error) => {
-          if (this._finalized || this.state.tileset !== tileset) return;
-          this._reportDatasetError(error, this.props.data);
-        });
-    }
+    this._overviewKicked = false;
   }
 
   /**

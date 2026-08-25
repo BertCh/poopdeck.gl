@@ -14,7 +14,11 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { OpfsTileCache, isOpfsAvailable } from '../src/opfs-cache';
+import {
+  OpfsTileCache,
+  OPFS_EVICT_LOW_WATER,
+  isOpfsAvailable,
+} from '../src/opfs-cache';
 import { installShim, uninstallShim } from './helpers/opfs-shim';
 
 describe('OpfsTileCache', () => {
@@ -513,5 +517,90 @@ describe('OpfsTileCache', () => {
     expect(await cache.get('A')).toBeNull();
     expect(await cache.get('B')).not.toBeNull();
     expect(cache.getBytes()).toBeLessThanOrEqual(50);
+  });
+
+  // ── H3 (core hot-spot audit 2026-08): eviction to a LOW-WATER mark ──────
+  //
+  // An over-budget `set()` used to rank all N entries and evict to exactly
+  // `maxBytes`, so the very next set was over budget again and paid the whole
+  // ranking pass too: 58.5 ms per set at 128k entries, 1.8 s for a 200-tile
+  // pan. Now it evicts to `OPFS_EVICT_LOW_WATER × budget` in one pass, and the
+  // next ~10 % of sets are free. The victim ORDER is unchanged — the pass just
+  // walks further down the same ranked sequence.
+
+  /** `n` equal-size entries written into a cache whose budget is exactly full. */
+  async function fullCache(
+    n: number,
+    size: number,
+    options: ConstructorParameters<typeof OpfsTileCache>[0] = {},
+  ): Promise<OpfsTileCache> {
+    const cache = new OpfsTileCache({ maxBytes: n * size, ...options });
+    for (let i = 0; i < n; i++) {
+      await cache.set(`k${i}`, new Uint8Array(size).fill(i & 0xff));
+    }
+    expect(cache.getBytes()).toBe(n * size);
+    return cache;
+  }
+
+  it('H3: 100 sets over a full 1,000-entry cache run the ranking pass once, never exceeding maxBytes', async () => {
+    installShim();
+    const N = 1000;
+    const SIZE = 1024;
+    const cache = await fullCache(N, SIZE);
+    const passes = vi.spyOn(cache, 'evict'); // set() only calls it over budget
+    for (let i = 0; i < 100; i++) {
+      await cache.set(`s${i}`, new Uint8Array(SIZE));
+      expect(cache.getBytes()).toBeLessThanOrEqual(N * SIZE);
+    }
+    expect(passes.mock.calls.length).toBeLessThanOrEqual(12);
+    // Equal sizes make the arithmetic exact: 1,001 KiB → ⌊0.9 × 1,000 KiB⌋ =
+    // 921,600 B takes 101 victims; the next 99 sets fit under the budget.
+    expect(passes).toHaveBeenCalledTimes(1);
+    expect(passes).toHaveBeenCalledWith(
+      Math.floor(OPFS_EVICT_LOW_WATER * N * SIZE),
+    );
+    expect(cache.getBytes()).toBe(921_600 + 99 * SIZE);
+    expect(cache.getEntryCount()).toBe(N - 101 + 100);
+    // Same victims as the old per-set passes would have taken, in the same
+    // order (all ties → ascending lastAccess): the 101 oldest go, k101 stays.
+    expect(await cache.get('k0')).toBeNull();
+    expect(await cache.get('k100')).toBeNull();
+    expect(await cache.get('k101')).not.toBeNull();
+    expect(await cache.get('s0')).not.toBeNull();
+  });
+
+  it('H3: evictLowWater: 1 is the documented rollback — every over-budget set pays a pass to exactly the budget', async () => {
+    installShim();
+    const N = 200;
+    const SIZE = 1024;
+    const cache = await fullCache(N, SIZE, { evictLowWater: 1 });
+    const passes = vi.spyOn(cache, 'evict');
+    for (let i = 0; i < 20; i++) {
+      await cache.set(`s${i}`, new Uint8Array(SIZE));
+      expect(cache.getBytes()).toBe(N * SIZE);
+    }
+    expect(passes).toHaveBeenCalledTimes(20);
+    expect(await cache.get('k19')).toBeNull();
+    expect(await cache.get('k20')).not.toBeNull();
+  });
+
+  it('H3: an out-of-range evictLowWater falls back to the default; manual evict() ignores it', async () => {
+    installShim();
+    for (const bad of [0, -1, 2, NaN, Infinity]) {
+      uninstallShim();
+      installShim();
+      const cache = await fullCache(50, 64, { evictLowWater: bad });
+      const passes = vi.spyOn(cache, 'evict');
+      await cache.set('s', new Uint8Array(64));
+      expect(passes).toHaveBeenCalledWith(
+        Math.floor(OPFS_EVICT_LOW_WATER * 50 * 64),
+      );
+      // 51 × 64 = 3,264 → ≤ 2,880 needs 6 victims → 2,880 exactly.
+      expect(cache.getBytes()).toBe(2880);
+    }
+    // A caller-driven evict(target) still stops at the target it was given.
+    const cache = await fullCache(10, 100);
+    await cache.evict(500);
+    expect(cache.getBytes()).toBe(500);
   });
 });

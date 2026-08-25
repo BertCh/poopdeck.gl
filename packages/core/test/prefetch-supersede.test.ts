@@ -247,7 +247,12 @@ describe('speed-aware seek detection', () => {
  *  - a priority batch dies only when EVERY member is superseded.
  */
 describe('BH-2 — the byte budget leaves supersession semantics alone', () => {
-  /** 1 MiB tiles against an 8 MiB cache ⇒ a 4 MiB (4-tile) runway. */
+  /**
+   * 1 MiB tiles against a 64 MiB cache ⇒ ½ × 64 MiB ÷ the cold 8× expansion
+   * = a 4 MiB (4-tile) runway. (Re-blessed from an 8 MiB cap, whose 512 KiB
+   * share the old 4 MiB FLOOR lifted to the same runway; since G3-2 the
+   * budget yields to the cache, and that cap admits nothing beyond the head.)
+   */
   function makeByteBudgetedTileset(batches: GatedBatch[]) {
     return new SpatioTemporalTileset({
       minZoom: 0,
@@ -256,7 +261,7 @@ describe('BH-2 — the byte budget leaves supersession semantics alone', () => {
       refinementStrategy: 'no-overlap',
       temporalBucketMs: BUCKET_MS,
       maxCacheSize: 300, // count budget 150 — deliberately NOT the binding one
-      maxCacheByteSize: 8 * 1024 * 1024,
+      maxCacheByteSize: 64 * 1024 * 1024,
       getTileByteSize: () => 1024 * 1024,
       getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
       getTileData: async (id: TileId) => fakeTile(id),

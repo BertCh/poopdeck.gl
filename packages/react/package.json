@@ -60,19 +60,19 @@
     }
   },
   "devDependencies": {
-    "@deck.gl/core": "^9.3.2",
-    "@deck.gl/react": "^9.3.2",
-    "@tailwindcss/cli": "^4.1.0",
-    "tailwindcss": "^4.1.0",
-    "@testing-library/dom": "^10.4.0",
-    "@testing-library/react": "^16.1.0",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "jsdom": "^25.0.1",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "@deck.gl/core": "9.3.10",
+    "@deck.gl/react": "9.3.10",
+    "@tailwindcss/cli": "^4.3.3",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "jsdom": "^30.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
@@ -95,6 +95,6 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   }
 }

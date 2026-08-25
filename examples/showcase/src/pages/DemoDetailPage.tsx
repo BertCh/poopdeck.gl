@@ -1,5 +1,5 @@
 import React, { Suspense, useState } from 'react';
-import { useParams, Navigate, Link } from 'react-router';
+import { useParams, Navigate, Link, type MetaFunction } from 'react-router';
 import { Highlight, themes } from 'prism-react-renderer';
 import { getDatasetById } from '../datasets';
 import {
@@ -14,6 +14,26 @@ import { VizBadge } from '../components/VizBadge';
 import CubeInLine from '../components/demo/CubeInLine';
 import { profileIdFromUrl } from '../lib/densityProfile';
 import { ClientOnly } from '../lib/ClientOnly';
+import { createSeoMeta } from '../lib/seo';
+
+export const meta: MetaFunction = ({ params }) => {
+  const id = params.datasetId ?? '';
+  const dataset = getDatasetById(id);
+  const entry = getCatalogEntry(id);
+  if (!dataset || !entry) {
+    return createSeoMeta({
+      title: 'Demo not found',
+      description: 'Browse the public SpatioTemporal Tiles demo catalog.',
+      path: '/demos',
+      noIndex: true,
+    });
+  }
+  return createSeoMeta({
+    title: dataset.name,
+    description: entry.meta.tagline ?? dataset.description,
+    path: `/demos/${dataset.id}`,
+  });
+};
 
 // The live map embed carries deck.gl + the playback stack; lazy + client only
 // so the statically prerendered detail HTML stays deck-free (a framed poster

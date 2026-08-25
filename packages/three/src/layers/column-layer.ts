@@ -181,8 +181,8 @@ export class STTColumnLayer extends BaseSTTLayer implements STTIdPickable {
   /**
    * Resolve the GPU stable-palette path (property + palette) when
    * `stableColorMapping` is on AND the colour mode is categorical; else null (the
-   * byte-identical CPU colour path). CPU-only — the palette TEXTURE is built after
-   * `disposeGpu` in `setTiles`, mirroring icon-layer's glide texture.
+   * byte-identical CPU colour path). CPU-only — the palette TEXTURE is built
+   * once, in `ensureBundle` (mirroring icon-layer's glide texture).
    */
   private resolveCategoryPalette(): {
     property: string;
@@ -213,7 +213,7 @@ export class STTColumnLayer extends BaseSTTLayer implements STTIdPickable {
     this.provenance = buf.provenance;
     this.binaryByTileKey = buf.binaryByTileKey;
 
-    this.disposeGpu();
+    this.disposeGeometry();
     if (buf.count === 0) {
       this.object.geometry = makeColumnPrismGeometry(
         this.opts.diskResolution ?? 20,
@@ -286,13 +286,33 @@ export class STTColumnLayer extends BaseSTTLayer implements STTIdPickable {
       );
     }
 
-    // Stable palette: build the texture AFTER disposeGpu (frees the previous one).
-    const paletteTexture =
-      cat && buf.categoryIndices.length > 0
-        ? makePaletteTexture(cat.palette)
-        : null;
-    this.paletteTexture = paletteTexture;
+    const bundle = this.ensureBundle(cat, buf.categoryIndices.length > 0);
+    this.object.geometry = geometry;
+    this.object.material = bundle.material;
+    this.pushUniforms(this.timeOrigin);
+  }
 
+  /** Whether the live bundle samples the stable-palette texture. */
+  private bundleUsesPalette = false;
+
+  /**
+   * The material (+ its palette texture), built ONCE per variant (audit E5).
+   * Every input is fixed at construction except whether the buffers carry
+   * category slots, which is constant for a given palette config — so the
+   * variant flips at most once. Disposing per `setTiles` evicted three's
+   * `nodeBuilderCache` entry, program and pipeline: a shader rebuild per tile
+   * arrival. Only the geometry churns now.
+   */
+  private ensureBundle(
+    cat: { palette: StablePalette } | null,
+    hasCategories: boolean,
+  ): ColumnMaterialBundle {
+    const usePalette = cat !== null && hasCategories;
+    if (this.bundle && this.bundleUsesPalette === usePalette)
+      return this.bundle;
+    this.disposeMaterials();
+    const paletteTexture = usePalette ? makePaletteTexture(cat.palette) : null;
+    this.paletteTexture = paletteTexture;
     this.bundle = createColumnMaterial({
       timeFiltered: this.opts.timeFiltered ?? true,
       transparent: this.opts.transparent ?? false,
@@ -304,9 +324,8 @@ export class STTColumnLayer extends BaseSTTLayer implements STTIdPickable {
     if (this.bundle.palette && cat) {
       this.bundle.palette.invWidth.value = 1 / cat.palette.colors.length;
     }
-    this.object.geometry = geometry;
-    this.object.material = this.bundle.material;
-    this.pushUniforms(this.timeOrigin);
+    this.bundleUsesPalette = usePalette;
+    return this.bundle;
   }
 
   setTime(absoluteTimeMs: number): void {
@@ -422,15 +441,24 @@ export class STTColumnLayer extends BaseSTTLayer implements STTIdPickable {
     return this.resolvePick(index, [cssX, cssY]);
   }
 
-  private disposeGpu(): void {
+  /** Release the geometry (and the per-geometry pick attribute flag) only. */
+  private disposeGeometry(): void {
     if (this.object.geometry) this.object.geometry.dispose();
+    this.idColorsPresent = false;
+  }
+
+  private disposeMaterials(): void {
     this.bundle?.material.dispose();
     this.bundle = null;
     this.idBundle?.material.dispose();
     this.idBundle = null;
-    this.idColorsPresent = false;
     this.paletteTexture?.dispose();
     this.paletteTexture = null;
+  }
+
+  private disposeGpu(): void {
+    this.disposeGeometry();
+    this.disposeMaterials();
   }
 
   dispose(): void {

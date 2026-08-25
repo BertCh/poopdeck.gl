@@ -25,7 +25,7 @@ polygons, trips, flows, events); time-varying rasters/datacubes are out of scope
 
 ```
 GeoParquet / PostGIS / DuckDB
-        │  stt-build      → packed .stt archive (manifest.json + index/*.sttd + packs/*.sttp)
+        │  stt-build      → packed STT archive (manifest.json + index/*.sttd + packs/*.sttp)
         │  stt-optimize   → analyze / recommend / inspect / doctor / diff / lint the archive
         │  stt-serve      → dynamic per-request tile server (or publish the static dir to R2/CDN)
         ▼
@@ -110,10 +110,13 @@ poopdeck-ai/            # Claude Code plugin (Agent Skills + MCP server wiring)
 
 - `docs/intro/concepts.md` — the space×time tile model, packed archives, playback.
 - `docs/intro/choosing.md` — static vs served; which renderer.
+- `docs/intro/status-and-support.md` — maturity tiers, compatibility window, and
+  support expectations; `project-status.json` is the machine-readable summary.
+- `docs/intro/glossary.md` — canonical product, format, archive, and API names.
 - `docs/architecture/system-overview.md` — how the pieces fit end to end.
 - `docs/api/cli-reference.md` — canonical flags for every `stt-*` CLI.
 - `docs/spec/stt-packed-format.md` — the on-disk format (manifest + packs +
-  directory v5; machine-checkable schema: `docs/spec/manifest.schema.json`).
+  directory v6; machine-checkable schema: `docs/spec/manifest.schema.json`).
 - `docs/architecture/data-format.md` — the per-tile Arrow layer-frame encoding.
 - `docs/guides/` — task guides (`csv-quickstart`, `tuning-tiles`, `deploying`,
   `export`, `python`, `data-generation`, `wasm`, `ai-suite`).

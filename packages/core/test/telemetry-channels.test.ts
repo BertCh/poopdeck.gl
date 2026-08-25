@@ -12,7 +12,7 @@
  *      to end with the probe off and asserts the bag was never even created —
  *      the "zero allocations on the request path" requirement.
  *   2. THE RING CAP STANDS. Every new channel is bounded by the same
- *      MAX_SAMPLES = 4096 FIFO window, so a long session cannot grow memory.
+ *      MAX_SAMPLES = 4096 window trimmed in batches, so a long session cannot grow memory.
  *
  * Plus the `decodeQueue` roll-up: percentiles over the decode QUEUE WAIT ring,
  * published as a latest-value snapshot so pool-size adaptation gets a cheap
@@ -139,8 +139,12 @@ describe('core telemetry — the P0-2 channels', () => {
       setBag({ enabled: true });
       for (let i = 0; i <= MAX_SAMPLES; i++) emit(channel, { i });
       const arr = getBag()![channel] as Array<{ i: number }>;
-      expect(arr).toHaveLength(MAX_SAMPLES);
-      expect(arr[0]).toEqual({ i: 1 }); // oldest shifted off
+      // Batched trim (tile-loading audit follow-up): a saturated channel sits
+      // between 3/4 of the cap and the cap — never above, and never one
+      // `shift()` per sample.
+      expect(arr.length).toBeLessThanOrEqual(MAX_SAMPLES);
+      expect(arr.length).toBeGreaterThanOrEqual(MAX_SAMPLES - MAX_SAMPLES / 4);
+      expect(arr[0]).toEqual({ i: MAX_SAMPLES / 4 }); // oldest QUARTER trimmed
       expect(arr[arr.length - 1]).toEqual({ i: MAX_SAMPLES });
     },
   );
@@ -230,9 +234,13 @@ describe('core telemetry — the decodeQueue roll-up', () => {
     setBag({ enabled: true });
     for (let i = 0; i < MAX_SAMPLES + 500; i++) recordDecodeWait(i, 0);
     const ring = getBag()!.__decodeWaitRing as { waits: number[] };
-    expect(ring.waits).toHaveLength(MAX_SAMPLES);
-    // FIFO window slid forward: the oldest 500 samples are gone.
-    expect(ring.waits[0]).toBe(500);
+    // The roll-up ring is a RECENT window (512), trimmed in batches of 128.
+    expect(ring.waits.length).toBeLessThanOrEqual(512);
+    expect(ring.waits.length).toBeGreaterThanOrEqual(512 - 128);
+    // The window holds the MOST RECENT samples: newest last, oldest no older
+    // than one window back.
+    expect(ring.waits[ring.waits.length - 1]).toBe(MAX_SAMPLES + 499);
+    expect(ring.waits[0]).toBeGreaterThanOrEqual(MAX_SAMPLES + 500 - 512);
   });
 
   it('clamps negative waits to zero (clock skew must not poison percentiles)', () => {
@@ -465,7 +473,10 @@ describe('requests channel — the scheduler emission', () => {
       );
     }
     await Promise.all(jobs);
-    expect(getBag()!.requests).toHaveLength(MAX_SAMPLES);
+    expect(getBag()!.requests.length).toBeLessThanOrEqual(MAX_SAMPLES);
+    expect(getBag()!.requests.length).toBeGreaterThanOrEqual(
+      MAX_SAMPLES - MAX_SAMPLES / 4,
+    );
   });
 });
 

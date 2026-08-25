@@ -10,6 +10,7 @@ import { _GlobeView as GlobeView } from '@deck.gl/core';
 import { HoverPreview } from '@poopdeck.gl/react/hover-preview';
 import type { Dataset } from '../../types';
 import { buildDemoLayers } from './buildDemoLayers';
+import { withPreviewTileProps } from './previewTileProps';
 import { useReducedMotion } from '../../lib/reducedMotion';
 import {
   clampPreviewPitch,
@@ -81,14 +82,19 @@ const DemoHoverPreview: React.FC<DemoHoverPreviewProps> = ({
     <HoverPreview
       time={time}
       timeRange={dataset.timeRange}
+      // The preview's own tile-loading recipe (no prefetch, scratch cache, a
+      // sliver of the request slots) on top of the live tree — see
+      // previewTileProps.ts for why a second live-sized stack was a problem.
       buildLayers={(controller) =>
-        buildDemoLayers({
-          dataset,
-          timeController: controller,
-          useGlobe,
-          timeHeightScale: 0,
-          reducedMotion,
-        })
+        withPreviewTileProps(
+          buildDemoLayers({
+            dataset,
+            timeController: controller,
+            useGlobe,
+            timeHeightScale: 0,
+            reducedMotion,
+          }),
+        )
       }
       viewState={viewState}
       views={views}

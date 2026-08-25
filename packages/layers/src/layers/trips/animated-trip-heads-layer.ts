@@ -152,11 +152,40 @@ export interface _AnimatedTripHeadsLayerProps {
    */
   elevationMapping?: Record<string, number> | null;
   /**
-   * Multiplier applied to every {@link elevationProperty} value before it
-   * becomes the dot's z — the scene's shared vertical exaggeration. No effect
-   * when {@link elevationProperty} is unset. @default 1
+   * Multiplier applied to every elevation-in-metres source before it becomes
+   * the dot's z — the scene's shared vertical exaggeration. Scales both
+   * {@link elevationProperty} (per-feature) and
+   * {@link elevationFromVertexValues} (baked per-vertex); no effect when
+   * neither is set. @default 1
    */
   elevationScale?: number;
+  /**
+   * Terrain drape: a per-frame height probe `(lon, lat) → z metres | null`
+   * sampled at each dot's LIVE interpolated position, so a dot rides the
+   * ground surface of a 3D basemap (e.g. mapbox `queryTerrainElevation`).
+   * The returned z is used AS-IS — the caller owns exaggeration and any
+   * anti-sink lift — and is ADDED to the dot's z (archive z + per-feature
+   * elevation), like the other z sources. `null` means "height unknown here"
+   * (terrain tile not loaded yet) and leaves the dot's z untouched rather
+   * than snapping it to a wrong 0-vs-surface guess. Runs once per active dot
+   * per frame on the CPU interpolation path, so implementations should be
+   * O(1) (memoized/bilinear lookups, not network fetches). @default null
+   */
+  getTerrainElevation?: ((lon: number, lat: number) => number | null) | null;
+  /**
+   * Baked-elevation mode: treat the tile's per-vertex `vertexValues` channel
+   * as ELEVATION in metres (e.g. a DEM sampled per vertex at build time —
+   * `stt-generate gtfs --bake-elevation`). The value is interpolated at the
+   * dot's live position exactly like the position itself, multiplied by
+   * {@link elevationScale}, and ADDED to the dot's z. Zero per-frame terrain
+   * queries — the preferred way to ride a 3D basemap when the archive carries
+   * the channel ({@link getTerrainElevation} is the runtime fallback for
+   * archives that don't). Set {@link elevationScale} to the basemap's terrain
+   * exaggeration so data and relief agree. A NaN interpolated value leaves
+   * the dot's z untouched. Compatible with gradient coloring (both read the
+   * same channel). @default false
+   */
+  elevationFromVertexValues?: boolean;
 
   /* ── Outline / contrast-ring subsystem ─────────────────────────────────
    * A stroked ring around each moving dot keeps it legible over busy
@@ -360,6 +389,17 @@ export class AnimatedTripHeadsLayer<
       compare: false,
     },
     elevationScale: { type: 'number', value: 1 },
+    // Terrain drape probe (unset ⇒ no drape). `compare: false`: the callback
+    // is expected to be a stable memoized closure; identity churn must not
+    // invalidate layer state (renderLayers re-reads it every frame anyway).
+    getTerrainElevation: {
+      type: 'function',
+      value: null,
+      optional: true,
+      compare: false,
+    },
+    // Baked-elevation mode: vertexValues channel = metres (off by default).
+    elevationFromVertexValues: false,
     // Outline subsystem — ScatterplotLayer defaults (stroked off, filled on).
     headStroked: false,
     headFilled: true,
@@ -555,6 +595,8 @@ export class AnimatedTripHeadsLayer<
     relTime: number,
     wantValues: boolean,
     elevScale: number,
+    drape: ((lon: number, lat: number) => number | null) | null,
+    elevFromValues: boolean,
   ): { positions: Float64Array; values: Float32Array | null; count: number } {
     const {
       positions,
@@ -573,11 +615,13 @@ export class AnimatedTripHeadsLayer<
       out = new Float64Array(featureCount * 3);
       p.headPositions = out;
     }
-    // Per-dot gradient scalar, in the SAME active-only order as `out` — only
-    // allocated when a gradient is configured AND this tile carries the channel.
-    const gradient = wantValues && vertexValues ? vertexValues : null;
+    // The per-vertex scalar channel is sampled when EITHER consumer wants it:
+    // gradient coloring (emits the per-dot `values` buffer) or baked
+    // elevation (folds `val × elevScale` into the dot's z, no buffer).
+    const gradient =
+      (wantValues || elevFromValues) && vertexValues ? vertexValues : null;
     let values: Float32Array | null = null;
-    if (gradient) {
+    if (gradient && wantValues) {
       values = p.headValues;
       if (!values || values.length < featureCount) {
         values = new Float32Array(featureCount);
@@ -643,6 +687,17 @@ export class AnimatedTripHeadsLayer<
       // Per-feature elevation (metres × scale) lifts the whole trip's dot to
       // its level — added ON TOP of any z the geometry already carries.
       if (featureElevations) alt += featureElevations[i] * elevScale;
+      // Baked per-vertex elevation: the channel value interpolated at the
+      // dot's live position IS metres (× the scene exaggeration). NaN (e.g.
+      // a tile without the channel) leaves the dot grounded.
+      if (elevFromValues && !Number.isNaN(val)) alt += val * elevScale;
+      // Terrain drape: sample the ground height at the dot's LIVE position so
+      // it rides a 3D basemap's surface. A null probe answer (terrain tile not
+      // resident yet) leaves the dot's z as-is instead of guessing.
+      if (drape) {
+        const tz = drape(lon, lat);
+        if (tz != null) alt += tz;
+      }
 
       const o = n * 3;
       out[o] = lon;
@@ -728,6 +783,14 @@ export class AnimatedTripHeadsLayer<
     ];
     // Vertical exaggeration applied to each dot's per-feature elevation column.
     const elevScale = this.props.elevationScale ?? 1;
+    // Terrain drape probe — re-read every renderLayers pass (identity is NOT
+    // compared, so a caller may rebuild the closure freely).
+    const drape =
+      typeof this.props.getTerrainElevation === 'function'
+        ? this.props.getTerrainElevation
+        : null;
+    // Baked-elevation mode: the vertexValues channel is metres.
+    const elevFromValues = this.props.elevationFromVertexValues === true;
 
     const sublayers: Layer[] = [];
     // Diagnostics for the probe: how much of the resident set is doing work.
@@ -768,6 +831,8 @@ export class AnimatedTripHeadsLayer<
           relTime,
           useGradient,
           elevScale,
+          drape,
+          elevFromValues,
         );
         if (count === 0) continue;
         if (probe) {

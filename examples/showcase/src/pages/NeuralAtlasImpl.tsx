@@ -42,6 +42,7 @@ import DeckGL from '@deck.gl/react';
 import { usePlayback } from '@poopdeck.gl/react';
 import { resolveDataUrl } from '../datasets';
 import { useReducedMotion } from '../lib/reducedMotion';
+import { useIsMobile } from '../lib/useMediaQuery';
 import AtlasPanel, {
   type AtlasSelection,
 } from '../components/atlas/AtlasPanel';
@@ -136,6 +137,10 @@ const NeuralAtlas: React.FC = () => {
   const [showDensity, setShowDensity] = useState(false);
   const [showPlaces, setShowPlaces] = useState(true);
   const [showManifolds, setShowManifolds] = useState(false);
+  // Phone: the control rail docks as a bottom sheet, closed by default so the
+  // atlas itself is what opens.
+  const isMobile = useIsMobile();
+  const [panelOpen, setPanelOpen] = useState(false);
   const [depth, setDepth] = useState(0);
   const [tokensPerSecond, setTokensPerSecond] = useState(
     DEFAULT_TOKENS_PER_SECOND,
@@ -396,26 +401,58 @@ const NeuralAtlas: React.FC = () => {
 
       {sidecar && (
         <>
-          <AtlasPanel
-            sidecar={sidecar}
-            metric={metric}
-            onMetric={(m) =>
-              navigate(m === 'activation' ? '/atlas' : `/atlas/${m}`)
-            }
-            visibleStatuses={visibleStatuses}
-            onToggleStatus={onToggleStatus}
-            showAnatomy={showAnatomy}
-            showTrace={showTrace}
-            showDensity={showDensity}
-            showPlaces={showPlaces}
-            showManifolds={showManifolds}
-            onToggleLayer={onToggleLayer}
-            depth={depth}
-            onDepth={onDepth}
-            selection={selection}
-            neuronpediaHref={neuronpediaHref}
-          />
-          <div style={bottomStyle}>
+          {/* Phone: the 372px rail would BE the screen, so the same panel
+              docks as a bottom sheet behind a floating toggle and the reading
+              stack reclaims the full width. */}
+          {isMobile && (
+            <button
+              type="button"
+              onClick={() => setPanelOpen((v) => !v)}
+              aria-expanded={panelOpen}
+              style={{
+                position: 'absolute',
+                right: 10,
+                top: 'max(10px, env(safe-area-inset-top))',
+                zIndex: 5,
+                appearance: 'none',
+                cursor: 'pointer',
+                borderRadius: 999,
+                border: `1px solid ${panelOpen ? 'rgba(150,200,255,0.55)' : 'rgba(150,170,220,0.24)'}`,
+                background: panelOpen
+                  ? 'rgba(90,150,240,0.22)'
+                  : 'rgba(10,12,20,0.8)',
+                backdropFilter: 'blur(10px)',
+                color: '#e6ebf5',
+                font: '12px/1 ui-sans-serif, system-ui, sans-serif',
+                padding: '10px 14px',
+              }}
+            >
+              {panelOpen ? 'Close' : 'Controls'}
+            </button>
+          )}
+          {(!isMobile || panelOpen) && (
+            <AtlasPanel
+              sidecar={sidecar}
+              metric={metric}
+              onMetric={(m) =>
+                navigate(m === 'activation' ? '/atlas' : `/atlas/${m}`)
+              }
+              visibleStatuses={visibleStatuses}
+              onToggleStatus={onToggleStatus}
+              showAnatomy={showAnatomy}
+              showTrace={showTrace}
+              showDensity={showDensity}
+              showPlaces={showPlaces}
+              showManifolds={showManifolds}
+              onToggleLayer={onToggleLayer}
+              depth={depth}
+              onDepth={onDepth}
+              selection={selection}
+              neuronpediaHref={neuronpediaHref}
+              variant={isMobile ? 'sheet' : 'rail'}
+            />
+          )}
+          <div style={isMobile ? bottomStyleMobile : bottomStyle}>
             <AtlasSeries
               sidecar={sidecar}
               tokenIndex={tokenIndex}
@@ -456,7 +493,10 @@ const NeuralAtlas: React.FC = () => {
 const shellStyle: React.CSSProperties = {
   position: 'relative',
   width: '100%',
-  height: '100vh',
+  // 100%, not 100vh: this shell mounts inside `Layout`'s flex column, under
+  // the motion notice — a viewport-height shell overhangs the visible area by
+  // exactly the notice's height and pushes the bottom reading stack off screen.
+  height: '100%',
   background:
     'radial-gradient(120% 100% at 50% 0%, #10131f 0%, #070810 55%, #04050a 100%)',
   overflow: 'hidden',
@@ -474,8 +514,18 @@ const overlayStyle: React.CSSProperties = {
 const bottomStyle: React.CSSProperties = {
   position: 'absolute',
   left: 18,
+  // Clears the 372px rail (plus its gutter) — see AtlasPanel's `rail` variant.
   right: 400,
   bottom: 16,
+};
+
+/** No rail to clear on a phone: the reading stack gets the whole width. */
+const bottomStyleMobile: React.CSSProperties = {
+  position: 'absolute',
+  left: 10,
+  right: 10,
+  bottom: 10,
+  marginBottom: 'env(safe-area-inset-bottom)',
 };
 
 const tooltipStyle = {

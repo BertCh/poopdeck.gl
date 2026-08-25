@@ -16,7 +16,10 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
+import {
+  PIN_COUNT_FRACTION,
+  SpatioTemporalTileset,
+} from '../src/spatiotemporal-tileset';
 import type { SpatioTemporalTilesetOptions } from '../src/spatiotemporal-tileset';
 import type { TileId, Tile } from '../src/types';
 import {
@@ -26,6 +29,7 @@ import {
   makeAvailableTiles,
   settle,
 } from './helpers/fixtures';
+import { advanceClock, installClock } from './helpers/clock';
 
 const N_BUCKETS = 20;
 /** Directory byte length of the tile at bucket index `i` (any zoom). */
@@ -170,23 +174,80 @@ describe('SpatioTemporalTileset.preloadOverviewTier', () => {
     tileset.finalize();
   });
 
-  it('pinned tiles survive eviction pressure (over maxCacheSize) and warn once', async () => {
+  /**
+   * A1 (tile-loading audit 2026-08, CS-1 / CE-1). This test used to be
+   * "pinned tiles survive eviction pressure (over maxCacheSize) and warn
+   * once", and it asserted `unloaded.length > 0` — i.e. it PINNED the defect:
+   * 40 pins against a 10-tile cap put the tileset permanently over
+   * `maxCacheSize`, so every selection pass ran the over-limit branch and
+   * evicted every non-pinned, non-needed tile, including the runway. The
+   * correct behaviour is the two halves below: a pin that large is refused
+   * on COUNT before anything is fetched, and a pin a caller explicitly
+   * allows is ADDITIVE to the count budget rather than consuming it.
+   */
+  it('A1: a pin larger than PIN_COUNT_FRACTION × maxCacheSize is rejected over-count — nothing is fetched', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // 40 pinned tiles >> maxCacheSize 10 → every eviction pass runs the
-    // over-limit LRU branch; only non-pinned tiles may go.
+    // 40 candidates against floor(10 × 0.25) = 2 allowed pins.
+    const { tileset, batchCalls } = makeHarness({ maxCacheSize: 10 });
+    expect(OVERVIEW_TILES).toBeGreaterThan(Math.floor(10 * PIN_COUNT_FRACTION));
+
+    const result = await tileset.preloadOverviewTier();
+
+    expect(result).toEqual({
+      loaded: false,
+      reason: 'over-count',
+      bytes: OVERVIEW_BYTES, // reported even when rejected
+      tiles: OVERVIEW_TILES,
+    });
+    expect(batchCalls).toHaveLength(0); // count gate fires BEFORE any fetch
+    expect(tileset.getCacheStats().tileCount).toBe(0); // no headers created
+    expect(tileset.getCacheStats().pinnedCount).toBe(0);
+    // Nothing was pinned, so there is nothing to warn about.
+    expect(warn).not.toHaveBeenCalled();
+
+    tileset.finalize();
+  });
+
+  it('A1: pinned tiles are exempt from the count test — a legal pin never churns the working set', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // The caller raises the pin allowance explicitly: 40 pins load against a
+    // 10-tile cap. Pinned tiles must not consume that cap.
     const { tileset, unloaded, loadBucket } = makeHarness({ maxCacheSize: 10 });
 
-    await tileset.preloadOverviewTier();
-    // Pinned alone exceeds the cache limits → the one-shot warning fired.
+    const result = await tileset.preloadOverviewTier({ maxTiles: 40 });
+    expect(result.loaded).toBe(true);
+    // The storyboard alone is larger than the working-set budget the caller
+    // configured — that is still worth one warning, since eviction can never
+    // reclaim pinned bytes.
     expect(warn).toHaveBeenCalledTimes(1);
 
-    // Churn primary-zoom tiles through the cache to force eviction passes.
+    const stats = tileset.getCacheStats();
+    expect(stats.pinnedCount).toBe(OVERVIEW_TILES);
+    // `fakeTile` carries no buffers: every decoded tile is the 1 000-byte base.
+    expect(stats.pinnedBytes).toBe(OVERVIEW_TILES * 1000);
+    expect(stats.cacheBytes).toBe(stats.pinnedBytes);
+
+    // Churn 8 primary-zoom buckets through the cache. 8 non-pinned tiles
+    // against a 10-tile cap is UNDER the limit once pins are excluded, so no
+    // over-limit pass may run and nothing may be evicted.
     for (let i = 0; i < 8; i++) await loadBucket(i, 6);
 
-    // Some z6 churn was evicted; NO pinned overview tile (z ≤ 1) ever was.
-    expect(unloaded.length).toBeGreaterThan(0);
-    expect(unloaded.every((id) => id.z >= 6)).toBe(true);
+    expect(unloaded).toEqual([]);
+    const after = tileset.getCacheStats();
+    expect(after.evictions).toBe(0);
+    expect(after.runwayEvictions).toBe(0);
+    expect(after.tileCount).toBe(OVERVIEW_TILES + 8);
+    expect(after.pinnedCount).toBe(OVERVIEW_TILES);
 
+    tileset.finalize();
+  });
+
+  it('A1: the count gate composes with the byte gate (over-budget still wins on bytes)', async () => {
+    // A count well under the allowance but a byte sum over the budget keeps
+    // the incumbent rejection reason — the two gates are independent.
+    const { tileset } = makeHarness({ maxCacheSize: 2000 });
+    const result = await tileset.preloadOverviewTier({ budgetBytes: 1000 });
+    expect(result.reason).toBe('over-budget');
     tileset.finalize();
   });
 
@@ -298,6 +359,167 @@ describe('SpatioTemporalTileset.preloadOverviewTier', () => {
     // ...and the buffered-ranges bar only shows the primary-loaded bucket.
     expect(tileset.getBufferedRanges()).toEqual([{ start: 0, end: BUCKET_MS }]);
 
+    tileset.finalize();
+  });
+});
+
+/**
+ * A1, at the shape of the live defect (`scratchpad/pin-thrash-repro.mjs`,
+ * tile-loading audit 2026-08 §2 A1): an hourly-bucket archive over years has
+ * THOUSANDS of tiny z0–z1 tiles whose directory bytes fit the 20 MiB overview
+ * budget. `earthquakes-v2` pinned 8 927 against a 2 000-tile cap, `hurricanes`
+ * 17 899; both then ran permanently over `maxCacheSize` and evicted their
+ * whole runway on every selection pass (11 105 runway evictions in 6 s of
+ * playback on earthquakes-v2; 0 in the no-pin control).
+ *
+ * Synthetic mirror: a single-cell archive with more than 2 × maxCacheSize
+ * coarse tiles over the time range, a z6 viewport, and 20 playback steps with
+ * the prefetch runway on.
+ */
+describe('A1: the overview pin against a playback runway', () => {
+  const MAX_CACHE = 400;
+  /** 2 zooms × 450 buckets = 900 overview candidates > 2 × MAX_CACHE. */
+  const THRASH_BUCKETS = 450;
+  const thrashTiles = makeAvailableTiles(THRASH_BUCKETS);
+  /** 1 sim-bucket per 100 real-ms. */
+  const SPEED = BUCKET_MS / 100;
+
+  function makeThrashHarness() {
+    const unloaded: TileId[] = [];
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      maxCacheSize: MAX_CACHE,
+      enablePrefetch: true,
+      refinementStrategy: 'best-available',
+      temporalBucketMs: BUCKET_MS,
+      getAvailableTiles: async (b, z, r) => thrashTiles(b, z, r),
+      // Tiny tiles: the byte gate passes (900 × 100 B), only COUNT can bind.
+      getTileByteSize: () => 100,
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (ids: TileId[]) => ids.map(fakeTile),
+      onTileUnload: (t) => unloaded.push(t.id),
+    });
+    return { tileset, unloaded };
+  }
+
+  /** 20 steps of 100 ms playback from bucket 0; returns the cache stats. */
+  async function play(tileset: SpatioTemporalTileset) {
+    tileset.setAnimationState(true, SPEED);
+    let time = 500;
+    tileset.update(
+      { bounds: BOUNDS, zoom: 6, time, timeWindow: BUCKET_MS },
+      true,
+    );
+    // Coverage tracking on: the tiered eviction (and `runwayEvictions`)
+    // needs the index — the same call the repro script makes.
+    tileset.getBufferedRunway(time, 1);
+    await settle(60);
+    for (let i = 0; i < 20; i++) {
+      advanceClock(100);
+      time += SPEED * 100;
+      tileset.update(
+        { bounds: BOUNDS, zoom: 6, time, timeWindow: BUCKET_MS },
+        true,
+      );
+      await settle(25);
+    }
+    return tileset.getCacheStats();
+  }
+
+  it('rejects the pin over-count when the coarse tier is larger than the cache fraction', async () => {
+    installClock();
+    const { tileset } = makeThrashHarness();
+    const result = await tileset.preloadOverviewTier();
+    expect(result).toEqual({
+      loaded: false,
+      reason: 'over-count',
+      bytes: 2 * THRASH_BUCKETS * 100,
+      tiles: 2 * THRASH_BUCKETS,
+    });
+    expect(tileset.getCacheStats().tileCount).toBe(0);
+    tileset.finalize();
+  });
+
+  it('a loaded pin (allowance raised) causes ZERO runway evictions over 20 playback steps', async () => {
+    installClock();
+    const { tileset, unloaded } = makeThrashHarness();
+    const result = await tileset.preloadOverviewTier({
+      maxTiles: 2 * THRASH_BUCKETS,
+    });
+    expect(result.loaded).toBe(true);
+    expect(tileset.getCacheStats().pinnedCount).toBe(2 * THRASH_BUCKETS);
+
+    const stats = await play(tileset);
+
+    // The headline: pinned residency is additive to the cache budget, so the
+    // runway (64 buckets × 1 tile ≪ 400) is never evicted underneath the
+    // play head. Pre-fix: thousands of tier-C/D evictions and the pressure
+    // ladder pinned at its 0.25 floor.
+    expect(stats.runwayEvictions).toBe(0);
+    expect(stats.evictions).toBe(0);
+    expect(stats.prefetchPressureScale).toBe(1);
+    expect(unloaded).toEqual([]);
+    // ...and the pin itself is intact.
+    expect(stats.pinnedCount).toBe(2 * THRASH_BUCKETS);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * C4 (tile-loading audit 2026-08, CS-2): the byte gate priced DIRECTORY
+ * bytes, but the coalescer fetches RANGES — 33× read amplification on
+ * `goes-glm-lightning` (22.2 MB fetched to pin 0.64 MiB), dispatched at cold
+ * start alongside the first viewport. When the archive can price its own
+ * range plan (`estimateFetchBytes`, wired by `makeTilesetCallbacks`), the
+ * gate is decided on that; the directory sum stays the fallback and is still
+ * reported as `bytes`.
+ */
+describe('C4: the overview byte gate prices PLANNED range bytes when the archive can', () => {
+  it('rejects over-budget on the range plan even though the directory sum fits', async () => {
+    const planned = 30 * 1024 * 1024; // what the coalescer would really move
+    const estimate = vi.fn((_ids: TileId[]) => planned);
+    const { tileset, batchCalls } = makeHarness({
+      maxCacheSize: 2000, // count gate inert: 40 ≤ 500
+      estimateFetchBytes: estimate,
+    });
+    expect(OVERVIEW_BYTES).toBeLessThan(20 * 1024 * 1024); // the directory sum fits
+
+    const result = await tileset.preloadOverviewTier();
+
+    expect(result).toEqual({
+      loaded: false,
+      reason: 'over-budget',
+      bytes: OVERVIEW_BYTES, // the directory sum is still reported...
+      plannedBytes: planned, // ...next to the number the gate was decided on
+      tiles: OVERVIEW_TILES,
+    });
+    expect(estimate).toHaveBeenCalledTimes(1);
+    expect(estimate.mock.calls[0][0]).toHaveLength(OVERVIEW_TILES);
+    expect(batchCalls).toHaveLength(0); // decided before a single fetch
+    tileset.finalize();
+  });
+
+  it('loads on a range plan under budget and reports it alongside the directory sum', async () => {
+    const { tileset } = makeHarness({
+      maxCacheSize: 2000,
+      estimateFetchBytes: () => 1024,
+    });
+    const result = await tileset.preloadOverviewTier();
+    expect(result.loaded).toBe(true);
+    expect(result.bytes).toBe(OVERVIEW_BYTES);
+    expect(result.plannedBytes).toBe(1024);
+    tileset.finalize();
+  });
+
+  it('falls back to the directory sum when no estimator is wired', async () => {
+    const { tileset } = makeHarness({ maxCacheSize: 2000 });
+    const result = await tileset.preloadOverviewTier({
+      budgetBytes: OVERVIEW_BYTES - 1,
+    });
+    expect(result.reason).toBe('over-budget');
+    expect(result.plannedBytes).toBeUndefined();
     tileset.finalize();
   });
 });

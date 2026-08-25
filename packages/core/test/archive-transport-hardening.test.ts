@@ -2,8 +2,10 @@
  * Transport-hardening tests for STTArchive:
  *
  * - per-transfer stall timeout (`transferTimeoutMs`): a TCP-stalled response
- *   aborts with a `TimeoutError` and is retried as a TRANSIENT failure,
- *   while caller aborts still propagate immediately;
+ *   aborts with a `TimeoutError` and — for a single, unsplittable range — is
+ *   retried as a TRANSIENT failure, while caller aborts still propagate
+ *   immediately. (The watchdog is a PROGRESS timeout since audit C1: a
+ *   slowly-progressing body never trips it; see archive-audit-2026-08.)
  * - manifest + directory GETs ride the same jittered retry/backoff as pack
  *   range requests (they were single-attempt single points of failure);
  * - 206 response validation: a truncated body or mismatched `Content-Range`
@@ -12,9 +14,9 @@
  * - throughput sampling at busy-window granularity (one sample per window of
  *   overlapping transfers, not one per request — the concurrent pool made
  *   per-request samples each see ~link/N);
- * - failure-aware estimation: retry-path failures feed pessimistic samples
- *   so `getThroughputEstimate()` can't hold a stale optimistic rate on a
- *   dead network.
+ * - failure accounting: retry-path failures are counted as failure EVENTS
+ *   (`getTransferFailureStats()`), never folded into the throughput estimate
+ *   as near-zero samples (audit C1).
  *
  * Served from the in-memory packed fixture with fault-injecting fetch shims.
  */
@@ -320,7 +322,7 @@ describe('STTArchive throughput sampling', () => {
     expect(estimate.bytesPerMs).toBeGreaterThan(0);
   });
 
-  it('decays the estimate when the network dies (failure-aware samples)', async () => {
+  it('C1: a stalled attempt is a failure event, not a throughput sample', async () => {
     let dead = false;
     const inner = packedFetch(DATASET);
     const archive = new STTArchive({
@@ -338,17 +340,23 @@ describe('STTArchive throughput sampling', () => {
     await archive.getTiles(ids);
     const healthy = archive.getThroughputEstimate();
     expect(healthy.bytesPerMs).toBeGreaterThan(0);
+    expect(archive.getTransferFailureStats().failedAttempts).toBe(0);
 
-    // Network dies: the retry path must feed pessimistic samples instead of
-    // leaving the last healthy rate frozen in place.
+    // Network dies. Re-blessed for audit C1 / NS-1: a stalled attempt
+    // delivered no bytes and says nothing about the link's RATE, so it must
+    // NOT be folded in as a near-zero sample (a 20 s stall so weighted
+    // collapsed the estimate to ~0 and every ETA with it). It is a failure
+    // EVENT, counted where a HUD or the governor can read it.
     dead = true;
     archive.clearCache();
     await expect(archive.getTile(ids[0])).rejects.toMatchObject({
       name: 'TimeoutError',
     });
-    const afterDeath = archive.getThroughputEstimate();
-    expect(afterDeath.samples).toBeGreaterThan(healthy.samples);
-    expect(afterDeath.bytesPerMs!).toBeLessThan(healthy.bytesPerMs!);
+    expect(archive.getThroughputEstimate()).toEqual(healthy);
+    const failures = archive.getTransferFailureStats();
+    expect(failures.failedAttempts).toBe(3);
+    expect(failures.timedOutAttempts).toBe(3);
+    expect(failures.permanentFailures).toBe(0);
   });
 });
 

@@ -9,10 +9,10 @@
  * APIs are pure directory + cache math, so every scenario is deterministic.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
 import type { BufferedRunway } from '../src/spatiotemporal-tileset';
-import type { TileId, Tile } from '../src/types';
+import type { BoundingBox, TileId, Tile } from '../src/types';
 import {
   BOUNDS,
   BUCKET_MS,
@@ -20,6 +20,7 @@ import {
   makeAvailableTiles,
   settle,
 } from './helpers/fixtures';
+import { advanceClock, installClock } from './helpers/clock';
 
 const N_BUCKETS = 20;
 /** Directory byte length of the tile at bucket index `i`. */
@@ -365,6 +366,35 @@ describe('SpatioTemporalTileset.estimateTimeToReadyMs', () => {
     tileset.finalize();
     bare.finalize();
   });
+
+  it('is null while the coverage index is still being built, even on a warm estimator (estimateCost says unknown)', async () => {
+    // The FIRST readiness call flips tracking on and kicks the async index
+    // build; until it lands the cost is UNKNOWABLE, not zero. A 0 here priced
+    // an ETA of 0, and a warm estimator let the governor's start gate pass
+    // onto nothing — three zero-length snap-backs on the small shape
+    // (tile-loading audit 2026-08, §9.3.4).
+    const { tileset, loadBucket } = makeHarness({
+      getThroughput: () => ({ bytesPerMs: 50, samples: 3 }),
+    });
+    await loadBucket(0);
+    const range = { start: 0, end: 2999 };
+    expect(tileset.estimateCost(range)).toEqual({
+      bytes: 0,
+      tiles: 0,
+      unknown: true,
+    });
+    expect(tileset.estimateTimeToReadyMs(range)).toBeNull();
+
+    await settle();
+    const built = tileset.estimateCost(range);
+    expect(built.unknown).toBeUndefined();
+    expect(built.bytes).toBe(bytesAt(1) + bytesAt(2));
+    expect(tileset.estimateTimeToReadyMs(range)).toBeCloseTo(
+      (bytesAt(1) + bytesAt(2)) / 50,
+      9,
+    );
+    tileset.finalize();
+  });
 });
 
 describe('SpatioTemporalTileset.getBufferedRanges', () => {
@@ -413,6 +443,230 @@ describe('SpatioTemporalTileset onBufferChange', () => {
     const last = reports[reports.length - 1];
     expect(last.simMs).toBe(500);
     expect(last.complete).toBe(false);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * B8 (tile-loading audit 2026-08, NS-9 / G7): a 404 used to be treated as
+ * transient — three attempts, then a per-member fan-out, then the 60 s
+ * backoff ladder forever — and the runway stayed pinned behind the hole for
+ * ~8–17 s before the readiness write-off latched. The archive now raises a
+ * typed `PermanentFetchError` (403/404/410) through the batch's `onTileError`
+ * hook; the tileset writes the tile off on FIRST sight, disarms the ladder,
+ * and reports a runway that ends there as `blockedPermanently` so the
+ * governor can fold it as complete instead of waiting on the escape hatch.
+ */
+describe('B8: a PermanentFetchError is a final write-off', () => {
+  const GONE_T = 4 * BUCKET_MS; // the tile the origin will never serve
+  const isGone = (id: TileId): boolean => id.t === GONE_T;
+
+  function makeFailingHarness(kind: 'permanent' | 'transient') {
+    const requests = new Map<string, number>();
+    const errors: Array<{ id: TileId; name: string }> = [];
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: false,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileByteSize,
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (ids: TileId[], _signal, hooks) => {
+        for (const id of ids) {
+          const k = `${id.z}/${id.x}/${id.y}/${id.t}`;
+          requests.set(k, (requests.get(k) ?? 0) + 1);
+        }
+        return ids.map((id, i) => {
+          if (!isGone(id)) return fakeTile(id);
+          const error =
+            kind === 'permanent'
+              ? Object.assign(new Error('404 Not Found'), {
+                  name: 'PermanentFetchError',
+                  status: 404,
+                })
+              : new Error('502 Bad Gateway');
+          hooks?.onTileError?.(i, error);
+          return null;
+        });
+      },
+      onTileError: (error, id) => errors.push({ id, name: error.name }),
+    });
+    return { tileset, requests, errors };
+  }
+
+  /** Head at 3.5 s with a 1 s window: buckets 3 and 4 (and 2) are needed. */
+  const HEAD = 3 * BUCKET_MS + 500;
+  const view = () => ({
+    bounds: BOUNDS,
+    zoom: 6,
+    time: HEAD,
+    timeWindow: BUCKET_MS,
+  });
+
+  it('writes the tile off after ONE settle, never re-fetches it, and the runway reports blockedPermanently', async () => {
+    const { tileset, requests, errors } = makeFailingHarness('permanent');
+    tileset.update(view(), true);
+    tileset.getBufferedRunway(HEAD, 1); // coverage tracking on
+    await settle(40);
+
+    // The runway ends at the bucket that can never complete — and says so.
+    // (Probe ONE bucket ahead: the default 4-window horizon would also count
+    // buckets 5–7, which were never needed, as ordinary pending bytes.)
+    const runway = tileset.getBufferedRunway(HEAD, 1, BUCKET_MS);
+    expect(runway.complete).toBe(false);
+    expect(runway.blockedPermanently).toBe(true);
+    expect(runway.simMs).toBe(GONE_T - HEAD); // up to the near edge of bucket 4
+    // ...and its bytes are not "pending": nothing is coming.
+    expect(runway.bytesPending).toBe(0);
+    // Surfaced typed, once.
+    expect(errors.filter((e) => e.name === 'PermanentFetchError')).toHaveLength(
+      1,
+    );
+
+    // No ladder: the first rung would re-issue at 500 ms; the ceiling is 60 s.
+    await settle(700);
+    expect(requests.get(`6/0/0/${GONE_T}`)).toBe(1);
+
+    tileset.finalize();
+  });
+
+  it('a TRANSIENT failure keeps the ladder (the control): retried, and the runway is merely incomplete', async () => {
+    const { tileset, requests } = makeFailingHarness('transient');
+    tileset.update(view(), true);
+    tileset.getBufferedRunway(HEAD, 1);
+    await settle(40);
+
+    const runway = tileset.getBufferedRunway(HEAD, 1, BUCKET_MS);
+    expect(runway.complete).toBe(false);
+    expect(runway.blockedPermanently).toBeUndefined();
+    expect(runway.bytesPending).toBe(bytesAt(4)); // still expected to arrive
+
+    // First rung of the backoff ladder (500 ms) re-issues the fetch.
+    await settle(700);
+    expect(requests.get(`6/0/0/${GONE_T}`)).toBeGreaterThanOrEqual(2);
+
+    tileset.finalize();
+  });
+});
+
+/**
+ * B1 (tile-loading audit 2026-08, PR-2): the coverage index was rebuilt only
+ * when the bounds rounded to 1/8 of their span changed, but it was BUILT from
+ * the exact bounds. A drift under 1/8 that still crossed a tile boundary left
+ * the column the trailing edge had left in the index; nothing addressed it
+ * again, a bucket is ready only when every index key is ready, and the runway
+ * decayed to 0 with everything on screen resident. Ported from
+ * `scratchpad/proof-runway.mts` experiment B onto real z6 slippy columns
+ * (5.625° each): bounds [5.5, 85.5] → [6, 86] is a 0.625 % drift that moves
+ * column 32 out of the box while the old 1/8-span key stays identical.
+ */
+describe('B1: the coverage index is keyed on the primary-zoom tile box', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const N = 400;
+  const SPEED = 2; // sim-ms per real-ms
+  /** z6 slippy columns covered by a box (the same math the archive scans with). */
+  const colsOf = (b: BoundingBox): [number, number] => [
+    Math.floor(((b.minLon + 180) / 360) * 64),
+    Math.floor(((b.maxLon - 1e-9 + 180) / 360) * 64),
+  ];
+  const available = (
+    b: BoundingBox,
+    z: number,
+    r: { start: number; end: number },
+  ): TileId[] => {
+    const [x0, x1] = colsOf(b);
+    const ids: TileId[] = [];
+    const first = Math.max(0, Math.floor(r.start / BUCKET_MS));
+    const last = Math.min(N - 1, Math.floor(r.end / BUCKET_MS));
+    for (let i = first; i <= last; i++) {
+      const t = i * BUCKET_MS;
+      if (t + BUCKET_MS < r.start || t > r.end) continue;
+      for (let x = x0; x <= x1; x++) ids.push({ z, x, y: 0, t });
+    }
+    return ids;
+  };
+  const B0: BoundingBox = { minLon: 5.5, minLat: 0, maxLon: 85.5, maxLat: 10 }; // cols 32..47
+  const DRIFT: BoundingBox = { minLon: 6, minLat: 0, maxLon: 86, maxLat: 10 }; // cols 33..47
+  const SAME_BOX: BoundingBox = {
+    minLon: 6.1,
+    minLat: 0,
+    maxLon: 86.1,
+    maxLat: 10,
+  };
+  const PAN: BoundingBox = { minLon: 16, minLat: 0, maxLon: 96, maxLat: 10 }; // > 1/8
+
+  it('a sub-tolerance drift across a tile boundary rebuilds the index and keeps the runway', async () => {
+    installClock();
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      temporalBucketMs: BUCKET_MS,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      prefetchAhead: 5 * BUCKET_MS,
+      prefetchSteps: 2,
+      maxCacheSize: 100_000,
+      getTileByteSize: () => 5000,
+      getAvailableTiles: async (b, z, r) => available(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: async (ids: TileId[]) => ids.map(fakeTile),
+    });
+    const step = async (bounds: BoundingBox, time: number): Promise<void> => {
+      advanceClock(300);
+      tileset.update({ bounds, zoom: 6, time, timeWindow: BUCKET_MS }, true);
+      await settle(40);
+    };
+
+    let time = 500;
+    tileset.setAnimationState(true, SPEED);
+    tileset.update({ bounds: B0, zoom: 6, time, timeWindow: BUCKET_MS });
+    tileset.getBufferedRunway(time, 1); // coverage tracking on
+    await settle(60);
+    for (let i = 0; i < 6; i++) {
+      time += SPEED * 300;
+      await step(B0, time);
+    }
+    expect(tileset.getBufferedRunway(time, 1).simMs).toBeGreaterThanOrEqual(
+      5 * BUCKET_MS,
+    );
+    const rebuilds = tileset.getCacheStats().coverageRebuilds;
+    expect(rebuilds).toBe(1);
+
+    // The drift. Column 32 leaves the box; the old 1/8-span key is unchanged
+    // (round(5.5/10) = round(6/10), round(85.5/10) = round(86/10)).
+    const runways: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      time += SPEED * 300;
+      await step(DRIFT, time);
+      runways.push(tileset.getBufferedRunway(time, 1).simMs);
+    }
+    // Rebuilt exactly once, on the boundary crossing...
+    expect(tileset.getCacheStats().coverageRebuilds).toBe(rebuilds + 1);
+    // ...and the runway stayed up: no phantom column 32 to wait on. Pre-fix:
+    // 14 300 → 11 300 → … → 0 by step 25 and 0 through step 39.
+    expect(Math.min(...runways.slice(2))).toBeGreaterThanOrEqual(4 * BUCKET_MS);
+
+    // Same box, different bounds: no rebuild (the drift-is-free property the
+    // old rounding bought is kept).
+    for (let i = 0; i < 4; i++) {
+      time += SPEED * 300;
+      await step(SAME_BOX, time);
+    }
+    expect(tileset.getCacheStats().coverageRebuilds).toBe(rebuilds + 1);
+
+    // A real pan still rebuilds, and the runway recovers on the new box.
+    for (let i = 0; i < 8; i++) {
+      time += SPEED * 300;
+      await step(PAN, time);
+    }
+    expect(tileset.getCacheStats().coverageRebuilds).toBe(rebuilds + 2);
+    expect(tileset.getBufferedRunway(time, 1).simMs).toBeGreaterThan(0);
 
     tileset.finalize();
   });

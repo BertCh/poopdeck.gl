@@ -40,7 +40,27 @@
     overflow: hidden;
   }
 
+  /* Mobile browsers resolve `height: 100%` against the LARGE viewport (toolbar
+     retracted), so a full-bleed map page is taller than what is on screen and
+     its bottom-anchored chrome — the transport bar — sits under the URL bar.
+     `100dvh` tracks the visible viewport instead. Kept behind @supports so the
+     100% fallback above still applies where dvh is unknown. */
+  @supports (height: 100dvh) {
+    html,
+    body,
+    #root {
+      height: 100dvh;
+    }
+  }
+
   body {
+    /* The map owns every touch inside it; without this a vertical drag on the
+       canvas triggers the browser's pull-to-refresh / overscroll bounce
+       instead of panning. */
+    overscroll-behavior: none;
+    /* iOS bumps font-size on inputs under 16px, which would resize the
+       transport bar's controls mid-interaction on rotate. */
+    -webkit-text-size-adjust: 100%;
     font-family:
       system-ui,
       -apple-system,
@@ -216,6 +236,22 @@
   color: rgba(255, 255, 255, 0.7) !important;
 }
 
+/* Attribution and the basemap logo are a licensing requirement, so they must
+   never end up UNDER a floating transport bar. The fullscreen viewer sets
+   `--stt-bottom-chrome` on the map wrapper to whatever its bottom chrome
+   currently occupies (0 on desktop, where the bar is a centred max-w-4xl card
+   the corners clear); the bottom-docked control stacks read it. Applies to
+   both engines — the same viewer renders mapbox and maplibre. */
+.mapboxgl-ctrl-bottom-left,
+.mapboxgl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left,
+.maplibregl-ctrl-bottom-right {
+  /* !important for the same reason the attribution rules above use it: the
+     engine stylesheets are imported from inside the renderer components, so
+     their `bottom: 0` cannot be relied on to lose the cascade to this file. */
+  bottom: var(--stt-bottom-chrome, 0px) !important;
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    DATA STORY — editorial design system
    Scoped under `.story-root` so the long-form serif treatment never leaks
@@ -315,11 +351,31 @@
   z-index: 1;
 }
 .story-step {
-  min-height: 92vh;
+  /* svh, not vh: on a phone `vh` is the toolbar-RETRACTED viewport, so a 92vh
+     step is taller than what is visible and the scroll-spy fires a step late. */
+  min-height: 92svh;
   display: flex;
   align-items: center;
-  padding: 12vh 0;
+  padding: 12svh 0;
 }
+
+/* Phone: the card is the same 30rem panel that reads as an aside beside a
+   desktop globe, but full-bleed over a 390px one it IS the screen and the
+   globe it narrates never shows. Dock it to the bottom instead — the globe
+   gets the upper two-thirds, the text sits where a thumb already is — and cap
+   its height so a long step scrolls inside the card rather than off it. */
+@media (max-width: 767.98px) {
+  .story-step {
+    align-items: flex-end;
+    padding: 8svh 0 12svh;
+  }
+  .story-step-card {
+    max-height: 62svh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
 .story-step-card {
   max-width: 30rem;
   padding: 1.6rem 1.8rem;

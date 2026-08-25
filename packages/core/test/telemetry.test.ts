@@ -97,20 +97,20 @@ describe('core telemetry shim', () => {
     expect(arr[arr.length - 1]).toEqual({ i: MAX_SAMPLES - 1 });
   });
 
-  it('shifts the oldest sample once the ring buffer overflows MAX_SAMPLES', () => {
+  it('trims the oldest QUARTER once the ring buffer overflows MAX_SAMPLES (batched, never one shift per sample)', () => {
     setBag({ enabled: true });
-    // One past the boundary triggers exactly one shift().
+    // One past the boundary triggers one batched trim of MAX_SAMPLES / 4.
     for (let i = 0; i <= MAX_SAMPLES; i++) emit('decode', { i });
     const arr = getBag()!.decode!;
-    expect(arr).toHaveLength(MAX_SAMPLES); // stays bounded
-    expect(arr[0]).toEqual({ i: 1 }); // { i: 0 } was shifted off
+    expect(arr).toHaveLength(MAX_SAMPLES - MAX_SAMPLES / 4 + 1);
+    expect(arr[0]).toEqual({ i: MAX_SAMPLES / 4 }); // { i: 0..1023 } trimmed
     expect(arr[arr.length - 1]).toEqual({ i: MAX_SAMPLES });
 
-    // Sustained overflow keeps it pinned at MAX_SAMPLES (FIFO window slides).
+    // Sustained overflow stays inside (3/4 cap, cap] and keeps sliding.
     for (let i = MAX_SAMPLES + 1; i < MAX_SAMPLES + 100; i++)
       emit('decode', { i });
-    expect(arr).toHaveLength(MAX_SAMPLES);
-    expect(arr[0]).toEqual({ i: 100 });
+    expect(arr.length).toBeLessThanOrEqual(MAX_SAMPLES);
+    expect(arr.length).toBeGreaterThanOrEqual(MAX_SAMPLES - MAX_SAMPLES / 4);
     expect(arr[arr.length - 1]).toEqual({ i: MAX_SAMPLES + 99 });
   });
 
@@ -123,5 +123,50 @@ describe('core telemetry shim', () => {
     snapshot('viewport', { z: 12 });
     bag = getBag()!;
     expect(bag.snapshots).toEqual({ viewport: { z: 12 } });
+  });
+});
+
+// Tile-loading audit 2026-08 follow-up (found by a peer session's core audit):
+// a full channel used to pay one `shift()` PER SAMPLE — ~90 µs/decode once the
+// decode-wait ring held 4,096 entries, i.e. the probe changed what it measured
+// and only after the 4,096th sample. Trims are batched now, and the roll-up
+// ring is a small recent window.
+describe('probe rings trim in batches, never one shift per sample', () => {
+  beforeEach(() => {
+    (globalThis as { __sttProbe?: unknown }).__sttProbe = { enabled: true };
+  });
+  afterEach(() => {
+    delete (globalThis as { __sttProbe?: unknown }).__sttProbe;
+  });
+
+  it('emit() keeps a saturated channel between 3/4 and the full cap (batched trim)', () => {
+    for (let i = 0; i < 4096 + 2000; i++) emit('decode', { i });
+    const arr = (globalThis as { __sttProbe: { decode: unknown[] } }).__sttProbe
+      .decode;
+    expect(arr.length).toBeLessThanOrEqual(4096);
+    expect(arr.length).toBeGreaterThanOrEqual(4096 - 1024);
+    // Oldest samples are the ones dropped.
+    expect((arr[arr.length - 1] as { i: number }).i).toBe(4096 + 2000 - 1);
+  });
+
+  it('recordDecodeWait() keeps a bounded recent window and still rolls up percentiles', async () => {
+    const { recordDecodeWait } = await import('../src/telemetry');
+    for (let i = 0; i < 5000; i++) recordDecodeWait(i % 100, 3);
+    const bag = (
+      globalThis as {
+        __sttProbe: {
+          __decodeWaitRing?: { waits: number[] };
+          snapshots?: Record<string, { p50WaitMs: number; p95WaitMs: number }>;
+        };
+      }
+    ).__sttProbe;
+    const ring = bag.__decodeWaitRing;
+    expect(ring).toBeDefined();
+    expect(ring!.waits.length).toBeLessThanOrEqual(512);
+    expect(ring!.waits.length).toBeGreaterThanOrEqual(512 - 128);
+    const snap = bag.snapshots?.decodeQueue;
+    expect(snap).toBeDefined();
+    expect(snap!.p50WaitMs).toBeGreaterThan(0);
+    expect(snap!.p95WaitMs).toBeGreaterThanOrEqual(snap!.p50WaitMs);
   });
 });

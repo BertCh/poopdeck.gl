@@ -1,7 +1,18 @@
+# Baseline response policy for every static page and asset. The Worker mirrors
+# these headers for its SPA-shell and 404 responses because `_headers` applies
+# to assets served directly, not responses constructed by worker.js.
+/*
+  Content-Security-Policy: frame-ancestors 'self'
+  Permissions-Policy: camera=(), geolocation=(), microphone=(), payment=(), usb=()
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+
 # Cross-origin + content-type for the llmstxt.org AI-agent doc surface
 # (dist/llms.txt, dist/llms-full.txt, dist/llms/*). These files are generated
-# into dist/ by the emit-llms-docs plugin in vite.config.ts; this file is
-# copied into dist/ by the excludeUnusedPublicFiles plugin's public/ re-copy.
+# into build/client/ by the React Router buildEnd finalizer; that finalizer also
+# copies this file after prerendering so React Router cannot discard it.
 # Serve them as plain UTF-8 text and allow any web-capable agent to fetch them.
 /llms.txt
   Access-Control-Allow-Origin: *
@@ -19,7 +30,7 @@
 # Worker's SPA fallback answers 200 text/html, so any validator that RESOLVES
 # the $id silently validates against the HTML shell. The bytes are copied from
 # docs/spec/ (see the copy note in public/spec/README.md) and shipped by the
-# excludeUnusedPublicFiles plugin's public/ re-copy, same as this file.
+# post-prerender static-asset finalizer, same as this file.
 # `application/schema+json` (RFC draft json-schema-core §11) for the two JSON
 # Schemas; the other two are contract documents, not schemas.
 /spec/manifest.schema.json
@@ -34,3 +45,23 @@
 /spec/render-spec.json
   Access-Control-Allow-Origin: *
   Content-Type: application/json
+
+# Machine-readable current release/support contract and its schema.
+/project-status.json
+  Access-Control-Allow-Origin: *
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: public, max-age=3600
+/project-status.schema.json
+  Access-Control-Allow-Origin: *
+  Content-Type: application/schema+json; charset=utf-8
+  Cache-Control: public, max-age=3600
+
+/robots.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=3600
+/sitemap.xml
+  Content-Type: application/xml; charset=utf-8
+  Cache-Control: public, max-age=3600
+/site.webmanifest
+  Content-Type: application/manifest+json; charset=utf-8
+  Cache-Control: public, max-age=3600

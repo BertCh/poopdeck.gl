@@ -126,7 +126,7 @@ new AnimatedIconLayer({
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **FillStyleExtension** | Decorative pattern-fill. The constant pattern already passes through; a per-feature pattern-index column is a lot of plumbing for little payoff.                  |
 | **\_TerrainExtension** | Experimental upstream, and the vertical axis is already claimed by poopdeck's `timeHeightScale` space-time-cube lift — draping and time-as-height fight over `z`. |
-| **Fp64Extension**      | Deprecated upstream. Poopdeck already relativizes time per-tile (`timeOffset`) and uses deck's built-in fp64 position split; adding it is counterproductive.      |
+| **Fp64Extension**      | Deprecated upstream. poopdeck.gl already relativizes time per-tile (`timeOffset`) and uses deck's built-in fp64 position split; adding it is counterproductive.   |
 
 ## See also
 

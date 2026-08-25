@@ -81,6 +81,7 @@ import {
 import {
   createCancellationError,
   isCancellationError,
+  SCHEDULER_PREFETCH_TIER_BASE,
 } from './request-scheduler.js';
 import { MAX_SEAM_SPAN_DEG } from './geo/viewport-bounds.js';
 import { MAX_MERCATOR_LAT } from './geo/mercator.js';
@@ -249,6 +250,15 @@ const MOBILE_MAX_CACHE_TILES = 100;
  * `ArchiveOptions.coalesceGapBytes`, a cold estimator, or an archive that
  * declares no build-assumed gap all resolve here, so absent measurement the
  * reader behaves exactly as it did before CO-7.
+ *
+ * The gap is a CEILING on what one fuse may bridge, not a promise to bridge
+ * it: the saved-RTT rationale above assumes the bridged bytes are cheap next
+ * to the useful ones, which stops being true for a handful of KB-sized tiles
+ * scattered over MBs (blob dedup breaks time-major locality — the same blob
+ * is referenced from every zoom it was first written for). So the fuse rule
+ * also bounds the gap by the useful bytes already in the group
+ * ({@link COALESCE_AMPLIFICATION_K} × useful + {@link MIN_ADAPTIVE_COALESCE_GAP});
+ * see {@link planCoalescedRanges}.
  */
 export const DEFAULT_RANGE_COALESCE_GAP = 2 * 1024 * 1024;
 /**
@@ -264,6 +274,88 @@ export const DEFAULT_RANGE_COALESCE_GAP = 2 * 1024 * 1024;
  * {@link adaptiveCoalesceGapBand}).
  */
 export const MIN_ADAPTIVE_COALESCE_GAP = 256 * 1024;
+/**
+ * Amplification bound on a fuse (C3): two ranges are bridged only when the
+ * gap is at most `k × usefulBytesSoFar + MIN_ADAPTIVE_COALESCE_GAP`, so the
+ * over-fetch of a coalesced request is at most ~k× its useful payload plus
+ * one floor's worth. Without it a sparse batch — ten sub-KB tiles a MiB apart,
+ * which blob dedup makes common at high zoom — fused into one multi-MB
+ * request (~900× measured on `earthquakes` z10). `4` keeps every steady-state
+ * playback amplification the audit measured (≤ 1.9×) untouched.
+ */
+export const COALESCE_AMPLIFICATION_K = 4;
+
+/** A tile's byte extent inside its pack object. */
+export interface RangeExtent {
+  packId: number;
+  offset: number;
+  length: number;
+}
+
+/** One coalesced HTTP range request and the items it carries. */
+export interface CoalescedRange<T> {
+  packId: number;
+  start: number;
+  end: number;
+  members: T[];
+}
+
+/**
+ * The range plan `getTiles` issues for a set of items — pure, so the same
+ * function prices a batch before it is fetched ({@link STTArchive.planRangeBytes}).
+ *
+ * Coalescing is PER-PACK: a single HTTP range addresses exactly one pack
+ * object, so no gap, adaptive or pinned, may bridge an object boundary. Within
+ * a pack, items are walked in offset order and a neighbour is fused into the
+ * open group when its gap is within BOTH `coalesceGap` (the RTT-priced
+ * ceiling, CO-7) and the amplification bound
+ * ({@link COALESCE_AMPLIFICATION_K} × useful bytes already in the group +
+ * {@link MIN_ADAPTIVE_COALESCE_GAP}). Overlapping / duplicate extents (dedup'd
+ * blobs) always fuse. Groups come out in pack order, byte order within a pack.
+ */
+export function planCoalescedRanges<T>(
+  items: readonly T[],
+  extentOf: (item: T) => RangeExtent,
+  coalesceGap: number,
+): CoalescedRange<T>[] {
+  const byPack = new Map<number, Array<{ item: T; extent: RangeExtent }>>();
+  for (const item of items) {
+    const extent = extentOf(item);
+    let list = byPack.get(extent.packId);
+    if (!list) {
+      list = [];
+      byPack.set(extent.packId, list);
+    }
+    list.push({ item, extent });
+  }
+  const groups: CoalescedRange<T>[] = [];
+  for (const [packId, members] of byPack) {
+    members.sort((a, b) => a.extent.offset - b.extent.offset);
+    let current: CoalescedRange<T> | undefined;
+    let useful = 0;
+    for (const { item, extent } of members) {
+      const pStart = extent.offset;
+      const pEnd = extent.offset + extent.length - 1;
+      if (current) {
+        const gap = pStart - (current.end + 1);
+        const bound = Math.min(
+          coalesceGap,
+          COALESCE_AMPLIFICATION_K * useful + MIN_ADAPTIVE_COALESCE_GAP,
+        );
+        if (gap <= bound) {
+          current.end = Math.max(current.end, pEnd);
+          current.members.push(item);
+          useful += extent.length;
+          continue;
+        }
+      }
+      current = { packId, start: pStart, end: pEnd, members: [item] };
+      useful = extent.length;
+      groups.push(current);
+    }
+  }
+  return groups;
+}
 /**
  * Ceiling of the adaptive coalesce band (CO-7). The estimator feeds back on
  * itself — a larger gap means fewer, longer transfers, which changes the
@@ -734,16 +826,15 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS = 24;
 const DEFAULT_RANGE_RETRY_DELAYS_MS = [250, 1000];
 /** Default fair-share weight for an archive in the process-shared scheduler. */
 const DEFAULT_SCHEDULER_WEIGHT = 1;
-/**
- * Tier base for the shared scheduler's cross-source EDF priority. A `'low'`
- * (prefetch/lookahead) range-group is offset by this large constant so it ALWAYS
- * ranks below any need-now (`'auto'`/`'high'`) group GLOBALLY across sources —
- * the bandwidth analog of required-vs-optional (§2.7). Need-now groups start at
- * base 0; within a tier, the EDF distance-to-playhead term orders them. The
- * constant exceeds any realistic distance-to-playhead in sim-ms so the tiers
- * never interleave.
- */
-const SCHEDULER_PREFETCH_TIER_BASE = 1e15;
+// `SCHEDULER_PREFETCH_TIER_BASE` (imported from request-scheduler): a `'low'`
+// (prefetch/lookahead) range-group is offset by it so it ranks below any
+// need-now (`'auto'`/`'high'`) group — the bandwidth analog of
+// required-vs-optional (§2.7). Need-now groups start at base 0; within a tier
+// the EDF distance-to-playhead term orders them. The priority VALUE alone does
+// not keep the tiers apart: the DRR deficit gate runs before the priority
+// compare, so cross-tier ordering holds only because the scheduler's own
+// tier-gated admission (B4) refuses a prefetch-tier group while any need-now
+// group is queued. One constant, owned there, so the two can never drift.
 /**
  * Weight applied to the spatial tie-break's squared normalized-mercator
  * distance (range [0, 2]) before it's added into
@@ -756,11 +847,16 @@ const SCHEDULER_PREFETCH_TIER_BASE = 1e15;
  */
 const SPATIAL_TIEBREAK_WEIGHT = 0.4;
 /**
- * Default per-transfer stall timeout. hls.js ships 20 s (`fragLoadingTimeOut`)
- * and Shaka ~30 s; without one, a TCP-stalled response hangs its tile forever
- * — the batch member stays in flight and is never re-requested. A timeout is
- * a TRANSIENT failure (retried), unlike a caller abort (propagated).
- * Overridable per-archive via `ArchiveOptions.transferTimeoutMs`; `0` disables.
+ * Default per-transfer STALL timeout — the longest a response may go without
+ * delivering a byte. hls.js ships 20 s (`fragLoadingTimeOut`) and Shaka ~30 s;
+ * without one, a TCP-stalled response hangs its tile forever — the batch
+ * member stays in flight and is never re-requested. It is an idle threshold,
+ * not a total deadline: the watchdog re-arms on every body chunk
+ * ({@link STTArchive.fetchObjectRange}), so a slowly-progressing 15 MB range
+ * completes on any link while a response that stops progressing still dies
+ * here. A timeout is a TRANSIENT failure (retried, or re-split when the range
+ * was a coalesced group), unlike a caller abort (propagated). Overridable
+ * per-archive via `ArchiveOptions.transferTimeoutMs`; `0` disables.
  */
 const DEFAULT_TRANSFER_TIMEOUT_MS = 20_000;
 /**
@@ -768,8 +864,10 @@ const DEFAULT_TRANSFER_TIMEOUT_MS = 20_000;
  * cells and switches to the per-zoom occupied-cell index.
  *
  * The scan runs on the selection path, and the tileset's selection key folds in
- * the time range — so during playback it re-runs at display refresh, not at
- * 10 Hz. It is bounded by the viewport in principle, but two things break that:
+ * the time range — so during playback it re-runs as often as the consumer calls
+ * `tileset.update()`: deck throttles that to ≤ 10 Hz, while the maplibre and
+ * Cesium backends drive it per frame. It is bounded by the viewport in
+ * principle, but two things break that:
  * the camera zoom is CLAMPED up into the archive's `[minZoom, maxZoom]`, so a
  * whole-world camera over a `min_zoom: 10` archive covers 2^10 × 2^10 cells; and
  * a degenerate box (see {@link orderLonRange}) can claim nearly the whole world
@@ -792,6 +890,55 @@ const MAX_QUERY_SCAN_CELLS = 8192;
 /** Whether an error is a fetch cancellation (must propagate, never retry). */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+/** Whether an error is the transfer watchdog firing (a stalled response). */
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
+
+/**
+ * A response status that no retry can change (B8): the object is gone
+ * (404/410) or forbidden (403). Raised by the range and whole-object readers,
+ * never retried, never fanned out per member, and surfaced typed so a caller
+ * (the tileset's readiness write-off) can treat the tile as final on first
+ * sight instead of re-enqueueing it forever on the retry ladder. 408/429 and
+ * every 5xx stay transient.
+ */
+export class PermanentFetchError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'PermanentFetchError';
+    this.status = status;
+  }
+}
+
+function isPermanentFetchError(error: unknown): error is PermanentFetchError {
+  return error instanceof Error && error.name === 'PermanentFetchError';
+}
+
+function isPermanentStatus(status: number): boolean {
+  return status === 403 || status === 404 || status === 410;
+}
+
+/**
+ * Per-batch error hook for {@link STTArchive.getTiles}: the reason a member
+ * resolved to `null`, delivered `(index, error)` as it is known. A
+ * {@link PermanentFetchError} here means no retry will ever help.
+ */
+export interface TileBatchErrorHook {
+  onTileError?: (index: number, error: unknown) => void;
+}
+
+/** Failure events counted by the transport (see {@link STTArchive.getTransferFailureStats}). */
+export interface TransferFailureStats {
+  /** Every failed attempt of any kind (timeouts and permanent included). */
+  failedAttempts: number;
+  /** Attempts the stall watchdog aborted. */
+  timedOutAttempts: number;
+  /** Attempts answered with a permanent status (403/404/410). */
+  permanentFailures: number;
 }
 
 /**
@@ -840,17 +987,24 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): {
 
 /**
  * Compose the caller's abort signal with a stall timeout. The returned signal
- * aborts with a `TimeoutError` reason when `timeoutMs` elapses, or mirrors the
- * caller's abort (reason and all) — so retry logic can tell the two apart
- * (timeout → retryable transient, caller abort → propagate). `cleanup` MUST
- * run when the transfer settles: it clears the timer and detaches the
- * caller-signal listener so neither outlives the request.
+ * aborts with a `TimeoutError` reason when `timeoutMs` elapses without
+ * progress, or mirrors the caller's abort (reason and all) — so retry logic
+ * can tell the two apart (timeout → retryable transient, caller abort →
+ * propagate). `rearm` restarts the idle clock; the streaming readers call it
+ * on every body chunk, which is what makes this a progress watchdog rather
+ * than a total deadline (C1). `cleanup` MUST run when the transfer settles: it
+ * clears the timer and detaches the caller-signal listener so neither
+ * outlives the request.
  */
 function withTransferTimeout(
   signal: AbortSignal | undefined,
   timeoutMs: number,
-): { signal: AbortSignal | undefined; cleanup: () => void } {
-  if (!(timeoutMs > 0)) return { signal, cleanup: () => {} };
+): {
+  signal: AbortSignal | undefined;
+  rearm: () => void;
+  cleanup: () => void;
+} {
+  if (!(timeoutMs > 0)) return { signal, rearm: () => {}, cleanup: () => {} };
   const controller = new AbortController();
   const onAbort = (): void => {
     controller.abort(
@@ -862,21 +1016,99 @@ function withTransferTimeout(
     if (signal.aborted) onAbort();
     else signal.addEventListener('abort', onAbort, { once: true });
   }
-  const timer = setTimeout(() => {
+  const fire = (): void => {
     controller.abort(
       new DOMException(
         `STT transfer stalled for ${timeoutMs} ms`,
         'TimeoutError',
       ),
     );
-  }, timeoutMs);
+  };
+  let timer = setTimeout(fire, timeoutMs);
   return {
     signal: controller.signal,
+    rearm: () => {
+      if (controller.signal.aborted) return;
+      clearTimeout(timer);
+      timer = setTimeout(fire, timeoutMs);
+    },
     cleanup: () => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
     },
   };
+}
+
+/**
+ * Drain a `Response` body through `getReader()`, re-arming the stall watchdog
+ * on every chunk and reporting progress to `onProgress` (bytes so far + the
+ * accumulating buffer, so a coalesced group can slice out and decode each
+ * member the moment its extent is complete — C2). `expectedLength`, when
+ * known (every range read), sizes the buffer up front and rejects an
+ * over-long body; unknown (whole-object GETs) grows by chunk list. Transports
+ * without a body stream (test shims, exotic fetch polyfills) fall back to
+ * `arrayBuffer()` under the same signal — one arming, total-deadline
+ * semantics, exactly the pre-C1 path.
+ */
+async function readBodyWithWatchdog(
+  response: Response,
+  transfer: { signal: AbortSignal | undefined; rearm: () => void },
+  expectedLength: number | undefined,
+  onProgress?: (bytesSoFar: number, buffer: Uint8Array) => void,
+): Promise<ArrayBuffer> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') {
+    return raceAbort(response.arrayBuffer(), transfer.signal);
+  }
+  const reader = body.getReader();
+  let done = false;
+  try {
+    if (expectedLength !== undefined) {
+      const out = new Uint8Array(expectedLength);
+      let cursor = 0;
+      for (;;) {
+        const chunk = await raceAbort(reader.read(), transfer.signal);
+        if (chunk.done) break;
+        transfer.rearm();
+        const value = chunk.value;
+        if (cursor + value.byteLength > expectedLength) {
+          throw new Error(
+            `STT range over-delivered: got more than ${expectedLength} bytes`,
+          );
+        }
+        out.set(value, cursor);
+        cursor += value.byteLength;
+        onProgress?.(cursor, out);
+      }
+      done = true;
+      // A short body is reported by the caller's length check against
+      // `expectedLength`, with the request's own range in the message.
+      return cursor === expectedLength
+        ? out.buffer
+        : out.buffer.slice(0, cursor);
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = await raceAbort(reader.read(), transfer.signal);
+      if (chunk.done) break;
+      transfer.rearm();
+      chunks.push(chunk.value);
+      total += chunk.value.byteLength;
+    }
+    done = true;
+    const out = new Uint8Array(total);
+    let cursor = 0;
+    for (const c of chunks) {
+      out.set(c, cursor);
+      cursor += c.byteLength;
+    }
+    return out.buffer;
+  } finally {
+    // Release the stream on abort/timeout/over-delivery; a completed read
+    // has already closed it. `cancel()` may reject on an errored stream.
+    if (!done) reader.cancel().catch(() => {});
+  }
 }
 
 /**
@@ -1011,6 +1243,15 @@ const sharedByteCacheLru = new Map<string, SharedByteCacheEntry>();
 let sharedByteCacheBytes = 0;
 let nextArchiveCacheId = 1;
 const SHARED_BYTE_CACHE_MAX_BYTES = getDeviceAwareCacheByteSize();
+
+/**
+ * Process-wide compressed-byte LRU accounting (every archive's byte cache
+ * registers here). Observation only — the number `clearCache()` must bring
+ * back down (A6), and what a HUD would show as "compressed bytes resident".
+ */
+export function getSharedByteCacheStats(): { bytes: number; entries: number } {
+  return { bytes: sharedByteCacheBytes, entries: sharedByteCacheLru.size };
+}
 
 function unregisterSharedCacheEntry(token: string): void {
   const existing = sharedByteCacheLru.get(token);
@@ -1828,6 +2069,17 @@ export class STTArchive {
    * is recorded per busy window (first transfer starts → last one settles).
    */
   private activeTransferCount = 0;
+  /**
+   * Transport failure events (C1 / B8). A failed attempt delivered no bytes
+   * and so says nothing about the link's RATE — it is counted here instead of
+   * being fed to {@link throughput} as a near-zero sample (which, weighted by
+   * a 20 s stall, collapsed the estimate and every ETA built on it).
+   */
+  private transferFailures: TransferFailureStats = {
+    failedAttempts: 0,
+    timedOutAttempts: 0,
+    permanentFailures: 0,
+  };
   private transferWindowBytes = 0;
   private transferWindowStart = 0;
 
@@ -1882,6 +2134,15 @@ export class STTArchive {
   private paged = false;
   /** The root page's leaf descriptors (paged mode only). */
   private pageTable?: PageDescriptor[];
+  /**
+   * Page-scale fuse gap for {@link fetchAndMergePages} (C6), memoised per
+   * page table: `2 × median leaf length`. Leaf pages are ~55 KB and their
+   * fetches are dispatched in parallel, so a fuse saves a request but no
+   * latency; bridging more than a couple of unneeded leaves only adds bytes
+   * to the cold-start critical path (`nyc-taxi-paths` z14: 1.99 MB fetched
+   * for 0.78 MB needed under the 2 MiB tile gap).
+   */
+  private leafPageGap?: { table: PageDescriptor[]; gapBytes: number };
   /** Indices into {@link pageTable} whose leaves are resident in the maps. */
   private residentPages = new Set<number>();
   /** Promise guards so concurrent queries share one in-flight page fetch. */
@@ -2303,11 +2564,21 @@ export class STTArchive {
         transfer.signal,
       );
       if (!response.ok) {
-        throw new Error(
-          `STT ${what} fetch failed: ${response.status} ${response.statusText}`,
-        );
+        const message = `STT ${what} fetch failed: ${response.status} ${response.statusText}`;
+        if (isPermanentStatus(response.status)) {
+          throw new PermanentFetchError(message, response.status);
+        }
+        throw new Error(message);
       }
-      const buffer = await raceAbort(response.arrayBuffer(), transfer.signal);
+      // Streamed under the progress watchdog: a large directory on a slow
+      // link is exactly the transfer a total deadline could never complete.
+      // The length is passed as a hint only when it is known; the mismatch
+      // check below is what reports a short body.
+      const buffer = await readBodyWithWatchdog(
+        response,
+        transfer,
+        expectedLength,
+      );
       if (
         expectedLength !== undefined &&
         buffer.byteLength !== expectedLength
@@ -2346,10 +2617,21 @@ export class STTArchive {
         return await this.fetchWholeObject(url, what, expectedLength);
       } catch (error) {
         if (isAbortError(error)) throw error;
+        this.noteFailedAttempt(error);
+        // A missing manifest/directory is a dead archive, not a flaky one.
+        if (isPermanentFetchError(error)) throw error;
         lastError = error;
       }
     }
     throw lastError;
+  }
+
+  /** Count one failed transport attempt by kind (see {@link transferFailures}). */
+  private noteFailedAttempt(error: unknown): void {
+    this.transferFailures.failedAttempts++;
+    if (isTimeoutError(error)) this.transferFailures.timedOutAttempts++;
+    else if (isPermanentFetchError(error))
+      this.transferFailures.permanentFailures++;
   }
 
   /**
@@ -2366,6 +2648,7 @@ export class STTArchive {
     end: number,
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
+    onProgress?: (bytesSoFar: number, buffer: Uint8Array) => void,
   ): Promise<ArrayBuffer> {
     const manifest = await this.fetchManifest();
     const pack = manifest.packs[packIndex];
@@ -2380,6 +2663,7 @@ export class STTArchive {
       end,
       signal,
       fetchPriority,
+      onProgress,
     );
   }
 
@@ -2405,6 +2689,7 @@ export class STTArchive {
     end: number,
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
+    onProgress?: (bytesSoFar: number, buffer: Uint8Array) => void,
   ): Promise<ArrayBuffer> {
     const lifetime = composeAbortSignals(
       signal,
@@ -2433,9 +2718,11 @@ export class STTArchive {
       // it would bias `L̂` toward whichever requests happened to succeed.
       this.latency.addSample(nowMs() - requestStart);
       if (!response.ok) {
-        throw new Error(
-          `STT range fetch failed: ${response.status} ${response.statusText}`,
-        );
+        const message = `STT range fetch failed: ${response.status} ${response.statusText}`;
+        if (isPermanentStatus(response.status)) {
+          throw new PermanentFetchError(message, response.status);
+        }
+        throw new Error(message);
       }
       if (response.status !== 206) {
         throw new Error(
@@ -2444,8 +2731,15 @@ export class STTArchive {
         );
       }
       validateContentRange(response, start, end);
-      const buffer = await raceAbort(response.arrayBuffer(), transfer.signal);
       const expected = end - start + 1;
+      // Streamed: the watchdog re-arms per chunk (C1) and `onProgress` lets a
+      // coalesced group decode each member as its extent completes (C2).
+      const buffer = await readBodyWithWatchdog(
+        response,
+        transfer,
+        expected,
+        onProgress,
+      );
       if (buffer.byteLength !== expected) {
         throw new Error(
           `STT range truncated: got ${buffer.byteLength} bytes, ` +
@@ -2476,6 +2770,8 @@ export class STTArchive {
     end: number,
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
+    onProgress?: (bytesSoFar: number, buffer: Uint8Array) => void,
+    splittable = false,
   ): Promise<ArrayBuffer> {
     const manifest = await this.fetchManifest();
     const pack = manifest.packs[packIndex];
@@ -2490,18 +2786,33 @@ export class STTArchive {
       end,
       signal,
       fetchPriority,
+      onProgress,
+      splittable,
     );
   }
 
-  /** {@link fetchObjectRange} with the same jittered backoff + failure-aware
-   *  throughput sampling as the per-pack path. Shared by tile and directory
-   *  range reads. An `AbortError` is never retried. */
+  /**
+   * {@link fetchObjectRange} with the same jittered backoff as the per-pack
+   * path. Shared by tile and directory range reads. Never retried: an
+   * `AbortError` (propagates), a {@link PermanentFetchError} (B8 — no status
+   * that 404/410/403 answers with changes on re-request), and — when the
+   * caller can re-split the range (`splittable`, a multi-member coalesced
+   * group) — a `TimeoutError`: the watchdog only fires after a full idle
+   * threshold with no progress, so re-issuing the identical range is the one
+   * thing that cannot change the outcome, while splitting it can. A single
+   * unsplittable range still retries a stall as a transient.
+   *
+   * A failed attempt is a failure EVENT ({@link noteFailedAttempt}), not a
+   * throughput sample: it delivered no bytes and says nothing about the rate.
+   */
   private async fetchObjectRangeWithRetry(
     url: string,
     start: number,
     end: number,
     signal?: AbortSignal,
     fetchPriority?: 'high' | 'low' | 'auto',
+    onProgress?: (bytesSoFar: number, buffer: Uint8Array) => void,
+    splittable = false,
   ): Promise<ArrayBuffer> {
     const lifetime = composeAbortSignals(
       signal,
@@ -2514,7 +2825,6 @@ export class STTArchive {
           const base = this.retryDelaysMs[attempt - 1];
           await abortableDelay(base * (0.5 + Math.random()), lifetime.signal);
         }
-        const attemptStart = nowMs();
         try {
           return await this.fetchObjectRange(
             url,
@@ -2522,17 +2832,13 @@ export class STTArchive {
             end,
             lifetime.signal,
             fetchPriority,
+            onProgress,
           );
         } catch (error) {
           if (isAbortError(error)) throw error;
-          // Failure-aware estimation: the estimator is otherwise fed only by
-          // COMPLETED responses, so on a dead network `getEstimate()` holds
-          // the last healthy rate forever and every ETA built from it lies.
-          // A failed attempt burned its wall-clock for ~zero delivered bytes
-          // — feed that as a 1-byte sample weighted by the attempt duration,
-          // dragging the fast EWMA toward zero (a 20 s stall outweighs a
-          // quick 5xx, which is the right proportionality).
-          this.throughput.addSample(1, nowMs() - attemptStart);
+          this.noteFailedAttempt(error);
+          if (isPermanentFetchError(error)) throw error;
+          if (splittable && isTimeoutError(error)) throw error;
           lastError = error;
         }
       }
@@ -2553,6 +2859,16 @@ export class STTArchive {
    */
   getThroughputEstimate(): ThroughputEstimate {
     return this.throughput.getEstimate();
+  }
+
+  /**
+   * Transport failure counters (C1 / B8): attempts that timed out, were
+   * answered with a permanent status, or failed for any reason. These are
+   * the failure EVENTS that used to be folded into the throughput estimate as
+   * near-zero samples; a HUD or the governor can read them here instead.
+   */
+  getTransferFailureStats(): TransferFailureStats {
+    return { ...this.transferFailures };
   }
 
   /**
@@ -3034,6 +3350,29 @@ export class STTArchive {
    * leaves are contiguous in the object), bounded by `maxConcurrentRequests`.
    * Concurrent callers share one in-flight fetch per page via `pageFetchPromises`.
    */
+  /**
+   * `2 × median leaf length` for the current page table (see
+   * {@link leafPageGap}), capped by an explicit `ArchiveOptions.coalesceGapBytes`
+   * pin: that option is documented as the widest gap ANY range read will
+   * bridge, so a caller who pins it (tests pin `0` to force one request per
+   * page) keeps that ceiling here too.
+   */
+  private leafPageGapBytes(): number {
+    const table = this.pageTable;
+    if (!table || table.length === 0) return 0;
+    let gapBytes: number;
+    if (this.leafPageGap?.table === table) {
+      gapBytes = this.leafPageGap.gapBytes;
+    } else {
+      const lengths = table.map((p) => p.length).sort((a, b) => a - b);
+      gapBytes = 2 * lengths[lengths.length >> 1];
+      this.leafPageGap = { table, gapBytes };
+    }
+    return this.coalesceGapPinned
+      ? Math.min(gapBytes, this.coalesceGapBytes)
+      : gapBytes;
+  }
+
   private async fetchAndMergePages(
     indices: number[],
     signal?: AbortSignal,
@@ -3060,10 +3399,13 @@ export class STTArchive {
       end: number;
       members: number[];
     }
-    // One reading for the whole pass: the fuse decisions in this plan are then
-    // all taken against the SAME G, which is what makes the plan a pure
-    // function of (pending pages, gap) and keeps it monotone in G.
-    const coalesceGap = this.effectiveCoalesceGap();
+    // Page-scale gap (C6), NOT the tile coalesce gap: leaf pages are ~55 KB
+    // and dispatched in parallel, so a fuse saves a request but no latency,
+    // while every bridged byte sits on the cold-start critical path. Two
+    // leaves' worth of bridge keeps a near-adjacent run (one unneeded leaf
+    // between two needed ones) in one request and nothing wider. One reading
+    // for the whole pass, so the plan is a pure function of (pending, gap).
+    const coalesceGap = this.leafPageGapBytes();
     const groups: Group[] = [];
     for (const i of pending) {
       const d = this.pageTable[i];
@@ -3130,8 +3472,8 @@ export class STTArchive {
     const groupSpatialDistance = (): number | null => null;
 
     // Register a shared promise per pending page so concurrent queries dedupe,
-    // then dispatch all groups through runGroupFetches (shared scheduler when
-    // enabled, legacy cursor runner otherwise). We pre-create a per-group
+    // then dispatch all groups through runGroupFetches (the process-shared
+    // scheduler; there is no other dispatch path). We pre-create a per-group
     // deferred so the registry can point at the eventual settlement BEFORE
     // runGroupFetches starts the (possibly scheduler-deferred) fetch — so a
     // concurrent query that arrives while a group is merely queued still dedups
@@ -3948,11 +4290,19 @@ export class STTArchive {
     const BEHIND_OFFSET = SCHEDULER_PREFETCH_TIER_BASE / 2;
     let best = Infinity;
     for (const e of entries) {
-      // Signed distance in the travel direction (positive = ahead of playhead).
-      const ahead = dir > 0 ? e.timeStart - t : t - e.timeStart;
-      // Distance metric: |t - timeStart|, but penalize data behind the playhead
-      // so imminent-ahead data always wins.
-      const dist = ahead >= 0 ? ahead : BEHIND_OFFSET + Math.abs(ahead);
+      // An entry is "passed" only once the play-head has left its whole
+      // `[timeStart, timeEnd]` interval in the travel direction. The bucket
+      // that CONTAINS the play-head is the frame being drawn: distance 0,
+      // ahead of every future bucket (B3 — keying on `timeStart` alone ranked
+      // it behind the frame 30 s away).
+      const passed = dir > 0 ? e.timeEnd < t : e.timeStart > t;
+      let dist: number;
+      if (passed) {
+        dist = BEHIND_OFFSET + (dir > 0 ? t - e.timeEnd : e.timeStart - t);
+      } else {
+        const ahead = dir > 0 ? e.timeStart - t : t - e.timeEnd;
+        dist = ahead > 0 ? ahead : 0;
+      }
       if (dist < best) best = dist;
     }
     return Number.isFinite(best) ? best : null;
@@ -4204,7 +4554,7 @@ export class STTArchive {
    */
   async getTiles(
     ids: TileId[],
-    options?: TileRequestOptions,
+    options?: TileRequestOptions & TileBatchErrorHook,
   ): Promise<(Tile | null)[]> {
     // BH-8: remember where playback is before anything can store or evict
     // bytes on this call. No-op for callers that declare no play-head.
@@ -4324,171 +4674,108 @@ export class STTArchive {
       pending = stillPending;
     }
 
+    // Per-member fallback batches (C7). A group that fails after retries (or
+    // times out — C1) re-issues its undelivered members as ONE-member groups
+    // through `runGroupFetches`, i.e. the same slot budget, EDF priority and
+    // abort wiring as the first pass, instead of a raw `Promise.all` fan-out
+    // of up to MAX_COALESCE_BATCH requests outside every concurrency cap. The
+    // fallback is kicked from inside the failing group's slot but NOT awaited
+    // there — awaiting would hold the parent slot while its children queue
+    // for slots, a deadlock at `maxRequests: 1`. It is collected here and
+    // awaited after the first pass.
+    const fallbackJobs: Promise<void>[] = [];
+
     if (pending.length > 0) {
-      interface Group {
-        packId: number;
-        start: number;
-        end: number;
-        members: Pending[];
-      }
-      // Coalescing is PER-PACK: a single HTTP range request addresses exactly
-      // one pack object, so a range may never bridge two packs — no value of
-      // the gap, adaptive or pinned, can bridge an object boundary. Group the
-      // pending tiles by pack first, then within each pack sort by offset and
-      // coalesce neighbours within the effective gap.
-      const byPack = new Map<number, Pending[]>();
-      for (const p of pending) {
-        let list = byPack.get(p.entry.packId);
-        if (!list) {
-          list = [];
-          byPack.set(p.entry.packId, list);
-        }
-        list.push(p);
-      }
-      // One reading for the whole batch (see fetchAndMergePages): every fuse
-      // decision in this plan is taken against the same G.
-      const coalesceGap = this.effectiveCoalesceGap();
-      const groups: Group[] = [];
-      for (const [packId, members] of byPack) {
-        members.sort((a, b) => a.entry.offset - b.entry.offset);
-        let current: Group | undefined;
-        for (const p of members) {
-          const pStart = p.entry.offset;
-          const pEnd = p.entry.offset + p.entry.length - 1;
-          if (current && pStart - (current.end + 1) <= coalesceGap) {
-            current.end = Math.max(current.end, pEnd);
-            current.members.push(p);
-          } else {
-            current = { packId, start: pStart, end: pEnd, members: [p] };
-            groups.push(current);
-          }
-        }
-      }
-      // Fire one HTTP range request per coalesced group. Decode all members of
-      // a group concurrently (a previous serial decode made `getTiles()` slower
-      // than per-tile `getTile()` calls). After coalescing a viewport×window
-      // usually collapses to a few groups; the concurrency pool below bounds
-      // in-flight requests across the groups of ALL packs so a pathological
-      // sparse batch can't exceed an object store's per-connection stream cap.
-      //
-      // WS-E hardening: the group fetch retries transient failures with
-      // backoff (see fetchRangeWithRetry); if the WHOLE coalesced range still
-      // fails, fall back to fetching its member tiles individually (single
-      // attempt each) so one bad range can't drop an entire batch — only the
-      // tiles that still fail stay `null` in the results. Every completed
-      // range response also feeds the throughput estimator, at busy-window
-      // granularity (see beginTransferSample / endTransferSample) so the
-      // concurrent pool can't make each request look like 1/Nth of the link.
-      // `signal` is the per-group signal: the caller's `options.signal` on the
-      // legacy path, or the scheduler-provided signal on the shared-scheduler
-      // path (so retry / timeout / raceAbort inside stop the moment the
-      // scheduled request is cancelled — see runGroupFetches).
-      const fetchGroup = async (
-        group: Group,
+      type Group = CoalescedRange<Pending>;
+      // The plan is the pure planner's (C3 / C4): per-pack, byte order, fused
+      // within the effective gap AND the amplification bound. One gap reading
+      // for the whole batch so the plan is a function of (pending, G).
+      const groups = planCoalescedRanges(
+        pending,
+        (p) => p.entry,
+        this.effectiveCoalesceGap(),
+      );
+
+      // Store + decode one member's bytes. `bytes` is the member's own copy
+      // (sliced out of the range buffer, or the single-range response): the
+      // decoder transfers it to a worker, and the byte cache — when enabled —
+      // retains the same buffer, so no second copy is ever made for the
+      // cache (A6).
+      const decodeMember = async (
+        m: Pending,
+        bytes: ArrayBuffer,
         signal: AbortSignal | undefined,
-        // BH-5: the scheduler priority this group won its slot with, forwarded
-        // into every member decode so the decode pool orders by the same scale
-        // the network stage used instead of by arrival.
         priority: number,
       ): Promise<void> => {
-        let buffer: ArrayBuffer;
+        this.storeBytes(tileKey(m.id), bytes, m.entry.timeStart);
+        try {
+          deliver(
+            m.index,
+            await this.decodeBytes(
+              m.id,
+              m.entry,
+              bytes,
+              signal,
+              true,
+              priority,
+            ),
+          );
+        } catch (decodeError) {
+          if (isAbortError(decodeError)) throw decodeError;
+          // Decode failure (e.g. a crc32c mismatch on one corrupt blob):
+          // per-tile `null` — one bad tile must not fail its whole coalesced
+          // group. Evict what we just cached so the poison can't replay from
+          // cache hits.
+          this.dropCachedBytes(tileKey(m.id));
+          options?.onTileError?.(m.index, decodeError);
+        }
+      };
+
+      // One-member group fetch for the fallback path: single attempt (the
+      // group already spent its retries), same per-tile `null` semantics.
+      const fetchSingle = async (
+        group: Group,
+        signal: AbortSignal | undefined,
+        priority: number,
+      ): Promise<void> => {
+        const m = group.members[0];
+        let single: ArrayBuffer;
         this.beginTransferSample();
         try {
-          buffer = await this.fetchRangeWithRetry(
-            group.packId,
-            group.start,
-            group.end,
+          single = await this.fetchRange(
+            m.entry.packId,
+            m.entry.offset,
+            m.entry.offset + m.entry.length - 1,
             signal,
             options?.fetchPriority,
           );
-          this.endTransferSample(buffer.byteLength);
-        } catch (error) {
+          this.endTransferSample(single.byteLength);
+        } catch (memberError) {
           this.endTransferSample(0);
-          if (isAbortError(error)) throw error;
-          // Coalesced range failed after retries → per-member fallback.
-          await Promise.all(
-            group.members.map(async (m) => {
-              let single: ArrayBuffer;
-              this.beginTransferSample();
-              try {
-                single = await this.fetchRange(
-                  m.entry.packId,
-                  m.entry.offset,
-                  m.entry.offset + m.entry.length - 1,
-                  signal,
-                  options?.fetchPriority,
-                );
-                this.endTransferSample(single.byteLength);
-              } catch (memberError) {
-                this.endTransferSample(0);
-                if (isAbortError(memberError)) throw memberError;
-                // Tile-level failure: leave `null`. Callers that know the
-                // tile exists in the directory surface this per-tile (the
-                // tileset reports it through `onTileError`).
-                return;
-              }
-              try {
-                this.storeBytes(tileKey(m.id), single, m.entry.timeStart);
-                deliver(
-                  m.index,
-                  await this.decodeBytes(
-                    m.id,
-                    m.entry,
-                    single,
-                    signal,
-                    true,
-                    priority,
-                  ),
-                );
-              } catch (decodeError) {
-                if (isAbortError(decodeError)) throw decodeError;
-                // Decode failure: same per-tile `null` semantics as a fetch
-                // failure (the bytes arrived but the payload is unusable).
-                // Evict what we just cached — a poisoned entry would reject
-                // every later batch from the cache-hit path.
-                this.dropCachedBytes(tileKey(m.id));
-              }
-            }),
-          );
+          if (isAbortError(memberError)) throw memberError;
+          // Tile-level failure: leave `null`, and say why.
+          this.noteFailedAttempt(memberError);
+          options?.onTileError?.(m.index, memberError);
           return;
         }
-        await Promise.all(
-          group.members.map(async (m) => {
-            const rel = m.entry.offset - group.start;
-            const slice = buffer.slice(rel, rel + m.entry.length);
-            this.storeBytes(tileKey(m.id), slice, m.entry.timeStart);
-            try {
-              deliver(
-                m.index,
-                await this.decodeBytes(
-                  m.id,
-                  m.entry,
-                  slice,
-                  signal,
-                  true,
-                  priority,
-                ),
-              );
-            } catch (decodeError) {
-              if (isAbortError(decodeError)) throw decodeError;
-              // Decode failure (e.g. a crc32c mismatch on one corrupt blob):
-              // per-tile `null`, same as the per-member fallback path — one
-              // bad tile must not fail its whole coalesced group. Evict what
-              // we just cached so the poison can't replay from cache hits.
-              this.dropCachedBytes(tileKey(m.id));
-            }
-          }),
-        );
+        await decodeMember(m, single, signal, priority);
       };
 
-      // Dispatch the coalesced groups through the process-shared scheduler (one
-      // slot per group, cross-source EDF + weighted-fair share). See
-      // runGroupFetches. The EDF distance term uses each group's members' tile
-      // timeStarts vs the threaded play-head.
-      jobs.push(
+      const dispatch = (
+        toRun: Group[],
+        execute: (
+          group: Group,
+          signal: AbortSignal | undefined,
+          priority: number,
+        ) => Promise<void>,
+      ): Promise<void> =>
+        // Dispatch through the process-shared scheduler (one slot per group,
+        // cross-source EDF + weighted-fair share). See runGroupFetches. The
+        // EDF distance term uses each group's members' tile intervals vs the
+        // threaded play-head.
         this.runGroupFetches(
-          groups,
-          (group, signal, priority) => fetchGroup(group, signal, priority),
+          toRun,
+          execute,
           (group) =>
             this.minDistanceToPlayhead(
               group.members.map((m) => m.entry),
@@ -4511,12 +4798,149 @@ export class STTArchive {
           // BH-1 cost: the coalesced range's EXACT size — this is the number
           // the wire will actually carry, known here without any estimate.
           (group) => group.end - group.start + 1,
-        ),
-      );
+        );
+
+      // Fire one HTTP range request per coalesced group and decode each
+      // member the moment ITS byte extent has arrived (C2): members are in
+      // offset order, so a cursor over the streaming buffer hands them out
+      // as it passes their end. A member delivered by a partial attempt is
+      // never re-delivered by a retry of the same range.
+      //
+      // WS-E hardening: the group fetch retries transient failures with
+      // backoff (see fetchRangeWithRetry); if the WHOLE coalesced range still
+      // fails — or stalls, which skips the identical retries — its
+      // UNDELIVERED members are re-issued individually (C7, see
+      // `fallbackJobs`) so one bad range can't drop an entire batch; only the
+      // tiles that still fail stay `null`. A permanent status (B8) is final:
+      // no fallback, every member reports it through `onTileError`. Every
+      // completed range also feeds the throughput estimator at busy-window
+      // granularity (beginTransferSample / endTransferSample) so the
+      // concurrent pool can't make each request look like 1/Nth of the link.
+      // `signal` is the scheduler-provided per-group signal (retry / timeout /
+      // raceAbort inside stop the moment the scheduled request is cancelled —
+      // see runGroupFetches).
+      const fetchGroup = async (
+        group: Group,
+        signal: AbortSignal | undefined,
+        // BH-5: the scheduler priority this group won its slot with, forwarded
+        // into every member decode so the decode pool orders by the same scale
+        // the network stage used instead of by arrival.
+        priority: number,
+      ): Promise<void> => {
+        const members = group.members;
+        const delivered: boolean[] = new Array(members.length).fill(false);
+        const decodes: Promise<void>[] = [];
+        let nextMember = 0;
+        // Slice + decode every not-yet-delivered member whose extent lies
+        // within the first `bytesSoFar` bytes of the range.
+        const deliverUpTo = (bytesSoFar: number, buf: Uint8Array): void => {
+          const absEnd = group.start + bytesSoFar; // exclusive
+          for (let i = nextMember; i < members.length; i++) {
+            if (delivered[i]) {
+              if (i === nextMember) nextMember++;
+              continue;
+            }
+            const e = members[i].entry;
+            if (e.offset + e.length > absEnd) break;
+            delivered[i] = true;
+            if (i === nextMember) nextMember++;
+            const rel = buf.byteOffset + (e.offset - group.start);
+            decodes.push(
+              decodeMember(
+                members[i],
+                (buf.buffer as ArrayBuffer).slice(rel, rel + e.length),
+                signal,
+                priority,
+              ),
+            );
+          }
+        };
+        this.beginTransferSample();
+        let buffer: ArrayBuffer | undefined;
+        let failure: unknown;
+        try {
+          buffer = await this.fetchRangeWithRetry(
+            group.packId,
+            group.start,
+            group.end,
+            signal,
+            options?.fetchPriority,
+            members.length > 1 ? deliverUpTo : undefined,
+            members.length > 1,
+          );
+          this.endTransferSample(buffer.byteLength);
+        } catch (error) {
+          this.endTransferSample(0);
+          if (isAbortError(error)) throw error;
+          failure = error;
+        }
+        if (buffer) deliverUpTo(buffer.byteLength, new Uint8Array(buffer));
+        // Decodes of members that landed before a failure still count.
+        await Promise.all(decodes);
+        if (!buffer) {
+          const missing = members.filter((_m, i) => !delivered[i]);
+          if (isPermanentFetchError(failure)) {
+            for (const m of missing) options?.onTileError?.(m.index, failure);
+            return;
+          }
+          fallbackJobs.push(
+            dispatch(
+              missing.map((m) => ({
+                packId: m.entry.packId,
+                start: m.entry.offset,
+                end: m.entry.offset + m.entry.length - 1,
+                members: [m],
+              })),
+              fetchSingle,
+            ),
+          );
+        }
+      };
+
+      jobs.push(dispatch(groups, fetchGroup));
     }
 
     await Promise.all(jobs);
+    // Fallback batches were kicked while the first pass ran; a batch may in
+    // turn (never, today — single members do not fall back) kick more.
+    while (fallbackJobs.length > 0) {
+      await Promise.all(fallbackJobs.splice(0));
+    }
     return results;
+  }
+
+  /**
+   * Bytes `getTiles(ids)` WOULD put on the wire right now: the sum of the
+   * coalesced range lengths the same planner ({@link planCoalescedRanges},
+   * same effective gap, same amplification bound) issues for the ids that are
+   * not already in the byte cache. Pure and synchronous — nothing is fetched
+   * or paged in, so an id whose directory entry is not resident (a leaf page
+   * not yet faulted in) contributes 0, as does an unknown id.
+   *
+   * This is the number a byte BUDGET must be checked against (C4): pricing a
+   * scattered selection by its directory sizes under-counts the ranges the
+   * coalescer actually fetches by up to ~33× (`goes-glm-lightning`'s overview
+   * pin: 0.64 MiB of tiles, 22.2 MB of ranges). Exposed to the tileset as
+   * `estimateFetchBytes` through `makeTilesetCallbacks`.
+   */
+  planRangeBytes(ids: readonly TileId[]): number {
+    const pending: TileEntry[] = [];
+    for (const id of ids) {
+      const entry = this.findTileEntry(id);
+      if (!entry) continue;
+      if (this.byteCache.has(tileKey(id))) continue;
+      pending.push(entry);
+    }
+    if (pending.length === 0) return 0;
+    let total = 0;
+    for (const g of planCoalescedRanges(
+      pending,
+      (e) => e,
+      this.effectiveCoalesceGap(),
+    )) {
+      total += g.end - g.start + 1;
+    }
+    return total;
   }
 
   /**
@@ -5269,10 +5693,14 @@ export class STTArchive {
     };
   }
 
-  /** Clear the in-memory compressed-byte cache (does NOT touch OPFS). */
+  /**
+   * Clear the in-memory compressed-byte cache (does NOT touch OPFS). Goes
+   * through {@link clearByteCache} so the process-shared LRU accounting is
+   * released too — a bare `byteCache.clear()` left every other archive
+   * evicting early against bytes nobody held any more (A6).
+   */
   clearCache(): void {
-    this.byteCache.clear();
-    this.currentCacheBytes = 0;
+    this.clearByteCache();
   }
 
   /**

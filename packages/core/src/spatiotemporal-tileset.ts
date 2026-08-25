@@ -37,6 +37,10 @@ import {
   byteExpansionRatio,
   type HorizonBytesOracle,
 } from './prefetch-policy.js';
+import {
+  decodedMemoryBudget,
+  type DecodedMemoryOwner,
+} from './memory-budget.js';
 import { normalizeViewportBounds } from './geo/viewport-bounds.js';
 import {
   emit as emitProbe,
@@ -47,6 +51,9 @@ import {
 } from './telemetry.js';
 
 const DEBUG = false;
+
+/** Registration ids for the process-wide decoded-byte budget (A4). */
+let nextTilesetMemoryOwnerId = 1;
 
 /**
  * Safety cap on how many priority tiles go into a single coalesced batch. The
@@ -250,9 +257,14 @@ const PLACEHOLDER_EV_MAX_CELLS = 256;
  * refinement strategy loads as coarse fallbacks (see getZoomLevelsToLoad).
  * 4 levels covers the common case for sparse global point datasets: a feature
  * isolated within ~150 km at z=10 typically clusters into a 2+ feature tile
- * by z=6 (300 km/cell). Higher numbers don't add load pressure (each lower
- * zoom has 4x fewer cells) but they DO grow the O(4^zDiff) ancestor-cover
- * check in getVisibleTiles, so we cap. Also the clamp ceiling for the
+ * by z=6 (300 km/cell). Each level is NOT free: a lower zoom has 4× fewer
+ * cells, but on a replicated archive (the no-thinning default) every level
+ * carries the full feature set again, so bytes per bucket are roughly FLAT
+ * across zooms (gtfs-ch: 7.0 MB at z6 … 12.9 MB at z14 per bucket) and the
+ * band is another ~N copies of the primary bytes unless the placeholder
+ * gate (shouldSkipParentFetch) prunes it. The levels also grow the
+ * O(4^zDiff) ancestor-cover check in getVisibleTiles, so we cap. Also the
+ * clamp ceiling for the
  * scrub-LOD spatial degrade ({@link ScrubLodOptions.spatialZoomDrop}) — a
  * drop inside this band targets tiles the parent-fallback path already
  * fetches, so a degraded scrub often needs zero new fetches.
@@ -354,6 +366,28 @@ const FAILED_TILE_RETRY_COOLDOWN_MS = 500;
 const FAILED_TILE_RETRY_MAX_BACKOFF_MS = 60_000;
 
 /**
+ * A cancellation, matched by NAME so any backing store can raise one without
+ * this module importing its error classes. A cancelled request is a pass being
+ * superseded or torn down — never a loader fault, and never worth logging.
+ */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * The archive's permanent verdict (B8), matched by NAME so a batch callback
+ * backed by anything — not only `STTArchive` — can raise it without the
+ * tileset importing the class: `{ name: 'PermanentFetchError', status }`.
+ */
+function isPermanentFetchErrorLike(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: unknown }).name === 'PermanentFetchError'
+  );
+}
+
+/**
  * Settles — of ANY kind, aborts included — after which a tile stops counting
  * as missing for readiness, even though it keeps being retried.
  *
@@ -427,6 +461,15 @@ const COVER_DP_ANCESTOR_LEVELS = PARENT_FALLBACK_LEVELS;
 const BUFFER_CHANGE_THROTTLE_MS = 100;
 
 /**
+ * Coalescing window for the delivery-driven over-limit eviction (A3,
+ * tile-loading audit 2026-08). Deliveries arrive one coalesced range-group
+ * at a time, so a single timer of about one frame gathers a burst into ONE
+ * tiered pass instead of a pass per tile — and the pass itself is the same
+ * playhead-relative plan a selection pass would have run.
+ */
+const OVER_LIMIT_EVICT_COALESCE_MS = 16;
+
+/**
  * "All of time" query range used to build the coverage index: the directory
  * slice for the current viewport across the FULL dataset time range. Bounds
  * are the ECMAScript Date range, so every directory entry overlaps it.
@@ -452,6 +495,22 @@ const DEFAULT_OVERVIEW_BUDGET_BYTES = 20 * 1024 * 1024;
 
 /** Default deepest zoom included in the overview (storyboard) tier. */
 const DEFAULT_OVERVIEW_MAX_ZOOM = 1;
+
+/**
+ * Default COUNT gate for {@link SpatioTemporalTileset.preloadOverviewTier}:
+ * the storyboard may pin at most this fraction of `maxCacheSize` tiles.
+ *
+ * The byte budget alone is the wrong instrument for the archives where
+ * pinning is ruinous. An hourly-bucket archive over years has THOUSANDS of
+ * tiny z0–z1 tiles whose directory bytes sit comfortably under 20 MiB —
+ * `hurricanes` 17 899 tiles / 10 MiB, `earthquakes-v2` 8 927 / 11 MiB
+ * (tile-loading audit 2026-08, A1) — and a pin larger than the cache's tile
+ * budget put the tileset permanently over `maxCacheSize`, so every
+ * selection pass evicted the whole non-pinned working set, runway included.
+ * A quarter of the working set is the most a preview tier should ever own;
+ * `preloadOverviewTier({ maxTiles })` overrides it per call.
+ */
+export const PIN_COUNT_FRACTION = 0.25;
 
 /**
  * The buffered-runway report: how much contiguous sim-time ahead of the play
@@ -481,6 +540,15 @@ export interface BufferedRunway {
    * available data in the travel direction — with nothing missing.
    */
   complete: boolean;
+  /**
+   * `true` (with `complete: false`) when the runway ends at a bucket holding
+   * a tile the archive has refused PERMANENTLY (403/404/410, B8): nothing
+   * further can arrive there, so waiting is pointless — the playback
+   * governor folds such a runway as complete and counts the flip. Absent
+   * otherwise; never set alongside `complete: true`. Such a tile's bytes are
+   * excluded from `bytesPending` for the same reason.
+   */
+  blockedPermanently?: boolean;
 }
 
 /** Per-bucket needed-tile records inside the coverage index. */
@@ -505,7 +573,7 @@ interface CoverageBucket {
  * runway / buffered-ranges / cost queries are cheap synchronous walks.
  */
 interface CoverageIndex {
-  /** Spatial signature (`bounds|primaryZoom`) this index was built for. */
+  /** Spatial signature (the primary-zoom tile box) this index was built for. */
   signature: string;
   /** Distinct bucket start times, ascending. */
   bucketStarts: number[];
@@ -562,6 +630,8 @@ interface OverviewState {
   pendingKeys: Set<TileKey>;
   /** Directory byte sum of the candidate tiles. */
   bytes: number;
+  /** Planned range bytes (see OverviewPreloadResult.plannedBytes). */
+  plannedBytes?: number;
   /** Candidate tile count. */
   tiles: number;
 }
@@ -605,17 +675,28 @@ export interface OverviewPreloadResult {
    * dataset is. `0` when `getTileByteSize` is unwired (sizes unknown).
    */
   bytes: number;
+  /**
+   * Bytes the archive would actually transfer for the tier — the coalesced
+   * range plan (C4). Present only when `estimateFetchBytes` is wired; it is
+   * then the quantity the byte gate was decided on.
+   */
+  plannedBytes?: number;
   /** Number of candidate overview tiles. */
   tiles: number;
   /**
    * Why the tier did NOT load (`loaded: false` only):
-   * - `'over-budget'` — the directory byte sum exceeds the budget; nothing
-   *   was fetched.
+   * - `'over-count'`  — more candidate tiles than the pin allowance
+   *   (`PIN_COUNT_FRACTION × maxCacheSize`, or `maxTiles`); nothing was
+   *   fetched. Checked before the byte gate: it is the gate that binds on
+   *   the archives where pinning actually hurts (see {@link PIN_COUNT_FRACTION}).
+   * - `'over-budget'` — the byte cost exceeds the budget (the PLANNED range
+   *   bytes when `estimateFetchBytes` is wired, else the directory sum);
+   *   nothing was fetched.
    * - `'no-tiles'`    — the directory has no tiles at the overview zooms.
    * - `'disabled'`    — the tileset was cleared/finalized mid-preload.
    * - `'error'`       — the directory enumeration failed.
    */
-  reason?: 'over-budget' | 'no-tiles' | 'disabled' | 'error';
+  reason?: 'over-count' | 'over-budget' | 'no-tiles' | 'disabled' | 'error';
 }
 
 /**
@@ -634,6 +715,14 @@ type RequestTier = 'priority' | 'prefetch' | 'overview';
 export interface TileBatchHooks {
   /** Delivers `(indexIntoBatch, tile)` as each tile decodes, before the batch resolves. */
   onTileReady?: (index: number, tile: Tile) => void;
+  /**
+   * Delivers `(indexIntoBatch, error)` — the reason a member will resolve
+   * `null` — as it is known, before the batch resolves. An error whose
+   * `name` is `'PermanentFetchError'` (the archive's 403/404/410 verdict,
+   * B8) is FINAL: the tileset writes the tile off on first sight and never
+   * re-dispatches it from that header.
+   */
+  onTileError?: (index: number, error: unknown) => void;
   /** Browser fetch-priority hint for the batch's HTTP requests. */
   fetchPriority?: 'high' | 'low' | 'auto';
   /**
@@ -960,7 +1049,14 @@ export interface SpatioTemporalTilesetOptions {
   /** Debounce time in milliseconds before loading tiles */
   debounceTime?: number;
 
-  /** Maximum number of tiles to cache */
+  /**
+   * Sanity ceiling on the number of decoded tiles held (default 20,000). The
+   * BYTE cap is the operative limit: a count cap bound first on every real
+   * archive (2,000 × 3 KB tiles is 6 MB; 2,000 × 4.5 MB satellite tiles is
+   * 9 GB), so it either starved small-tile archives or bounded nothing. It
+   * survives as the guard for byte-blind delivery paths — a tile whose size
+   * cannot be estimated still counts as one (A4, tile-loading audit 2026-08).
+   */
   maxCacheSize?: number;
 
   /**
@@ -968,8 +1064,13 @@ export interface SpatioTemporalTilesetOptions {
    * accounting is alias-deduped (each backing buffer counted once), so
    * zero-copy datasets genuinely occupy up to this budget — the old
    * double-counting estimator made them plateau around half of it.
-   * Memory-constrained deployments (mobile Safari) should set this
-   * explicitly.
+   *
+   * A PER-TILESET ceiling. The operative cap is `min(maxCacheByteSize, this
+   * tileset's share of the process-wide decoded budget)` — see
+   * `decodedMemoryBudget` (A4, tile-loading audit 2026-08), which is sized
+   * from `navigator.deviceMemory` and split across every live tileset, so a
+   * composite needs no per-N arithmetic here and a mobile client is bounded
+   * without setting this at all.
    */
   maxCacheByteSize?: number;
 
@@ -988,6 +1089,21 @@ export interface SpatioTemporalTilesetOptions {
 
   /** Refinement strategy: 'best-available' (load parent tiles as fallback) or 'no-overlap' (only exact zoom) */
   refinementStrategy?: 'best-available' | 'no-overlap';
+
+  /**
+   * The archive OMITS primary-zoom tiles in sparse regions (`stt-build
+   * --min-features-per-tile > 1`), so an in-viewport cell with no tile at
+   * the primary zoom is still covered by its parent — the parent is the only
+   * holder of those features, and `getVisibleTiles` keeps it on screen for
+   * that cell. Default `false`, the replicated (full-duplication) archive:
+   * an empty primary cell is empty in the parent too, so only a cell whose
+   * tile EXISTS and has not arrived keeps a parent (E3, tile-loading audit
+   * 2026-08 — the any-cell rule drew a parent over its loaded siblings'
+   * children forever wherever the frame held water or a night-time cell).
+   * Wire from the archive's partition / min-features capability.
+   * @default false
+   */
+  sparsePrimary?: boolean;
 
   /**
    * Level-of-detail composition across zoom levels.
@@ -1189,6 +1305,18 @@ export interface SpatioTemporalTilesetOptions {
   getTileByteSize?: (tileId: TileId) => number | undefined;
 
   /**
+   * Bytes the archive would actually TRANSFER to fetch `ids` right now — the
+   * coalesced range plan over the not-yet-cached members, not the sum of
+   * their directory lengths (`STTArchive.planRangeBytes`, wired by
+   * `makeTilesetCallbacks`). The overview preload prices its byte gate on
+   * this when wired (C4, tile-loading audit 2026-08): a scattered z0–z1
+   * selection under-counts by its directory sizes by up to ~33×
+   * (`goes-glm-lightning`: 0.64 MiB of tiles, 22.2 MB of ranges).
+   * Absent ⇒ the gate falls back to the `getTileByteSize` sum.
+   */
+  estimateFetchBytes?: ((ids: TileId[]) => number) | null;
+
+  /**
    * Byte ceiling above which a PARENT-fallback tile is skipped (requires
    * {@link getTileByteSize}). Defaults to {@link DEFAULT_MAX_PARENT_TILE_BYTES}.
    *
@@ -1327,12 +1455,15 @@ function normalizeTilesetOptions(
     // multiplexing.
     maxRequests: options.maxRequests ?? 24,
     debounceTime: options.debounceTime ?? 0,
-    maxCacheSize: options.maxCacheSize ?? 2000,
+    // A sanity ceiling, not the operative limit — bytes bind (A4). 20,000 of
+    // the fleet's smallest tiles (~3 KB decoded) is ~60 MB.
+    maxCacheSize: options.maxCacheSize ?? 20_000,
     maxCacheByteSize: options.maxCacheByteSize ?? 2 * 1024 * 1024 * 1024,
     minZoom: options.minZoom ?? 0,
     maxZoom: options.maxZoom ?? 14,
     temporalBucketMs: options.temporalBucketMs ?? 3600 * 1000,
     refinementStrategy: options.refinementStrategy ?? 'best-available',
+    sparsePrimary: options.sparsePrimary ?? false,
     lodMode: options.lodMode ?? 'parent-fallback',
     enablePrefetch: options.enablePrefetch ?? true,
     // Defaults sized for a few real-time seconds of buffer. See the
@@ -1356,6 +1487,7 @@ function normalizeTilesetOptions(
     getTileData: options.getTileData,
     getTileDataBatch: options.getTileDataBatch ?? null,
     getTileByteSize: options.getTileByteSize ?? null,
+    estimateFetchBytes: options.estimateFetchBytes ?? null,
     maxParentTileBytes:
       options.maxParentTileBytes ?? DEFAULT_MAX_PARENT_TILE_BYTES,
     placeholderPolicy: options.placeholderPolicy ?? 'expected-value',
@@ -1395,7 +1527,9 @@ export interface SpatioTemporalTileHeader {
   /**
    * Pinned overview (storyboard) tile: never evicted, never aborted by
    * `flushPrefetch()` / `cancelSupersededRequests()`. Its bytes still count
-   * in cache accounting. Set by `preloadOverviewTier()`.
+   * against `maxCacheByteSize`; its COUNT is additive to `maxCacheSize` (a
+   * pin can never push the working set over the tile cap — see
+   * `evictUnusedTiles`). Set by `preloadOverviewTier()`.
    */
   isPinned?: boolean;
   /**
@@ -1436,6 +1570,16 @@ export interface SpatioTemporalTileHeader {
    * window — a stutter every 60 s instead of one clean write-off.
    */
   isFailed?: boolean;
+  /**
+   * The archive answered with a status no retry can change (403/404/410 —
+   * a `PermanentFetchError`, B8). Latched together with {@link isFailed} on
+   * FIRST sight, and the backoff ladder is disarmed (`retryAfter` = ∞): this
+   * header never dispatches again. `getBufferedRunway` reports a runway that
+   * ends at such a tile as `blockedPermanently`. Cleared only by the
+   * header's replacement (eviction + re-selection), which is the one probe
+   * per lifetime that can notice a republish.
+   */
+  permanentFailure?: boolean;
 }
 
 /**
@@ -1469,10 +1613,43 @@ export interface TilesetCacheStats {
   evictionsByTier: Record<'b' | 'c' | 'd', number>;
   /** Decoded bytes released by eviction over the tileset's lifetime. */
   bytesEvicted: number;
+  // ── Always-on network / churn counters (G2, tile-loading audit 2026-08) ──
+  /** Dispatches: one per `getTileDataBatch` call plus one per `getTileData` call. */
+  requests: number;
+  /**
+   * Bytes those dispatches were planned to put on the wire: the coalesced
+   * range plan (`estimateFetchBytes`) when wired, else the directory sum of
+   * the dispatched ids. `bytesRequested / bytesUseful` is the read
+   * amplification.
+   */
+  bytesRequested: number;
+  /** Compressed directory bytes of the tiles actually delivered. */
+  bytesUseful: number;
+  /**
+   * Deliveries of a key that had been LOADED and then evicted earlier in this
+   * registry's life (the oracle resets on `clear()`) — the fetch-evict-refetch
+   * churn a healthy session keeps at zero.
+   */
+  refetches: number;
+  /** Delivery-driven over-limit eviction passes armed (A3's coalesced timer). */
+  overLimitEvictionsScheduled: number;
+  /** Selection passes that got past the identical-params fast path. */
+  selectionPasses: number;
+  /** Coverage-index builds completed (one per primary-zoom tile-box change). */
+  coverageRebuilds: number;
   /** Headers currently in the registry (loaded + in-flight). */
   tileCount: number;
   /** Decoded bytes currently resident. */
   cacheBytes: number;
+  /**
+   * LOADED pinned (overview-storyboard) tiles. Excluded from the
+   * `maxCacheSize` test, so `tileCount − pinnedCount` is what the tile cap
+   * actually governs; the one-line check for "is the pin thrashing the cache"
+   * is `pinnedCount ≤ PIN_COUNT_FRACTION × maxCacheSize`.
+   */
+  pinnedCount: number;
+  /** Decoded bytes held by loaded pinned tiles (a subset of `cacheBytes`). */
+  pinnedBytes: number;
   /** `hits / (hits + misses)`; 0 before the first needed tile. */
   hitRate: number;
   activeRequests: number;
@@ -1494,6 +1671,29 @@ export class SpatioTemporalTileset {
 
   // Tile registry
   private tiles: Map<TileKey, SpatioTemporalTileHeader> = new Map();
+
+  /**
+   * The NON-PINNED subset of {@link tiles}, kept in lockstep at every
+   * registry mutation (the three header-creation sites, the flush and
+   * eviction deletes, `clear()`, and the overview pin). The eviction passes
+   * iterate THIS map: pinned storyboard headers are never candidates, and
+   * with `hurricanes` pinning 17,899 of them the grace sweep was visiting
+   * every one at 10 Hz for nothing (F1 / CS-4, tile-loading audit 2026-08).
+   */
+  private unpinnedTiles: Map<TileKey, SpatioTemporalTileHeader> = new Map();
+
+  /**
+   * This tileset's registration with the process-wide decoded-byte budget
+   * (A4). `bytes` is the live running total; `evictToward` runs the ordinary
+   * tiered over-limit plan against a lower byte cap, so the budget's backstop
+   * evicts with the same playhead-relative judgement a local over-limit pass
+   * would — never a special-cased LRU.
+   */
+  private readonly memoryOwner: DecodedMemoryOwner = {
+    id: `tileset-${nextTilesetMemoryOwnerId++}`,
+    bytes: () => this.currentCacheBytes,
+    evictToward: (targetBytes: number) => this.evictDecodedToward(targetBytes),
+  };
 
   // Active requests tracking
   private activeRequests: Set<TileKey> = new Set();
@@ -1546,7 +1746,25 @@ export class SpatioTemporalTileset {
     evictionsByTier: { b: 0, c: 0, d: 0 } as Record<'b' | 'c' | 'd', number>,
     /** Total decoded bytes released by eviction over the tileset's lifetime. */
     bytesEvicted: 0,
+    // G2 (tile-loading audit 2026-08): the always-on counters the HUD, the
+    // MCP tools and the QoE report had no way to read. Integers, `+=` only.
+    requests: 0,
+    bytesRequested: 0,
+    bytesUseful: 0,
+    refetches: 0,
+    overLimitEvictionsScheduled: 0,
+    selectionPasses: 0,
+    coverageRebuilds: 0,
   };
+
+  /**
+   * Keys of LOADED tiles this registry has evicted since the last `clear()`
+   * — the `refetches` oracle (G2). Deliberately unbounded: it holds at most
+   * one entry per distinct key ever delivered, the same order as the
+   * directory the archive already keeps resident, and a bounded structure
+   * would under-count exactly the long sessions the counter exists for.
+   */
+  private evictedKeys = new Set<TileKey>();
 
   /**
    * Playback state + speculative-loading decisions: direction hysteresis, the
@@ -1568,12 +1786,30 @@ export class SpatioTemporalTileset {
   // visible cost of the eviction loop.
   private loadedTileCount: number = 0;
 
+  // Loaded PINNED tiles and their decoded bytes — the storyboard's share of
+  // the two counters above, maintained at the same sites (delivery, the pin
+  // loop, eviction, clear). Pins are excluded from the `maxCacheSize` test
+  // and never scanned for: with `hurricanes` pinning 17 899 headers, a
+  // recount per eviction pass would be the pass's dominant cost.
+  private pinnedLoadedCount: number = 0;
+  private pinnedBytes: number = 0;
+
   // Last `selectAndLoadTiles` parameters. When `update()` arrives with
   // identical (bounds, zoom, timeStart, timeEnd) we skip the awaited
   // `getAvailableTiles` Promise.all entirely — the result would just
   // re-mark the same `neededTileKeys` set we already published. This
   // dominates the steady-state cost for tightly-throttled time ticks.
   private lastSelectKey: string = '';
+
+  /**
+   * Set by {@link finalize}. An async pass that was mid-`await` when the host
+   * tore the tileset down must stop THERE rather than resume against an
+   * archive that is now finalized: every call it makes rejects, and the
+   * rejections surface as "prefetch error: AbortError: STTArchive has been
+   * finalized" noise that reads like a loader fault instead of a normal
+   * unmount. One-way — a finalized tileset is never revived.
+   */
+  private finalized = false;
 
   /**
    * Monotonic stamp for the async `selectAndLoadTiles` pass. A pass captures it
@@ -1622,6 +1858,27 @@ export class SpatioTemporalTileset {
   /** Trailing-edge throttle state for onBufferChange. */
   private bufferChangeTimer: ReturnType<typeof setTimeout> | null = null;
   private lastBufferChangeAt = 0;
+  /** Pending delivery-driven over-limit eviction (scheduleOverLimitEviction). */
+  private overLimitEvictTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Primary-zoom tiles per temporal bucket the LAST prefetch pass enumerated
+   * for this viewport — the fallback density estimate for the policy's
+   * residency-capacity floor bend (A2) when no coverage index is built.
+   * `null` until a pass has seen at least one candidate.
+   */
+  private lastPrefetchKeysPerBucket: number | null = null;
+  /**
+   * Compressed directory bytes per bucket the last prefetch pass enumerated —
+   * the byte half of the residency price (G3-2), beside the count above.
+   * `null` until observed, or when the pass could not size every candidate.
+   */
+  private lastPrefetchBytesPerBucket: number | null = null;
+  /**
+   * The decoded/compressed exchange rate the last planning pass measured. The
+   * slice sizer prices its ceiling with it so dispatch does no walk of its own.
+   */
+  private lastPrefetchByteExpansion: number = PREFETCH_COLD_BYTE_EXPANSION;
 
   /**
    * Viewport bounds + zoom of the previous selection pass. A SIGNIFICANT
@@ -1656,6 +1913,12 @@ export class SpatioTemporalTileset {
    * Nothing in this file reads it.
    */
   private selectionCut: readonly TileId[] | null = null;
+  /**
+   * Registry keys of {@link selectionCut}'s members, built once per selection
+   * pass so `getVisibleTiles` can tell a cut member from a placeholder with
+   * no per-frame work.
+   */
+  private selectionCutKeys: Set<TileKey> | null = null;
 
   /**
    * In-flight PREFETCH-tier requests (shared AbortController + the registry
@@ -1733,6 +1996,8 @@ export class SpatioTemporalTileset {
 
   constructor(options: SpatioTemporalTilesetOptions) {
     this.options = normalizeTilesetOptions(options);
+    // Join the process-wide decoded-byte budget (A4); `finalize()` leaves it.
+    decodedMemoryBudget.register(this.memoryOwner);
 
     // A wired onBufferChange implies the caller wants live buffer reports,
     // so start maintaining the coverage index from the first update().
@@ -1877,10 +2142,7 @@ export class SpatioTemporalTileset {
         // Headroom returned: let the pinned-overview warning fire again.
         this.warnedPinnedOverCacheLimit = false;
       }
-      if (
-        this.loadedTileCount > this.options.maxCacheSize ||
-        this.currentCacheBytes > this.options.maxCacheByteSize
-      ) {
+      if (this.isOverCacheLimits()) {
         this.evictUnusedTiles(this.neededTileKeys);
       }
     }
@@ -2534,7 +2796,29 @@ export class SpatioTemporalTileset {
         viewport.timeWindow,
         Math.abs(this.prefetch.animationSpeed) * SEEK_DETECTION_REAL_MS,
       );
-      if (Math.abs(simTimeDelta) > seekThreshold) {
+      // LOOP WRAP (B5): a jump from one end of the declared loop to the
+      // other — within a bucket of each, against the committed direction —
+      // is playback CONTINUING, not a seek. The prefetch plan already warmed
+      // the far side (its horizon wraps), so nothing is flushed, no
+      // direction flip is counted, the pass generation stands, and the delta
+      // is not evidence of speed. Only the runway anchor moves, by one loop
+      // span, so the throttle keeps reading the warmed buckets as runway.
+      const loop = this.loopRange;
+      const wrapTolerance =
+        this.options.temporalBucketMs > 0
+          ? this.options.temporalBucketMs
+          : viewport.timeWindow;
+      const isLoopWrap =
+        loop !== null &&
+        Math.sign(simTimeDelta) === -this.prefetch.direction &&
+        (this.prefetch.direction > 0
+          ? previousTime >= loop.end - wrapTolerance &&
+            viewport.time <= loop.start + wrapTolerance
+          : previousTime <= loop.start + wrapTolerance &&
+            viewport.time >= loop.end - wrapTolerance);
+      if (isLoopWrap && loop) {
+        this.prefetch.observeLoopWrap(loop.end - loop.start);
+      } else if (Math.abs(simTimeDelta) > seekThreshold) {
         this.flushPrefetch();
       } else {
         // Direction tracking only needs the SIGN of the time delta — update it
@@ -2622,6 +2906,15 @@ export class SpatioTemporalTileset {
       return [clampedZoom];
     }
 
+    // Coarser levels stay on the PRIMARY'S tier (E4, tile-loading audit
+    // 2026-08). `pickTierForZoom` is per zoom, so at `summary.maxZoom + 1 …
+    // + 4` under `tier: 'auto'` every parent level lay inside the summary
+    // range and H3/Quadbin centroid cells with `count` columns were handed to
+    // the raw layer as placeholders. An aggregate is not a coarser copy of
+    // the detail; it cannot stand in for it (nor, under additive LOD, hold
+    // the residual points a coarse level is supposed to own).
+    const primaryTier = this.pickTierForZoom(clampedZoom);
+
     // ADDITIVE-OCTREE LOD: load the FULL union [minZoom..clampedZoom]. Each
     // point lives at exactly one home zoom, so every level contributes distinct
     // points and they are all kept resident + rendered together (no parent
@@ -2629,7 +2922,10 @@ export class SpatioTemporalTileset {
     // the coarse levels were already fetched when the camera was zoomed out.
     if (this.options.lodMode === 'additive') {
       const zoomLevels: number[] = [];
-      for (let z = clampedZoom; z >= minZoom; z--) zoomLevels.push(z);
+      for (let z = clampedZoom; z >= minZoom; z--) {
+        if (this.pickTierForZoom(z) !== primaryTier) continue;
+        zoomLevels.push(z);
+      }
       return zoomLevels;
     }
 
@@ -2639,6 +2935,7 @@ export class SpatioTemporalTileset {
     for (let i = 1; i <= PARENT_FALLBACK_LEVELS; i++) {
       const z = clampedZoom - i;
       if (z < minZoom) break;
+      if (this.pickTierForZoom(z) !== primaryTier) continue;
       zoomLevels.push(z);
     }
 
@@ -2698,6 +2995,7 @@ export class SpatioTemporalTileset {
    * download it less than the blank visible-cell-ms it averts?
    *
    * ```
+   *   bytes(u) / θ̂   <   Ê[coverMs]                       (it must land first)
    *   bytes(u) / θ̂   <   λ · A(u) · min(Ê[coverMs], PLACEHOLDER_COVER_HORIZON_MS)
    * ```
    *
@@ -2786,37 +3084,55 @@ export class SpatioTemporalTileset {
     if (visibleCells === 0) return null;
 
     const arrivalMs = bytes / bytesPerMs;
-    const coverMs = Math.min(
-      missingChildBytes / bytesPerMs,
-      PLACEHOLDER_COVER_HORIZON_MS,
-    );
+    const missingMs = missingChildBytes / bytesPerMs;
+    // A placeholder that lands AFTER the detail it stands in for is worth
+    // nothing — pass 2 of getVisibleTiles drops it unseen on arrival — yet
+    // for A > 16 the weighting below reduces to `P < A · C_missing / 16` and
+    // buys a parent slower than all of its children (C5, tile-loading audit
+    // 2026-08: the Zürich z14 camera's z10 parent, 212 ms against 200 ms of
+    // children, 850 KB of link time spent in the children's own priority
+    // batch). The race is judged UNCAPPED: the 10 s horizon below bounds the
+    // benefit, not whether the tile can arrive in time at all.
+    if (arrivalMs >= missingMs) return false;
+    const coverMs = Math.min(missingMs, PLACEHOLDER_COVER_HORIZON_MS);
     const avertedValueMs =
       this.options.placeholderValueLambda * visibleCells * coverMs;
     return arrivalMs < avertedValueMs;
   }
 
   /**
-   * Quantize the viewport bounds to a ~{@link SPATIAL_FLUSH_TOLERANCE} grid of
-   * their own extent, yielding a signature that is STABLE under sub-tile camera
-   * drift (an AV ego-follow tracking the car, an easing pan) but that changes
-   * once the viewport pans past ~1/8 of its span or the zoom changes. Used as
-   * the coverage-index signature so a smoothly drifting camera doesn't re-run
-   * the FULL-time-range directory slice (the heaviest query in the system) on
-   * every ~10 Hz selection pass — the buffered-runway estimate is a viewport
-   * approximation that tolerates sub-tile slack. This mirrors the tolerance the
-   * prefetch flush applies via its own center/span-delta check in
-   * `selectAndLoadTiles` (which can't be a grid key — it needs the pre-move
-   * bounds to measure drift, not a quantized snapshot).
+   * The viewport's primary-zoom TILE BOX as a string — the coverage index's
+   * signature (B1, tile-loading audit 2026-08).
+   *
+   * The index enumerates the directory for the exact bounds, and that
+   * enumeration is a pure function of which tile columns and rows the bounds
+   * cover, so this key changes EXACTLY when the enumeration could: on a tile
+   * boundary crossing or a zoom change. The previous key rounded the bounds
+   * to 1/8 of their own span — stable under drift, which was the point, but
+   * a drift under 1/8 that still crossed a tile boundary left the index
+   * holding the column the trailing edge had left. Nothing addresses that
+   * column again (selection and prefetch use the new bounds), a bucket is
+   * ready only when EVERY index key is ready, and so the buffered runway
+   * decayed to 0 with everything on screen resident — the governor read
+   * `simMs 0` and stalled a fully loaded viewport (repro: 14,900 → 0 over 25
+   * steps; recovery only after a > 1/8 pan). Any smoothly moving camera
+   * triggers it: ego-follow, the auto-rotating globes, eased pans.
+   *
+   * Sub-tile drift still costs nothing here (same box, same key), which is
+   * what the old rounding bought. Seam-aware through the same
+   * `viewportTileXIntervals` split the placeholder gate uses: a crossing or
+   * unwrapped box yields its two column intervals, both keyed. The prefetch
+   * FLUSH keeps its own 1/8-span tolerance in `selectAndLoadTiles` — that is
+   * a destructive decision debounced on purpose; this is a cache key that
+   * must be exact.
    */
-  private quantizedSpatialKey(bounds: BoundingBox, zoom: number): string {
-    const lonSpan = lonSpanOf(bounds) || 1e-9;
-    const latSpan = bounds.maxLat - bounds.minLat || 1e-9;
-    const qLon = lonSpan * SPATIAL_FLUSH_TOLERANCE;
-    const qLat = latSpan * SPATIAL_FLUSH_TOLERANCE;
-    return (
-      `${Math.round(bounds.minLon / qLon)}|${Math.round(bounds.minLat / qLat)}` +
-      `|${Math.round(bounds.maxLon / qLon)}|${Math.round(bounds.maxLat / qLat)}|${zoom}`
-    );
+  private coverageTileBoxKey(bounds: BoundingBox, primaryZoom: number): string {
+    const xSpans = viewportTileXIntervals(bounds, primaryZoom);
+    const yMin = latToTileClamped(bounds.maxLat, primaryZoom); // y is flipped
+    const yMax = latToTileClamped(bounds.minLat, primaryZoom);
+    let key = `${primaryZoom}|${yMin}-${yMax}`;
+    for (const [x0, x1] of xSpans) key += `|${x0}-${x1}`;
+    return key;
   }
 
   /**
@@ -2856,11 +3172,15 @@ export class SpatioTemporalTileset {
     // Cheap fast-path: when the (bounds, zoom, time-range) signature is
     // identical to the previous call we'd just rebuild the same
     // `neededTileKeys` set and recompute equality. Skip the awaited
-    // `getAvailableTiles` chain entirely. Running on a TimeController
-    // tick that hasn't crossed a bucket boundary, this is the common
-    // case and the await round-trip is the dominant cost. The scrub-LOD
-    // degrade state is part of the signature so an interactive toggle
-    // between identical viewports still reselects.
+    // `getAvailableTiles` chain entirely. NOT the common case during
+    // playback: the key folds the RAW time range, so a moving clock misses
+    // it on every tick whether or not a bucket boundary was crossed (the
+    // deck chassis throttles its update() calls to ~10 Hz for that reason;
+    // maplibre/cesium drive it at frame rate and pay a full pass each). It
+    // hits for a paused clock and a still camera — re-renders, resizes,
+    // repeated identical updates — where the await round-trip would be the
+    // dominant cost. The scrub-LOD degrade state is part of the signature
+    // so an interactive toggle between identical viewports still reselects.
     // ── The cut this pass will address, if it has a usable one ────────────
     //
     // Built here, ahead of the select key, because whether it is usable at all
@@ -2910,6 +3230,7 @@ export class SpatioTemporalTileset {
     if (selectKey === this.lastSelectKey) {
       return;
     }
+    this.cacheStats.selectionPasses++;
 
     // Spatial viewport change (pan/zoom): the prefetch runway was planned for
     // the previous viewport, so a real move now warms tiles the camera has left
@@ -3000,6 +3321,7 @@ export class SpatioTemporalTileset {
       if (Number.isFinite(shallowest)) primaryZoom = shallowest;
     }
     this.selectionCut = useCells ? cut : null;
+    this.selectionCutKeys = useCells ? new Set(cut.map(tileKey)) : null;
 
     // Mark tiles as used (for LRU)
     const now = Date.now();
@@ -3126,6 +3448,7 @@ export class SpatioTemporalTileset {
             byteSize: 0,
           };
           this.tiles.set(key, header);
+          this.unpinnedTiles.set(key, header);
 
           // Cache MISS: a needed tile that must be fetched from the network.
           this.cacheStats.misses++;
@@ -3292,6 +3615,52 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * The runway's share of the byte cache in the directory's own currency:
+   * `PREFETCH_CACHE_FRACTION × effectiveMaxCacheBytes ÷ expansion` — the one
+   * quantity the horizon solve, the enqueue budget and (G3-2) the slice
+   * ceiling are all bounded by. Defined once so the three cannot drift.
+   */
+  private prefetchCacheShareBytes(byteExpansion: number): number {
+    return (
+      (PREFETCH_CACHE_FRACTION * this.effectiveMaxCacheBytes()) / byteExpansion
+    );
+  }
+
+  /**
+   * Primary-zoom tiles per temporal bucket in the current viewport — the
+   * density that converts the runway's tile budget into a sim-time capacity
+   * (A2). The coverage index is the exact answer when it exists (viewport ×
+   * full time range at the primary zoom); otherwise the last prefetch pass's
+   * own enumeration stands in; `null` when neither has been seen, which the
+   * policy reads as "do not bend". O(1): both are running counts.
+   */
+  private prefetchKeysPerBucket(): number | null {
+    const idx = this.coverageIndex;
+    if (idx && idx.bucketStarts.length > 0) {
+      return idx.keySet.size / idx.bucketStarts.length;
+    }
+    return this.lastPrefetchKeysPerBucket;
+  }
+
+  /**
+   * COMPRESSED directory bytes per temporal bucket in the current viewport —
+   * the density that converts the runway's BYTE budget into a sim-time
+   * capacity (G3-2, tile-loading audit 2026-08), the byte twin of
+   * {@link prefetchKeysPerBucket}. The coverage index is the exact answer
+   * when its byte channel is known; otherwise the last prefetch pass's own
+   * enumeration stands in; `null` when neither has been seen or the directory
+   * is byte-blind, which the policy reads as "price by count alone". O(1).
+   */
+  private prefetchBytesPerBucket(): number | null {
+    const idx = this.coverageIndex;
+    if (idx && idx.bucketStarts.length > 0 && idx.bytesKnown) {
+      const n = idx.bucketStarts.length;
+      return idx.cumulativeBytes[n] / n;
+    }
+    return this.lastPrefetchBytesPerBucket;
+  }
+
+  /**
    * Prefetch tiles ahead of current animation time
    * This ensures smooth playback by loading tiles before they're needed
    *
@@ -3303,7 +3672,7 @@ export class SpatioTemporalTileset {
    * - Reduced loading churn during animation
    */
   private async prefetchFutureTiles(): Promise<void> {
-    if (!this.currentViewport) return;
+    if (this.finalized || !this.currentViewport) return;
 
     const { bounds, zoom, time, timeWindow } = this.currentViewport;
     const { prefetchAhead, prefetchSteps } = this.options;
@@ -3315,6 +3684,41 @@ export class SpatioTemporalTileset {
     // selection-only and preview-only).
     const zoomLevels = this.getZoomLevelsToLoad(zoom);
     const primaryZoom = zoomLevels[0];
+
+    // PREFETCH IS PRIMARY-ZOOM ONLY (CO-7). A coarse parent is a PLACEHOLDER:
+    // it exists to cover the screen while the detail tiles for the CURRENT play
+    // head are still in flight. The prefetch runway is, by construction, about
+    // buckets the head has not reached — nothing there is blank, and by the time
+    // the head arrives the primary-zoom tiles for that bucket have been warmed
+    // by this very pass. So a parent fetched here is a placeholder for a
+    // blankness that will never occur, and it is charged against the same byte
+    // budget as the tiles it is standing in for.
+    //
+    // Measured on the live `flights` demo (camera z4, archive z0-10,
+    // PARENT_FALLBACK_LEVELS = 4): of 52.3 MB of prefetch-tier traffic,
+    // 35.1 MB (67%) was z0-z3 ancestors — on a link that was the binding
+    // constraint at ~4 MB/s.
+    //
+    // `shouldSkipParentFetch` cannot catch this: its expected-value rule prices
+    // a parent against `Ê[coverMs]`, the ETA of its still-MISSING children, and
+    // at a future bucket EVERY child is missing — so the further ahead the
+    // runway looks, the more attractive a parent appears. The gate asks a
+    // well-posed question in a context where the answer is meaningless. It stays
+    // in place below for the (now rare) coarse candidate that reaches here.
+    //
+    // ADDITIVE LOD IS EXEMPT: under `lodMode: 'additive'` the coarse levels are
+    // not placeholders at all — each point lives at exactly one home zoom, so
+    // every level carries distinct data that is kept resident AND drawn. Warming
+    // the full union is the whole point of that mode (see getZoomLevelsToLoad).
+    //
+    // What this gives up: in a SPARSE archive (`stt-build
+    // --min-features-per-tile > 1`) a low-density region has no tile at the
+    // primary zoom, so the runway warms nothing there and the covering ancestor
+    // is resolved on the PRIORITY path when the head arrives — one late tile
+    // instead of four speculative ones. That is the conservative trade on
+    // purpose: the priority path still walks `PARENT_FALLBACK_LEVELS`.
+    const prefetchZoomLevels =
+      this.options.lodMode === 'additive' ? zoomLevels : [primaryZoom];
     const now = Date.now();
 
     // CO-2: hand the policy a directory ORACLE so the horizon is solved against
@@ -3338,9 +3742,9 @@ export class SpatioTemporalTileset {
     // cap. Converting the cap once, here, is what makes the two comparisons
     // honest instead of off by the compression ratio.
     const byteExpansion = this.prefetchByteExpansion();
+    this.lastPrefetchByteExpansion = byteExpansion;
     /** The DECODED cache cap expressed in the directory's own bytes. */
-    const compressedCacheShare =
-      (PREFETCH_CACHE_FRACTION * this.options.maxCacheByteSize) / byteExpansion;
+    const compressedCacheShare = this.prefetchCacheShareBytes(byteExpansion);
 
     // Ask the policy for the horizon. `null` means the play head still has
     // enough planned runway ahead of it that another pass is wasted work; a
@@ -3363,6 +3767,20 @@ export class SpatioTemporalTileset {
       // sums), not the decoded one the cache cap is written in.
       byteBudget: bytesForHorizon ? compressedCacheShare : null,
       bytesForHorizon,
+      // What the runway's share of the TILE cache can hold, so the
+      // speed-scaled gate floor can bend to it (A2 — see PrefetchPolicy.plan).
+      maxCacheSize: this.options.maxCacheSize,
+      keysPerBucket: this.prefetchKeysPerBucket(),
+      // …and what its share of the BYTE cache can hold (G3-2), in the same
+      // compressed currency as the enqueue budget below; the floor bends to
+      // the smaller of the two prices.
+      maxCacheBytes: this.effectiveMaxCacheBytes(),
+      bytesPerBucket: this.prefetchBytesPerBucket(),
+      byteExpansion,
+      // The declared loop (B5): the horizon wraps at its far edge instead of
+      // running into empty time, so the loop start is warm before the head
+      // gets there. `null` keeps the plan byte-identical.
+      loop: this.loopRange,
     });
     if (!plan) return;
     const { effectiveAhead } = plan;
@@ -3370,14 +3788,30 @@ export class SpatioTemporalTileset {
     if (DEBUG)
       console.log('[Tileset] Wide-range prefetch:', {
         time: new Date(time).toISOString(),
-        zoomLevels,
+        zoomLevels: prefetchZoomLevels,
         fullRangeStart: new Date(plan.queryRange.start).toISOString(),
         fullRangeEnd: new Date(plan.queryRange.end).toISOString(),
       });
 
     const pass = this.prefetch.beginPass();
+    // The wrapped remainder of a looping horizon (B5), issued alongside the
+    // primary slice below; `null` on every non-looping plan.
+    const wrapRange = plan.wrapQueryRange;
+    const wrapPending =
+      wrapRange === null
+        ? null
+        : Promise.allSettled(
+            prefetchZoomLevels.map(async (z) => {
+              const tileIds = await this.fetchAvailableTilesForZoom(
+                bounds,
+                z,
+                wrapRange,
+              );
+              return { zoom: z, tileIds };
+            }),
+          );
     const results = await Promise.allSettled(
-      zoomLevels.map(async (z) => {
+      prefetchZoomLevels.map(async (z) => {
         const tileIds = await this.fetchAvailableTilesForZoom(
           bounds,
           z,
@@ -3387,23 +3821,58 @@ export class SpatioTemporalTileset {
       }),
     );
 
+    const wrapResults = wrapPending === null ? [] : await wrapPending;
+
     // A flush (seek / spatial move / direction flip) or a newer prefetch
     // pass superseded this plan while we awaited the directory queries —
     // enqueuing its candidates now would warm buckets for a stale playhead
-    // or direction (and recreate headers flushPrefetch just dropped).
-    if (!this.prefetch.isCurrentPass(pass)) return;
+    // or direction (and recreate headers flushPrefetch just dropped). A
+    // teardown that landed in the same window ends the pass outright.
+    if (this.finalized || !this.prefetch.isCurrentPass(pass)) return;
 
     // Flatten the candidate tiles across all zoom levels into one list.
     const candidates: TileId[] = [];
-    for (const result of results) {
+    for (const result of wrapResults.length === 0
+      ? results
+      : [...results, ...wrapResults]) {
       if (result.status === 'rejected') {
-        // Ignore prefetch errors - they're best-effort
-        console.debug('[Tileset] Prefetch error:', result.reason);
+        // Ignore prefetch errors - they're best-effort. An abort is not even
+        // that: it is this pass being cancelled (a flush, or the archive
+        // finalizing under an unmount), so it says nothing about the loader
+        // and does not belong in the log.
+        if (!isAbortError(result.reason)) {
+          console.debug('[Tileset] Prefetch error:', result.reason);
+        }
         continue;
       }
       for (const tileId of result.value.tileIds) candidates.push(tileId);
     }
     const totalTilesFound = candidates.length;
+
+    // Density observation for the next plan's floor bend (A2): candidates per
+    // distinct bucket, over exactly the zooms this pass warms.
+    if (totalTilesFound > 0) {
+      const bucketsSeen = new Set<number>();
+      const sizeOf = this.options.getTileByteSize;
+      let bytesSeen = 0;
+      // The option is normalised to `null` when unwired, hence the typeof.
+      let bytesKnown = typeof sizeOf === 'function';
+      for (const id of candidates) {
+        bucketsSeen.add(id.t);
+        if (bytesKnown) {
+          const size = sizeOf?.(id);
+          if (size === undefined) bytesKnown = false;
+          else bytesSeen += size;
+        }
+      }
+      this.lastPrefetchKeysPerBucket = totalTilesFound / bucketsSeen.size;
+      // The byte price (G3-2) only when every candidate could be sized: one
+      // blind tile would make the density a floor pretending to be a fact,
+      // the same stance CoverageIndex.bytesKnown takes.
+      this.lastPrefetchBytesPerBucket = bytesKnown
+        ? bytesSeen / bucketsSeen.size
+        : null;
+    }
 
     // Order candidates by temporal distance from the play head IN THE PLAYBACK
     // DIRECTION, so the buckets the head reaches SOONEST are enqueued first.
@@ -3437,7 +3906,7 @@ export class SpatioTemporalTileset {
       this.options.maxCacheSize,
     );
     const prefetchBudgetBytes = this.prefetch.enqueueBudgetBytes(
-      this.options.maxCacheByteSize,
+      this.effectiveMaxCacheBytes(),
       byteExpansion,
     );
     // Same lookup + same fallback the slice sizer uses, so one pass prices a
@@ -3452,20 +3921,41 @@ export class SpatioTemporalTileset {
     for (const qid of this.priorityQueue) queuedKeys.add(tileKey(qid));
 
     let newTilesAdded = 0;
-    /** Directory bytes this pass has committed to the runway (BH-2). */
+    /**
+     * Tiles ALREADY committed to the runway inside this plan's horizon —
+     * loaded, in flight, or queued — charged against the same two budgets as
+     * the new admissions (A2, tile-loading audit 2026-08). The budget used to
+     * bound admissions PER PASS, and a pass re-ran as soon as its slice
+     * drained, so residency converged on the whole horizon: at fast playback
+     * (`speed × 5 s` > 64 buckets, horizon × tiles/bucket > maxCacheSize) the
+     * over-limit pass evicted the far edge just fetched and the next pass
+     * bought it back — 515 double fetches / 555 runway evictions in the
+     * audit's repro. Charging what is committed first makes the budget a
+     * bound on RESIDENCY within the horizon, which is the only thing that
+     * keeps the runway inside the cache.
+     */
+    let residentAhead = 0;
+    /**
+     * Horizon candidates the runway still owes (F1): not loaded and not
+     * written off. Zero, together with `newTilesAdded === 0`, is the "whole
+     * horizon resident" verdict that lets the policy throttle through an idle
+     * pipeline instead of re-running the directory slice every debounce.
+     */
+    let unresolvedInHorizon = 0;
+    /** Directory bytes committed to the runway, resident + new (BH-2). */
     let enqueuedBytes = 0;
     /** Set when the BYTE budget (rather than the count budget) ended the pass. */
     let byteBudgetSpent = false;
-    // Furthest ahead-of-head distance actually ENQUEUED this pass — the
-    // honest frontier when the budget truncates the span (behind-head
-    // sentinel distances are ignored).
+    // Furthest ahead-of-head distance COVERED this pass — enqueued or already
+    // committed — the honest frontier when the budget truncates the span
+    // (behind-head sentinel distances are ignored).
     let coveredAheadMs = 0;
-    const noteEnqueued = (id: TileId): void => {
+    const noteCovered = (id: TileId): void => {
       const d = plan.aheadDistance(id.t);
       if (d <= effectiveAhead) coveredAheadMs = Math.max(coveredAheadMs, d);
     };
     for (const tileId of candidates) {
-      if (newTilesAdded >= prefetchBudget) break;
+      if (newTilesAdded + residentAhead >= prefetchBudget) break;
       // Don't prefetch low-value low-zoom parent placeholders either (see
       // shouldSkipParentFetch); they'd evict the runway they're meant to warm.
       if (this.shouldSkipParentFetch(tileId, primaryZoom)) continue;
@@ -3501,8 +3991,12 @@ export class SpatioTemporalTileset {
         // than a whole slice — and after that the runway stops BEFORE it
         // exceeds its share of the byte cache.
         const size = getTileBytes?.(tileId) ?? PREFETCH_UNKNOWN_TILE_BYTES;
-        if (newTilesAdded > 0 && enqueuedBytes + size > prefetchBudgetBytes) {
+        if (
+          newTilesAdded + residentAhead > 0 &&
+          enqueuedBytes + size > prefetchBudgetBytes
+        ) {
           byteBudgetSpent = true;
+          unresolvedInHorizon++; // a candidate the runway still owes (F1)
           break;
         }
         enqueuedBytes += size;
@@ -3510,7 +4004,7 @@ export class SpatioTemporalTileset {
         if (header === undefined) {
           // Create header for prefetch tile and add to the LOW PRIORITY queue.
           // These only load when the priority queue has capacity.
-          this.tiles.set(key, {
+          const created: SpatioTemporalTileHeader = {
             id: tileId,
             tile: null,
             isLoaded: false,
@@ -3518,27 +4012,63 @@ export class SpatioTemporalTileset {
             isCancelled: false,
             lastUsed: now,
             byteSize: 0,
-          });
+          };
+          this.tiles.set(key, created);
+          this.unpinnedTiles.set(key, created);
           this.prefetchQueue.push(tileId);
         } else {
           header.isCancelled = false;
           header.lastUsed = now;
           this.prefetchQueue.push(tileId);
-          queuedKeys.add(key);
         }
+        // Either branch queued the key: a loop's wrapped range (B5) can hand
+        // the same id to this loop twice, and a second sighting must read as
+        // "already committed", not as a dead header to revive.
+        queuedKeys.add(key);
         newTilesAdded++;
-        noteEnqueued(tileId);
+        noteCovered(tileId);
       } else if (header !== undefined) {
         // Update last used time to prevent eviction
         header.lastUsed = now;
+        // Already committed (resident, in flight, or queued): inside the
+        // horizon it occupies runway budget exactly as a new admission would
+        // — priced the same way, in directory bytes. A quarantined dead
+        // header holds nothing and is not charged; a behind-head bucket
+        // carries the sentinel distance and falls outside the horizon.
+        const d = plan.aheadDistance(tileId.t);
+        if (header.isLoaded || header.isLoading || queuedKeys.has(key)) {
+          if (d <= effectiveAhead) {
+            residentAhead++;
+            enqueuedBytes +=
+              getTileBytes?.(tileId) ?? PREFETCH_UNKNOWN_TILE_BYTES;
+            noteCovered(tileId);
+          }
+        }
+        // Resident-pass verdict (F1): anything inside the horizon not yet
+        // loaded — in flight, queued, or a quarantined hole that may still
+        // heal — means the next pass has work to check. A permanent write-off
+        // never will, so it does not keep the planner awake.
+        if (
+          d <= effectiveAhead &&
+          !header.isLoaded &&
+          !header.permanentFailure
+        ) {
+          unresolvedInHorizon++;
+        }
       }
     }
 
     // Budget-capped pass: the plan claimed the FULL speed-scaled span, but the
     // enqueue stopped at the budget (either one). Hand the honest frontier back
     // so the next pass re-plans against what was actually planned.
-    if (newTilesAdded >= prefetchBudget || byteBudgetSpent) {
+    if (newTilesAdded + residentAhead >= prefetchBudget || byteBudgetSpent) {
       this.prefetch.anchorTruncatedRunway(plan, coveredAheadMs, bucketMs);
+    }
+    // Whole horizon already resident (F1): keep the throttle armed through
+    // the idle pipeline. A fully resident archive otherwise re-ran the
+    // directory slice + sort every PREFETCH_DEBOUNCE_MS while playing.
+    if (newTilesAdded === 0 && unresolvedInHorizon === 0) {
+      this.prefetch.noteResidentPass();
     }
 
     // Log prefetch results
@@ -3546,6 +4076,7 @@ export class SpatioTemporalTileset {
       console.log('[Tileset] Prefetch results:', {
         totalTilesFound,
         newTilesAdded,
+        residentAhead,
         enqueuedBytes,
         prefetchQueueLength: this.prefetchQueue.length,
       });
@@ -3666,8 +4197,13 @@ export class SpatioTemporalTileset {
     // A second concurrent slice would only add bandwidth contention against
     // priority fetches.
     if (this.prefetchQueue.length > 0 && this.inflightPrefetch.size === 0) {
+      // Capped at the runway's share of the byte cache (G3-2): a slice is
+      // one delivery, and one bigger than the share evicts the runway it was
+      // fetched to extend. Priced with the last planning pass's exchange
+      // rate, so dispatch does no header walk of its own.
       const budget = this.prefetch.sliceBytes(
         this.options.getThroughput?.().bytesPerMs ?? null,
+        this.prefetchCacheShareBytes(this.lastPrefetchByteExpansion),
       );
       const sizeFn = this.options.getTileByteSize;
       const candidates: TileId[] = [];
@@ -3778,6 +4314,9 @@ export class SpatioTemporalTileset {
     // whole attempt budget in three flaky seconds.
     let sawAbort = false;
 
+    // Always-on network counters (G2): one request, priced by the range plan.
+    this.noteDispatch([tileId]);
+
     // Load tile with abort signal
     this.options
       .getTileData(tileId, abortController.signal)
@@ -3789,6 +4328,13 @@ export class SpatioTemporalTileset {
           // Incremental accounting — never re-summed every frame.
           this.currentCacheBytes += header.byteSize;
           this.loadedTileCount++;
+          if (header.isPinned) {
+            this.pinnedLoadedCount++;
+            this.pinnedBytes += header.byteSize;
+          }
+          this.noteDelivery(key, tileId);
+          if (this.isOverCacheLimits() || this.isOverProcessBudget())
+            this.scheduleOverLimitEviction();
 
           this.options.onTileLoad?.(tile);
 
@@ -3800,7 +4346,11 @@ export class SpatioTemporalTileset {
       .catch((error) => {
         // Ignore abort errors - they're expected when cancelling
         if (error.name === 'AbortError') sawAbort = true;
-        else this.options.onTileError?.(error, tileId);
+        else {
+          if (isPermanentFetchErrorLike(error))
+            this.writeOffPermanently(key, header);
+          this.options.onTileError?.(error, tileId);
+        }
       })
       .finally(() => {
         header.isLoading = false;
@@ -3930,45 +4480,68 @@ export class SpatioTemporalTileset {
       header.byteSize = estimateTileSize(tile);
       this.currentCacheBytes += header.byteSize;
       this.loadedTileCount++;
+      if (header.isPinned) {
+        this.pinnedLoadedCount++;
+        this.pinnedBytes += header.byteSize;
+      }
+      this.noteDelivery(started[i].key, started[i].id);
+      if (this.isOverCacheLimits() || this.isOverProcessBudget())
+        this.scheduleOverLimitEviction();
       this.options.onTileLoad?.(tile);
       this.frameNumber++;
       this.notifyBufferChange();
     };
 
-    batchFn(
-      started.map((s) => s.id),
-      abortController.signal,
-      {
-        onTileReady: deliverTile,
-        // Lookahead tiers yield to concurrent need-now fetches at the
-        // browser's connection scheduler; priority keeps the default.
-        fetchPriority: tier === 'priority' ? 'auto' : 'low',
-        // Cross-source EDF hint (docs/roadmap/playback-and-loading.md §5): the
-        // current play-head time + committed prefetch direction, so a batch
-        // backed by a shared-scheduler archive can rank range-groups by
-        // distance-to-playhead comparably across archives. Forwarded by the
-        // layer's getTileDataBatch into STTArchive.getTiles({playheadTime}).
-        playheadTime: this.currentViewport?.time,
-        playheadDirection: this.prefetch.direction,
-        // Spatial scheduler tie-break (perf research 2026-07): among
-        // range-groups already tied in EDF/enqueue order, the one nearer the
-        // viewport center resolves first. Forwarded the same way as
-        // playheadTime, into STTArchive.getTiles({viewportCenter}).
-        viewportCenter: this.currentViewport
-          ? {
-              // Seam-crossing aware, then folded back into [-180, 180): the
-              // scheduler projects this as a GEOGRAPHIC longitude, so an
-              // unwrapped 184 (or a crossing box's far-side midpoint) would
-              // put the "nearest" tile on the wrong side of the world.
-              lon: wrapLon(lonCenterOf(this.currentViewport.bounds)),
-              lat:
-                (this.currentViewport.bounds.minLat +
-                  this.currentViewport.bounds.maxLat) /
-                2,
-            }
-          : undefined,
+    // Always-on network counters (G2): one request for the whole batch,
+    // priced by the coalesced range plan when the archive offers one.
+    const batchIds = started.map((s) => s.id);
+    this.noteDispatch(batchIds);
+
+    batchFn(batchIds, abortController.signal, {
+      onTileReady: deliverTile,
+      // A member's failure reason, as the archive learns it. Only the
+      // PERMANENT verdict (403/404/410) changes anything here: it writes
+      // the tile off on first sight (B8) instead of leaving it to the
+      // retry ladder, which would probe a tile the origin will never serve
+      // once a minute for the rest of the session.
+      onTileError: (i: number, error: unknown): void => {
+        const member = started[i];
+        if (!member || member.header.isCancelled) return;
+        if (!isPermanentFetchErrorLike(error)) return;
+        this.writeOffPermanently(member.key, member.header);
+        this.options.onTileError?.(
+          error instanceof Error ? error : new Error(String(error)),
+          member.id,
+        );
       },
-    )
+      // Lookahead tiers yield to concurrent need-now fetches at the
+      // browser's connection scheduler; priority keeps the default.
+      fetchPriority: tier === 'priority' ? 'auto' : 'low',
+      // Cross-source EDF hint (docs/roadmap/playback-and-loading.md §5): the
+      // current play-head time + committed prefetch direction, so a batch
+      // backed by a shared-scheduler archive can rank range-groups by
+      // distance-to-playhead comparably across archives. Forwarded by the
+      // layer's getTileDataBatch into STTArchive.getTiles({playheadTime}).
+      playheadTime: this.currentViewport?.time,
+      playheadDirection: this.prefetch.direction,
+      // Spatial scheduler tie-break (perf research 2026-07): among
+      // range-groups already tied in EDF/enqueue order, the one nearer the
+      // viewport center resolves first. Forwarded the same way as
+      // playheadTime, into STTArchive.getTiles({viewportCenter}).
+      viewportCenter: this.currentViewport
+        ? {
+            // Seam-crossing aware, then folded back into [-180, 180): the
+            // scheduler projects this as a GEOGRAPHIC longitude, so an
+            // unwrapped 184 (or a crossing box's far-side midpoint) would
+            // put the "nearest" tile on the wrong side of the world.
+            lon: wrapLon(lonCenterOf(this.currentViewport.bounds)),
+            lat:
+              (this.currentViewport.bounds.minLat +
+                this.currentViewport.bounds.maxLat) /
+              2,
+          }
+        : undefined,
+    })
       .then((tiles) => {
         for (let i = 0; i < started.length; i++) {
           const { header, id, key } = started[i];
@@ -3985,7 +4558,12 @@ export class SpatioTemporalTileset {
             // tiles stay best-effort: they re-surface at priority if the
             // play head actually reaches them.
             const sizeFn = this.options.getTileByteSize;
-            if (sizeFn && sizeFn(id) !== undefined) {
+            // A permanent refusal was already surfaced, typed, by the hook.
+            if (
+              sizeFn &&
+              sizeFn(id) !== undefined &&
+              !header.permanentFailure
+            ) {
               this.options.onTileError?.(
                 new Error(`Tile fetch failed after retries: ${key}`),
                 id,
@@ -4069,6 +4647,43 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * FINAL readiness write-off (B8): the archive has said no retry can change
+   * the answer (403/404/410). Latches {@link SpatioTemporalTileHeader.isFailed}
+   * at once — the readiness APIs stop waiting on the tile — and disarms the
+   * backoff ladder for good: `retryAfter` = ∞ makes every dispatch gate
+   * (`isQuarantined`) refuse this header for its lifetime, and the retry
+   * sweep forgets it. The ladder's "not right now, not not-ever" stance was
+   * built for a client that cannot know whether a tile is absent; here the
+   * origin has told us. A republish is noticed by the header's replacement
+   * (eviction + re-selection), one probe per lifetime rather than one a
+   * minute.
+   */
+  private writeOffPermanently(
+    key: TileKey,
+    header: SpatioTemporalTileHeader,
+  ): void {
+    if (header.permanentFailure || header.isLoaded) return;
+    if (this.tiles.get(key) !== header) return; // replaced mid-flight
+    header.permanentFailure = true;
+    header.isFailed = true;
+    header.retryAfter = Number.POSITIVE_INFINITY;
+    this.retryKeys.delete(key);
+    // The runway that ends here can now report so (blockedPermanently) —
+    // tell whoever is gating on it.
+    this.notifyBufferChange();
+  }
+
+  /** A coverage key the archive has refused permanently and that never loaded. */
+  private isPermanentlyMissing(key: TileKey): boolean {
+    const header = this.tiles.get(key);
+    return (
+      header !== undefined &&
+      header.permanentFailure === true &&
+      !header.isLoaded
+    );
+  }
+
+  /**
    * Record that a fetch for a NEEDED tile settled without producing data, and
    * schedule the revival.
    *
@@ -4101,6 +4716,9 @@ export class SpatioTemporalTileset {
     // A header that has already been replaced (flushed / evicted mid-flight)
     // is not ours to write off — the replacement is in charge now.
     if (this.tiles.get(key) !== header) return;
+    // Already written off for good by the archive's permanent verdict (B8):
+    // no attempt to charge, no ladder rung, no revival to schedule.
+    if (header.permanentFailure) return;
 
     // The count is charged on EVERY tier, not just the needed one: the
     // prefetch planner has its own revival for dead headers, and without a
@@ -4443,6 +5061,16 @@ export class SpatioTemporalTileset {
     let bytesPending = 0;
     let firstMissing: number | null = null;
     let lastMissing: number | null = null;
+    // Whether the first / last missing bucket is one that can NEVER complete
+    // (B8): a tile in it was refused permanently. Such a tile counts as
+    // missing HERE — the governor's gate must not be told a bucket is
+    // buffered when its data is gone — but its bytes are not pending: they
+    // will never be fetched, so they must not inflate the ETA. (The other
+    // readiness APIs keep the write-off stance: `isCoverageReady` treats the
+    // tile as settled, so the bar and the cost estimate do not carry a hole
+    // nothing can fill.)
+    let firstPermanent = false;
+    let lastPermanent = false;
     for (
       let i = lowerBound(starts, spanStart - bucketMs);
       i < starts.length && starts[i] <= spanEnd;
@@ -4452,15 +5080,26 @@ export class SpatioTemporalTileset {
       if (b + bucketMs <= spanStart) continue; // touches the span edge only
       const bucket = idx.buckets.get(b)!;
       let missing = false;
+      let permanent = false;
       for (let j = 0; j < bucket.keys.length; j++) {
-        if (!this.isCoverageReady(bucket.keys[j])) {
+        const key = bucket.keys[j];
+        if (this.isPermanentlyMissing(key)) {
+          missing = true;
+          permanent = true;
+          continue;
+        }
+        if (!this.isCoverageReady(key)) {
           missing = true;
           bytesPending += bucket.bytes[j];
         }
       }
       if (missing) {
-        if (firstMissing === null) firstMissing = b;
+        if (firstMissing === null) {
+          firstMissing = b;
+          firstPermanent = permanent;
+        }
         lastMissing = b;
+        lastPermanent = permanent;
       }
     }
 
@@ -4478,7 +5117,17 @@ export class SpatioTemporalTileset {
       0,
       Math.min(direction > 0 ? reach - time : time - reach, horizon),
     );
-    return { simMs, bytesPending, horizonSimMs: horizon, complete };
+    const blockedPermanently =
+      !complete && (direction > 0 ? firstPermanent : lastPermanent);
+    return blockedPermanently
+      ? {
+          simMs,
+          bytesPending,
+          horizonSimMs: horizon,
+          complete,
+          blockedPermanently: true,
+        }
+      : { simMs, bytesPending, horizonSimMs: horizon, complete };
   }
 
   /**
@@ -4536,16 +5185,22 @@ export class SpatioTemporalTileset {
    * the primary zoom: the directory byte sum (and count) of tiles whose
    * bucket intersects the range and are NOT loaded. In-flight tiles count
    * as not loaded — honesty over optimism. Pure directory math, zero
-   * network. `bytes` is 0 when `getTileByteSize` is unwired (sizes unknown)
-   * or before the coverage index is built.
+   * network. `bytes` is 0 when `getTileByteSize` is unwired (sizes unknown).
+   * Before the coverage index is built the result is also 0 — but carries
+   * `unknown: true`, because "nothing is known" is not "nothing is missing":
+   * a warm throughput estimator turned that 0 into an ETA of 0 and the
+   * start gate passed onto nothing (tile-loading audit 2026-08, §9.3.4).
+   * {@link estimateTimeToReadyMs} abstains on it.
    */
   estimateCost(range: { start: number; end: number }): {
     bytes: number;
     tiles: number;
+    unknown?: true;
   } {
     this.ensureBufferTracking();
     const idx = this.coverageIndex;
-    if (!idx || idx.timeRange === null) return { bytes: 0, tiles: 0 };
+    if (!idx) return { bytes: 0, tiles: 0, unknown: true };
+    if (idx.timeRange === null) return { bytes: 0, tiles: 0 };
     const bucketMs = this.options.temporalBucketMs;
     const starts = idx.bucketStarts;
 
@@ -4681,15 +5336,20 @@ export class SpatioTemporalTileset {
    * `estimateCost(range).bytes / measured throughput`. Returns `null` when
    * no `getThroughput` option is wired or the estimator has no signal yet
    * (`bytesPerMs` null/0) — callers should show an indeterminate state, not
-   * a fake number. A video player cannot compute this; STT can because the
-   * directory knows every tile's byte length in advance.
+   * a fake number — and while the coverage index is still being built, when
+   * the cost is not yet knowable (the governor reads `null` as "cannot
+   * predict" and holds its gate; a 0 here let it pass onto nothing). A video
+   * player cannot compute this; STT can because the directory knows every
+   * tile's byte length in advance.
    */
   estimateTimeToReadyMs(range: { start: number; end: number }): number | null {
     const getThroughput = this.options.getThroughput;
     if (!getThroughput) return null;
     const { bytesPerMs } = getThroughput();
     if (!bytesPerMs) return null;
-    return this.estimateCost(range).bytes / bytesPerMs;
+    const cost = this.estimateCost(range);
+    if (cost.unknown) return null;
+    return cost.bytes / bytesPerMs;
   }
 
   /**
@@ -4725,6 +5385,7 @@ export class SpatioTemporalTileset {
       const header = this.tiles.get(key);
       if (header && !header.isLoading && !header.isLoaded && !header.isPinned) {
         this.tiles.delete(key);
+        this.unpinnedTiles.delete(key);
       }
     }
     this.prefetchQueue = [];
@@ -4755,6 +5416,7 @@ export class SpatioTemporalTileset {
         if (header && !header.isLoaded && !header.isPinned) {
           header.isCancelled = true;
           this.tiles.delete(key);
+          this.unpinnedTiles.delete(key);
         }
       }
     }
@@ -4779,16 +5441,22 @@ export class SpatioTemporalTileset {
    * renders these as the scrub preview whenever primary-zoom tiles for the
    * target time aren't loaded yet, so scrubbing always shows something.
    *
-   * Budget-gated: the candidates' directory byte sum is checked BEFORE any
-   * fetch, and the preload resolves `{ loaded: false, reason: 'over-budget' }`
-   * when it exceeds `budgetBytes` (default 20 MiB) — some datasets have giant
-   * coarse tiles (satellites z0 is ~17 MB *per tile*) that must never be
-   * pinned. Fetches ride the normal coalesced-batch machinery at the LOWEST
-   * tier (dispatched only when the priority queue is idle, so viewport work
-   * is never starved) and the pinned headers are exempt from LRU eviction,
-   * `flushPrefetch()`, and `cancelSupersededRequests()`. Pinned bytes still
-   * count in cache accounting; the budget gate keeps that contribution small
-   * (warns once if pinned tiles alone somehow exceed the cache limits).
+   * Budget-gated twice, both decided from directory math BEFORE any fetch:
+   * on COUNT — more candidates than `maxTiles` (default
+   * {@link PIN_COUNT_FRACTION} × `maxCacheSize`) resolves
+   * `{ loaded: false, reason: 'over-count' }`, which is the gate that binds on
+   * hourly-bucket archives over years (thousands of tiny z0–z1 tiles) — and
+   * on BYTES — a directory sum over `budgetBytes` (default 20 MiB) resolves
+   * `'over-budget'`, which is what stops giant coarse tiles (satellites z0 is
+   * ~17 MB *per tile*) from ever being pinned. Fetches ride the normal
+   * coalesced-batch machinery at the LOWEST tier (dispatched only when the
+   * priority queue is idle, so viewport work is never starved) and the pinned
+   * headers are exempt from LRU eviction, `flushPrefetch()`, and
+   * `cancelSupersededRequests()`. Pinned BYTES still count against
+   * `maxCacheByteSize`; the pinned COUNT is additive to `maxCacheSize` (see
+   * `evictUnusedTiles`), so a legal pin can never push the working set over
+   * the tile cap. Warns once if a caller-raised allowance lets the pin alone
+   * exceed either cache limit — eviction can never reclaim pinned tiles.
    *
    * Pinned tiles deliberately do NOT count toward the primary-zoom readiness
    * APIs (`getBufferedRunway` / `estimateCost` / `getBufferedRanges`) — those
@@ -4807,6 +5475,11 @@ export class SpatioTemporalTileset {
     budgetBytes?: number;
     /** Deepest zoom included in the overview tier. @default 1 */
     maxZoom?: number;
+    /**
+     * Reject (without fetching) above this many candidate tiles.
+     * @default floor(PIN_COUNT_FRACTION × maxCacheSize)
+     */
+    maxTiles?: number;
   }): Promise<OverviewPreloadResult> {
     if (this.overviewState) return this.overviewState.promise;
 
@@ -4827,15 +5500,18 @@ export class SpatioTemporalTileset {
       state,
       opts?.budgetBytes ?? DEFAULT_OVERVIEW_BUDGET_BYTES,
       opts?.maxZoom ?? DEFAULT_OVERVIEW_MAX_ZOOM,
+      opts?.maxTiles ??
+        Math.floor(PIN_COUNT_FRACTION * this.options.maxCacheSize),
     );
     return promise;
   }
 
-  /** Enumerate, budget-gate, pin, and enqueue the overview candidates. */
+  /** Enumerate, budget-gate (count, then bytes), pin, and enqueue the overview candidates. */
   private async startOverviewPreload(
     state: OverviewState,
     budgetBytes: number,
     maxZoom: number,
+    maxTiles: number,
   ): Promise<void> {
     const zooms: number[] = [];
     const zMax = Math.min(maxZoom, this.options.maxZoom);
@@ -4887,7 +5563,9 @@ export class SpatioTemporalTileset {
       return;
     }
 
-    // Budget gate on DIRECTORY bytes — decided before a single fetch.
+    // Both budget gates run on DIRECTORY math — decided before a single
+    // fetch. The byte sum is computed first even when the count gate rejects,
+    // so a rejected result still reports how large the tier is.
     const getSize = this.options.getTileByteSize;
     let bytes = 0;
     for (const id of candidates) {
@@ -4895,10 +5573,33 @@ export class SpatioTemporalTileset {
     }
     state.bytes = bytes;
     state.tiles = candidates.length;
-    if (bytes > budgetBytes) {
+    // The byte the gate is decided on (C4): what the archive would actually
+    // TRANSFER — its coalesced range plan over the candidates — when it can
+    // tell us, else the directory sum. A scattered z0–z1 selection priced by
+    // directory lengths under-counts the ranges the coalescer fetches by up
+    // to ~33× (`goes-glm-lightning`: 0.64 MiB of tiles, 22.2 MB of ranges),
+    // dispatched at cold start alongside the first viewport.
+    const estimateFetch = this.options.estimateFetchBytes;
+    const plannedBytes = estimateFetch ? estimateFetch(candidates) : undefined;
+    state.plannedBytes = plannedBytes;
+    const planned = plannedBytes === undefined ? {} : { plannedBytes };
+    // COUNT gate (A1): a storyboard of thousands of tiny tiles passes the
+    // byte gate and is exactly the pin that hurts.
+    if (candidates.length > maxTiles) {
       this.settleOverview(state, {
         loaded: false,
         bytes,
+        ...planned,
+        tiles: candidates.length,
+        reason: 'over-count',
+      });
+      return;
+    }
+    if ((plannedBytes ?? bytes) > budgetBytes) {
+      this.settleOverview(state, {
+        loaded: false,
+        bytes,
+        ...planned,
         tiles: candidates.length,
         reason: 'over-budget',
       });
@@ -4922,7 +5623,15 @@ export class SpatioTemporalTileset {
         };
         this.tiles.set(key, header);
       }
+      // An already-resident tile joins the pinned accounting here; one still
+      // to load joins it at delivery (see deliverTile / startTileLoad).
+      if (header.isLoaded && !header.isPinned) {
+        this.pinnedLoadedCount++;
+        this.pinnedBytes += header.byteSize;
+      }
       header.isPinned = true;
+      // Pinned headers leave the eviction candidate map for good (F1).
+      this.unpinnedTiles.delete(key);
       header.lastUsed = now;
       if (header.isLoaded) continue; // already resident — pinning is enough
       header.isCancelled = false; // re-arm a previously cancelled header
@@ -5005,37 +5714,37 @@ export class SpatioTemporalTileset {
 
   /**
    * Successful-completion path: sanity-check the pinned footprint against
-   * the cache limits (the budget gate should make this impossible; warn once
-   * if not — eviction will never reclaim pinned bytes) and resolve.
+   * the cache limits (the two budget gates make this unreachable at the
+   * defaults; a caller-raised `maxTiles` / `budgetBytes` can get here — warn
+   * once, since eviction will never reclaim pinned tiles) and resolve.
    */
   private finishOverviewLoad(state: OverviewState): void {
     this.overviewQueue = []; // anything left is already in a terminal state
 
-    let pinnedBytes = 0;
-    let pinnedCount = 0;
-    for (const header of this.tiles.values()) {
-      if (header.isPinned && header.isLoaded) {
-        pinnedBytes += header.byteSize;
-        pinnedCount++;
-      }
-    }
+    // The incremental counters, not a scan: a pinned tier is the one case
+    // where `this.tiles` is large by design.
+    const pinnedBytes = this.pinnedBytes;
+    const pinnedCount = this.pinnedLoadedCount;
+    const byteCap = this.effectiveMaxCacheBytes();
     if (
       !this.warnedPinnedOverCacheLimit &&
-      (pinnedBytes > this.options.maxCacheByteSize ||
-        pinnedCount > this.options.maxCacheSize)
+      (pinnedBytes > byteCap || pinnedCount > this.options.maxCacheSize)
     ) {
       this.warnedPinnedOverCacheLimit = true;
       console.warn(
         `[Tileset] Pinned overview tier (${pinnedCount} tiles, ${pinnedBytes} bytes) ` +
           `alone exceeds the cache limits (maxCacheSize=${this.options.maxCacheSize}, ` +
-          `maxCacheByteSize=${this.options.maxCacheByteSize}); eviction cannot reclaim ` +
-          'pinned tiles — lower the overview budget or raise the cache limits.',
+          `maxCacheByteSize=${byteCap}); eviction cannot reclaim ` +
+          'pinned tiles — lower the overview allowance or raise the cache limits.',
       );
     }
 
     this.settleOverview(state, {
       loaded: true,
       bytes: state.bytes,
+      ...(state.plannedBytes === undefined
+        ? {}
+        : { plannedBytes: state.plannedBytes }),
       tiles: state.tiles,
     });
   }
@@ -5081,14 +5790,13 @@ export class SpatioTemporalTileset {
     // even while a scrub-LOD drag degrades selection (gates on release must
     // re-arm against full detail, never the coarse preview).
     const primaryZoom = this.getZoomLevelsToLoad(zoom)[0];
-    // Quantize to the SAME tolerance the prefetch flush applies (see
-    // quantizedSpatialKey): a smoothly drifting camera (AV ego-follow, eased
-    // pan) otherwise re-runs this FULL-time-range directory slice — the
-    // heaviest getAvailableTiles query in the system — on every ~10 Hz
-    // selection pass, even though the buffered-runway estimate tolerates
-    // sub-tile spatial slack. A real pan/zoom past ~1/8 of the viewport (or any
-    // zoom change) still moves the key and rebuilds.
-    const signature = this.quantizedSpatialKey(bounds, primaryZoom);
+    // Keyed on the primary-zoom TILE BOX (see coverageTileBoxKey): a smoothly
+    // drifting camera (AV ego-follow, eased pan) re-runs this FULL-time-range
+    // directory slice — the heaviest getAvailableTiles query in the system —
+    // only when it actually crosses a tile boundary, which is exactly when
+    // the slice can differ. Rounding to a fraction of the span instead left
+    // phantom trailing-edge keys in the index (B1).
+    const signature = this.coverageTileBoxKey(bounds, primaryZoom);
     if (this.coverageIndex?.signature === signature) return;
     if (this.coverageBuildSignature === signature) return; // build in flight
     this.coverageBuildSignature = signature;
@@ -5152,6 +5860,7 @@ export class SpatioTemporalTileset {
           cumulativeBytes,
           bytesKnown,
         };
+        this.cacheStats.coverageRebuilds++;
         this.notifyBufferChange();
       })
       .catch(() => {
@@ -5188,6 +5897,102 @@ export class SpatioTemporalTileset {
   }
 
   /**
+   * Over either cache cap, on the SAME arithmetic `evictUnusedTiles` applies:
+   * pinned (storyboard) tiles are additive to the tile cap, their bytes count.
+   */
+  private isOverCacheLimits(): boolean {
+    return (
+      this.loadedTileCount - this.pinnedLoadedCount >
+        this.options.maxCacheSize ||
+      this.currentCacheBytes > this.effectiveMaxCacheBytes()
+    );
+  }
+
+  /**
+   * The byte cap this tileset actually evicts against (A4, tile-loading
+   * audit 2026-08): its own `maxCacheByteSize`, bounded by the process-wide
+   * decoded budget. The budget's split is the fair share `limit / owners`,
+   * except that an owner may also use whatever the others leave idle
+   * (`limit − Σ others`) — so a composite whose overlays hold a few hundred
+   * KB does not strand nine tenths of the budget, while the total across
+   * every live tileset still cannot exceed the limit once each has evicted
+   * to its cap. A smarter proportional split is deliberately out of scope.
+   */
+  private effectiveMaxCacheBytes(): number {
+    const limit = decodedMemoryBudget.limit();
+    const others = decodedMemoryBudget.total() - this.currentCacheBytes;
+    const budgetCap = Math.max(decodedMemoryBudget.share(), limit - others);
+    return Math.min(this.options.maxCacheByteSize, budgetCap);
+  }
+
+  /** The process total is over the shared decoded budget (A4). */
+  private isOverProcessBudget(): boolean {
+    return decodedMemoryBudget.total() > decodedMemoryBudget.limit();
+  }
+
+  /**
+   * The budget's backstop entry point (A4): evict through the ordinary tiered
+   * plan down toward `targetBytes`, and report what was released.
+   */
+  private evictDecodedToward(targetBytes: number): number {
+    const before = this.currentCacheBytes;
+    if (before <= targetBytes) return 0;
+    this.evictUnusedTiles(this.neededTileKeys, targetBytes);
+    return Math.max(0, before - this.currentCacheBytes);
+  }
+
+  /**
+   * G2 (tile-loading audit 2026-08): count one dispatch and what it was
+   * planned to move. The range plan (`estimateFetchBytes`) is the honest
+   * wire figure — a scattered selection fuses into ranges many times its
+   * directory bytes — and the directory sum is the fallback when unwired.
+   */
+  private noteDispatch(ids: TileId[]): void {
+    this.cacheStats.requests++;
+    const plan = this.options.estimateFetchBytes;
+    if (plan) {
+      this.cacheStats.bytesRequested += plan(ids);
+      return;
+    }
+    const getSize = this.options.getTileByteSize;
+    if (!getSize) return;
+    for (const id of ids) this.cacheStats.bytesRequested += getSize(id) ?? 0;
+  }
+
+  /** G2: the useful bytes a delivery carried, and whether it was a refetch. */
+  private noteDelivery(key: TileKey, id: TileId): void {
+    const size = this.options.getTileByteSize?.(id);
+    if (size !== undefined) this.cacheStats.bytesUseful += size;
+    if (this.evictedKeys.has(key)) this.cacheStats.refetches++;
+  }
+
+  /**
+   * A3 (tile-loading audit 2026-08): eviction used to be reachable ONLY from
+   * a selection pass that got past the identical-params fast path (and from
+   * `setOptions`). A frozen clock and a still camera — a start gate holding
+   * the playhead while the runway fills, a paused embed — therefore let
+   * deliveries land with no eviction at all: 13 741 headers / 1.67 GB were
+   * observed on the flow-and-riders heads overlay against a 1 GiB cap. This
+   * runs the existing tiered over-limit plan from the delivery path instead,
+   * coalesced onto one timer (see {@link OVER_LIMIT_EVICT_COALESCE_MS}) so a
+   * burst of deliveries costs one pass, never one per tile, and re-checked
+   * when it fires in case a selection pass got there first. The needed set is
+   * the last selection's — the same set `setOptions` evicts against.
+   */
+  private scheduleOverLimitEviction(): void {
+    if (this.overLimitEvictTimer !== null) return; // one pass already queued
+    this.cacheStats.overLimitEvictionsScheduled++;
+    this.overLimitEvictTimer = setTimeout(() => {
+      this.overLimitEvictTimer = null;
+      // Process-wide first (A4): the owners furthest over their share evict
+      // toward it, this one included when it is among them.
+      if (this.isOverProcessBudget()) decodedMemoryBudget.enforce();
+      if (!this.isOverCacheLimits()) return;
+      this.evictUnusedTiles(this.neededTileKeys);
+    }, OVER_LIMIT_EVICT_COALESCE_MS);
+  }
+
+  /**
    * Evict cached tiles: a wall-clock grace timer while under the cache
    * limits, a playhead-relative tiered policy (never plain LRU — see the
    * over-limit branch) once over them.
@@ -5195,8 +6000,14 @@ export class SpatioTemporalTileset {
    * PERFORMANCE: Grace period reduced from 5 minutes to 60 seconds
    * to prevent memory bloat while still supporting animation loops.
    */
-  private evictUnusedTiles(neededTileKeys: Set<TileKey>): void {
+  private evictUnusedTiles(
+    neededTileKeys: Set<TileKey>,
+    byteCapOverride?: number,
+  ): void {
     const now = Date.now();
+    // The byte cap: this tileset's share-bounded cap (A4), or the lower
+    // target the process budget's backstop asked for.
+    const byteCap = byteCapOverride ?? this.effectiveMaxCacheBytes();
     // Grace period scales with animation: longer during animation to keep prefetched tiles
     // 120 seconds during animation (2 minutes of real-time buffer)
     // 30 seconds when paused (keep recently viewed tiles)
@@ -5208,10 +6019,16 @@ export class SpatioTemporalTileset {
     // visibly expensive at a few thousand cached tiles.
     let loadedCount = this.loadedTileCount;
     let cacheBytes = this.currentCacheBytes;
+    // Pinned (overview-storyboard) tiles are ADDITIVE to the tile cap (A1):
+    // they are never candidates below, so counting them here made a pin
+    // larger than `maxCacheSize` an over-limit condition no eviction could
+    // ever clear — every pass then emptied the whole non-pinned working set,
+    // runway included. Their BYTES still count: memory is memory.
+    const pinnedCount = this.pinnedLoadedCount;
 
     // Only evict if we're over limits
-    const overSizeLimit = loadedCount > this.options.maxCacheSize;
-    const overByteLimit = cacheBytes > this.options.maxCacheByteSize;
+    const overSizeLimit = loadedCount - pinnedCount > this.options.maxCacheSize;
+    const overByteLimit = cacheBytes > byteCap;
 
     if (!overSizeLimit && !overByteLimit) {
       // Under limits - only evict tiles outside grace period
@@ -5232,7 +6049,10 @@ export class SpatioTemporalTileset {
       // that never touch the buffer APIs — their behavior is unchanged.)
       const bufferedKeys = this.coverageIndex?.keySet;
 
-      for (const [tileKey, header] of this.tiles) {
+      // Non-pinned headers only (F1): a pinned storyboard header is never a
+      // candidate, and iterating the full registry visited every one of
+      // them — 8.9k–17.9k per pass on the pinning demos — at 10 Hz.
+      for (const [tileKey, header] of this.unpinnedTiles) {
         const isNeeded =
           neededTileKeys.has(tileKey) || (bufferedKeys?.has(tileKey) ?? false);
         const isRecent = now - header.lastUsed < GRACE_PERIOD;
@@ -5242,7 +6062,7 @@ export class SpatioTemporalTileset {
         // would resurrect the orphan outside the registry, inflating
         // currentCacheBytes / loadedTileCount forever. It gets re-judged
         // on the pass after its load settles.
-        if (!isNeeded && !isRecent && !header.isPinned && !header.isLoading) {
+        if (!isNeeded && !isRecent && !header.isLoading) {
           tilesToEvict.push(tileKey);
         }
       }
@@ -5262,18 +6082,15 @@ export class SpatioTemporalTileset {
     // relative to the playhead instead (back-buffer first, distant
     // speculation next, the imminent window last). Candidates: NEVER tiles in
     // the current viewport (neededTileKeys) or PINNED overview tiles (the
-    // always-resident storyboard; their bytes still count against the limits
-    // — the preload byte budget keeps that contribution small, and
-    // preloadOverviewTier warns once if it somehow isn't), and never
-    // in-flight headers (see the under-limit note above).
+    // always-resident storyboard; their COUNT is excluded from the tile cap
+    // above and their bytes still count against the byte cap — the preload's
+    // count + byte gates keep that contribution small, and
+    // preloadOverviewTier warns once if a raised allowance lets it exceed
+    // either limit), and never in-flight headers (see the under-limit note
+    // above).
     const candidates: Array<[TileKey, SpatioTemporalTileHeader]> = [];
-    for (const [key, header] of this.tiles) {
-      if (
-        !neededTileKeys.has(key) &&
-        !header.isPinned &&
-        !header.isLoading &&
-        header.isLoaded
-      ) {
+    for (const [key, header] of this.unpinnedTiles) {
+      if (!neededTileKeys.has(key) && !header.isLoading && header.isLoaded) {
         candidates.push([key, header]);
       }
     }
@@ -5421,9 +6238,12 @@ export class SpatioTemporalTileset {
     let runwayEvicted = false;
 
     for (let i = 0; i < plan.length; i++) {
-      // Check if we're still over limits
-      const stillOverSize = loadedCount > this.options.maxCacheSize;
-      const stillOverBytes = cacheBytes > this.options.maxCacheByteSize;
+      // Check if we're still over limits (pins excluded from the count, as
+      // above — the plan never contains one, so `pinnedCount` is constant
+      // across the loop).
+      const stillOverSize =
+        loadedCount - pinnedCount > this.options.maxCacheSize;
+      const stillOverBytes = cacheBytes > byteCap;
 
       if (!stillOverSize && !stillOverBytes) {
         break; // We're under limits now, stop evicting
@@ -5482,11 +6302,24 @@ export class SpatioTemporalTileset {
           this.options.onTileUnload?.(header.tile);
           // Incrementally decrement the running counters.
           this.currentCacheBytes -= header.byteSize;
-          if (header.isLoaded) this.loadedTileCount--;
+          if (header.isLoaded) {
+            this.loadedTileCount--;
+            // Pinned headers are never eviction candidates, but this is the
+            // one exit for a loaded header, so the pinned share is kept
+            // honest here rather than trusting every caller.
+            if (header.isPinned) {
+              this.pinnedLoadedCount--;
+              this.pinnedBytes -= header.byteSize;
+            }
+          }
           evictedLoaded = true;
           releasedBytes = header.byteSize;
         }
         this.tiles.delete(key);
+        this.unpinnedTiles.delete(key);
+        // A loaded tile leaving the registry: any later delivery of the same
+        // key is a refetch (G2).
+        if (header.tile) this.evictedKeys.add(key);
         this.cacheStats.evictions++;
         this.cacheStats.bytesEvicted += releasedBytes;
         const tier = tiers?.[i] ?? 'a';
@@ -5637,11 +6470,12 @@ export class SpatioTemporalTileset {
     // full-duplication archive (every zoom carries every feature, the
     // no-thinning default) that is a permanent extra full copy of the data
     // per parent level. Cells outside the viewport are invisible either way,
-    // so covering them is irrelevant for rendering; cells INSIDE the
-    // viewport keep the existing semantics, which also preserves the
-    // sparse-archive contract (`--min-features-per-tile` omits deep-zoom
-    // tiles entirely, so an in-viewport cell with no primary tile keeps its
-    // parent — that parent is the only holder of those features).
+    // so covering them is irrelevant for rendering; a cell INSIDE the
+    // viewport counts only while the directory says a tile exists there and
+    // it is still pending (E3) — unless the archive declares `sparsePrimary`
+    // (`--min-features-per-tile` omits deep-zoom tiles entirely, so an
+    // in-viewport cell with no primary tile keeps its parent: that parent is
+    // the only holder of those features).
     const vpBounds = this.currentViewport?.bounds;
     const nPrimary = 1 << primaryZoom;
     const worldSpans: Array<[number, number]> = [[0, nPrimary - 1]];
@@ -5685,6 +6519,26 @@ export class SpatioTemporalTileset {
       Math.max(0, x0 - 1),
       Math.min(nPrimary - 1, x1 + 1),
     ]);
+    const sparsePrimary = this.options.sparsePrimary === true;
+    // FRUSTUM CUT (FS-2): a cut MEMBER at a shallower zoom than the deepest
+    // one is not a placeholder — it is the intended cover for its own patch
+    // of ground at its own zoom, and pass 2's question ("is some deepest-zoom
+    // cell of yours still uncovered?") has no correct answer for it: the far
+    // field is covered at z6 and simply has no z8 cells to be covered by.
+    // Delivered as primary when loaded; while PENDING it is what keeps its
+    // own ancestor stand-ins on screen (the per-node test below), exactly as
+    // a pending primary cell keeps a parent on the box path. Before E3 the
+    // any-in-box-cell rule kept both by coincidence of geometry.
+    const cutKeys = this.selectionCutKeys;
+    let pendingCut: TileId[] | null = null;
+    if (cutKeys) {
+      pendingCut = [];
+      for (const key of this.neededTileKeys) {
+        if (!cutKeys.has(key)) continue;
+        const h = this.tiles.get(key);
+        if (h && !(h.isLoaded && h.tile)) pendingCut.push(h.id);
+      }
+    }
     for (const key of this.neededTileKeys) {
       const header = this.tiles.get(key);
       if (!header?.isLoaded || !header.tile) continue;
@@ -5696,6 +6550,13 @@ export class SpatioTemporalTileset {
       if (zDiff <= 0) {
         tiles.push(header.tile);
         emitted.add(key);
+        continue;
+      }
+      if (cutKeys?.has(key)) {
+        tiles.push(header.tile);
+        emitted.add(key);
+        // Content in its block: no ancestor stand-in may draw over it.
+        parentCoverIds.push(header.id);
         continue;
       }
       const range = 1 << zDiff;
@@ -5716,19 +6577,33 @@ export class SpatioTemporalTileset {
           for (let cx = x0; cx <= x1; cx++) {
             const cell = `${cx}/${cy}/${t}`;
             if (primaryCover.has(cell)) continue;
-            // INSIDE the viewport box: unchanged semantics — any uncovered
-            // cell keeps the parent, including a cell the archive has no tile
-            // for at all (`--min-features-per-tile` omits deep-zoom tiles in
-            // sparse regions, and the parent is then the only holder of those
-            // features). IN THE SLACK RING: only a cell the viewport actually
-            // asked for and has not received.
+            // A cell the directory says EXISTS and that has not arrived keeps
+            // the parent — in the box or in the slack ring alike. A cell with
+            // no tile at all keeps it only under `sparsePrimary` (the archive
+            // omits deep-zoom tiles in sparse regions, so the parent is the
+            // only holder of those features), and only inside the box. On a
+            // replicated archive an empty primary cell is empty in the parent
+            // too; counting it kept the parent drawn over its loaded
+            // siblings' children for as long as the camera stood still (E3).
             if (
-              (inRowBand && cx >= vpMinX && cx <= vpMaxX) ||
-              primaryPending.has(cell)
+              primaryPending.has(cell) ||
+              (sparsePrimary && inRowBand && cx >= vpMinX && cx <= vpMaxX)
             ) {
               needed = true;
               break;
             }
+          }
+        }
+      }
+      // Cut path: an ancestor stand-in is also kept while any cut member it
+      // covers is still pending, at whatever zoom that member lives.
+      if (!needed && pendingCut) {
+        for (const m of pendingCut) {
+          const up = m.z - z;
+          if (up < 0 || m.t !== t) continue;
+          if (m.x >> up === x && m.y >> up === y) {
+            needed = true;
+            break;
           }
         }
       }
@@ -6072,6 +6947,8 @@ export class SpatioTemporalTileset {
       evictionsByTier: { ...this.cacheStats.evictionsByTier },
       tileCount: this.tiles.size,
       cacheBytes: this.currentCacheBytes,
+      pinnedCount: this.pinnedLoadedCount,
+      pinnedBytes: this.pinnedBytes,
       hitRate: total > 0 ? this.cacheStats.hits / total : 0,
       activeRequests: this.activeRequests.size,
       priorityQueueLength: this.priorityQueue.length,
@@ -6103,11 +6980,15 @@ export class SpatioTemporalTileset {
     this.neededTilesVersion++;
 
     this.tiles.clear();
+    this.unpinnedTiles.clear();
+    this.evictedKeys.clear();
     this.priorityQueue = [];
     this.prefetchQueue = [];
     this.activeRequests.clear();
     this.currentCacheBytes = 0;
     this.loadedTileCount = 0;
+    this.pinnedLoadedCount = 0;
+    this.pinnedBytes = 0;
 
     // The failed-tile revival is bookkeeping ABOUT headers that no longer
     // exist; firing it after a clear would enqueue ids from the torn-down
@@ -6142,6 +7023,9 @@ export class SpatioTemporalTileset {
    * Finalize and cleanup
    */
   finalize(): void {
+    // Before anything else: an async pass parked on an await must see this the
+    // moment it resumes (see the `finalized` field).
+    this.finalized = true;
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
@@ -6153,7 +7037,13 @@ export class SpatioTemporalTileset {
       clearTimeout(this.bufferChangeTimer);
       this.bufferChangeTimer = null;
     }
+    if (this.overLimitEvictTimer !== null) {
+      clearTimeout(this.overLimitEvictTimer);
+      this.overLimitEvictTimer = null;
+    }
     this.clear();
+    // Leave the process-wide budget so the survivors' shares grow back (A4).
+    decodedMemoryBudget.unregister(this.memoryOwner);
   }
 
   // Tile-size estimation lives in archive.ts (estimateTileSize) so the archive

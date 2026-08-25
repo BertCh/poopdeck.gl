@@ -35,7 +35,10 @@ const NAV_ITEMS: { label: string; to: string }[] = [
 const SiteHeader: React.FC = () => {
   return (
     <header
-      className="shrink-0 flex items-center justify-between px-5 sm:px-7 lg:px-12 h-12"
+      // `justify-between` alone leaves NO gap once the nav strip fills its
+      // track, which it does from ~500px down — the wordmark and the first
+      // link ran together as "poopdeck.glDemos". A real gap is the floor.
+      className="shrink-0 flex items-center justify-between gap-4 sm:gap-6 px-4 sm:px-7 lg:px-12 h-12"
       style={{
         background: 'var(--page-bg)',
         borderBottom: '1px solid var(--hairline)',

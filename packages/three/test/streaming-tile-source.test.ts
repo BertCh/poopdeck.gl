@@ -8,6 +8,9 @@ import {
   type RunwayTileset,
 } from '../src/scene/streaming-tile-source';
 import { mockTileset, tile, VIEWPORT } from './_support/streaming';
+import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { LocalEnuProjection } from '../src/projection/local-enu';
+import { makePointTile } from './_support/features';
 
 // Shared capture across the hoisted `@poopdeck.gl/core` mock and the assertions:
 // the `.load()` path builds a real `SpatioTemporalTileset` from an archive URL,
@@ -22,6 +25,10 @@ const h = vi.hoisted(() => ({
   preloadCalls: [] as Array<unknown>,
   /** Metadata the fake archive returns from `getMetadata()` (per test). */
   metadata: { current: null as unknown },
+  /** The visible set the fake tileset reports (audit E5 arrival tests). */
+  visible: { current: [] as unknown[] },
+  /** How many `getVisibleTiles()` walks the fake tileset served. */
+  walks: { count: 0 },
 }));
 
 vi.mock('@poopdeck.gl/core', async (importOriginal) => {
@@ -63,7 +70,8 @@ vi.mock('@poopdeck.gl/core', async (importOriginal) => {
       h.ctorOpts.push(opts);
     }
     getVisibleTiles(): unknown[] {
-      return [];
+      h.walks.count++;
+      return h.visible.current;
     }
     preloadOverviewTier(opts?: unknown): Promise<unknown> {
       h.preloadCalls.push(opts ?? null);
@@ -384,5 +392,188 @@ describe('StreamingTileSource.load (knob forwarding + summary dispatch)', () => 
     });
     await b.load();
     expect(h.preloadCalls).toEqual([{ budgetBytes: 123, maxZoom: 2 }]);
+  });
+});
+
+/**
+ * Tile-loading audit 2026-08, finding E5 (LC-3). The source republished
+ * SYNCHRONOUSLY on every `onTileLoad` — and every publish is a replace-all
+ * `setTiles` that re-packs every resident point — so a burst of M arrivals
+ * cost O(N·M) (measured: 16 tiles 25 ms → 256 tiles 4,695 ms, points
+ * reprocessed 128× the final count). `onTileUnload` was not wired at all, so
+ * an evicted tile's points stayed on the GPU until some later change moved
+ * the set. And `update()` ran the `getVisibleTiles()` + Set diff walk on every
+ * call, frame number or not.
+ */
+describe('E5 — coalesced publish, frame gate, unload wiring (audit 2026-08)', () => {
+  beforeEach(() => {
+    h.ctorOpts.length = 0;
+    h.preloadCalls.length = 0;
+    h.metadata.current = { minZoom: 0, maxZoom: 10, temporalBucketMs: 1000 };
+    h.visible.current = [];
+    h.walks.count = 0;
+  });
+
+  /** The tileset callbacks the source wired in `_load` (fake ctor capture). */
+  function callbacks() {
+    const o = h.ctorOpts[0] as {
+      onTileLoad?: (t: unknown) => void;
+      onTileUnload?: (t: unknown) => void;
+    };
+    return o;
+  }
+
+  it('E5: 50 onTileLoad in one task publish ONCE, after the task', async () => {
+    const onTilesChanged = vi.fn();
+    const src = new StreamingTileSource({ url: 'x', onTilesChanged });
+    await src.load();
+    const cb = callbacks();
+    expect(typeof cb.onTileLoad).toBe('function');
+
+    // Each arrival joins the visible set, exactly as core reports it.
+    for (let i = 0; i < 50; i++) {
+      const t = tile({ z: 14, x: i, y: 0, t: 0 });
+      h.visible.current = [...h.visible.current, t];
+      cb.onTileLoad!(t);
+    }
+    // Nothing inside the task: no walk, no publish.
+    expect(onTilesChanged).not.toHaveBeenCalled();
+    expect(h.walks.count).toBe(0);
+
+    await Promise.resolve();
+    expect(onTilesChanged).toHaveBeenCalledTimes(1);
+    expect(onTilesChanged.mock.calls[0][0]).toHaveLength(50);
+    expect(h.walks.count).toBe(1);
+  });
+
+  it('E5: onTileUnload is wired and coalesces with arrivals in the same task', async () => {
+    const onTilesChanged = vi.fn();
+    const src = new StreamingTileSource({ url: 'x', onTilesChanged });
+    await src.load();
+    const cb = callbacks();
+    expect(typeof cb.onTileUnload).toBe('function');
+
+    const a = tile({ z: 14, x: 0, y: 0, t: 0 });
+    const b = tile({ z: 14, x: 1, y: 0, t: 0 });
+    h.visible.current = [a, b];
+    cb.onTileLoad!(a);
+    cb.onTileLoad!(b);
+    await Promise.resolve();
+    expect(onTilesChanged).toHaveBeenCalledTimes(1);
+
+    // Eviction: core fires the callback, then removes the header.
+    h.visible.current = [a];
+    cb.onTileUnload!(b);
+    expect(onTilesChanged).toHaveBeenCalledTimes(1); // deferred past the task
+    await Promise.resolve();
+    expect(onTilesChanged).toHaveBeenCalledTimes(2);
+    expect(onTilesChanged.mock.calls[1][0]).toEqual([a]);
+  });
+
+  it('E5: an unchanged frame number across two update()s costs zero walks and zero publishes', () => {
+    const t0 = [tile({ z: 14, x: 0, y: 0, t: 0 })];
+    const getVisibleTiles = vi.fn(() => t0);
+    const pinned = {
+      update: vi.fn(() => 3), // the tileset's "nothing changed" answer
+      getVisibleTiles,
+    };
+    const onTilesChanged = vi.fn();
+    const src = new StreamingTileSource({ url: 'x', onTilesChanged });
+    src.attachTileset(pinned);
+
+    src.update(VIEWPORT);
+    expect(getVisibleTiles).toHaveBeenCalledTimes(1);
+    expect(onTilesChanged).toHaveBeenCalledTimes(1);
+
+    src.update({ ...VIEWPORT, time: 6000 });
+    src.update({ ...VIEWPORT, time: 7000 });
+    expect(pinned.update).toHaveBeenCalledTimes(3);
+    expect(getVisibleTiles).toHaveBeenCalledTimes(1);
+    expect(onTilesChanged).toHaveBeenCalledTimes(1);
+
+    // A moved frame number re-walks (and publishes the change it finds).
+    pinned.update.mockReturnValue(4);
+    const t1 = [...t0, tile({ z: 14, x: 1, y: 0, t: 0 })];
+    getVisibleTiles.mockReturnValue(t1);
+    src.update({ ...VIEWPORT, time: 8000 });
+    expect(getVisibleTiles).toHaveBeenCalledTimes(2);
+    expect(onTilesChanged).toHaveBeenCalledTimes(2);
+    expect(onTilesChanged).toHaveBeenLastCalledWith(t1);
+  });
+
+  it('E5: update() flushes a pending arrival publish synchronously (a driving frame never publishes late)', async () => {
+    const onTilesChanged = vi.fn();
+    const src = new StreamingTileSource({ url: 'x', onTilesChanged });
+    await src.load();
+    const cb = callbacks();
+    const a = tile({ z: 14, x: 0, y: 0, t: 0 });
+    h.visible.current = [a];
+    cb.onTileLoad!(a);
+    expect(onTilesChanged).not.toHaveBeenCalled();
+
+    // The frame that drives the tileset gets the corrected set inside it…
+    (src.getTileset() as { update: unknown }).update = () => 1;
+    src.update(VIEWPORT);
+    expect(onTilesChanged).toHaveBeenCalledTimes(1);
+    // …and the microtask then finds nothing outstanding.
+    await Promise.resolve();
+    expect(onTilesChanged).toHaveBeenCalledTimes(1);
+    expect(h.walks.count).toBe(1);
+  });
+
+  it('E5: dispose cancels a pending publish', async () => {
+    const onTilesChanged = vi.fn();
+    const src = new StreamingTileSource({ url: 'x', onTilesChanged });
+    await src.load();
+    const cb = callbacks();
+    h.visible.current = [tile({ z: 14, x: 0, y: 0, t: 0 })];
+    cb.onTileLoad!(h.visible.current[0]);
+    src.dispose();
+    await Promise.resolve();
+    expect(onTilesChanged).not.toHaveBeenCalled();
+  });
+
+  it('E5: an evicted tile releases the geometry that carried it (end to end through a real layer)', async () => {
+    const anchor = { longitude: -71.05, latitude: 42.35 };
+    const ctx = { projection: new LocalEnuProjection(anchor), timeOrigin: 0 };
+    const pointTile = (x: number) =>
+      makePointTile(
+        3,
+        [
+          anchor.longitude + x * 0.01,
+          anchor.latitude,
+          anchor.longitude + x * 0.01 + 0.001,
+          anchor.latitude,
+          anchor.longitude + x * 0.01 + 0.002,
+          anchor.latitude,
+        ],
+        { endTimes: new Float32Array([1000, 1000, 1000]) },
+        { id: { z: 12, x, y: 0, t: 0 } },
+      );
+    const layer = new STTPointCloudLayer({ id: 'pts' });
+    const src = new StreamingTileSource({
+      url: 'x',
+      onTilesChanged: (tiles) => layer.setTiles(tiles, ctx),
+    });
+    await src.load();
+    const cb = callbacks();
+
+    const a = pointTile(0);
+    const b = pointTile(1);
+    h.visible.current = [a, b];
+    cb.onTileLoad!(a);
+    cb.onTileLoad!(b);
+    await Promise.resolve();
+    const g1 = layer.object.geometry;
+    expect(g1.instanceCount).toBe(6);
+    const disposed = vi.spyOn(g1, 'dispose');
+
+    h.visible.current = [a];
+    cb.onTileUnload!(b);
+    await Promise.resolve();
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(layer.object.geometry).not.toBe(g1);
+    expect(layer.object.geometry.instanceCount).toBe(3);
+    layer.dispose();
   });
 });

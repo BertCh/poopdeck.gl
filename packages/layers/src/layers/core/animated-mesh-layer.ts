@@ -105,7 +105,7 @@ import {
   SpatioTemporalLayerProps,
   SpatioTemporalPickingInfo,
 } from '../spatiotemporal-layer.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   colorMappingDigest,
@@ -1053,7 +1053,8 @@ export class AnimatedMeshLayer<
    * with the same absorb/evict discipline.
    */
   private syncTrackIndex(tiles: Tile[], indexKey: string): void {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     if (!this.trackMaintainer)
       this.trackMaintainer = new TrackIndexMaintainer();
     const quatColumn = this.quaternionColumnValue();
@@ -1096,13 +1097,15 @@ export class AnimatedMeshLayer<
     this.trackIndexKey = indexKey;
     this.lastTilesRef = tiles;
 
-    emit('tilePrepare', {
-      layer: 'AnimatedMeshLayer',
-      tracks: result.tracks.size,
-      snapshots: result.totalSnapshots,
-      resorted: this.trackMaintainer.resortedTrackIds.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedMeshLayer',
+        tracks: result.tracks.size,
+        snapshots: result.totalSnapshots,
+        resorted: this.trackMaintainer.resortedTrackIds.length,
+        ms: performance.now() - t0,
+      });
+    }
   }
 
   /**
@@ -1236,7 +1239,8 @@ export class AnimatedMeshLayer<
   }
 
   renderLayers(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles: rawTiles } = this.state;
     if (!rawTiles || rawTiles.length === 0) {
       this.trackIndex = null;
@@ -1279,12 +1283,14 @@ export class AnimatedMeshLayer<
       if (s) samples.push(s);
     }
     if (samples.length === 0) {
-      emit('renderLayers', {
-        layer: 'AnimatedMeshLayer',
-        tiles: tiles.length,
-        sublayers: 0,
-        ms: performance.now() - t0,
-      });
+      if (probe) {
+        emit('renderLayers', {
+          layer: 'AnimatedMeshLayer',
+          tiles: tiles.length,
+          sublayers: 0,
+          ms: performance.now() - t0,
+        });
+      }
       return [];
     }
 
@@ -1324,14 +1330,16 @@ export class AnimatedMeshLayer<
       this.pruneBuffers(SINGLE_SUBLAYER_KEYS);
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedMeshLayer',
-      tiles: tiles.length,
-      tracks: index.size,
-      active: samples.length,
-      sublayers: layers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedMeshLayer',
+        tiles: tiles.length,
+        tracks: index.size,
+        active: samples.length,
+        sublayers: layers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(

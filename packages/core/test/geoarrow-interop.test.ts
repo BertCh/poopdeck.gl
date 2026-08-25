@@ -14,7 +14,11 @@
 import { describe, it, expect } from 'vitest';
 import { Field, FixedSizeList, Float, Precision } from 'apache-arrow';
 import { STTArchive } from '../src/archive';
-import { toGeoArrowTable, decodeTile } from '../src/tile';
+import {
+  toGeoArrowTable,
+  decodeTile,
+  readTemporalColumnInfo,
+} from '../src/tile';
 import { GeometryType } from '../src/types';
 import { packedFromGolden, packedFetch } from './helpers/packed-fixture';
 
@@ -204,6 +208,114 @@ describe('decodeTile guards', () => {
       expect(layer.arrowTable).toBeDefined();
       expect(layer.arrowTable!.numRows).toBe(layer.features.featureCount);
     });
+  });
+});
+
+/**
+ * The time half of the same self-description job the geometry tests above do.
+ *
+ * `ARROW:extension:name` tells a generic Arrow consumer WHAT to draw; the
+ * `visgl:temporal-*` descriptor tells it WHEN — the vocabulary luma.gl's
+ * `@luma.gl/arrow` writes on a prepared temporal field, and the one a deck.gl
+ * v10 Arrow-backed layer reads to drive playback. An `Int64` column carries
+ * none of that on its own.
+ *
+ * The fixture is a LEGACY archive, transcoded from the v4 sample — written
+ * long before the encoder emitted a byte of temporal metadata. That is the
+ * point: the descriptor has to be completed at the hand-off, or every archive
+ * already in the fleet stays mute.
+ */
+describe('vis.gl temporal metadata', () => {
+  async function firstTable() {
+    const archive = sampleArchive();
+    const index = await archive.getIndex();
+    const entry = index.tiles[0];
+    const tile = await archive.getTile({
+      z: entry.zoom,
+      x: entry.x,
+      y: entry.y,
+      t: entry.timeStart,
+    });
+    return toGeoArrowTable(tile!.layers[0]);
+  }
+
+  it('completes the descriptor on a legacy archive that carries none', async () => {
+    const table = await firstTable();
+    for (const column of ['start_time', 'end_time']) {
+      const info = readTemporalColumnInfo(table, column);
+      expect(info, `${column} must be described`).not.toBeNull();
+      expect(info!.kind).toBe('timestamp');
+      expect(info!.unit).toBe('millisecond');
+      expect(info!.timezone).toBe('UTC');
+    }
+    // A non-time column stays undescribed — the keys mean something.
+    expect(readTemporalColumnInfo(table, 'geometry')).toBeNull();
+  });
+
+  it('reports the time columns as absolute Unix ms', async () => {
+    const table = await firstTable();
+    const info = readTemporalColumnInfo(table, 'start_time')!;
+    expect(info.origin).toBe(0);
+    expect(info.originPolicy).toBe('zero');
+
+    // …and the claim is true. Cross-checked against the OTHER surface: the
+    // render path reconstructs an absolute time as `timeOffset + startTimes[i]`
+    // precisely because its own column is relative. If the Arrow column needed
+    // that same offset, `origin: 0` would be a lie.
+    const archive = sampleArchive();
+    const index = await archive.getIndex();
+    const entry = index.tiles[0];
+    const tile = await archive.getTile({
+      z: entry.zoom,
+      x: entry.x,
+      y: entry.y,
+      t: entry.timeStart,
+    });
+    const { timeOffset, startTimes } = tile!.layers[0].features;
+    const fromArrow = Number(table.getChild('start_time')!.get(0));
+    expect(fromArrow).toBe(Math.round(timeOffset + startTimes[0]));
+  });
+
+  /**
+   * THE INTEROP RULE, from the deck.gl v10 Arrow direction: for streamed
+   * `RecordBatch` inputs "the temporal origin should be stable across all
+   * batches… later batches should not silently shift the animation clock for
+   * already uploaded data."
+   *
+   * STT satisfies it by construction rather than by bookkeeping — the
+   * hand-off is absolute, so every tile of an archive reports the SAME origin
+   * and a consumer can concatenate tiles into one Arrow layer freely. The
+   * per-tile `BinaryFeatures.timeOffset` is an internal f32-precision device
+   * and deliberately never reaches this surface.
+   */
+  it('reports the same origin for every tile of an archive', async () => {
+    const archive = sampleArchive();
+    const index = await archive.getIndex();
+    const origins = new Set<number | undefined>();
+    let tilesRead = 0;
+    for (const entry of index.tiles.slice(0, 8)) {
+      const tile = await archive.getTile({
+        z: entry.zoom,
+        x: entry.x,
+        y: entry.y,
+        t: entry.timeStart,
+      });
+      if (!tile) continue;
+      for (const layer of tile.layers) {
+        const info = readTemporalColumnInfo(
+          toGeoArrowTable(layer),
+          'start_time',
+        );
+        if (!info) continue;
+        origins.add(info.origin);
+        tilesRead++;
+      }
+    }
+    expect(
+      tilesRead,
+      'the fixture must yield tiles to compare',
+    ).toBeGreaterThan(1);
+    expect([...origins]).toEqual([0]);
   });
 });
 

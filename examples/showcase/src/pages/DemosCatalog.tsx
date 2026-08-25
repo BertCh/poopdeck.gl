@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router';
+import { Link, type MetaFunction } from 'react-router';
 import {
   CATEGORY_ORDER,
   CATEGORY_LABELS,
@@ -13,6 +13,15 @@ import DemoCard from '../components/DemoCard';
 // and hardcoding /demo/:id here would reintroduce exactly the dead-end that
 // helper was extracted to fix.
 import { fullscreenRoute } from '../components/demo/DemoEmbed';
+import { createSeoMeta } from '../lib/seo';
+
+export const meta: MetaFunction = () =>
+  createSeoMeta({
+    title: 'Spatiotemporal data demos',
+    description:
+      'Explore real ships, earthquakes, ocean drifters, transit, weather, mobility, and other time-aware vector datasets rendered with STT.',
+    path: '/demos',
+  });
 
 /**
  * The full demo catalog (`/demos`): every healthy dataset grouped by theme.

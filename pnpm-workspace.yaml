@@ -2,3 +2,85 @@ packages:
   - 'packages/*'
   - 'examples/*'
   - 'tools/*'
+
+allowBuilds:
+  '@parcel/watcher': false
+  '@swc/core': false
+  esbuild: false
+
+# pnpm 11 rejects dependencies published within the last day (a supply-chain
+# default worth keeping for FUTURE resolutions). Every entry below shipped on
+# 2026-08-24 and is pinned to an exact version, so the gate still applies to
+# anything newer. pnpm grandfathered the first group in; the oxfmt bindings and
+# the maplibre style-spec were added by hand for consistency. Safe to delete
+# these lines once the versions have aged past the cutoff.
+minimumReleaseAgeExclude:
+  - '@oxfmt/binding-android-arm-eabi@0.65.0'
+  - '@oxfmt/binding-android-arm64@0.65.0'
+  - '@oxfmt/binding-darwin-arm64@0.65.0'
+  - '@oxfmt/binding-darwin-x64@0.65.0'
+  - '@oxfmt/binding-freebsd-x64@0.65.0'
+  - '@oxfmt/binding-linux-arm-gnueabihf@0.65.0'
+  - '@oxfmt/binding-linux-arm-musleabihf@0.65.0'
+  - '@oxfmt/binding-linux-arm64-gnu@0.65.0'
+  - '@oxfmt/binding-linux-arm64-musl@0.65.0'
+  - '@oxfmt/binding-linux-ppc64-gnu@0.65.0'
+  - '@oxfmt/binding-linux-riscv64-gnu@0.65.0'
+  - '@oxfmt/binding-linux-riscv64-musl@0.65.0'
+  - '@oxfmt/binding-linux-s390x-gnu@0.65.0'
+  - '@oxfmt/binding-linux-x64-gnu@0.65.0'
+  - '@oxfmt/binding-linux-x64-musl@0.65.0'
+  - '@oxfmt/binding-openharmony-arm64@0.65.0'
+  - '@oxfmt/binding-win32-arm64-msvc@0.65.0'
+  - '@oxfmt/binding-win32-ia32-msvc@0.65.0'
+  - '@oxfmt/binding-win32-x64-msvc@0.65.0'
+  - oxfmt@0.65.0
+  - '@maplibre/maplibre-gl-style-spec@26.4.0'
+  - 3d-tiles-renderer@0.5.2
+  - '@oxlint/binding-android-arm-eabi@1.80.0'
+  - '@oxlint/binding-android-arm64@1.80.0'
+  - '@oxlint/binding-darwin-arm64@1.80.0'
+  - '@oxlint/binding-darwin-x64@1.80.0'
+  - '@oxlint/binding-freebsd-x64@1.80.0'
+  - '@oxlint/binding-linux-arm-gnueabihf@1.80.0'
+  - '@oxlint/binding-linux-arm-musleabihf@1.80.0'
+  - '@oxlint/binding-linux-arm64-gnu@1.80.0'
+  - '@oxlint/binding-linux-arm64-musl@1.80.0'
+  - '@oxlint/binding-linux-ppc64-gnu@1.80.0'
+  - '@oxlint/binding-linux-riscv64-gnu@1.80.0'
+  - '@oxlint/binding-linux-riscv64-musl@1.80.0'
+  - '@oxlint/binding-linux-s390x-gnu@1.80.0'
+  - '@oxlint/binding-linux-x64-gnu@1.80.0'
+  - '@oxlint/binding-linux-x64-musl@1.80.0'
+  - '@oxlint/binding-openharmony-arm64@1.80.0'
+  - '@oxlint/binding-win32-arm64-msvc@1.80.0'
+  - '@oxlint/binding-win32-ia32-msvc@1.80.0'
+  - '@oxlint/binding-win32-x64-msvc@1.80.0'
+  - maplibre-gl@6.6.0
+  - mermaid@11.17.1
+  - oxlint@1.80.0
+
+# pnpm 11 no longer reads `pnpm.overrides` / `pnpm.patchedDependencies` from
+# package.json — both live here now. The luma patch is load-bearing: it is the
+# UniformBlock UBO re-upload fix (storm-4d 44.6 -> 86.8 fps); losing it is a
+# silent 2x frame-time regression. See docs/roadmap/measurements-2026-08.md.
+overrides:
+  'react': '>=19.2.0 <19.3.0'
+  'react-dom': '>=19.2.0 <19.3.0'
+  '@deck.gl/core': '9.3.10'
+  '@deck.gl/layers': '9.3.10'
+  '@deck.gl/react': '9.3.10'
+  '@deck.gl/aggregation-layers': '9.3.10'
+  '@deck.gl/geo-layers': '9.3.10'
+  '@deck.gl/extensions': '9.3.10'
+  '@deck.gl/mesh-layers': '9.3.10'
+  '@deck.gl/widgets': '9.3.10'
+  '@luma.gl/core': '9.3.6'
+  '@luma.gl/engine': '9.3.6'
+  '@luma.gl/constants': '9.3.6'
+  '@luma.gl/shadertools': '9.3.6'
+  '@luma.gl/webgl': '9.3.6'
+  '@luma.gl/gltf': '9.3.6'
+
+patchedDependencies:
+  '@luma.gl/core@9.3.6': patches/@luma.gl__core@9.3.6.patch

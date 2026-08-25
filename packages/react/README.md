@@ -1,5 +1,8 @@
 # @poopdeck.gl/react
 
+> **Status: stable, pre-1.0.** See the
+> [support and compatibility policy](../../docs/intro/status-and-support.md).
+
 React hooks and UI for **spatiotemporal playback**: `usePlayback` (clock +
 governor + multi-source registry as React state), `usePlaybackHotkeys`
 (media-player keyboard controls), `PlaybackControls` (transport bar +

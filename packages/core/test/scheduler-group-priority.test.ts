@@ -208,15 +208,37 @@ describe('coalesced group dispatch order above the per-archive cap', () => {
     ]);
   });
 
-  it('ranks data ahead of the play-head above data already passed', async () => {
-    // The play-head sits between the 2000 and 3000 buckets travelling forward:
-    // 3000 and 4000 are imminent, 2000 and 1000 have been passed and are
-    // pushed behind everything by `minDistanceToPlayhead`'s BEHIND_OFFSET.
+  it('B3: the bucket CONTAINING the play-head ranks first, then the future, then the past', async () => {
+    // The play-head is at 2500, inside the [2000, 3000] bucket, travelling
+    // forward: that bucket is the frame being drawn (distance 0), 3000 and
+    // 4000 are imminent, and only 1000 has been passed — pushed behind
+    // everything by `minDistanceToPlayhead`'s BEHIND_OFFSET. Keying the
+    // distance on `timeStart` alone used to rank the containing bucket as
+    // "already passed", behind the frame 30 s away (audit B3 / NS-7).
     configureSharedScheduler({ maxRequests: 8 });
     const order = await dispatchOrder({
       playheadTime: 2500,
       playheadDirection: 1,
     });
-    expect(order.slice(0, 2)).toEqual(['packs/t3000.sttp', 'packs/t4000.sttp']);
+    expect(order).toEqual([
+      'packs/t2000.sttp',
+      'packs/t3000.sttp',
+      'packs/t4000.sttp',
+      'packs/t1000.sttp',
+    ]);
+  });
+
+  it('B3: the same holds travelling backward — containing bucket, then the past, then the future', async () => {
+    configureSharedScheduler({ maxRequests: 8 });
+    const order = await dispatchOrder({
+      playheadTime: 2500,
+      playheadDirection: -1,
+    });
+    expect(order).toEqual([
+      'packs/t2000.sttp',
+      'packs/t1000.sttp',
+      'packs/t3000.sttp',
+      'packs/t4000.sttp',
+    ]);
   });
 });

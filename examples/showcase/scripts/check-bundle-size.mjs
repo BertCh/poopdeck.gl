@@ -50,7 +50,11 @@ const chunkBudgets = [
   [/^MaplibreRenderer-.*\.js$/, 'MapLibre renderer', 70],
   [/^SttThreeGeoViewer-.*\.js$/, 'Three renderer shell', 5],
   [/^HomeGlobe-.*\.js$/, 'home globe shell', 2.5],
-  [/^tile-decoder\.worker-.*\.js$/, 'tile decoder worker', 95],
+  // 95 -> 100: apache-arrow 17 -> 21 measured at +7.5 KiB gzip here
+  // (91,472 -> 99,133 B for the same worker source). Arrow is ~79% of
+  // this bundle and `tile.ts` needs the barrel (tableFromIPC, Table,
+  // Schema, Struct, Field, Type), so there is no subpath to trim to.
+  [/^tile-decoder\.worker-.*\.js$/, 'tile decoder worker', 100],
 ];
 const assetNames = fs.readdirSync(assetsDir);
 for (const [pattern, label, maximum] of chunkBudgets) {

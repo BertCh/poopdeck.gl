@@ -68,14 +68,21 @@
  *     holds none, so an idle source's share is reclaimed and redistributed —
  *     the global budget is never left idle while any source has work. If, after
  *     a full pass, no source has yet reached its admission threshold but slots
- *     and work remain, we top every active source up to that threshold so a slot
- *     is never wasted (DRR's standard "no idle slot" guarantee).
+ *     and work remain, we top every contending source up to that threshold so a
+ *     slot is never wasted (DRR's standard "no idle slot" guarantee).
+ *   - TIER-GATED (B4, tile-loading audit 2026-08): the admission gate and its
+ *     top-up run only among the sources whose most urgent candidate sits in the
+ *     most urgent TIER present — need-now (priority below
+ *     {@link SCHEDULER_PREFETCH_TIER_BASE}) before prefetch. Arrears buy
+ *     same-tier rivals their share; they never let another source's prefetch
+ *     run ahead of this source's next need-now group.
  *
  * Within those eligibility rules the actual pick is by priority (lowest value),
  * so DRR governs *how many* bytes each source gets over time while priority
  * governs *which* of a source's requests runs first. A required source below its
  * gate (priority near 0) still wins individual races; DRR only stops a flood
- * from one source from consuming the share another source is entitled to.
+ * from one source from consuming the share another source in the SAME tier is
+ * entitled to.
  *
  * ─── The currency is bytes (M6 / BH-1) ───────────────────────────────────────
  *
@@ -320,6 +327,25 @@ const DEFAULT_BYTE_QUANTUM = 512 * 1024;
  * arithmetically to the pre-BH-1 slot scheme.
  */
 const SLOT_QUANTUM = 1;
+
+/**
+ * Priority value at or above which a request is in the PREFETCH tier (B4,
+ * tile-loading audit 2026-08).
+ *
+ * The archive prices every `fetchPriority: 'low'` group at
+ * `SCHEDULER_PREFETCH_TIER_BASE + timeToPlayhead` and every need-now group
+ * below it, so a request's tier is a pure function of its priority. The
+ * scheduler reads the tier for exactly one decision: the DRR admission gate
+ * runs only among sources whose most urgent candidate sits in the most urgent
+ * tier present (see {@link SharedRequestScheduler.selectNext}). Byte arrears —
+ * earned by dispatching a group larger than one quantum — can therefore only
+ * make a source yield to SAME-tier rivals; they can never let another source's
+ * prefetch run ahead of this source's next need-now request.
+ *
+ * `archive.ts` is the producer of this convention; its local copy of the base
+ * must stay equal to this value (it should import this one).
+ */
+export const SCHEDULER_PREFETCH_TIER_BASE = 1e15;
 
 /**
  * Per-entry probe bookkeeping, allocated ONLY when the probe is enabled at
@@ -677,12 +703,16 @@ export class SharedRequestScheduler {
    *  2. Determine active sources (those with a survivor). Prune drained sources'
    *     deficits/round-state (work-conserving). Then credit — for the current
    *     round — any active source not yet credited this round.
-   *  3. If no active source has reached its admission threshold, the round is
+   *  2b. B4 tier gate: the CONTENDERS are the sources whose best candidate is
+   *     in the most urgent tier present (need-now beats prefetch, see
+   *     {@link SCHEDULER_PREFETCH_TIER_BASE}). Steps 3–4 look only at them; a
+   *     single-tier queue contends with every active source, as before.
+   *  3. If no contender has reached its admission threshold, the round is
    *     over: start a fresh round (clear the credited set) and credit everyone
-   *     again. If even a single quantum still leaves the most-deserving source
-   *     short (weights < 1, or a group bigger than one quantum), top every
-   *     active source up so a slot is never wasted.
-   *  4. Among admissible sources, pick the candidate (its lowest-value =
+   *     again. If even a single quantum still leaves the most-deserving
+   *     contender short (weights < 1, or a group bigger than one quantum), top
+   *     every contender up so a slot is never wasted.
+   *  4. Among admissible contenders, pick the candidate (its lowest-value =
    *     most-urgent survivor) with the globally lowest priority; ties → FIFO.
    *     Subtract its `costBytes` from the deficit. (No "larger deficit first"
    *     tiebreak — that let an inflated deficit monopolize.)
@@ -739,48 +769,58 @@ export class SharedRequestScheduler {
       }
     }
 
+    // (2b) B4 — TIER GATE. Admission is decided only among the sources whose
+    // best candidate sits in the most urgent tier present. A need-now group is
+    // never held behind another source's prefetch because its own source is in
+    // byte arrears from the group it just dispatched; arrears still buy
+    // SAME-tier rivals their share. A single-tier queue — every pinned recorded
+    // order — contends with every active source, exactly as before B4.
+    const contenders = urgentTierContenders(bestPerSource);
+
     // Credit each active source its quantum AT MOST ONCE in the current round.
     // A source that became active mid-round still earns this round's quantum the
-    // first time it is seen.
+    // first time it is seen. Non-contending sources are credited too (clamped to
+    // one quantum, so nothing banks up while they wait behind the urgent tier).
     this.creditRound(activeSources);
 
-    // (3) If no source can dispatch yet, advance the round: clear the credited
-    // set and credit everyone again. Repeat while progress is possible; a tiny
-    // "top up" guarantees a slot is never wasted even with sub-1 weights.
-    let chosen = this.pickEligible(bestPerSource);
+    // (3) If no contender can dispatch yet, advance the round: clear the
+    // credited set and credit everyone again. Repeat while progress is possible;
+    // a tiny "top up" guarantees a slot is never wasted even with sub-1 weights.
+    let chosen = this.pickEligible(contenders);
     if (!chosen) {
       // New round.
       this.roundCredited.clear();
       this.creditRound(activeSources);
-      chosen = this.pickEligible(bestPerSource);
+      chosen = this.pickEligible(contenders);
     }
     if (!chosen) {
       // Sub-1 weights — or a group larger than one quantum, which leaves the
       // source in arrears after it dispatches — left even the most-deserving
-      // source short. Top up the smallest common amount that makes at least one
-      // source admissible, so a slot is never wasted (single-source-draws-all).
+      // contender short. Top up the smallest common amount that makes at least
+      // one contender admissible, so a slot is never wasted
+      // (single-source-draws-all).
       //
-      // The iteration domain is EVERY active source, exactly as the pre-BH-1
-      // slot implementation did — narrowing it to sources that happen to hold a
-      // candidate would be an unflagged semantic change. `bestPerSource` is
-      // built from the same survivor scan that built `activeSources`, so the
-      // candidate-less branch is unreachable today; it asks the source for its
-      // threshold FLOOR rather than dropping it, keeping the loop total.
+      // The iteration domain is every CONTENDING source. For a single-tier
+      // queue that is every active source, exactly as the pre-BH-1 slot
+      // implementation did. A source parked in a less urgent tier is
+      // deliberately NOT topped up: it earned no admission this pass, and
+      // crediting it a need-now source's arrears-sized shortfall would bank it
+      // far past one quantum (a 15 MiB group would hand every overlay 14.5 MiB
+      // of credit to spend once the urgent tier drains).
       let minNeeded = Infinity;
-      for (const id of activeSources) {
-        const cand = bestPerSource.get(id);
+      for (const [id, cand] of contenders) {
         minNeeded = Math.min(
           minNeeded,
-          this.admissionThreshold(id, cand?.entry) -
+          this.admissionThreshold(id, cand.entry) -
             (this.deficits.get(id) ?? 0),
         );
       }
       if (Number.isFinite(minNeeded) && minNeeded > 0) {
-        for (const id of activeSources) {
+        for (const id of contenders.keys()) {
           this.deficits.set(id, (this.deficits.get(id) ?? 0) + minNeeded);
         }
       }
-      chosen = this.pickEligible(bestPerSource);
+      chosen = this.pickEligible(contenders);
     }
 
     if (!chosen) return null;
@@ -849,14 +889,10 @@ export class SharedRequestScheduler {
    * after a single credit round and change the dispatch sequence, so the
    * rollback would no longer be the incumbent. Sub-1 weights are the production
    * case: §11.3's fairness controller sheds leaders to `0.25 × base`.
-   *
-   * `entry` is optional only so the top-up loop can ask a source with no
-   * candidate for its floor; every real admission decision passes one.
    */
-  private admissionThreshold(sourceId: string, entry?: Entry): number {
+  private admissionThreshold(sourceId: string, entry: Entry): number {
     if (!this.byteMetered) return 1;
-    const quantum = this.quantumFor(sourceId);
-    return entry ? Math.min(entry.costBytes, quantum) : quantum;
+    return Math.min(entry.costBytes, this.quantumFor(sourceId));
   }
 
   /**
@@ -880,7 +916,8 @@ export class SharedRequestScheduler {
   }
 
   /**
-   * Among sources whose deficit has reached their candidate's
+   * Among the given sources (the B4 contenders — see
+   * {@link urgentTierContenders}) whose deficit has reached their candidate's
    * {@link admissionThreshold}, return the globally most-urgent candidate
    * (lowest priority value, ties → FIFO), or `null` if none is admissible.
    */
@@ -1010,4 +1047,27 @@ function compareCandidates(
 ): number {
   if (a.priority !== b.priority) return a.priority - b.priority;
   return a.entry.seq - b.entry.seq;
+}
+
+/**
+ * B4 — the DRR admission domain: the sources whose most urgent candidate sits
+ * in the most urgent TIER present. A need-now candidate (priority below
+ * {@link SCHEDULER_PREFETCH_TIER_BASE}) outranks every prefetch one, so when
+ * both tiers are queued only the need-now sources contend; the prefetch sources
+ * wait however the deficits stand. Returns the input map itself when every
+ * source is in one tier, so the common single-tier pass allocates nothing.
+ */
+function urgentTierContenders(
+  bestPerSource: Map<string, { entry: Entry; priority: number }>,
+): Map<string, { entry: Entry; priority: number }> {
+  let needNow = 0;
+  for (const cand of bestPerSource.values()) {
+    if (cand.priority < SCHEDULER_PREFETCH_TIER_BASE) needNow++;
+  }
+  if (needNow === 0 || needNow === bestPerSource.size) return bestPerSource;
+  const contenders = new Map<string, { entry: Entry; priority: number }>();
+  for (const [id, cand] of bestPerSource) {
+    if (cand.priority < SCHEDULER_PREFETCH_TIER_BASE) contenders.set(id, cand);
+  }
+  return contenders;
 }

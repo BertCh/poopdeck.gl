@@ -1059,9 +1059,11 @@ describe('createSttMcpServer — execution tools (--allow-cli)', () => {
       });
       expect(result.isError).toBe(true);
       // The rejection names the offending param and enumerates the real
-      // subcommands — `all` is not among them.
+      // subcommands — `all` is not among them. Match the param name unquoted:
+      // @modelcontextprotocol/sdk 1.30 renders the zod issue path as
+      // `… at dataset`, where 1.29 quoted it.
       expect(firstText(result)).toMatch(/invalid option/i);
-      expect(firstText(result)).toMatch(/"dataset"/);
+      expect(firstText(result)).toMatch(/\bdataset\b/);
       expect(firstText(result)).not.toMatch(/"all"/);
     } finally {
       await close();

@@ -586,17 +586,17 @@ describe('clause 1b: every LOADED cut member reaches the renderer', () => {
   // neighbouring stand-in) or not at all. This is the assertion that survives
   // any argument about how densely to sample.
   //
-  // WHY IT FAILS TODAY. `getVisibleTiles` classifies every needed tile shallower
-  // than the deepest needed zoom as a fallback PARENT, and pass 2 then judges it
-  // by the oversized-parent clamp: "is some child cell, at the deepest zoom,
-  // inside the viewport box and uncovered?". A far-field cut member whose block
-  // sits at or past the box edge intersects that clamp in ZERO cells, the inner
-  // loops never run, `needed` stays false — and the cell the camera is looking
-  // at is discarded. The clamp is right for a genuine oversized parent and wrong
-  // for a cut member, and telling them apart is exactly what FS-3's cut-zoom
-  // keying does.
+  // WHY IT USED TO FAIL. `getVisibleTiles` classified every needed tile
+  // shallower than the deepest needed zoom as a fallback PARENT, and pass 2
+  // judged it by the oversized-parent clamp: "is some child cell, at the
+  // deepest zoom, inside the viewport box and uncovered?". A far-field cut
+  // member whose block sat at or past the box edge intersected that clamp in
+  // ZERO cells, the inner loops never ran, `needed` stayed false — and the
+  // cell the camera was looking at was discarded. Repaired with E3
+  // (tile-loading audit 2026-08): pass 2 now tells a cut member from a
+  // placeholder (`selectionCutKeys`) and delivers it on its own account.
 
-  it.fails('PENDING FS-3 REPAIR: no loaded cut member is dropped (no-overlap)', () => {
+  it('no loaded cut member is dropped (no-overlap) — FS-3 clause 1b', () => {
     expect(
       NO_OVERLAP.filter((f) => f.droppedCutCells > 0).map(
         (f) => `${label(f)} dropped=${f.droppedCutCells}/${f.cut}`,
@@ -604,29 +604,30 @@ describe('clause 1b: every LOADED cut member reaches the renderer', () => {
     ).toEqual([]);
   });
 
-  it('records the scale of the drop, and that it is not rare', () => {
-    // Measured 2026-08-11: 142 of 432 cameras drop at least one loaded cut
-    // member, worst case 14 cells at once. Live assertions, so the figures in
-    // the FS-3 report are reproducible and a worsening is caught.
-    const dropping = NO_OVERLAP.filter((f) => f.droppedCutCells > 0);
-    expect(dropping.length).toBeGreaterThan(0);
-    expect(dropping.length).toBeLessThanOrEqual(200);
+  it('records that the drop is gone at every camera, under both strategies', () => {
+    // Measured 2026-08-11 (pre-repair): 142 of 432 cameras dropped at least
+    // one loaded cut member, worst case 14 cells at once. Live assertions on
+    // the repaired figure, so a regression is caught with its scale.
     expect(
-      Math.max(...NO_OVERLAP.map((f) => f.droppedCutCells)),
-    ).toBeLessThanOrEqual(20);
+      NO_OVERLAP.filter((f) => f.droppedCutCells > 0).map(
+        (f) => `${label(f)} dropped=${f.droppedCutCells}/${f.cut}`,
+      ),
+    ).toEqual([]);
+    expect(
+      BEST_AVAILABLE.filter((f) => f.droppedCutCells > 0).map(
+        (f) => `${label(f)} dropped=${f.droppedCutCells}/${f.cut}`,
+      ),
+    ).toEqual([]);
   });
 
-  it('is why clause 1 currently passes only by ACCIDENT under best-available', () => {
-    // The two defects mask each other, and that is the single most important
-    // fact in this file. `best-available`'s redundant stand-in band (clause 2's
-    // overdraw) happens to blanket the cut members pass 2 drops, so the drawn
-    // samples stay covered. Remove the overdraw WITHOUT fixing the cut-zoom
-    // keying and the over-delivery bug becomes an under-delivery bug — the
-    // strictly worse one. Whoever lands the repair must keep both clauses in
-    // view at once; this test exists to say so in executable form.
-    expect(
-      BEST_AVAILABLE.filter((f) => f.droppedCutCells > 0).length,
-    ).toBeGreaterThan(0);
+  it('clause 1 no longer depends on the overdraw masking the drop', () => {
+    // Pre-repair the two defects masked each other: `best-available`'s
+    // redundant stand-in band (clause 2's overdraw) blanketed the cut members
+    // pass 2 dropped, so the drawn samples stayed covered by accident. Both
+    // halves were repaired together (E3 + the cut-member rule) — the only
+    // order that never turns over-delivery into under-delivery — and this
+    // pins that coverage now holds with NEITHER defect in play.
+    expect(BEST_AVAILABLE.every((f) => f.droppedCutCells === 0)).toBe(true);
     expect(BEST_AVAILABLE.every((f) => f.blanks === 0)).toBe(true);
     expect(NO_OVERLAP.every((f) => f.doubleCovers === 0)).toBe(true);
   });
@@ -649,15 +650,14 @@ describe('clause 2: the single-cover contract', () => {
     ).toEqual([]);
   });
 
-  // ── The clauses below are the FS-3 repair's acceptance, and they FAIL ──
+  // ── The clauses below are the FS-3 repair's acceptance ──
   //
-  // `it.fails` asserts that the body throws. That is the honest encoding of
-  // "this contract is not met yet": the suite stays green, the defect stays
-  // named and measured, and the day `getVisibleTiles` is generalized these turn
-  // RED and whoever fixed it must delete the `.fails`. Do not "repair" them by
-  // weakening the expectation — the expectation IS the contract.
+  // They carried `it.fails` until E3 (tile-loading audit 2026-08) repaired
+  // the pass-2 rule: a cell keeps a parent only while a tile EXISTS there and
+  // is pending, and on the cut path a stand-in only while a cut member it
+  // covers is pending. The expectations are unchanged — they ARE the contract.
 
-  it.fails('PENDING FS-3 REPAIR: no ancestor is delivered alongside its own descendant', () => {
+  it('no ancestor is delivered alongside its own descendant — FS-3 clause 2', () => {
     expect(
       BEST_AVAILABLE.filter((f) => f.doubleCovers > 0).map(
         (f) => `${label(f)} pairs=${f.doubleCovers}`,
@@ -665,7 +665,7 @@ describe('clause 2: the single-cover contract', () => {
     ).toEqual([]);
   });
 
-  it.fails('PENDING FS-3 REPAIR: delivery never exceeds the cut it was selected for', () => {
+  it('delivery never exceeds the cut it was selected for — FS-3 clause 2', () => {
     // The renderer-facing statement of the same defect. A cut is the intended
     // cover; anything beyond it that is not covering a genuinely pending cell
     // is a second copy of ground already painted.
@@ -676,33 +676,29 @@ describe('clause 2: the single-cover contract', () => {
     ).toEqual([]);
   });
 
-  it('records HOW BAD the pending defect is, so the gate is not merely "red"', () => {
-    // A number, not an adjective: this is what the flip would ship today. Kept
-    // as live assertions so a regression that makes it WORSE is caught.
-    // Measured 2026-08-11: worst 985 ancestor/descendant pairs at one camera,
-    // worst overdraw 2.0× (24 tiles delivered for a 12-cell cut).
+  it('records the repaired figures, so a regression is caught with its scale', () => {
+    // Measured 2026-08-11 (pre-repair): worst 985 ancestor/descendant pairs
+    // at one camera, worst overdraw 2.0× (24 tiles delivered for a 12-cell
+    // cut). Post-repair: zero pairs anywhere and delivery never above the cut
+    // — including the FLAT-with-bearing cameras that made this a
+    // delivery-KEYING bug rather than a pitched-frustum edge case. (At bearing
+    // 0 the frustum is axis-aligned and the cut degenerates to the box, which
+    // is why bearing 0 alone never caught it, the 2026-07-26 lesson.)
     const worst = Math.max(...BEST_AVAILABLE.map((f) => f.doubleCovers));
     const maxOverdraw = Math.max(
       ...BEST_AVAILABLE.map((f) => f.delivered / f.cut),
     );
-    expect(worst).toBeGreaterThan(0);
-    expect(worst).toBeLessThanOrEqual(1200);
-    expect(maxOverdraw).toBeLessThanOrEqual(2.5);
-    // ... and it is not confined to pitched cameras: a FLAT camera with a
-    // bearing overdraws too, which is what makes this a delivery-KEYING bug
-    // rather than a pitched-frustum edge case. (At bearing 0 the frustum is
-    // axis-aligned, the cut degenerates to the box, and nothing nests — which
-    // is precisely why bearing 0 alone never caught it, the 2026-07-26 lesson.)
+    expect(worst).toBe(0);
+    expect(maxOverdraw).toBeLessThanOrEqual(1);
     const flat = BEST_AVAILABLE.filter((f) => f.pitch === 0);
-    expect(flat.filter((f) => f.doubleCovers > 0).length).toBeGreaterThan(0);
-    expect(flat.find((f) => f.bearing === 0)!.doubleCovers).toBe(0);
+    expect(flat.filter((f) => f.doubleCovers > 0).map(label)).toEqual([]);
   });
 
-  it('shows the regression is introduced by the CUT path, not by the tileset', async () => {
-    // The A/B that localizes it. Same camera, same archive, same strategy — the
-    // only difference is whether `tileCells` is supplied. The incumbent box path
-    // delivers a clean antichain because every cell at its primary zoom IS
-    // selected, so pass 2's cover set can actually become complete.
+  it('the box path and the cut path both deliver an antichain (the A/B that localized the defect)', async () => {
+    // Same camera, same archive, same strategy — the only difference is
+    // whether `tileCells` is supplied. The box path always delivered a clean
+    // antichain because every cell at its primary zoom IS selected, so pass
+    // 2's cover set could become complete; the cut path now does too.
     const cam = matrixCamera(0, 30);
     const bounds = boundsOf(drawnPoints(cam));
 
@@ -717,7 +713,7 @@ describe('clause 2: the single-cover contract', () => {
     expect(
       BEST_AVAILABLE.find((f) => f.pitch === 0 && f.bearing === 30)!
         .doubleCovers,
-    ).toBeGreaterThan(0);
+    ).toBe(0);
   });
 });
 
@@ -942,15 +938,14 @@ describe('O5: fetch reduction at high pitch, at verified coverage', () => {
     (_name, pitch, bearing) => {
       // Both sit below the horizon. Recorded so FS-3's acceptance starts from
       // the truth rather than from the above-horizon headline: a low
-      // single-digit win on count, zero coverage loss — and the same pending
-      // clause-2 defect, which is why the flip is not admissible on the very
-      // routes it was designed for.
+      // single-digit win on count, zero coverage loss — and, since E3, no
+      // clause-2 double cover on the very routes the cut was designed for.
       const f = SHIPPED.find((c) => c.pitch === pitch && c.bearing === bearing);
       expect(f).toBeDefined();
       expect(f!.blanks).toBe(0);
       expect(ratioPre(f!)).toBeGreaterThanOrEqual(1);
       expect(ratioPre(f!)).toBeLessThan(10);
-      expect(f!.doubleCovers).toBeGreaterThan(0);
+      expect(f!.doubleCovers).toBe(0);
     },
   );
 });

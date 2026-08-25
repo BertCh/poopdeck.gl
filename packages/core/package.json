@@ -74,15 +74,15 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "apache-arrow": "^17.0.0",
-    "earcut": "^3.0.0",
+    "apache-arrow": "^21.2.0",
+    "earcut": "^3.2.3",
     "fzstd": "^0.1.1"
   },
   "devDependencies": {
-    "@types/earcut": "^2.1.4",
-    "esbuild": "^0.21.5",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "@types/earcut": "^3.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
@@ -101,6 +101,6 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   }
 }

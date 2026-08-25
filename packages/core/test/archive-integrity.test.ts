@@ -413,8 +413,13 @@ describe('CRC verification is invariant under the coalesce gap (CO-7)', () => {
     MAX_ADAPTIVE_COALESCE_GAP,
     Number.MAX_SAFE_INTEGER,
   ];
-  /** Pads chosen so the ladder actually spans "all split" → "all fused". */
-  const PADS = [0, 300_000, 1_500_000];
+  /**
+   * Pads chosen so the ladder actually spans "all split" → "all fused". They
+   * sit INSIDE the amplification bound for ~830 B blobs (audit C3: a fuse may
+   * bridge at most `4 × useful + 256 KiB` ≈ 260 KB), so `G` alone decides;
+   * the previous 300 KB / 1.5 MB pads are now never bridged at any `G`.
+   */
+  const PADS = [0, 100_000, 200_000];
 
   it('every member of a fused buffer CRC-verifies, at every G', async () => {
     const requestCounts: number[] = [];

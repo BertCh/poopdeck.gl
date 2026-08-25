@@ -65,7 +65,7 @@ import {
   SpatioTemporalLayerProps,
 } from '../spatiotemporal-layer.js';
 import { TimeFilterExtension } from '../../extensions/time-filter-extension.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import {
   colorListDigest,
   colorMappingDigest,
@@ -476,8 +476,18 @@ export class AnimatedPointCloudLayer<
     );
   }
 
+  /**
+   * Pre-`renderLayers()` prepare for one tile, so the chassis can meter
+   * tile commits per frame (`tileCommitBudgetMs`); the result lands in the
+   * prepared-tile cache the render loop reads.
+   */
+  protected warmTile(tile: Tile): void {
+    for (const tileLayer of tile.layers) this.prepareTile(tile, tileLayer);
+  }
+
   renderLayers(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       // Drop the derived buffers (padded positions, expanded RGBA) AND the
@@ -516,7 +526,11 @@ export class AnimatedPointCloudLayer<
     }
 
     const sublayers: Layer[] = [];
-    for (const tile of tiles) {
+    // Draw only the tiles whose covering time range can intersect the render
+    // window; the rest stay resident (caches intact) until the playhead wakes
+    // them — see SpatioTemporalLayer.cullTilesByTimeRange.
+    const liveTiles = this.cullTilesByTimeRange(tiles);
+    for (const tile of liveTiles) {
       for (const tileLayer of tile.layers) {
         const prepared = this.prepareTile(tile, tileLayer);
         if (!prepared) continue;
@@ -539,12 +553,15 @@ export class AnimatedPointCloudLayer<
       }
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedPointCloudLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedPointCloudLayer',
+        tiles: tiles.length,
+        liveTiles: liveTiles.length,
+        sublayers: sublayers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(
@@ -618,13 +635,16 @@ export class AnimatedPointCloudLayer<
     const styleKey = this.computeStyleKey();
     const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
+    const probe = isProbeEnabled();
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', {
-        layer: 'AnimatedPointCloudLayer',
-        tileKey,
-        cached: true,
-        ms: 0,
-      });
+      if (probe) {
+        emit('tilePrepare', {
+          layer: 'AnimatedPointCloudLayer',
+          tileKey,
+          cached: true,
+          ms: 0,
+        });
+      }
       return cached;
     }
     const prepared = this.buildTileData(tile, tileLayer, styleKey, tileKey);
@@ -643,7 +663,9 @@ export class AnimatedPointCloudLayer<
     const count = binary.featureCount;
     if (count === 0) return null;
 
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+
+    const t0 = probe ? performance.now() : 0;
     const srcDims = binary.positionDimensions ?? 2;
     const vec = binary.vectorProps ?? {};
 
@@ -821,13 +843,15 @@ export class AnimatedPointCloudLayer<
       layerName: tileLayer.name,
       features: binary,
     };
-    emit('tilePrepare', {
-      layer: 'AnimatedPointCloudLayer',
-      tileKey,
-      cached: false,
-      features: count,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedPointCloudLayer',
+        tileKey,
+        cached: false,
+        features: count,
+        ms: performance.now() - t0,
+      });
+    }
     return prepared;
   }
 

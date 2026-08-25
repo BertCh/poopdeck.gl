@@ -16,6 +16,8 @@ import { getDatasetById } from '../datasets';
 import { useDemoPlayback } from '../components/demo/useDemoPlayback';
 import CesiumRenderer from '../components/CesiumRenderer';
 import { CESIUM_SUPPORTED_TYPES } from '../components/buildCesiumLayer';
+import { useIsMobile } from '../lib/useMediaQuery';
+import { DARK_CONTROL_THEME } from '../lib/controlTheme';
 
 export default function CesiumDemoPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
@@ -24,6 +26,10 @@ export default function CesiumDemoPage() {
   // Fullscreen surface → wire the standard video-player keyboard map
   // (Space / arrows / speed). Inert while dataset?.timeRange is undefined.
   usePlaybackHotkeys(playback, dataset?.timeRange);
+  // A solid, page-wide light band across the bottom of a phone is ~180px of
+  // globe gone. On phone widths the bar floats instead — the same dark glass
+  // card the deck viewer uses — and runs the transport's compact layout.
+  const isMobile = useIsMobile();
 
   if (!dataset || !CESIUM_SUPPORTED_TYPES.has(dataset.type)) {
     return <Navigate to="/" replace />;
@@ -38,15 +44,29 @@ export default function CesiumDemoPage() {
         timeController={playback.timeController}
       />
       <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          padding: '12px 20px',
-          background: 'var(--surface)',
-          borderTop: '1px solid var(--hairline)',
-        }}
+        className={isMobile ? 'glass' : undefined}
+        style={
+          isMobile
+            ? {
+                ...DARK_CONTROL_THEME,
+                position: 'absolute',
+                left: 8,
+                right: 8,
+                bottom: 8,
+                marginBottom: 'env(safe-area-inset-bottom)',
+                padding: '10px 12px',
+                borderRadius: 12,
+              }
+            : {
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                padding: '12px 20px',
+                background: 'var(--surface)',
+                borderTop: '1px solid var(--hairline)',
+              }
+        }
       >
         <PlaybackControls
           currentTime={playback.currentTime}
@@ -65,7 +85,9 @@ export default function CesiumDemoPage() {
           loop={playback.loop}
           onLoopToggle={playback.onLoopToggle}
           // This page mounts usePlaybackHotkeys, so the bar may advertise keys.
+          // (`compact` suppresses the hint — a phone has no key map.)
           keyboardShortcuts
+          compact={isMobile}
         />
         {/* Hover preview is deck-only (needs the deck camera); omitted here. */}
       </div>

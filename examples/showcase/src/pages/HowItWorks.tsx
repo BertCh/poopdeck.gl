@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router';
+import { Link, type MetaFunction } from 'react-router';
 import PipelineFlow from '../components/how/PipelineFlow';
 import SpaceTimeDiagram from '../components/how/SpaceTimeDiagram';
 import CoverLookback from '../components/how/CoverLookback';
@@ -14,6 +14,15 @@ import PackagesMap from '../components/how/PackagesMap';
 import ParityKernel from '../components/how/ParityKernel';
 import DesignDecisions from '../components/how/DesignDecisions';
 import { useReducedMotion } from '../lib/reducedMotion';
+import { createSeoMeta } from '../lib/seo';
+
+export const meta: MetaFunction = () =>
+  createSeoMeta({
+    title: 'How SpatioTemporal Tiles work',
+    description:
+      'See how STT builds, packs, streams, decodes, and animates full-fidelity vector data across space and time.',
+    path: '/how-it-works',
+  });
 
 /**
  * `/how-it-works` — the visual explainer for STT itself: the build→publish→

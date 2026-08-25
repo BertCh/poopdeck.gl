@@ -63,21 +63,49 @@ class FakeWorker {
   }
 
   postMessage(msg: any, _transfer?: Transferable[]) {
-    this.postedMessages.push(msg);
-    if (msg && typeof msg.requestId === 'number') {
-      this.postedRequestIds.push(msg.requestId);
+    // BH-7: a decode pull arrives as ONE `decodeBatch` envelope carrying N
+    // per-tile `decode` messages. Batching is a TRANSPORT detail — record the
+    // members, so every assertion below reads the logical message stream the
+    // host intended (which is what these tests are about) rather than how many
+    // postMessage calls it took to carry it.
+    if (msg?.type === 'decodeBatch') this.batchEnvelopes.push(msg);
+    const items = msg?.type === 'decodeBatch' ? msg.items : [msg];
+    for (const item of items) {
+      this.postedMessages.push(item);
+      if (item && typeof item.requestId === 'number') {
+        this.postedRequestIds.push(item.requestId);
+      }
     }
   }
+
+  /** Batch envelopes posted, in order — for assertions about batching itself. */
+  batchEnvelopes: any[] = [];
 
   /**
    * Simulate the worker's decode response arriving. Pass `payload` to also
    * exercise the decompressed-payload hand-back (the `returnPayload` path).
    */
-  respond(requestId: number, tile: unknown, payload?: Uint8Array) {
-    const data =
+  respond(
+    requestId: number,
+    tile: unknown,
+    payload?: Uint8Array,
+    handlerMs?: number,
+  ) {
+    const data: any =
       payload !== undefined
         ? { requestId, tile, payload }
         : { requestId, tile };
+    // BH-7 sizes batches against WORKER-side decode cost, which rides the
+    // response as `timing.handlerMs` — supply it when a test is about sizing.
+    if (handlerMs !== undefined) {
+      data.timing = {
+        decompressMs: handlerMs,
+        parseMs: 0,
+        prepMs: 0,
+        handlerMs,
+        transferables: 0,
+      };
+    }
     this.onmessage?.({ data } as MessageEvent<unknown>);
   }
 
@@ -120,6 +148,34 @@ declare global {
   // eslint-disable-next-line no-var
   var Worker: any;
 }
+
+/**
+ * Settle every decode message a worker has been handed but not yet answered,
+ * repeating until it has none outstanding.
+ *
+ * BH-7 made a pull hand over a whole BATCH, and a worker's slot frees only once
+ * every member settles — so the pre-BH-7 idiom ("respond to the newest message,
+ * loop N times") deadlocks. What these tests are actually about is the ORDER
+ * the host dispatches work in, which a batch preserves internally, so they
+ * drive batches and assert the dispatch sequence directly.
+ */
+async function settleAll(w: any, answered: Set<number>): Promise<void> {
+  for (;;) {
+    const pending = w
+      .decodeMessages()
+      .filter((m: any) => !answered.has(m.requestId));
+    if (pending.length === 0) return;
+    for (const m of pending) {
+      answered.add(m.requestId);
+      w.respond(m.requestId, { layers: [] });
+    }
+    await Promise.resolve();
+  }
+}
+
+/** Tile z-ids in the order the host dispatched them to this worker. */
+const dispatchOrder = (w: any): number[] =>
+  w.decodeMessages().map((m: any) => m.id.z);
 
 describe('WorkerTileDecoder respawn', () => {
   let originalWorker: any;
@@ -436,17 +492,12 @@ describe('WorkerTileDecoder pool-wide host queue (M6 / BH-5)', () => {
     // backlog is pool-wide, B keeps pulling. Under the old least-pending
     // assignment jobs 3 and 4 were bound to A/B at enqueue, so job 3 sat behind
     // A's long decode while B went idle.
-    for (let i = 0; i < 2; i++) {
-      const msg = b.decodeMessages().at(-1);
-      b.respond(msg.requestId, { layers: [] });
-      await Promise.resolve();
-    }
+    await settleAll(b, new Set<number>());
     expect(a.decodeMessages()).toHaveLength(1);
     expect(b.decodeMessages()).toHaveLength(3);
 
     // Drain so nothing leaks.
     a.respond(a.decodeMessages()[0].requestId, { layers: [] });
-    b.respond(b.decodeMessages().at(-1).requestId, { layers: [] });
     await Promise.all(ps);
     decoder.finalize();
   });
@@ -465,17 +516,18 @@ describe('WorkerTileDecoder pool-wide host queue (M6 / BH-5)', () => {
     );
     expect(w.decodeMessages()).toHaveLength(1);
 
-    const dispatched: number[] = [];
+    const answered = new Set<number>([w.decodeMessages()[0].requestId]);
     w.respond(w.decodeMessages()[0].requestId, { layers: [] });
     await blocker;
-    for (let i = 0; i < 3; i++) {
-      const msg = w.decodeMessages().at(-1);
-      dispatched.push(msg.id.z - 10); // recover the priority we encoded in z
-      w.respond(msg.requestId, { layers: [] });
-      await Promise.resolve();
-    }
+    // The freed worker pulls the backlog as one batch, ordered by priority.
+    // (`z - 10` recovers the priority the enqueue encoded in z.)
+    expect(
+      dispatchOrder(w)
+        .slice(1)
+        .map((z) => z - 10),
+    ).toEqual([1, 3, 5]);
+    await settleAll(w, answered);
     await Promise.all(jobs);
-    expect(dispatched).toEqual([1, 3, 5]);
     decoder.finalize();
   });
 
@@ -490,17 +542,12 @@ describe('WorkerTileDecoder pool-wide host queue (M6 / BH-5)', () => {
     // them, i.e. exactly the pre-BH-5 arrival order.
     const jobs = [1, 2, 3].map((z) => decoder.decode(decodeArgs(z)));
 
-    const order: number[] = [];
+    const answered = new Set<number>([w.decodeMessages()[0].requestId]);
     w.respond(w.decodeMessages()[0].requestId, { layers: [] });
     await blocker;
-    for (let i = 0; i < 3; i++) {
-      const msg = w.decodeMessages().at(-1);
-      order.push(msg.id.z);
-      w.respond(msg.requestId, { layers: [] });
-      await Promise.resolve();
-    }
+    expect(dispatchOrder(w).slice(1)).toEqual([1, 2, 3]);
+    await settleAll(w, answered);
     await Promise.all(jobs);
-    expect(order).toEqual([1, 2, 3]);
     decoder.finalize();
   });
 
@@ -526,17 +573,12 @@ describe('WorkerTileDecoder pool-wide host queue (M6 / BH-5)', () => {
       }),
     );
 
-    const order: number[] = [];
+    const answered = new Set<number>([w.decodeMessages()[0].requestId]);
     w.respond(w.decodeMessages()[0].requestId, { layers: [] });
     await blocker;
-    for (let i = 0; i < 3; i++) {
-      const msg = w.decodeMessages().at(-1);
-      order.push(msg.id.z);
-      w.respond(msg.requestId, { layers: [] });
-      await Promise.resolve();
-    }
+    expect(dispatchOrder(w).slice(1)).toEqual([2, 3, 1]); // 64 B, 512 B, 4096 B
+    await settleAll(w, answered);
     await Promise.all(jobs);
-    expect(order).toEqual([2, 3, 1]); // 64 B, 512 B, 4096 B
     decoder.finalize();
   });
 
@@ -612,16 +654,13 @@ describe('WorkerTileDecoder pool-wide host queue (M6 / BH-5)', () => {
 
     const replacement = FakeWorker.all.find((w) => !w.terminated)!;
     expect(replacement).not.toBe(first);
-    // The replacement immediately picked up a survivor — and, per §4.4, only
-    // after its template registry.
-    expect(replacement.decodeMessages()).toHaveLength(1);
-    replacement.respond(replacement.decodeMessages()[0].requestId, {
-      layers: [],
-    });
+    // The replacement immediately picked up the survivors — and, per §4.4,
+    // only after its template registry. BH-7: it is the pool's only idle
+    // worker, so its fair share is the whole backlog and both arrive in one
+    // batch (pre-BH-7 they arrived one at a time).
+    expect(replacement.decodeMessages()).toHaveLength(2);
+    await settleAll(replacement, new Set<number>());
     await expect(survivorA).resolves.toEqual({ layers: [] });
-    replacement.respond(replacement.decodeMessages()[1].requestId, {
-      layers: [],
-    });
     await expect(survivorB).resolves.toEqual({ layers: [] });
     decoder.finalize();
   });
@@ -733,13 +772,8 @@ describe('WorkerTileDecoder pool-wide host queue (M6 / BH-5)', () => {
           ...(s.priority === undefined ? {} : { priority: s.priority }),
         }),
       );
-      const order: number[] = [];
-      for (let i = 0; i < script.length; i++) {
-        const msg = w.decodeMessages().at(-1);
-        order.push(msg.id.z);
-        w.respond(msg.requestId, { layers: [] });
-        await Promise.resolve();
-      }
+      await settleAll(w, new Set<number>());
+      const order = dispatchOrder(w);
       await Promise.all(ps);
       decoder.finalize();
       return order;
@@ -880,11 +914,18 @@ describe('WorkerTileDecoder adaptive pool sizing (M6 / BH-6)', () => {
       },
       now: () => t,
       outstanding,
+      // BH-7: a pull hands a worker a BATCH, and the slot frees only when the
+      // last member settles. "Answer one" therefore means "answer one worker's
+      // batch" — answering a single member would leave every worker
+      // permanently half-busy and the pool would never free a slot to grow.
       answerOne: async (): Promise<boolean> => {
         const [next] = outstanding();
         if (!next) return false;
-        answered.add(next.requestId);
-        next.w.respond(next.requestId, { layers: [] });
+        for (const item of outstanding()) {
+          if (item.w !== next.w) continue;
+          answered.add(item.requestId);
+          item.w.respond(item.requestId, { layers: [] });
+        }
         await Promise.resolve();
         return true;
       },
@@ -1520,5 +1561,188 @@ describe('createDefaultTileDecoder fallbacks', () => {
     expect(FakeWorker.all.some((worker) => !worker.terminated)).toBe(true);
     second.finalize();
     expect(FakeWorker.all.every((worker) => worker.terminated)).toBe(true);
+  });
+});
+
+describe('WorkerTileDecoder decode batching (BH-7)', () => {
+  let originalWorker: any;
+
+  beforeEach(() => {
+    FakeWorker.all = [];
+    FakeWorker.idSeq = 0;
+    originalWorker = (globalThis as any).Worker;
+    (globalThis as any).Worker = FakeWorker;
+  });
+  afterEach(() => {
+    (globalThis as any).Worker = originalWorker;
+  });
+
+  const sized = (decoder: WorkerTileDecoder, z: number, bytes: number) =>
+    decoder.decode({
+      id: { z, x: 0, y: 0, t: 0 },
+      timeRange: { start: 0, end: 1 },
+      compressed: new ArrayBuffer(bytes),
+      compression: Compression.None,
+      expectedUncompressedSize: bytes,
+    });
+
+  it('carries a BACKLOG in one message instead of one round trip per tile', async () => {
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
+    const w = FakeWorker.all[0];
+    // Occupy the worker so the rest genuinely queue.
+    const blocker = sized(decoder, 0, 8);
+    const jobs = Array.from({ length: 20 }, (_, i) => sized(decoder, i + 1, 8));
+    expect(w.decodeMessages()).toHaveLength(1); // blocker only
+
+    const answered = new Set<number>([w.decodeMessages()[0].requestId]);
+    w.respond(w.decodeMessages()[0].requestId, { layers: [] });
+    await blocker;
+
+    // THE POINT: 20 queued tiles reached the worker in ONE postMessage. A
+    // decode round trip costs ~22 ms of cross-thread latency whatever it
+    // carries, so pre-BH-7 this backlog cost 20 of them.
+    const backlogEnvelopes = w.batchEnvelopes.filter(
+      (e: any) => e.items.length > 1,
+    );
+    expect(backlogEnvelopes).toHaveLength(1);
+    expect(backlogEnvelopes[0].items).toHaveLength(20);
+
+    await settleAll(w, answered);
+    await Promise.all(jobs);
+    decoder.finalize();
+  });
+
+  it('does NOT batch while workers are idle — parallelism beats amortisation', async () => {
+    const decoder = new WorkerTileDecoder({
+      poolSize: 4,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
+    // Four jobs, four idle workers: each worker takes exactly one. Batching
+    // here would serialise onto one worker what the pool can run at once —
+    // the head-of-line stall BH-5's pool-wide queue exists to prevent.
+    const jobs = [1, 2, 3, 4].map((z) => sized(decoder, z, 8));
+    for (const w of FakeWorker.all) {
+      expect(w.decodeMessages()).toHaveLength(1);
+    }
+    for (const w of FakeWorker.all) await settleAll(w, new Set<number>());
+    await Promise.all(jobs);
+    decoder.finalize();
+  });
+
+  it('bounds a batch by BYTES so big tiles keep their first-tile latency', async () => {
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
+    const w = FakeWorker.all[0];
+    const blocker = sized(decoder, 0, 8);
+    // 256 KiB each against a 512 KiB budget: a batch takes tiles while it is
+    // UNDER budget, so it stops after the one that crosses it.
+    const big = 256 * 1024;
+    const jobs = Array.from({ length: 8 }, (_, i) =>
+      sized(decoder, i + 1, big),
+    );
+
+    const answered = new Set<number>([w.decodeMessages()[0].requestId]);
+    w.respond(w.decodeMessages()[0].requestId, { layers: [] });
+    await blocker;
+
+    const first = w.batchEnvelopes.find((e: any) => e.items.length > 1);
+    expect(first.items.length).toBeLessThanOrEqual(3);
+    expect(first.items.length).toBeGreaterThan(1);
+
+    await settleAll(w, answered);
+    await Promise.all(jobs);
+    decoder.finalize();
+  });
+
+  /**
+   * Drive one batch to completion at a known per-tile cost, then report how big
+   * the NEXT batch is. `costMs` is the service the clock reports for that first
+   * (single-tile) batch, which is what seeds the per-tile service EWMA.
+   */
+  async function nextBatchSizeAfter(costMs: number): Promise<number> {
+    // Non-zero start: `activeStartedAt` uses 0 as its "unset" sentinel, so a
+    // clock that begins at 0 makes the very first dispatch look unset and its
+    // service sample is dropped. Real clocks (`performance.now()`) are never 0
+    // at first decode; only an injected one can be.
+    // This helper runs several times per test, and FakeWorker.all accumulates
+    // across constructions — reset so `all[0]` is THIS decoder's worker and not
+    // the previous call's (which would deadlock waiting on a dead pool).
+    FakeWorker.all = [];
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
+    const w = FakeWorker.all[0];
+    const blocker = sized(decoder, 0, 8);
+    // A deep backlog, so nothing but the caps decides the batch size.
+    const jobs = Array.from({ length: 40 }, (_, i) => sized(decoder, i + 1, 8));
+
+    // Report `costMs` of WORKER-side decode for the blocker; that is what seeds
+    // the divisor the next batch's time budget is measured against.
+    const answered = new Set<number>([w.decodeMessages()[0].requestId]);
+    w.respond(
+      w.decodeMessages()[0].requestId,
+      { layers: [] },
+      undefined,
+      costMs,
+    );
+    await blocker;
+
+    const size = w.decodeMessages().length - 1; // minus the blocker
+    await settleAll(w, answered);
+    await Promise.all(jobs);
+    decoder.finalize();
+    return size;
+  }
+
+  it('bounds a batch by expected DECODE TIME, not by bytes', async () => {
+    // A batch is answered with one reply, so its first tile settles when its
+    // last does. The bound therefore has to be in TIME: sizing by compressed
+    // bytes would buy ~8 tiles of an expensive archive and make its first tile
+    // wait ~8x longer, on exactly the demos least able to afford it.
+    //
+    // 100 ms/tile against the 100 ms budget ⇒ batching is not worth it at all.
+    expect(await nextBatchSizeAfter(100)).toBe(1);
+    // 25 ms/tile ⇒ four fit inside the budget.
+    expect(await nextBatchSizeAfter(25)).toBe(4);
+    // 1 ms/tile ⇒ the budget allows 100, so the tile cap (32) binds instead.
+    expect(await nextBatchSizeAfter(1)).toBe(32);
+  });
+
+  it('settles a batch member-by-member: one bad tile fails alone', async () => {
+    const decoder = new WorkerTileDecoder({
+      poolSize: 1,
+      workerUrl: new URL('file:///fake-worker.js'),
+    });
+    const w = FakeWorker.all[0];
+    const blocker = sized(decoder, 0, 8);
+    const good = sized(decoder, 1, 8);
+    const bad = sized(decoder, 2, 8);
+
+    w.respond(w.decodeMessages()[0].requestId, { layers: [] });
+    await blocker;
+
+    const batch = w.decodeMessages().slice(1);
+    expect(batch).toHaveLength(2);
+    // One reply carrying a mixed batch — the host must settle each member on
+    // its own promise, not fail the batch as a unit.
+    w.onmessage?.({
+      data: {
+        type: 'decodeBatch',
+        responses: [
+          { requestId: batch[0].requestId, tile: { layers: [] } },
+          { requestId: batch[1].requestId, error: 'tile 2/0/0/0: boom' },
+        ],
+      },
+    } as MessageEvent<unknown>);
+
+    await expect(good).resolves.toEqual({ layers: [] });
+    await expect(bad).rejects.toThrow(/boom/);
+    decoder.finalize();
   });
 });

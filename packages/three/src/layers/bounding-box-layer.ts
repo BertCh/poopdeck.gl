@@ -181,14 +181,23 @@ export class STTBoundingBoxLayer extends BaseSTTLayer implements STTPickable {
     };
   }
 
+  /** Time of the last resample; a repeated `setTime` is a no-op (audit E5). */
+  private lastSampledTime = Number.NaN;
+
   setTiles(tiles: Tile[], ctx: STTLayerContext): void {
     this.timeOrigin = ctx.timeOrigin;
     this.projection = ctx.projection;
     this.trackIndex = buildTrackIndex(tiles, this.trackOptions());
+    // New tracks: the next setTime must resample even at the same playhead.
+    this.lastSampledTime = Number.NaN;
   }
 
   setTime(absoluteTimeMs: number): void {
     if (!this.trackIndex || !this.projection) return;
+    // A paused clock still renders every frame; the resample + full-buffer
+    // upload below is O(active tracks) and was paid on every one of them.
+    if (absoluteTimeMs === this.lastSampledTime) return;
+    this.lastSampledTime = absoluteTimeMs;
     const samples = sampleTracks(this.trackIndex, absoluteTimeMs, {
       length: this.opts.defaultLength,
       width: this.opts.defaultWidth,
@@ -329,12 +338,24 @@ export class STTBoundingBoxLayer extends BaseSTTLayer implements STTPickable {
       return;
     }
     geom.setDrawRange(0, vertexCount);
+    if (vertexCount === 0) return; // nothing written, nothing drawn
+    // Upload only the prefix this frame wrote. The buffers are sticky and
+    // sized to CAPACITY (doubling growth), so an unqualified `needsUpdate`
+    // re-sent the whole allocation every frame — 8 ms/frame at 4,000 tracks.
+    // No bounding sphere: the object is `frustumCulled = false` and nothing
+    // else reads it, and computing it walked the full capacity too.
+    const floats = vertexCount * 3;
+    pos.clearUpdateRanges();
+    pos.addUpdateRange(0, floats);
     pos.needsUpdate = true;
     const col = geom.getAttribute('color') as
       | Float32BufferAttribute
       | undefined;
-    if (col) col.needsUpdate = true;
-    geom.computeBoundingSphere();
+    if (col) {
+      col.clearUpdateRanges();
+      col.addUpdateRange(0, floats);
+      col.needsUpdate = true;
+    }
   }
 
   /** Active interpolated box poses at the last `setTime` (for picking / inspection). */

@@ -69,18 +69,40 @@
  *       archive extent is the "renders blank / camera parked over the previous
  *       scene" class, so it is a HARD failure. Whole-world archives and globe
  *       demos pass trivially.
- *   (f) `blobOrdering !== 'spatial'` on any dataset that authors
- *       `targetPlaybackSeconds` — i.e. anything that PLAYS. Spatial ordering
- *       makes a time-ordered range read a scatter-gather, the buffered ranges
+ *   (f) `blobOrdering === 'time-major'` on every multi-bucket archive of a
+ *       dataset that authors `targetPlaybackSeconds` — i.e. anything that
+ *       PLAYS. Any other layout (`spatial`, `hilbert3`, …) interleaves one
+ *       bucket's tiles with every other bucket's bytes, so a time-ordered
+ *       range read becomes a scatter-gather / over-read, the buffered ranges
  *       come back empty and the playhead stalls with no error anywhere. Hard
  *       failure; see the `--blob-ordering time-major` rule in
- *       docs/roadmap/tile-loading-3d-2026-07.md §5 wave 4.
+ *       docs/roadmap/tile-loading-3d-2026-07.md §5 wave 4. (It used to reject
+ *       only the literal `'spatial'`, which let `nwm-rivers-2019`'s `hilbert3`
+ *       through — tile-loading audit 2026-08 F5.) A single-bucket archive is
+ *       exempt: there is nothing to interleave.
  *   (g) every authored `maxPitch` (view-state or `timeHeight`) is ≤ 70. Past
  *       71.57° at deck's default `altitude: 1.5` the top screen ray clears the
  *       horizon, `unproject` returns a point behind the camera, and the viewport
  *       lon/lat box the tile loader selects against inverts — zero tiles on the
  *       latitude axis, a near-whole-world column span on the longitude axis.
  *       docs/roadmap/tile-loading-3d-2026-07.md §1/§4 is the account.
+ *   (g′) the terrain (`MapboxOverlay`) map path in DemoViewer falls back to
+ *       `MAX_SAFE_PITCH` for `maxPitch` — (g) reads the registry, so a
+ *       map-level default of 85 (which shipped, latent, audit F10) was
+ *       invisible to it. Source-level contract on DemoViewer.tsx.
+ *
+ * ── the HORIZON-FEASIBILITY half (third describe) ─────────────────────────
+ *
+ *   (h) for every archive a playing demo mounts, the prefetch horizon the
+ *       loader will PLAN at the shipped camera fits the per-archive tile cap,
+ *       and the steady-state byte rate the playhead consumes fits the link
+ *       budget. Both are measured against the REAL directory (local dev only —
+ *       the packed dirs are git-ignored, so CI records skips). Tile-loading
+ *       audit 2026-08 A2 / F1 / F2 / F3: four demos shipped speeds whose gate
+ *       floor exceeded their cache (`nyc-taxi-paths` 3,600 tiles vs 2,000,
+ *       11.4 MB/s; `rain-flood-2019` 1,079 vs a 1,000 split; `satellites`
+ *       12 MB/s; `ocean-drifters` 8.5 MB/s) and the gate could not fail on any
+ *       of them.
  *
  * (d)–(f) need `min_zoom` / `max_zoom` / `bounds` / `blobOrdering`, which only
  * the packed `manifest.json` carries; the git-tracked density sidecar supplies
@@ -89,11 +111,17 @@
  * therefore ALWAYS runs, in CI included.
  */
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { WebMercatorViewport } from '@deck.gl/core';
+import { STTArchive } from '@poopdeck.gl/core';
+import { resolvePlaybackParams } from '@poopdeck.gl/playback';
 import { datasets } from '../src/datasets';
 import { profileIdFromUrl } from '../src/lib/densityProfile';
+import { tileLoadingProps } from '../src/types';
 import type { Dataset } from '../src/types';
+import { MAX_SAFE_PITCH } from '../src/components/demo/cameraLimits';
+import { perArchiveTileCap } from '../src/components/demo/compositeCacheBudget';
 
 /** Normalized archive characteristics, unified across sidecar & manifest. */
 interface Fixture {
@@ -191,6 +219,17 @@ interface ArchiveFacts {
   maxZoom?: number;
   bounds?: Bounds;
   blobOrdering?: string;
+  /** Manifest only — (f) needs the bucket COUNT to exempt single-bucket archives. */
+  bucketMs?: number;
+  timeRange?: { start: number; end: number };
+}
+
+/** Temporal buckets the archive spans; `undefined` when the manifest lacks either fact. */
+function archiveBucketCount(facts: ArchiveFacts): number | undefined {
+  if (!facts.bucketMs || !facts.timeRange) return undefined;
+  return Math.ceil(
+    (facts.timeRange.end - facts.timeRange.start) / facts.bucketMs,
+  );
 }
 
 function isBounds(v: unknown): v is Bounds {
@@ -233,6 +272,8 @@ function factsFromManifest(url: string): ArchiveFacts | null {
       : undefined,
     blobOrdering:
       typeof j.blobOrdering === 'string' ? j.blobOrdering : undefined,
+    bucketMs: num(md.temporal_bucket_ms),
+    timeRange: isRange(md.time_range) ? md.time_range : undefined,
   };
 }
 
@@ -290,13 +331,9 @@ function authoredMaxPitches(d: Dataset): { where: string; value: number }[] {
   return out;
 }
 
-/**
- * The pitch at which deck's default `altitude: 1.5` camera puts the top of the
- * screen at/above the horizon: `90 - degrees(atan(1 / 1.5) … )` resolves to
- * 71.57°. 70 is the shipped ceiling — comfortably under, still dramatic.
- * Raising it needs docs/roadmap/tile-loading-3d-2026-07.md §4 read first.
- */
-const MAX_SAFE_PITCH = 70;
+// `MAX_SAFE_PITCH` (70; the 71.57° above-horizon band explained at its
+// definition) is imported from src/components/demo/cameraLimits.ts so (g) and
+// the viewers' map-level defaults share ONE number.
 
 /**
  * Floor on each axis of an archive extent before the camera-centre test, in
@@ -590,6 +627,25 @@ describe('registered datasets resolve to built archives', () => {
   });
 });
 
+/**
+ * Non-time-major archives that PLAY but whose layout cannot matter, each with
+ * the reason. Same contract as `KNOWN_UNBUILT`: exhaustive (anything else
+ * fails) and non-stale (an entry that becomes time-major fails too).
+ *
+ * NOT listed — deliberately red until its archive is rebuilt with
+ * `--blob-ordering time-major` (`stt-generate nwm …`, the recipe in its
+ * registry entry): `nwm-rivers-2019` (`hilbert3`, 13 monthly buckets, 12 z4
+ * tiles across the CONUS viewport). It is multi-cell playback, not a
+ * single-cell scroll, so the rule applies; the standalone demo and the
+ * `rain-flood-2019` rivers overlay both fail on it. Audit F5.
+ */
+const ORDERING_EXEMPT = new Map<string, string>([
+  [
+    '/data/comma-280-1641/ego/manifest.json',
+    'one 60 s ego trajectory sliced into 1,569 one-second tiles (one feature each, z0–18); the whole archive is a fraction of one cache, so it is fully resident after the first plan and never range-streamed — the layout cannot stall the runway',
+  ],
+]);
+
 // Filled during the camera/ordering runs; read by that describe's summary case.
 const cameraNotes: string[] = [];
 const cameraProblems: string[] = [];
@@ -703,13 +759,27 @@ describe('dataset ↔ archive camera & ordering reconciliation', () => {
 
         // (f) Blob ordering vs playback. Only the manifest records what the
         // build actually resolved (the density sidecar's `autoChoice` is a
-        // recommendation, not the shipped value).
+        // recommendation, not the shipped value). Anything but time-major on
+        // a multi-bucket archive fails — the old `!== 'spatial'` predicate
+        // waved `hilbert3` through (audit F5). A single-bucket archive has
+        // nothing to interleave, so it is exempt; so is anything in
+        // ORDERING_EXEMPT, for the reason recorded there.
+        const buckets = archiveBucketCount(facts);
+        const exempt = ORDERING_EXEMPT.get(url);
+        if (exempt && facts.blobOrdering === 'time-major') {
+          problems.push(
+            `ORDERING_EXEMPT lists ${url} but it is now time-major — delete the stale entry`,
+          );
+        }
         if (
           d.targetPlaybackSeconds !== undefined &&
-          facts.blobOrdering === 'spatial'
+          facts.blobOrdering !== undefined &&
+          facts.blobOrdering !== 'time-major' &&
+          (buckets === undefined || buckets > 1) &&
+          !exempt
         ) {
           problems.push(
-            `blobOrdering='spatial' on ${at} while the demo authors targetPlaybackSeconds=${d.targetPlaybackSeconds} — a time-ordered range read becomes a scatter-gather, buffered ranges come back empty and the playhead stalls silently; rebuild with --blob-ordering time-major`,
+            `blobOrdering='${facts.blobOrdering}' on ${at} (${buckets ?? '?'} buckets) while the demo authors targetPlaybackSeconds=${d.targetPlaybackSeconds} — one bucket's tiles are interleaved with every other bucket's bytes, so a time-ordered range read becomes a scatter-gather / over-read and the playhead stalls silently; rebuild with --blob-ordering time-major`,
           );
         }
       }
@@ -734,6 +804,33 @@ describe('dataset ↔ archive camera & ordering reconciliation', () => {
     expect(facts!.source).toBe('density');
     expect(typeof facts!.maxZoom).toBe('number');
     expect(isBounds(facts!.bounds)).toBe(true);
+  });
+
+  // (g′) The registry half above cannot see a MAP-level default. The terrain
+  // (`MapboxOverlay`) path hands react-map-gl its own `maxPitch`, and that
+  // fallback shipped as 85 — latent only because the one terrain demo authors
+  // 70 itself (audit F10). Pin the fallback token to the shared constant.
+  it('(g′) the terrain map path falls back to MAX_SAFE_PITCH, not a literal', () => {
+    const src = readFileSync(
+      fileURLToPath(
+        new URL('../src/components/demo/DemoViewer.tsx', import.meta.url),
+      ),
+      'utf8',
+    );
+    const m =
+      /maxPitch=\{\(initialViewState as any\)\?\.maxPitch \?\? ([^}]+)\}/.exec(
+        src,
+      );
+    expect(
+      m,
+      'the terrain <Map maxPitch={(initialViewState as any)?.maxPitch ?? …}> site moved; update this contract',
+    ).not.toBeNull();
+    expect(
+      m![1].trim(),
+      `terrain map maxPitch fallback must be MAX_SAFE_PITCH (${MAX_SAFE_PITCH}); a literal above it re-opens the above-horizon selection band`,
+    ).toBe('MAX_SAFE_PITCH');
+    expect(src).toMatch(/import \{ MAX_SAFE_PITCH \} from '\.\/cameraLimits'/);
+    expect(MAX_SAFE_PITCH).toBe(70);
   });
 
   it('coverage summary (archives opened, camera/ordering findings)', () => {
@@ -777,5 +874,395 @@ describe('dataset ↔ archive camera & ordering reconciliation', () => {
       archiveUrlsSeen,
       'expected more archive-bearing urls than datasets (composites mount several); got fewer — the *Url discovery in archiveUrls() likely broke',
     ).toBeGreaterThan(datasets.length);
+  });
+});
+
+// ── horizon-feasibility half ─────────────────────────────────────────────────
+
+/**
+ * `packages/core/src/prefetch-policy.ts` constants, mirrored (the package index
+ * does not export them). Keep in lock-step: `PREFETCH_LOOKAHEAD_REAL_MS` :44,
+ * `MAX_PREFETCH_BUCKETS` :63, `PREFETCH_CAP_FLOOR_REAL_MS` :75.
+ */
+const PREFETCH_LOOKAHEAD_REAL_MS = 8000;
+const MAX_PREFETCH_BUCKETS = 64;
+const PREFETCH_CAP_FLOOR_REAL_MS = 5000;
+
+/** The link budget the audit judged every demo against: 4 MB/s (32 MB per 8 real s). */
+const LINK_BUDGET_BYTES_PER_S = 4 * 2 ** 20;
+/**
+ * `prefetch-policy.ts:152` — the feasibility solve bounds a planned horizon to
+ * this fraction of `maxCacheSize` (:964) so the resident window + the horizon
+ * fit together. A horizon the solve would have to cut is exactly the A2
+ * evict/refetch pathology, so the gate judges residency against the same bound.
+ */
+const PREFETCH_CACHE_FRACTION = 0.5;
+
+/** The audit's probe viewport (a typical laptop canvas). */
+const PROBE_VIEWPORT = { width: 1440, height: 900 };
+
+/**
+ * The horizon `prefetch-policy.ts:690-741` PLANS for one tileset, before the
+ * pressure ladder — and the gate floor no shrinking path may cut below. The
+ * planned horizon is what residency converges on (A2): every shrink path is
+ * `Math.max(…, gateFloor)`, so `max(effectiveAhead, gateFloor)` is the honest
+ * "what the loader will insist on holding".
+ */
+function plannedHorizonMs(args: {
+  bucketMs: number;
+  loadWindow: number;
+  prefetchAhead: number;
+  prefetchSteps: number;
+  speed: number;
+}): { planned: number; gateFloor: number } {
+  const { bucketMs, loadWindow, prefetchAhead, prefetchSteps, speed } = args;
+  const windowAhead =
+    (prefetchAhead > 0 ? prefetchAhead : loadWindow) * prefetchSteps;
+  let effectiveAhead = Math.max(
+    windowAhead,
+    speed * PREFETCH_LOOKAHEAD_REAL_MS,
+  );
+  if (bucketMs > 0) {
+    effectiveAhead = Math.min(
+      effectiveAhead,
+      Math.max(
+        MAX_PREFETCH_BUCKETS * bucketMs,
+        speed * PREFETCH_CAP_FLOOR_REAL_MS,
+      ),
+    );
+  }
+  const gateFloor = Math.max(
+    bucketMs,
+    loadWindow,
+    speed * PREFETCH_CAP_FLOOR_REAL_MS,
+  );
+  return { planned: Math.max(effectiveAhead, gateFloor), gateFloor };
+}
+
+/**
+ * The window the LAYER hands `tileset.update()` for one archive of a demo —
+ * `buildDemoLayers`' authored window (cumulative points: 2× the span), raised
+ * by `spatiotemporal-layer.ts:1823-1828` (`tileLoadTimeWindow`), by
+ * `animated-trips-layer.ts:1143-1147` (2× trail) and by
+ * `animated-point-layer.ts:1407-1428` (2× wake). Overlays of composite demos
+ * carry their own trails the registry does not describe, so they get the
+ * dataset window (the heads overlay its dedicated one) — approximate, which is
+ * why overlays are flagged, not failed.
+ */
+function loadWindowFor(
+  d: Dataset,
+  field: string,
+): { authored: number; loadWindow: number } {
+  const span = d.timeRange.end - d.timeRange.start;
+  const cumulative = d.type === 'point' && !!d.cumulative;
+  let authored = cumulative ? span * 2 : d.timeWindow || 86400000;
+  if (field === 'headsOverlayUrl' && d.headsOverlayTimeWindow)
+    authored = d.headsOverlayTimeWindow;
+  let loadWindow = Math.max(d.tileLoadTimeWindow ?? 0, authored);
+  if (field === 'url') {
+    if (d.type === 'trips' && typeof d.trailLength === 'number')
+      loadWindow = Math.max(loadWindow, 2 * d.trailLength);
+    if (d.type === 'point' && typeof d.wakeLength === 'number')
+      loadWindow = Math.max(loadWindow, 2 * d.wakeLength);
+  }
+  return { authored, loadWindow };
+}
+
+/**
+ * The lon/lat box + zoom the loader selects against at the shipped camera:
+ * `viewport.getBounds()` of the opening view state (unioned with the top of
+ * `zRange` for scenes with height, as `core/src/geo/viewport-bounds.ts` does),
+ * or the whole world at `zoomOverride` for the global-bounds demos.
+ */
+function probeSelection(d: Dataset): {
+  bounds: Bounds;
+  zoom: number;
+  how: string;
+} {
+  const vs = d.initialViewState;
+  if (d.zoomOverride !== undefined || d.useGlobalBounds || d.useGlobe) {
+    const zoom = d.zoomOverride ?? Math.floor(vs.zoom);
+    return {
+      bounds: { minLon: -180, minLat: -90, maxLon: 180, maxLat: 90 },
+      zoom,
+      how:
+        d.zoomOverride !== undefined
+          ? `world@zoomOverride=${zoom}`
+          : `world@floor(zoom)=${zoom}`,
+    };
+  }
+  const vp = new WebMercatorViewport({
+    ...PROBE_VIEWPORT,
+    longitude: vs.longitude,
+    latitude: vs.latitude,
+    zoom: vs.zoom,
+    pitch: vs.pitch,
+    bearing: vs.bearing,
+  });
+  let b = vp.getBounds();
+  if (d.zRange && d.zRange[1] > 0) {
+    const bz = vp.getBounds({ z: d.zRange[1] });
+    b = [
+      Math.min(b[0], bz[0]),
+      Math.min(b[1], bz[1]),
+      Math.max(b[2], bz[2]),
+      Math.max(b[3], bz[3]),
+    ];
+  }
+  return {
+    bounds: { minLon: b[0], minLat: b[1], maxLon: b[2], maxLat: b[3] },
+    zoom: Math.floor(vs.zoom),
+    how: `viewport ${PROBE_VIEWPORT.width}×${PROBE_VIEWPORT.height} @ z${vs.zoom} p${vs.pitch} b${vs.bearing}`,
+  };
+}
+
+/**
+ * A Range-honouring `fetch` over `public/` so `STTArchive` reads the REAL
+ * packed directory off disk — the same query path the loader uses, without a
+ * dev server. 206 + `Content-Range` + exact body length are what
+ * `archive.fetchObjectRange` validates.
+ */
+function fileFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const url = new URL(
+    typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url,
+  );
+  const path = publicPath(decodeURIComponent(url.pathname));
+  if (!existsSync(path))
+    return Promise.resolve(
+      new Response(null, { status: 404, statusText: 'Not Found' }),
+    );
+  const size = statSync(path).size;
+  const headers = new Headers(init?.headers);
+  const range = headers.get('range');
+  if (!range)
+    return Promise.resolve(new Response(readFileSync(path), { status: 200 }));
+  const m = /^bytes=(\d+)-(\d+)$/.exec(range);
+  if (!m) return Promise.resolve(new Response(null, { status: 416 }));
+  const start = Number(m[1]);
+  const end = Math.min(Number(m[2]), size - 1);
+  const body = readFileSync(path).subarray(start, end + 1);
+  return Promise.resolve(
+    new Response(body, {
+      status: 206,
+      headers: { 'Content-Range': `bytes ${start}-${end}/${size}` },
+    }),
+  );
+}
+
+interface HorizonMeasure {
+  bucketMs: number;
+  speed: number;
+  plannedBuckets: number;
+  gateFloorBuckets: number;
+  /** Distinct tiles the loader must hold for `[t − w/2, t + planned]`, worst of 3 samples. */
+  residentMax: number;
+  /** `PREFETCH_CACHE_FRACTION × perArchiveTileCap` — what the solve lets a horizon occupy. */
+  /** Bytes the playhead consumes per real second once the horizon is full, mean of 3 samples. */
+  steadyBytesPerS: number;
+  tileCap: number;
+  how: string;
+}
+
+/**
+ * Measure one archive of a demo at the shipped camera. Residency is the UNION
+ * of tile ids over the horizon (not `buckets × tiles/bucket`: on un-sliced
+ * track archives successive buckets return mostly the same tiles — `animals`
+ * is 7,531 naive vs 182 real). The steady-state rate is a differential —
+ * bytes the SECOND horizon adds over the first, per real second the first one
+ * takes to play — so the one-off fill of the opening window (a cold-start
+ * matter, audit F9) is not charged to the link budget. Worst-of-3 for the hard
+ * cap (overflow = evict/refetch loop); mean-of-3 for the soft link budget (the
+ * governor absorbs a dense decade by stalling honestly).
+ */
+async function measureHorizon(
+  d: Dataset,
+  field: string,
+  url: string,
+  archiveCount: number,
+): Promise<HorizonMeasure> {
+  const archive = new STTArchive({
+    url: `http://reconcile.local${url}`,
+    fetch: fileFetch,
+  });
+  try {
+    const meta = await archive.getMetadata();
+    const bucketMs = meta.temporalBucketMs;
+    const cumulative = d.type === 'point' && !!d.cumulative;
+    const { authored, loadWindow } = loadWindowFor(d, field);
+    const { baseSpeed: speed } = resolvePlaybackParams(undefined, {
+      targetPlaybackSeconds: d.targetPlaybackSeconds || 60,
+      timeWindow: authored,
+      timeRange: d.timeRange,
+    });
+    const recipe = tileLoadingProps(authored, speed);
+    const prefetchAhead =
+      field === 'headsOverlayUrl' && d.headsOverlayTimeWindow
+        ? d.headsOverlayTimeWindow
+        : recipe.prefetchAhead;
+    const { planned, gateFloor } = plannedHorizonMs({
+      bucketMs,
+      loadWindow,
+      prefetchAhead,
+      prefetchSteps: recipe.prefetchSteps,
+      speed,
+    });
+    const sel = probeSelection(d);
+    const zoom = Math.min(Math.max(sel.zoom, meta.minZoom), meta.maxZoom);
+    const dStart = d.timeRange.start;
+    const dSpan = d.timeRange.end - dStart;
+    const samples = [0.25, 0.5, 0.75].map(
+      (f) => dStart + Math.floor((f * dSpan) / bucketMs) * bucketMs,
+    );
+    const query = async (start: number, end: number) => {
+      const ids = await archive.getTileIdsInBounds(sel.bounds, zoom, {
+        start,
+        end,
+      });
+      let bytes = 0;
+      for (const id of ids) bytes += archive.getTileByteSize(id) ?? 0;
+      return { tiles: ids.length, bytes };
+    };
+    let residentMax = 0;
+    let rateSum = 0;
+    let rateSamples = 0;
+    for (const t of samples) {
+      const lo = t - loadWindow / 2;
+      const fill = await query(lo, t + planned);
+      residentMax = Math.max(residentMax, fill.tiles);
+      // The second horizon may run past the demo's end near the 75 % sample;
+      // charge its bytes to the real seconds it actually covers.
+      const secondEnd = Math.min(t + 2 * planned, d.timeRange.end);
+      const realSeconds = (secondEnd - (t + planned)) / speed / 1000;
+      if (realSeconds <= 0) continue;
+      const next = await query(lo, secondEnd);
+      rateSum += (next.bytes - fill.bytes) / realSeconds;
+      rateSamples += 1;
+    }
+    return {
+      bucketMs,
+      speed,
+      plannedBuckets: Math.ceil(planned / bucketMs),
+      gateFloorBuckets: Math.ceil(gateFloor / bucketMs),
+      residentMax,
+      steadyBytesPerS: rateSamples ? rateSum / rateSamples : 0,
+      // A cumulative (draw-and-persist) demo's window IS its whole history —
+      // the gate floor is 2× the span by design and there is no horizon beyond
+      // it to shrink — so its bound is simply "fits the cache"; every other
+      // demo's window + horizon must leave the solve's headroom.
+      tileCap: cumulative
+        ? perArchiveTileCap(archiveCount)
+        : Math.floor(perArchiveTileCap(archiveCount) * PREFETCH_CACHE_FRACTION),
+      how: `${sel.how} → tile z${zoom}`,
+    };
+  } finally {
+    archive.finalize();
+  }
+}
+
+const mb = (bytes: number) => (bytes / 2 ** 20).toFixed(2);
+
+const horizonProblems: string[] = [];
+const horizonNotes: string[] = [];
+const horizonSkipped: string[] = [];
+const horizonWatch: string[] = [];
+let horizonMeasured = 0;
+const playingDatasets = datasets.filter(
+  (d) => d.targetPlaybackSeconds !== undefined,
+);
+
+describe('dataset ↔ archive horizon feasibility (tile-loading audit 2026-08 A2)', () => {
+  for (const d of playingDatasets) {
+    it(`${d.id} horizon fits its cache and the link`, async () => {
+      const problems: string[] = [];
+      const urls = archiveUrls(d);
+      for (const { field, url } of urls) {
+        if (!existsSync(publicPath(url))) {
+          horizonSkipped.push(
+            `${d.id}.${field} → ${url} (git-ignored packed dir absent)`,
+          );
+          continue;
+        }
+        const m = await measureHorizon(d, field, url, urls.length);
+        horizonMeasured += 1;
+        const at = `${field} (${url}; ${m.how}; bucket ${m.bucketMs} ms, speed ${m.speed.toFixed(1)}×, planned ${m.plannedBuckets} buckets / gate floor ${m.gateFloorBuckets})`;
+        const primary = field === 'url';
+        const record = (msg: string) => {
+          if (primary) problems.push(msg);
+          else
+            horizonNotes.push(`${d.id}: ${msg} — overlay, flagged not failed`);
+        };
+        if (m.residentMax > m.tileCap) {
+          record(
+            `planned horizon needs ${m.residentMax} resident tiles > ${PREFETCH_CACHE_FRACTION} × per-archive cap = ${m.tileCap} on ${at} — the loader evicts the far end of the horizon it just planned and re-plans it (A2 evict/refetch loop); raise targetPlaybackSeconds, widen timeWindow, or pin refinementStrategy 'no-overlap'`,
+          );
+        }
+        if (m.steadyBytesPerS > LINK_BUDGET_BYTES_PER_S) {
+          const msg = `steady-state consumption ${mb(m.steadyBytesPerS)} MB/s > link budget ${mb(LINK_BUDGET_BYTES_PER_S)} MB/s on ${at} — the governor stalls on any ordinary link; raise targetPlaybackSeconds`;
+          if (d.type === 'av') {
+            // AV cockpits play at 1.0× by contract (camera frames and
+            // telemetry are synced to the clock), and a LIDAR sweep every
+            // 100 ms IS the data rate — the Waymo surfel scenes stream
+            // 4.3–7.1 MB/s. The lever there is the density tier / perf mode,
+            // not the speed, so this is reported, not failed.
+            horizonNotes.push(
+              `${d.id}: ${msg} — AV scene at real time, the density tier is the lever; flagged not failed`,
+            );
+          } else {
+            record(msg);
+          }
+        }
+        if (
+          m.residentMax > m.tileCap / 2 ||
+          m.steadyBytesPerS > LINK_BUDGET_BYTES_PER_S / 2
+        ) {
+          horizonWatch.push(
+            `${d.id}.${field}: ${m.residentMax}/${m.tileCap} tiles, ${mb(m.steadyBytesPerS)} MB/s (${m.plannedBuckets} buckets planned)`,
+          );
+        }
+      }
+      for (const p of problems) horizonProblems.push(`${d.id}: ${p}`);
+      expect(
+        problems,
+        `\n[horizon] ${d.id}\n  - ${problems.join('\n  - ')}\n`,
+      ).toEqual([]);
+    }, 60_000);
+  }
+
+  it('coverage summary (archives measured, horizon findings)', () => {
+    const lines: string[] = [];
+    lines.push(
+      `[horizon] ${horizonMeasured} archive(s) measured across ${playingDatasets.length} playing datasets; ` +
+        `${horizonSkipped.length} skipped (git-ignored packed dir absent)`,
+    );
+    if (horizonWatch.length) {
+      lines.push(
+        `[horizon] ${horizonWatch.length} above half a budget (watch list):`,
+      );
+      for (const w of horizonWatch) lines.push(`    · ${w}`);
+    }
+    if (horizonNotes.length) {
+      lines.push(`[horizon] ${horizonNotes.length} overlay note(s):`);
+      for (const n of horizonNotes) lines.push(`    · ${n}`);
+    }
+    lines.push(
+      horizonProblems.length
+        ? `[horizon] ${horizonProblems.length} FINDING(S):`
+        : `[horizon] 0 findings — every measured primary fits its cache and the link`,
+    );
+    for (const bad of horizonProblems) lines.push(`    ✗ ${bad}`);
+    // eslint-disable-next-line no-console
+    console.log(lines.join('\n'));
+    // Honest accounting only: with no packed dirs (CI) everything is skipped
+    // and that is reported, not hidden — there is no git-tracked fixture that
+    // knows tiles-per-bucket at a camera (the density sidecar bins time into
+    // 64 slices, so the per-bucket overlap factor is not recoverable from it).
+    expect(horizonMeasured + horizonSkipped.length).toBeGreaterThan(0);
   });
 });

@@ -75,7 +75,7 @@ import {
   appendNullCategorySlot,
   categoryIndicesToFloat32,
 } from '../../extensions/category-color-extension.js';
-import { emit } from '../../lib/telemetry.js';
+import { emit, isProbeEnabled } from '../../lib/telemetry.js';
 import { warnOnce } from '../../lib/log.js';
 import {
   sampleTrack as kernelSampleTrack,
@@ -1469,6 +1469,33 @@ export class AnimatedPointLayer<
     }
   }
 
+  /**
+   * Cumulative lights everything started at or before the playhead (unbounded
+   * past); wake mode lights `0 ≤ now − start ≤ wakeLength`. Neither draws
+   * anything ahead of the playhead. Window mode: base.
+   */
+  protected getRenderReach(): { before: number; after: number } {
+    if (this.props.cumulative) return { before: Infinity, after: 0 };
+    const wakeLength = this.props.wakeLength;
+    return wakeLength > 0
+      ? { before: wakeLength, after: 0 }
+      : super.getRenderReach();
+  }
+
+  /**
+   * Pre-`renderLayers()` prepare for one tile, so the chassis can meter
+   * tile commits per frame (`tileCommitBudgetMs`); the result lands in the
+   * prepared-tile cache the render loop reads.
+   */
+  protected warmTile(tile: Tile): void {
+    // Cumulative packs slabs from `buildTileData` and glide pools per track —
+    // neither reads the per-tile cache, so there is nothing to warm.
+    if (this.props.cumulative || this.interpolationActive()) return;
+    const styleKey = this.computeStyleKey();
+    for (const tileLayer of tile.layers)
+      this.prepareTile(tile, tileLayer, styleKey);
+  }
+
   renderLayers(): Layer[] {
     // Cumulative "draws itself" datasets use a consolidated, append-only path:
     // packing points into a few slabs instead of one sublayer per resident
@@ -1484,7 +1511,9 @@ export class AnimatedPointLayer<
       return this.renderInterpolated();
     }
 
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
       this.lastTilesRef = null;
@@ -1523,7 +1552,11 @@ export class AnimatedPointLayer<
     const styleKey = this.computeStyleKey();
 
     const preparedTiles: PreparedTile[] = [];
-    for (const tile of tiles) {
+    // Draw only the tiles whose covering time range can intersect the render
+    // window; the rest stay resident (caches intact) until the playhead wakes
+    // them — see SpatioTemporalLayer.cullTilesByTimeRange.
+    const liveTiles = this.cullTilesByTimeRange(tiles);
+    for (const tile of liveTiles) {
       for (const tileLayer of tile.layers) {
         const prepared = this.prepareTile(tile, tileLayer, styleKey);
         if (!prepared) continue;
@@ -1563,21 +1596,24 @@ export class AnimatedPointLayer<
       }
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedPointLayer',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      // Resident POINTS behind those sublayers. The interesting ratio for this
-      // layer is points-per-draw-call: one sublayer per tile is the right
-      // trade when a tile is large, and pure overhead when it is not.
-      points: pointCount,
-      // Distinct `timeOffset` values across the resident set — the floor on how
-      // few sublayers this set could collapse to WITHOUT rebasing any times
-      // (tiles that share an offset can be packed into one buffer with the
-      // shader semantics unchanged).
-      offsets: residentTimeOffsetCount(tiles),
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedPointLayer',
+        tiles: tiles.length,
+        liveTiles: liveTiles.length,
+        sublayers: sublayers.length,
+        // Resident POINTS behind those sublayers. The interesting ratio for this
+        // layer is points-per-draw-call: one sublayer per tile is the right
+        // trade when a tile is large, and pure overhead when it is not.
+        points: pointCount,
+        // Distinct `timeOffset` values across the resident set — the floor on how
+        // few sublayers this set could collapse to WITHOUT rebasing any times
+        // (tiles that share an offset can be packed into one buffer with the
+        // shader semantics unchanged).
+        offsets: residentTimeOffsetCount(tiles),
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(
@@ -1777,13 +1813,16 @@ export class AnimatedPointLayer<
     if (tileLayer.features.featureCount === 0) return null;
     const tileKey = tileLayerKey(tile.id, tileLayer.name);
     const cached = this.preparedTileCache.get(tileKey);
+    const probe = isProbeEnabled();
     if (cached && cached.styleKey === styleKey) {
-      emit('tilePrepare', {
-        layer: 'AnimatedPointLayer',
-        tileKey,
-        cached: true,
-        ms: 0,
-      });
+      if (probe) {
+        emit('tilePrepare', {
+          layer: 'AnimatedPointLayer',
+          tileKey,
+          cached: true,
+          ms: 0,
+        });
+      }
       return cached;
     }
     const prepared = this.buildTileData(tile, tileLayer, styleKey);
@@ -1827,7 +1866,9 @@ export class AnimatedPointLayer<
     const radiusProp = typeof radiusValue === 'string' ? radiusValue : '';
     const tileKey = tileLayerKey(tile.id, tileLayer.name);
 
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+
+    const t0 = probe ? performance.now() : 0;
     const count = binary.featureCount;
     const srcDims = binary.positionDimensions ?? 2;
 
@@ -2112,14 +2153,16 @@ export class AnimatedPointLayer<
       layerName: tileLayer.name,
       features: binary,
     };
-    emit('tilePrepare', {
-      layer: 'AnimatedPointLayer',
-      tileKey,
-      cached: false,
-      features: count,
-      gpuPalette: gpuPalette !== null,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('tilePrepare', {
+        layer: 'AnimatedPointLayer',
+        tileKey,
+        cached: false,
+        features: count,
+        gpuPalette: gpuPalette !== null,
+        ms: performance.now() - t0,
+      });
+    }
     return prepared;
   }
 
@@ -2264,7 +2307,8 @@ export class AnimatedPointLayer<
    */
 
   private renderConsolidated(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     const { tiles } = this.state;
 
     // Cumulative slabs bake a fixed attribute schema (positions/times/colors/
@@ -2358,13 +2402,15 @@ export class AnimatedPointLayer<
       this.buildSlabLayer(slab, i),
     );
 
-    emit('renderLayers', {
-      layer: 'AnimatedPointLayer',
-      mode: 'cumulative',
-      tiles: tiles.length,
-      sublayers: sublayers.length,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedPointLayer',
+        mode: 'cumulative',
+        tiles: tiles.length,
+        sublayers: sublayers.length,
+        ms: performance.now() - t0,
+      });
+    }
     if (DEBUG) {
       // eslint-disable-next-line no-console
       console.log(
@@ -2931,7 +2977,8 @@ export class AnimatedPointLayer<
   }
 
   private renderInterpolated(): Layer[] {
-    const t0 = performance.now();
+    const probe = isProbeEnabled();
+    const t0 = probe ? performance.now() : 0;
     this.warnGlideDroppedProps();
     const { tiles } = this.state;
     if (!tiles || tiles.length === 0) {
@@ -2990,14 +3037,16 @@ export class AnimatedPointLayer<
       w++;
     }
 
-    emit('renderLayers', {
-      layer: 'AnimatedPointLayer',
-      mode: 'interpolate',
-      tiles: tiles.length,
-      tracks: index.size,
-      active: w,
-      ms: performance.now() - t0,
-    });
+    if (probe) {
+      emit('renderLayers', {
+        layer: 'AnimatedPointLayer',
+        mode: 'interpolate',
+        tiles: tiles.length,
+        tracks: index.size,
+        active: w,
+        ms: performance.now() - t0,
+      });
+    }
 
     if (w === 0) return [];
     return [

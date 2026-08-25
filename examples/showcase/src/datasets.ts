@@ -1834,14 +1834,29 @@ const rawDatasets: Dataset[] = [
     name: 'Switzerland — National Transit Ballet',
     sources: ['opentransportdata'],
     description:
-      'Every scheduled public-transport vehicle in Switzerland for one Monday — 205,936 train, bus, tram, boat, gondola and funicular journeys expanded from the national GTFS timetable, the same service day as SRF’s “Wenn der Schweizer ÖV erwacht” visualization. Source: opentransportdata.swiss (Open Data Platform Mobility Switzerland).',
-    // Rebuild: stt-generate gtfs --feed data/gtfs-ch/feed --date 20260302
-    //   --output examples/showcase/public/data/gtfs-ch
+      'Every scheduled public-transport vehicle in Switzerland for one Monday — 205,962 train, bus, tram, boat, gondola and funicular journeys expanded from the national GTFS timetable and map-matched onto the real rail/road network, riding 3D Alpine terrain. The same service day as SRF’s “Wenn der Schweizer ÖV erwacht” visualization. Source: opentransportdata.swiss (Open Data Platform Mobility Switzerland).',
+    // Rebuild (3 steps — the Swiss feed publishes no shapes.txt, so trips are
+    // map-matched onto OSM with pfaedle first):
+    //   1. python3 scripts/data-generation/gtfs_filter_day.py \
+    //        data/gtfs-ch/feed data/gtfs-ch/feed-day-20260302 20260302
+    //      (drops transfers.txt/frequencies.txt — transfers reference trips
+    //      outside the day and pfaedle validates referential integrity)
+    //   2. pfaedle -c pfaedle.cfg -x data/osm/switzerland-latest.osm.pbf \
+    //        -o data/gtfs-ch/feed-day-shaped data/gtfs-ch/feed-day-20260302
+    //      (github.com/ad-freiburg/pfaedle, built from source; OSM extract
+    //      from download.geofabrik.de/europe/switzerland-latest.osm.pbf.
+    //      ~5 min; 100% of trips get shapes + shape_dist_traveled — trains on
+    //      tracks, buses on roads, gondolas on cableways)
+    //   3. stt-generate gtfs --feed data/gtfs-ch/feed-day-shaped
+    //        --date 20260302 --bake-elevation
+    //        --output examples/showcase/public/data/gtfs-ch
+    //      (--bake-elevation samples the AWS Terrarium DEM per vertex into
+    //      the archive's vertex_values channel, shaped per mode: grade-capped
+    //      ground modes tunnel ridges / bridge gorges, gondolas span
+    //      station-to-station. DEM tiles cache under data/dem/terrarium.)
     // (feed: data.opentransportdata.swiss/dataset/timetable-2026-gtfs2020
     // permalink, regenerated twice weekly; the calendar spans the whole
-    // timetable year, so 20260302 stays valid until the 2027 feed lands.
-    // The Swiss feed publishes no shapes.txt — all trips use stop-to-stop
-    // geometry.)
+    // timetable year, so 20260302 stays valid until the 2027 feed lands.)
     url: '/data/gtfs-ch/manifest.json',
     type: 'tripHeads',
     // Real archive span: Mon 2026-03-02 service day (Europe/Zurich). Starts at
@@ -1857,11 +1872,29 @@ const rawDatasets: Dataset[] = [
     targetPlaybackSeconds: 780,
     initialViewState: {
       longitude: 8.23,
-      latitude: 46.8,
-      zoom: 7.4, // whole country in frame; zoom in and the dots ride their routes
-      pitch: 0,
-      bearing: 0,
+      latitude: 46.75,
+      zoom: 7.6, // whole country in frame; zoom in and the dots ride their routes
+      // Pitched over the Alps: terrain in relief, the Mittelland carpet of
+      // vehicles running behind it. maxPitch is honored by the map-owned
+      // camera on the terrain path too, and stays at the repo-wide 70°
+      // ceiling — above 71.57° the tile-selection unproject inverts
+      // (docs/roadmap/tile-loading-3d-2026-07.md §1/§4; contract-tested).
+      pitch: 52,
+      bearing: -10,
+      maxPitch: 70,
     },
+    // 3D basemap: vehicles ride the relief — trains thread the valleys (and
+    // tunnel the ridges), gondolas span station-to-station. Elevation is
+    // BAKED into the archive per vertex (--bake-elevation above); the layer
+    // lifts each dot by the channel value interpolated at its live position,
+    // with zero runtime DEM queries. elevationScale MUST equal the terrain
+    // exaggeration or dots and relief disagree vertically.
+    basemapTerrain: { exaggeration: 1.5 },
+    elevationFromVertexValues: true,
+    elevationScale: 1.5,
+    // Baked z reaches ~4.5 km × 1.5 exaggeration; tile selection is a
+    // ground-plane operation, so declare the slab (see types.ts zRange).
+    zRange: [0, 7000],
     // Darkest backdrop so thousands of 2 px vehicles read as a living network.
     basemapHideLabels: true,
     basemapBackgroundColor: '#02040a',
@@ -1883,6 +1916,12 @@ const rawDatasets: Dataset[] = [
     // Rebuild: stt-generate nwm --window 2019 --bin 1d --value self-scaled
     //   --output examples/showcase/public/data/nwm-rivers-2019 --detail-zoom 8
     // (zarr chunks + reduced stripes cache under data/nwm/; resumable.)
+    // Rebuilt 2026-08-24 with exactly that recipe: the generator's default
+    // `--blob-ordering time-major` replaced the hilbert3 layout the shipped
+    // archive carried (tile-loading audit F5 — the reconcile gate now rejects
+    // any multi-bucket playback archive that is not time-major). Same 11,453
+    // tiles / features / buckets; packs 180 → 192 MB (time-major dedups a
+    // little worse). Old copy kept as `.nwm-rivers-2019.bak-ordering`.
     // --detail-zoom 8 is REQUIRED, do NOT let it fall back to the default 11:
     //   geometry vertex spacing targets 2px at `detail-zoom` and is held at ALL
     //   zooms (no per-zoom decimation). The archive only tiles z4-8, so the
@@ -1992,10 +2031,15 @@ const rawDatasets: Dataset[] = [
       end: 1577836800000, // 2020-01-01 00:00 UTC
     },
     timeWindow: 7200000, // 2-hourly rain bin (rivers pick their own daily bucket)
-    // 4,380 two-hourly frames in ~2 min (~36 frames/s — smooth at 60fps) —
-    // storm systems cross the country and the crests roll down the network at a
-    // pace the eye can follow, with 3× finer motion than the old 6h build.
-    targetPlaybackSeconds: 120,
+    // 4,380 two-hourly frames in 5 min (~15 frames/s) — storm systems cross
+    // the country and the crests roll down the network at a pace the eye can
+    // follow, with 3× finer motion than the old 6h build. It used to be 120 s
+    // (~36 frames/s): at 262,800× the gate floor is speed × 5 s = 183 buckets
+    // × 11 z4 tiles = 1,079 resident against the 1,000-tile feasibility bound
+    // (0.5 × cache; and against the old 1,000-tile composite split), i.e. the
+    // A2 evict/refetch loop plus ~400 tile decodes/s for 33 KB of payload per
+    // bucket (audit F2). At 105,120× it is 73 buckets / 436 tiles / 0.5 MB/s.
+    targetPlaybackSeconds: 300,
     initialViewState: {
       longitude: -96,
       latitude: 38.5,
@@ -2385,7 +2429,16 @@ const rawDatasets: Dataset[] = [
       end: 1420213385000, // 2015-01-02 13:43:05 UTC
     },
     timeWindow: 60000, // 1 min window for 1.5 day dataset
-    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
+    // 900 s (15 min), the same pace `nyc-flow-and-riders` runs this archive
+    // at. It used to be 60 s ("full time-range plays in ~1 min"): 1.66 d in
+    // 60 s is 2,383× — the loader's gate floor is speed × 5 s = 199 one-minute
+    // buckets, and at the shipped z14 camera that horizon holds 3,600 distinct
+    // tiles against a 2,000-tile cache (and 8.3 MB/s), so it evicted the far
+    // end of the horizon it had just planned and re-fetched it forever (audit
+    // A2/F1). At 159× the same horizon is 53 buckets / 972 tiles / 0.6 MB/s —
+    // inside the loader's 0.5 × cache feasibility bound; `dataset-archive-
+    // reconcile` (h) measures this against the real directory.
+    targetPlaybackSeconds: 900,
     initialViewState: {
       longitude: -73.98,
       latitude: 40.75,
@@ -4720,7 +4773,15 @@ const rawDatasets: Dataset[] = [
     // Time window controls which segments are loaded/visible
     // For LEO satellites with ~90 min orbits and ~40 min segments, use larger window
     timeWindow: 600000, // 10 minute window - loads segments overlapping this range
-    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
+    // 180 s (3 min) for the 24 h — a ~92 min LEO orbit completes in ~11 real
+    // seconds, still a fast streak field. It used to be 60 s: at 1,440× the
+    // playhead crosses 4.8 five-minute buckets per real second and each bucket
+    // brings one new 1.26 MB z0 tile (the whole planet: `zoomOverride: 0`), i.e.
+    // 6.0 MB/s steady state against a 4 MB/s link budget (audit A2/F3; the
+    // audit's 12.4 MB/s double-counted the tile overlapping two buckets). At
+    // 480× it is 2.0 MB/s. Memory was never the limit (the z0 tier is 288
+    // tiles).
+    targetPlaybackSeconds: 180,
     initialViewState: {
       longitude: 0,
       latitude: 20,
@@ -4728,8 +4789,6 @@ const rawDatasets: Dataset[] = [
       pitch: 0,
       bearing: 0,
     },
-    // 24h plays in ~15 min: LEO ground tracks move fast, so a slower playback
-    // lets the eye follow individual streaks instead of a blur.
     legend: {
       title: 'Orbit',
       items: [{ color: '#1FBAD6', label: 'LEO satellite' }],
@@ -4798,6 +4857,17 @@ const rawDatasets: Dataset[] = [
     widthMaxPixels: 3,
     trailLength: 86400000 * 4, // 4-day fading trail shows the migration arc
     fadeTrail: true,
+    // Whole planet at z0. NB this archive's z0 tiles are addressed by start
+    // bucket but NOT bucket-sliced: multi-month tracks folded into one year
+    // overlap far past their bucket, so ANY one-day query returns ~118 tiles
+    // and the 8-day effective window (window ∪ 2× trail) pulls 139 tiles /
+    // 37.8 MB before the first correct frame — ≥ 9.5 s at 4 MB/s, past the
+    // governor's 8 s escape hatch, so cold start opens in degraded creep on
+    // modest links. Steady state is cheap (~1 new tile per day-bucket, ~2
+    // MB/s) because successive windows share tiles; live fps is render-bound
+    // (10.6 M features at z0), not loader-bound. The fix is build-side: slice
+    // tracks at bucket boundaries as `stt-build` does (a day's window would be
+    // 1–2 tiles). Not changed here (audit F9).
     zoomOverride: 0,
     useGlobalBounds: true,
     legend: {
@@ -4842,14 +4912,18 @@ const rawDatasets: Dataset[] = [
       start: 287884800000, // 1979-02-15 — first fix in the GDP record
       end: 1667260800000, // 2022-11-01 — last fix in the archive
     },
-    // ~43 years compress into ~10 min, so sim-time races by; the loader window
+    // ~43 years compress into ~5 min, so sim-time races by; the loader window
     // is wide (weekly build buckets → ~30 buckets) and the trail long so each
     // comet tail still lasts a few real seconds.
     timeWindow: 86400000 * 200,
-    // Slowed so the 43-year record doesn't race by: ~120s base ⇒ 1× ≈ 2 min,
-    // 2× ≈ 1 min. Purely an aesthetic pacing choice — loading no longer needs
-    // a speed margin (the PlaybackGovernor stalls honestly if R2 falls behind).
-    targetPlaybackSeconds: 120,
+    // 300 s (5 min) base ⇒ 2× ≈ 2.5 min. It used to be 120 s ("1× ≈ 2 min",
+    // an aesthetic choice made when "loading no longer needs a speed margin"):
+    // at 11.5 M× the playhead crosses 19 weekly buckets per real second and the
+    // z0 tier (`zoomOverride: 0`, whole planet) costs 2.2 / 3.9 / 6.0 MB/s in
+    // the 1990s / 2000s / 2010s — the dense decades over the 4 MB/s link
+    // budget, so the governor stalled there on ordinary links (audit A2/F3).
+    // At 4.6 M× the dense decade is 2.4 MB/s. The home hero reuses this speed.
+    targetPlaybackSeconds: 300,
     // Open centered on the west coast of South America (the Humboldt Current),
     // then the globe slowly spins via the auto-rotate loop.
     initialViewState: {
@@ -4879,7 +4953,7 @@ const rawDatasets: Dataset[] = [
     tripWidth: 1.5,
     widthMinPixels: 1,
     widthMaxPixels: 3,
-    trailLength: 86400000 * 90, // ~90-day trail ≈ a few real seconds at 43yr/10min
+    trailLength: 86400000 * 90, // ~90-day trail ≈ a couple of real seconds at 43yr/5min
     fadeTrail: true,
     zoomOverride: 0,
     useGlobalBounds: true,
@@ -5121,7 +5195,12 @@ const rawDatasets: Dataset[] = [
       end: Date.parse('2026-01-01T00:00:00Z'),
     },
     timeWindow: 86400000 * 60, // 60-day rolling window of editing activity
-    targetPlaybackSeconds: 60, // full time-range plays in ~1 min
+    // 120 s for the 19-year record. It used to be 60 s: at 10 M× the loader
+    // planned its 64-bucket (5.3 y) horizon = 1,056 resident z11 tiles, just
+    // over the 0.5 × cache feasibility bound the reconcile gate (h) enforces
+    // (same arithmetic as audit A2, on a demo the audit's table skipped). At
+    // 5 M× the horizon is 40 buckets. A frame is 60 days either way.
+    targetPlaybackSeconds: 120,
     initialViewState: {
       longitude: -73.97,
       latitude: 40.72,

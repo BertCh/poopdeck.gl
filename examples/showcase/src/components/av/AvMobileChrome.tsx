@@ -18,7 +18,7 @@
  * never steal a map pan/pinch; the interactive blocks opt back in. Top and
  * bottom edges respect the iOS safe-area insets.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import type { TimeController } from '@poopdeck.gl/playback';
 import type { AvDataset, ColorRGBA } from '../../types';
@@ -71,6 +71,13 @@ export interface AvMobileChromeProps {
   onCloseObject: () => void;
   // Timeline transport (null until the time range resolves).
   timeline: TimelineProps | null;
+  /**
+   * Live height of the bottom stack (sheet + inspector + timeline), reported so
+   * the cockpit can lift the basemap's attribution and logo clear of it — they
+   * are a licensing requirement and must never sit UNDER floating chrome. See
+   * `--stt-bottom-chrome` in index.css.
+   */
+  onBottomChromeHeight?: (px: number) => void;
 }
 
 const ICON = 'h-[18px] w-[18px]';
@@ -232,9 +239,25 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
   selectedObject,
   onCloseObject,
   timeline,
+  onBottomChromeHeight,
 }) => {
   const [sheetOpen, setSheetOpen] = useState(false);
   const hasSheet = Boolean(scene) || hasTelemetry;
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = bottomRef.current;
+    if (!el || !onBottomChromeHeight || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const ro = new ResizeObserver(() => onBottomChromeHeight(el.offsetHeight));
+    ro.observe(el);
+    onBottomChromeHeight(el.offsetHeight);
+    return () => {
+      ro.disconnect();
+      onBottomChromeHeight(0);
+    };
+  }, [onBottomChromeHeight]);
 
   return (
     <>
@@ -316,6 +339,7 @@ const AvMobileChrome: React.FC<AvMobileChromeProps> = ({
 
       {/* ── Bottom stack: sheet · inspector · timeline ─────────────────────── */}
       <div
+        ref={bottomRef}
         className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col"
         style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >

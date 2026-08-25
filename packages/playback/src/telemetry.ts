@@ -24,6 +24,8 @@ interface ProbeBag {
 }
 
 const MAX_SAMPLES = 4096;
+/** Batched trim — a per-sample `shift()` on a full channel copies ~4k slots per sample (see core telemetry.ts). */
+const SAMPLE_TRIM_BATCH = MAX_SAMPLES / 4;
 
 /**
  * The channels this package writes.
@@ -69,7 +71,7 @@ export function emit<T>(channel: PlaybackProbeChannel, payload: T): void {
     bag[channel] = arr;
   }
   arr.push(payload);
-  if (arr.length > MAX_SAMPLES) arr.shift();
+  if (arr.length > MAX_SAMPLES) arr.splice(0, SAMPLE_TRIM_BATCH);
 }
 
 /** Publish a latest-value snapshot under `name`. No-op when probe is unset. */
@@ -124,4 +126,14 @@ export interface PlaybackStateSnapshot {
   startupMs: number | null;
   degradedResumeCount: number;
   creepMs: number;
+  // Tile-loading audit G2 counters (see `PlaybackQoeStats`): the same
+  // getQoeStats() object is spread here, so a harness reads them from the
+  // snapshot exactly as from the getter.
+  stallMs: number;
+  seekCount: number;
+  seekSettleMsP50: number | null;
+  gateEntriesByReason: { starting: number; buffering: number; seeking: number };
+  gateHoldsByReason: { starting: number; buffering: number; seeking: number };
+  frontierSnapBacks: number;
+  blockedPermanentlyCount: number;
 }

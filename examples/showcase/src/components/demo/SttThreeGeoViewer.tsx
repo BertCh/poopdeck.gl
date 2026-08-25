@@ -34,7 +34,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import maplibregl from 'maplibre-gl';
+// MapLibre 6 is ESM-only and publishes no default export;
+// the namespace carries both the classes and the types.
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useThree, useFrame } from '@react-three/fiber';
 import type { PerspectiveCamera } from 'three';
@@ -68,6 +70,7 @@ import {
 } from '@poopdeck.gl/three/r3f';
 import type { Dataset } from '../../types';
 import { useReducedMotion } from '../../lib/reducedMotion';
+import { useIsMobile } from '../../lib/useMediaQuery';
 import Legend from '../Legend';
 
 /** App cyan — the shared constant fallback colour across the geo layers. */
@@ -443,6 +446,8 @@ export interface SttThreeGeoViewerProps {
   playback: PlaybackState;
   /** Push the top-left in-map chip down by N px so a floating header clears it. */
   topLeftInset?: number;
+  /** Lift the bottom-right legend by N px so a floating transport clears it. */
+  bottomInset?: number;
   /** false renders with the controller off (embed tap-to-interact shield). */
   interactive?: boolean;
 }
@@ -451,7 +456,10 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
   dataset,
   playback,
   topLeftInset = 0,
+  bottomInset = 0,
 }) => {
+  // Phone widths collapse the legend to a tap-to-open pill (see Legend).
+  const isMobile = useIsMobile();
   const { timeController, registry } = playback;
   const reducedMotion = useReducedMotion();
   const timeRange = dataset.timeRange;
@@ -656,8 +664,11 @@ const SttThreeGeoViewer: React.FC<SttThreeGeoViewerProps> = ({
       </div>
 
       {dataset.legend && (
-        <div className="absolute bottom-3 right-3">
-          <Legend legend={dataset.legend} />
+        <div
+          className="absolute right-3"
+          style={{ bottom: 12 + bottomInset, maxWidth: 'calc(100% - 1.5rem)' }}
+        >
+          <Legend legend={dataset.legend} collapsible={isMobile} />
         </div>
       )}
     </div>

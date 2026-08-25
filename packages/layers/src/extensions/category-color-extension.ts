@@ -120,8 +120,29 @@ export function appendNullCategorySlot(
   palette: readonly Color[],
   defaultColor?: Color,
 ): Color[] {
-  return [...palette, defaultColor ?? ([0, 0, 0, 0] as Color)];
+  // Memoized per source palette (identity) × default-colour CONTENT. Every
+  // kind calls this once per tile prepare with the same palette, and the
+  // result feeds `colorListDigest`'s per-reference WeakMap — a fresh array
+  // per call missed that memo every time and re-serialised the palette per
+  // tile. The slot is COPIED so a caller mutating its default array in place
+  // cannot alias into a cached result (the key would no longer match it).
+  const slot = defaultColor ?? TRANSPARENT_SLOT;
+  const key = slot.join(',');
+  let byDefault = nullSlotMemo.get(palette);
+  if (!byDefault) {
+    byDefault = new Map();
+    nullSlotMemo.set(palette, byDefault);
+  }
+  let out = byDefault.get(key);
+  if (!out) {
+    out = [...palette, Array.from(slot) as unknown as Color];
+    byDefault.set(key, out);
+  }
+  return out;
 }
+
+const TRANSPARENT_SLOT: Color = [0, 0, 0, 0];
+const nullSlotMemo = new WeakMap<readonly Color[], Map<string, Color[]>>();
 
 /** Props for layers using CategoryColorExtension. */
 export type CategoryColorExtensionProps<DataT = unknown> = {
@@ -304,6 +325,19 @@ function releasePaletteTexture(device: Device, digest: string): void {
 }
 
 /**
+ * What the last uniform push covered, cached on the host layer's state.
+ * `model`/`modelCount` pin it to the model set it was applied to — see the
+ * note in `draw()` for why a partial push is unsafe across a model swap.
+ */
+interface CategoryColorPushCache {
+  model: unknown;
+  modelCount: number;
+  paletteSize: number;
+  useCategoryColor: number;
+  paletteTexture: Texture | undefined;
+}
+
+/**
  * Layer extension for GPU-based categorical color lookup.
  *
  * Always include in the layer's extension list when categorical coloring is a
@@ -406,6 +440,39 @@ export class CategoryColorExtension extends LayerExtension {
     _extension: CategoryColorExtension,
   ): void {
     const { categoryPalette = [], useCategoryColor = false } = this.props;
+    const paletteSize = Math.min(categoryPalette.length, CATEGORY_PALETTE_SIZE);
+    const use = useCategoryColor ? 1.0 : 0.0;
+    const paletteTexture = this.state.paletteTexture as Texture | undefined;
+
+    // ── Push the DELTA, not the whole block ──────────────────────────────
+    // `draw()` runs once per MODEL per FRAME — one call per visible tile on
+    // a tiled layer — and this extension is installed on every animated
+    // layer whether or not it colours categorically. `setShaderModuleProps`
+    // walks and clones every value it is handed (`ShaderInputs.setProps`),
+    // so pushing the full block each draw paid, on every sublayer of every
+    // layer, for three values that never move. Same scheme as
+    // TimeFilterExtension: the block goes out in full once per MODEL SET (a
+    // fresh model starts from the module defaults, and luma merges partial
+    // props into what the module already holds — so an unsent key keeps its
+    // value only on a model that has been pushed the full block), and after
+    // that only the values that changed. A layer that never uses
+    // categorical colour makes one push per model set for its lifetime.
+    const models = this.getModels();
+    const cache = this.state.categoryColorPush as
+      | CategoryColorPushCache
+      | undefined;
+    const sameModels =
+      !!cache &&
+      cache.model === models[0] &&
+      cache.modelCount === models.length;
+    if (
+      sameModels &&
+      cache.paletteSize === paletteSize &&
+      cache.useCategoryColor === use &&
+      cache.paletteTexture === paletteTexture
+    ) {
+      return;
+    }
 
     // Hard cap: callers must size their palettes within the texture. We
     // assert (warn + clamp) rather than silently wrap, which was the bug in
@@ -421,15 +488,26 @@ export class CategoryColorExtension extends LayerExtension {
       );
     }
 
-    const paletteSize = Math.min(categoryPalette.length, CATEGORY_PALETTE_SIZE);
-
-    this.setShaderModuleProps({
-      categoryColor: {
-        paletteSize,
-        useCategoryColor: useCategoryColor ? 1.0 : 0.0,
-        paletteTexture: this.state.paletteTexture,
-      },
-    });
+    const delta: Partial<CategoryColorUniformProps> & {
+      paletteTexture?: Texture;
+    } = {};
+    if (!sameModels || cache.paletteSize !== paletteSize) {
+      delta.paletteSize = paletteSize;
+    }
+    if (!sameModels || cache.useCategoryColor !== use) {
+      delta.useCategoryColor = use;
+    }
+    if (!sameModels || cache.paletteTexture !== paletteTexture) {
+      delta.paletteTexture = paletteTexture;
+    }
+    this.state.categoryColorPush = {
+      model: models[0],
+      modelCount: models.length,
+      paletteSize,
+      useCategoryColor: use,
+      paletteTexture,
+    } satisfies CategoryColorPushCache;
+    this.setShaderModuleProps({ categoryColor: delta });
   }
 
   /**

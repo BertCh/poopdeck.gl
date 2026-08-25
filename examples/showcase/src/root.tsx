@@ -10,6 +10,11 @@ import {
   type LinksFunction,
   type MetaFunction,
 } from 'react-router';
+import {
+  createSeoMeta,
+  DEFAULT_DESCRIPTION,
+  SOFTWARE_APPLICATION_STRUCTURED_DATA,
+} from './lib/seo';
 import './index.css';
 
 /**
@@ -32,15 +37,17 @@ export const links: LinksFunction = () => [
     rel: 'stylesheet',
     href: 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,900&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap',
   },
+  { rel: 'manifest', href: '/site.webmanifest' },
 ];
 
 export const meta: MetaFunction = () => [
-  { title: 'poopdeck.gl — navigation & observation' },
-  {
-    name: 'description',
-    content:
-      'poopdeck.gl — time-aware deck.gl layers and a tile format for streaming animated geospatial data. Built for things that move: ships, drifters, cars, and anything with a trace.',
-  },
+  ...createSeoMeta({
+    title: 'poopdeck.gl — SpatioTemporal Tiles for moving data',
+    description: DEFAULT_DESCRIPTION,
+    path: '/',
+    absoluteTitle: true,
+  }),
+  { name: 'theme-color', content: '#0a0d12' },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -54,6 +61,9 @@ export function Layout({ children }: { children: ReactNode }) {
         />
         <Meta />
         <Links />
+        <script type="application/ld+json">
+          {JSON.stringify(SOFTWARE_APPLICATION_STRUCTURED_DATA)}
+        </script>
       </head>
       <body>
         {children}

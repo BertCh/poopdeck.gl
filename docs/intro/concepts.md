@@ -1,185 +1,128 @@
-# Core Concepts
+# Core concepts
 
-## What is a Spatiotemporal Tile?
-
-A spatiotemporal tile organizes geospatial features by time as well as by space. Where a traditional vector tile (MVT) is a static snapshot addressed by `(zoom, x, y)`, an STT tile is addressed by `(zoom, x, y, time bucket)` and holds the features that exist within that space-time volume.
-
-Each tile represents:
-
-- A specific spatial bounds (Web Mercator tile).
-- A specific time interval (start time to end time).
-- A collection of features that exist within that space-time volume.
+STT adds time to a spatial tile pyramid. A traditional vector tile is addressed
+by `(zoom, x, y)`; an STT tile adds a fixed-width time bucket:
+`(zoom, x, y, time-bucket)`.
 
 ```mermaid
 flowchart LR
-  D["source dataset"] --> Z["spatial pyramid<br/>(zoom z, tile x/y<br/>WebMercatorQuad)"]
-  D --> T["temporal axis<br/>(buckets of<br/>temporal_bucket_ms)"]
-  Z --> A["tile address<br/>(z, x, y, bucket)"]
+  D["vector source"] --> S["spatial pyramid<br/>zoom, x, y"]
+  D --> T["temporal buckets"]
+  S --> A["STT tile address"]
   T --> A
-  A --> P["payload:<br/>Arrow IPC + GeoArrow,<br/>features in that<br/>space-time volume"]
+  A --> P["Arrow IPC payload<br/>with GeoArrow geometry"]
 ```
 
-The temporal axis is specified in full in the
-[time model](../spec/time-model.md); the addressing maps onto an OGC
-WebMercatorQuad tile matrix set plus a regular time dimension
-([`tile-matrix-set.json`](../spec/tile-matrix-set.json)).
+This lets a reader request only the features relevant to the current viewport
+and time window. The [time model](../spec/time-model.md) defines bucket
+boundaries and interval semantics; the
+[tile matrix set](../spec/tile-matrix-set.json) defines the spatial grid.
 
-### Why add Time?
+## The packed archive
 
-Traditional approaches to animating massive datasets (millions of points) usually involve:
+A normal static STT dataset is a directory, not one large file:
 
-1.  **Loading everything:** Heavy memory usage, slow initial load.
-2.  **GeoJSON per frame:** Huge network overhead, redundant data.
-3.  **Filtering static tiles:** CPU intensive on the client to filter millions of points every frame.
-
-STT pre-indexes the data temporally instead. The client downloads only what the current viewport, time window, and animation speed need, and the GPU does the per-frame time filtering, so nothing is re-uploaded as the clock advances.
-
-## The packed container
-
-A dataset is **not** one big file. It is a small tree of objects designed so
-that _cacheability is a property of the format_ — a dumb CDN or static host
-(S3, R2, GCS) serves it efficiently with no server-side code:
-
-- **`manifest.json`** — the only mutable object. Tiny; embeds the full dataset
-  metadata plus pointers to everything else, so a cold start needs no separate
-  metadata fetch.
-- **`index/<blake3>.sttd`** — the **directory**: a compact binary index mapping
-  every `(zoom, x, y, time bucket)` to its byte range. Run-length encoded, so a
-  spatial cell whose content is identical across many consecutive time buckets
-  costs one index run.
-- **`packs/<blake3>.sttp`** — the tile data, cut into **content-addressed
-  packs** of ≤ 64 MiB (default). Each tile payload inside a pack is an
-  independently zstd-compressed blob, deduplicated by hash.
-
-Packs and the directory are named by their own blake3 hash, so their bytes can
-never change without their name changing — they ship with
-`Cache-Control: immutable` and live at the edge forever. A deploy only ever
-invalidates the few-KB manifest. Reads are HTTP range requests into packs; the
-reader groups nearby tiles by pack and coalesces their ranges into a handful of
-requests. The full contract is in
-[the packed format spec](../spec/stt-packed-format.md).
-
-```mermaid
-sequenceDiagram
-  participant R as Reader
-  participant CDN as CDN / static host
-  R->>CDN: GET manifest.json (mutable, short TTL)
-  CDN-->>R: metadata + directory pointer + pack table
-  R->>CDN: GET the directory object (immutable) — whole, or just the root page
-  CDN-->>R: directory entries: (z,x,y,bucket) maps to (pack, offset, length)
-  loop per viewport + time window
-    R->>CDN: Range GET into a pack object (coalesced per pack)
-    CDN-->>R: zstd(Arrow IPC) tile blobs
-  end
-  Note over R,CDN: warm reads are served entirely from the edge cache
+```text
+dataset/
+  manifest.json
+  index/<content-hash>.sttd
+  packs/<content-hash>.sttp
 ```
 
-A cold load is **1 manifest + 1 directory (or root page) + N pack ranges**; for a
-paged directory the directory bytes are proportional to the viewport, not the
-dataset. Everything but the tiny manifest is immutable and edge-cached forever.
+- **`manifest.json`** is the small, mutable entry point. It declares metadata,
+  time, capabilities, variants, the directory pointer, and pack table.
+- **The directory** maps tile addresses to byte ranges in packs.
+- **Packs** contain independently compressed tile blobs.
 
-## Key Concepts
+The directory and packs are named by their BLAKE3 content hashes. Changing
+their bytes changes their names, so they can be cached as immutable objects.
+Only the manifest needs a short cache lifetime. Readers fetch the manifest, the
+directory or relevant directory pages, and coalesced HTTP ranges from the packs.
 
-### 1. Apache Arrow IPC + GeoArrow tile payloads
+The archive layout and version rules are normative in the
+[packed-format specification](../spec/stt-packed-format.md). A `.sttb` file is
+an optional interchange bundle produced by `stt-bundle`; it is not the primary
+CDN layout.
 
-Each tile payload is one Apache Arrow `RecordBatch` per layer, with geometry
-encoded as standard **GeoArrow** (interleaved `[x, y]` Float64 inside a
-`FixedSizeList`). By default coordinates are absolute WGS84 — no delta or
-zig-zag encoding — so a tile is "a chunk of the source dataset, broken up by
-`(zoom, x, y, time)`" and a decompressed tile opens directly in any Arrow tool
-(GeoPandas, Lonboard, …). Per-blob zstd does the size compression; the client
-decodes with `apache-arrow` + a small zstd decoder, and the columnar buffers
-feed the GPU directly. (Opt-in [coordinate quantization](../architecture/data-format.md#coordinate-quantization)
-replaces the Float64 leaf with `Int32` fixed-point grid indices — smaller
-tiles, but no longer literal GeoArrow; the tile self-describes it via
-`stt:quant`.) See [the payload spec](../architecture/data-format.md).
+## Tile payloads
 
-### 2. Temporal Bucketing
+Each tile contains one or more layer frames encoded as Apache Arrow IPC.
+Geometry uses GeoArrow layouts, so decoded columnar buffers can move efficiently
+into analysis tools and GPU renderers. Compression, integrity checks, geometry
+encodings, and optional quantization are defined in the
+[tile-payload specification](../architecture/data-format.md).
 
-Not all data needs millisecond precision. **Temporal Bucketing** groups
-features into fixed-width time slots — the same bucket size everywhere
-in the archive, configurable as `--temporal-bucket` (default `1h`).
-Bucket boundaries become the cache-hit pivot for predictive prefetch
-during animation.
+The manifest is always the dataset contract. Applications should use its
+declared layers, temporal metadata, variants, and capabilities instead of
+guessing from filenames or sample tiles.
 
-### 3. Temporal LOD pyramid
+## Time and levels of detail
 
-For multi-year datasets you'd animate at fine bucket resolution, the
-build can emit one or more coarser-bucket tiers alongside the base
-(`--temporal-lod 1d,30d` or `1d@8,30d@4`). The **reader API** can pick the
-coarsest tier whose `max_zoom_level` covers the current zoom
-(`STTArchive.pickTemporalLodForZoom` + `getTilesInBoundsForTemporalLod`) —
-so "zoomed out, scrubbing a decade" can read 30-day aggregates instead of
-streaming per-hour base tiles. These coarser tiers are exposed through the
-reader API; an app calls these methods to select a tier. (The summary tier
-below, by contrast, is selected automatically by the tileset.)
+### Temporal bucketing
 
-### 4. Summary tier (server-side aggregation)
+`stt-build` assigns features to fixed-width buckets such as an hour or a day.
+The right bucket size depends on the source cadence and intended playback
+window. Smaller buckets provide finer selection but create more tile addresses.
+The [tuning guide](../guides/tuning-tiles.md) explains how to measure the
+trade-off.
 
-For 100M+ point datasets, a `--summary-tier h3` build emits a
-server-aggregated H3-hex tier alongside the raw tier. Each hex carries a
-`count` plus any configured `name:agg` (mean / sum / max / min) columns.
-The reader dispatches to summary tiles below the configured zoom
-threshold, so low-zoom rendering never streams the raw points.
+### Temporal LOD
 
-### 5. Blob ordering (space–time locality)
+An archive may include coarser time tiers, such as daily and monthly buckets,
+for long-range views. Applications can select a coarser temporal level at low
+zoom or across a long window, then return to the base tier for detailed
+playback.
 
-Tile blobs are laid out inside packs so that blobs a client reads together sit
-near each other, letting the per-pack range-coalescer satisfy several tiles
-with one request. There is no single best curve — it depends on the dataset's
-space-vs-time shape, so the default is **`--blob-ordering auto`**:
+### Summary and raster tiers
 
-- **Time-deep data** (few cells, thousands of buckets — e.g. four decades of
-  ocean drifters) → **spatial-major** `(zoom, hilbert, time)`: each cell's
-  whole timeline is byte-contiguous, which is what playback reads. Measured
-  ~3× better than a 3D space-time curve here.
-- **Balanced or space-dominant data** (e.g. one day of flights) →
-  **3D Hilbert** over `(x, y, time bucket)`: the robust generalist with no
-  catastrophic query.
+Very large datasets may add H3, Quadbin, or rasterized overview variants for
+coarse zooms. These are explicit build options. They supplement the raw feature
+tier and never authorize silent thinning, sampling, or aggregation of that raw
+tier.
 
-Explicit `spatial`, `time-major`, `hilbert3`, and `morton3` orders are
-available when you know your access pattern.
+Default and `--auto` builds preserve every usable feature. To control archive
+size, first keep the zoom range honest and choose an appropriate temporal
+bucket. Expert per-tile budgets remain opt-in and must report what they remove.
 
-## Client-Side Rendering
+## Streaming and playback
 
-### Optimistic Rendering
+The TypeScript reader combines the spatial viewport and visible time window to
+select tiles. It groups nearby ranges, decodes tiles in workers where
+configured, caches results, and prefetches a bounded runway ahead of playback.
+Tiles already on the GPU are filtered by time uniforms rather than decoded and
+uploaded on every animation frame.
 
-The client (`@poopdeck.gl/core`) renders optimistically:
+[`SttPlayer`](../api/stt-player.md) is the recommended playback entry point. It
+connects the clock to the loader's buffered runway, pausing when data is not
+ready instead of advancing through empty frames. The lower-level
+[`TimeController`](../api/time-controller.md) is available when another system
+owns the clock.
 
-- it displays whatever data is already in the cache;
-- it fetches higher-resolution and adjacent temporal data in the background;
-- it never blocks the animation loop on a network request.
+## Build, serve, and render
 
-Time filtering happens on the GPU: tiles are uploaded once per bucket, and a
-per-frame uniform window selects what's visible, so a 60 fps clock costs no
-re-decode or re-upload.
+```text
+GeoParquet / PostGIS / DuckDB
+            │
+            ├─ stt-build ──> packed archive ──> CDN/static host
+            └─ stt-serve ──> dynamic STT endpoint
+                                      │
+                                      v
+                              STT archive reader
+                                      │
+                          renderer + playback clock
+```
 
-### Predictive Prefetching
+Static and dynamic delivery share the same manifest and tile semantics. The
+[system overview](../architecture/system-overview.md) explains the complete
+pipeline. See [Choosing STT](./choosing.md) for deployment and renderer
+decisions.
 
-When you play an animation, the client predicts which time buckets will be
-needed next and fetches them ahead of the playhead, in small byte-budgeted,
-nearest-first slices (~1 s of measured network throughput at a time) so a
-seek or pan is never stuck behind a huge speculative download.
+## Canonical references
 
-### Buffered playback (the governor)
-
-Prefetch alone can't guarantee the playhead never outruns the network. The
-[`PlaybackGovernor`](../api/playback-governor.md) couples the playback clock to
-the loader the way a video player does: it gates `play()` and seeks on a
-buffered runway ahead of the playhead, freezes the clock (with resume
-hysteresis) when the runway drains instead of advancing into unloaded time,
-and can drive an Auto speed that adapts the playback rate to measured
-throughput. Playback therefore gets "buffering…" semantics rather than silently
-empty frames.
-
-## Specifications
-
-This page is the orientation; the normative detail lives in the spec set:
-
-| Spec                                           | Covers                                                                                                                                                                                                           |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Packed format](../spec/stt-packed-format.md)  | The container: manifest, content-addressed packs, the v6 directory codec (+ paged), caching, reproducibility, standards relationships. Machine-checkable [`manifest.schema.json`](../spec/manifest.schema.json). |
-| [Tile payload](../architecture/data-format.md) | The per-tile Arrow IPC + GeoArrow schema, `vertex_time`, pre-tessellation, and the [space-time cube](../architecture/data-format.md#space-time-cube-payload-vertex_value_matrix) (`vertex_value_matrix`).        |
-| [Time model](../spec/time-model.md)            | The temporal axis: Unix-ms UTC, instants vs intervals, fixed-width start-anchored buckets, temporal LOD, read-time pruning, and the OGC TMS mapping ([`tile-matrix-set.json`](../spec/tile-matrix-set.json)).    |
-| [Sidecar assets](../spec/sidecar-assets.md)    | The scene-bundle profile: multi-stream bundles, non-tile sidecars, and `georeferenced` vs `anchored-local` frames. Machine-checkable [`scene.schema.json`](../spec/scene.schema.json).                           |
-| [Conformance](../spec/conformance.md)          | What a conformant reader/writer MUST/SHOULD do, the golden fixtures, and the `stt-validate` reference validator.                                                                                                 |
+| Reference                                      | Owns                                                   |
+| ---------------------------------------------- | ------------------------------------------------------ |
+| [Packed format](../spec/stt-packed-format.md)  | Manifest, directory, packs, versions, caching, bundles |
+| [Tile payload](../architecture/data-format.md) | Layer frames, Arrow schemas, geometry and time columns |
+| [Time model](../spec/time-model.md)            | Instants, intervals, buckets, temporal LOD, pruning    |
+| [Conformance](../spec/conformance.md)          | Required reader/writer behavior and golden fixtures    |
+| [CLI reference](../api/cli-reference.md)       | Commands, flags, defaults, and exit behavior           |

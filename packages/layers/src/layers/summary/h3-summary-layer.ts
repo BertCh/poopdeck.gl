@@ -452,6 +452,26 @@ interface CachedH3Sublayer {
  */
 interface H3Caches {
   prepared: Map<string, PreparedTile>;
+  /**
+   * Decoded H3 index strings per tile, keyed by `makeTileKey(tile)` ALONE.
+   *
+   * Split out of {@link prepared} because the two have different lifetimes.
+   * A prepared tile is keyed by `(tile, weightProperty, subBucket)` — the
+   * sub-bucket advances with the PLAYHEAD, so during playback every crossing
+   * of a sub-bucket boundary misses that cache and rebuilds the tile's rows
+   * from scratch. The cell ids are not part of what changed: they are a pure
+   * function of the tile's `id` column, invariant across every sub-bucket and
+   * every weight property. Rebuilding them meant re-running
+   * `splitLongToH3Index` — a 15-char string allocation per cell — for every
+   * cell of every resident tile on every boundary crossing, which on a
+   * row-heavy tier (`maxCacheSize` is 500 tiles here) is the dominant cost of
+   * an animating summary layer.
+   *
+   * `null` entries are kept, not skipped: a cell whose id does not decode is
+   * a permanent property of the tile, and re-deriving that per sub-bucket is
+   * the same waste as re-deriving the ones that do.
+   */
+  hexIds: Map<string, (string | null)[]>;
   sublayers: Map<string, CachedH3Sublayer>;
   tilesRef: Tile[] | null;
   pruneKey: string | null;
@@ -463,6 +483,7 @@ const H3_CACHE_SLOT = '_sttH3Caches';
 function freshH3Caches(): H3Caches {
   return {
     prepared: new Map(),
+    hexIds: new Map(),
     sublayers: new Map(),
     tilesRef: null,
     pruneKey: null,
@@ -502,6 +523,11 @@ export class H3SummaryLayer<
   }
   private set preparedTileCache(value: Map<string, PreparedTile>) {
     this.h3Caches.prepared = value;
+  }
+
+  /** Per-tile decoded H3 index strings. See {@link H3Caches.hexIds}. */
+  private get hexIdCache(): Map<string, (string | null)[]> {
+    return this.h3Caches.hexIds;
   }
 
   /**
@@ -561,6 +587,7 @@ export class H3SummaryLayer<
     // tileset/archive teardown.
     super.finalizeState(context);
     this.preparedTileCache.clear();
+    this.hexIdCache.clear();
     this.sublayerCache.clear();
   }
 
@@ -749,11 +776,22 @@ export class H3SummaryLayer<
       }
     }
 
+    // Cell ids are invariant across weight property and sub-bucket, so they
+    // are decoded once per TILE and reused by every later (re)prepare — see
+    // {@link H3Caches.hexIds}.
+    const hexKey = makeTileKey(tile);
+    let hexes = this.hexIdCache.get(hexKey);
+    if (!hexes) {
+      hexes = new Array<string | null>(n);
+      for (let i = 0; i < n; i++) hexes[i] = h3IndexFromTile(featureIds64, i);
+      this.hexIdCache.set(hexKey, hexes);
+    }
+
     const rows: PreparedHexRow[] = [];
     let weightMin = Infinity;
     let weightMax = -Infinity;
     for (let i = 0; i < n; i++) {
-      const hex = h3IndexFromTile(featureIds64, i);
+      const hex = hexes[i];
       if (!hex) continue;
       // A cell with no activity in the active slice is not drawn at all —
       // that (not a colour change) is what makes the summary tier animate
@@ -898,11 +936,19 @@ export class H3SummaryLayer<
     }`;
     if (this.lastTilesRef !== tiles || this.lastPruneKey !== pruneKey) {
       const live = new Set<string>();
+      // The hex-id cache keys on the TILE alone, so it needs its own live set
+      // — reusing `live` would evict every entry the moment the sub-bucket
+      // advanced, which is exactly the churn that cache exists to stop.
+      const liveTiles = new Set<string>();
       for (const tile of tiles) {
         live.add(prepareKey(tile, weightProp, subBucketOf(tile)));
+        liveTiles.add(makeTileKey(tile));
       }
       for (const key of this.preparedTileCache.keys()) {
         if (!live.has(key)) this.preparedTileCache.delete(key);
+      }
+      for (const key of this.hexIdCache.keys()) {
+        if (!liveTiles.has(key)) this.hexIdCache.delete(key);
       }
       for (const key of this.sublayerCache.keys()) {
         if (!live.has(key)) this.sublayerCache.delete(key);

@@ -1,0 +1,10 @@
+{
+  "name": "poopdeck.gl — SpatioTemporal Tiles",
+  "short_name": "poopdeck.gl",
+  "description": "Build, stream, and render full-fidelity vector data across space and time.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "minimal-ui",
+  "background_color": "#0a0d12",
+  "theme_color": "#0a0d12"
+}

@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /debug.html
+
+Sitemap: https://poopdeck.gl/sitemap.xml

@@ -26,7 +26,7 @@ export function createDeckCoreMock() {
     declare state: any;
     declare context: any;
 
-    setState(_: any) {}
+    setState(_state: any) {}
     setNeedsRedraw() {}
     getCurrentTime() {
       return 0;

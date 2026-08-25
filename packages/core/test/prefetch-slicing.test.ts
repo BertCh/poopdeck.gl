@@ -109,8 +109,11 @@ describe('SpatioTemporalTileset prefetch slicing', () => {
       maxZoom: 12,
       // Count budget 150 tiles — never the binding one here.
       maxCacheSize: 300,
-      // Enqueue byte budget = max(4 MiB, 0.5 × 8 MiB) = 4 MiB ⇒ 8 tiles.
-      maxCacheByteSize: 8 * 1024 * 1024,
+      // Enqueue byte budget = ½ × 64 MiB ÷ the cold 8× expansion = 4 MiB ⇒
+      // 8 tiles. (Re-blessed from an 8 MiB cap, whose 512 KiB share the old
+      // 4 MiB FLOOR lifted to the same 4 MiB; since G3-2 the budget yields to
+      // the cache, and that cap honestly admits nothing beyond the head.)
+      maxCacheByteSize: 64 * 1024 * 1024,
       enablePrefetch: true,
       refinementStrategy: 'no-overlap',
       getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
@@ -127,10 +130,14 @@ describe('SpatioTemporalTileset prefetch slicing', () => {
 
     const { prefetch } = splitCalls(batchSpy.mock.calls);
     // The runway is 8 tiles (the byte cache fraction), dispatched as two
-    // 4-tile slices (the throughput budget) — nearest-first, in order.
+    // slices of at most 4 (the throughput budget) — nearest-first, in order.
+    // Since A2 (tile-loading audit 2026-08) the enqueue budget is a RESIDENCY
+    // bound inside the horizon: the play head's own bucket-0 tile, fetched on
+    // the priority path at distance 0, is charged first, so seven further
+    // buckets are admitted — 4 + 3. (Re-blessed from 4 + 4.)
     expect(prefetch.map((ids) => ids.map((id) => id.t))).toEqual([
       [1000, 2000, 3000, 4000],
-      [5000, 6000, 7000, 8000],
+      [5000, 6000, 7000],
     ]);
 
     tileset.finalize();

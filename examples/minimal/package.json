@@ -10,25 +10,25 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@deck.gl/aggregation-layers": "^9.3.2",
-    "@deck.gl/core": "^9.3.2",
-    "@deck.gl/extensions": "^9.3.2",
-    "@deck.gl/geo-layers": "^9.3.2",
-    "@deck.gl/layers": "^9.3.2",
-    "@deck.gl/mesh-layers": "^9.3.2",
-    "@deck.gl/react": "^9.3.2",
-    "@luma.gl/core": "^9.3.3",
-    "@luma.gl/engine": "^9.3.3",
+    "@deck.gl/aggregation-layers": "9.3.10",
+    "@deck.gl/core": "9.3.10",
+    "@deck.gl/extensions": "9.3.10",
+    "@deck.gl/geo-layers": "9.3.10",
+    "@deck.gl/layers": "9.3.10",
+    "@deck.gl/mesh-layers": "9.3.10",
+    "@deck.gl/react": "9.3.10",
+    "@luma.gl/core": "9.3.6",
+    "@luma.gl/engine": "9.3.6",
     "@poopdeck.gl/layers": "^0.6.0",
     "@poopdeck.gl/react": "^0.6.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.4.0",
-    "vite": "^5.4.11"
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^7.0.2",
+    "vite": "^5.4.21"
   }
 }

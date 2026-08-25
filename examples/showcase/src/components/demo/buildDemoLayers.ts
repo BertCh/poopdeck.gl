@@ -42,6 +42,7 @@ import type {
 } from '@poopdeck.gl/playback';
 import { resolvePlaybackParams } from '@poopdeck.gl/playback';
 import { tileLoadingProps } from '../../types';
+import { compositeCacheProps } from './compositeCacheBudget';
 import type { Dataset, SummaryToggleOption } from '../../types';
 
 /**
@@ -416,6 +417,22 @@ export interface BuildDemoLayersArgs {
    */
   reducedMotion?: boolean;
   /**
+   * Terrain drape probe for `basemapTerrain` demos: `(lon, lat) → z metres`
+   * (already exaggeration-scaled and anti-sink lifted by the viewer) or null
+   * where terrain isn't resident yet. Threaded to the layers that support
+   * per-frame draping (currently the tripHeads case). The hover preview and
+   * non-terrain demos pass nothing.
+   */
+  getTerrainElevation?: ((lon: number, lat: number) => number | null) | null;
+  /**
+   * Bumped by the viewer when terrain coverage changes (map idle). The value
+   * itself is meaningless — it rides into the layer props so deck re-runs
+   * renderLayers while PAUSED, re-sampling dots that were computed before
+   * their terrain tile arrived. (While playing, renderLayers runs every frame
+   * anyway.)
+   */
+  terrainRevision?: number;
+  /**
    * Fill-rate "performance mode" (AV cockpit). When true, the heavy LIDAR layer
    * trades a little fidelity for frame rate so the densest tiers (e.g. the
    * "ultra" raw cloud) stay smooth: raw dots render OPAQUE + non-antialiased
@@ -436,6 +453,8 @@ export function buildDemoLayers({
   plumbing,
   perfMode = false,
   reducedMotion = false,
+  getTerrainElevation = null,
+  terrainRevision = 0,
 }: BuildDemoLayersArgs) {
   const {
     registry,
@@ -603,15 +622,13 @@ export function buildDemoLayers({
     // seconds of sim-time lookahead, floored at the resident window.
     ...tileLoadingProps(timeWindow, playbackSpeed),
     // Per-dataset caches have no cross-dataset budget, so composites scale
-    // each tileset's slice of the ~2 GiB budget; floors keep a slice viable
-    // for dense datasets. Single-archive demos keep the layer defaults.
-    ...(archiveCount > 1 && {
-      maxCacheSize: Math.max(600, Math.floor(2000 / archiveCount)),
-      maxCacheByteSize: Math.max(
-        512 * 2 ** 20,
-        Math.floor((2 * 2 ** 30) / archiveCount),
-      ),
-    }),
+    // each tileset's slice of the ~2 GiB BYTE budget (512 MiB floor). The
+    // tile-COUNT cap is deliberately NOT split any more — dividing 2,000 by N
+    // starved 3 KB-tile archives (`rain-flood-2019`: 1,079 tiles planned vs a
+    // 1,000 split = 6 MB of payload, looping evict/refetch; audit A2/F2/F11).
+    // Single-archive demos keep the layer defaults.
+    // TODO(core A4): delete once `maxCacheByteSize` is a process-wide budget.
+    ...compositeCacheProps(archiveCount),
     // Playback-governor plumbing is NOT baked into baseProps anymore: each
     // single-layer demo and each composite layer applies its own role-based
     // `sourceProps(id, required)` so EVERY tileset is registered (Phase 0).
@@ -632,18 +649,26 @@ export function buildDemoLayers({
     // the camera's zoom — 4096×4096 candidate columns at z6 — so the layer
     // should really enforce the coupling itself; until it does, this is the one
     // place the showcase applies it, for EVERY layer type rather than only the
-    // `trips` branch that used to own it. `zoomOverride: 0` is safe on the four
-    // datasets that opt in (satellites, animals, drifters, ecco-currents)
-    // because each is a full-duplication archive whose single z0 tile per bucket
-    // already carries the complete feature set at 1 m coordinate quantization —
-    // it would become a lossy overview the moment one is rebuilt with
-    // `--min-zoom-field` or a summary tier.
+    // `trips` branch that used to own it. `zoomOverride: 0` is LOSSLESS on the
+    // four datasets that opt in (satellites, animals, drifters, ecco-currents)
+    // because each is a full-duplication archive whose z0 tier carries the
+    // complete feature set at 1 m coordinate quantization — it would become a
+    // lossy overview the moment one is rebuilt with `--min-zoom-field` or a
+    // summary tier. It is NOT "one z0 tile per bucket": a bucket query returns
+    // 2–3 z0 tiles on satellites/drifters and ~118 overlapping ones on animals
+    // (un-sliced tracks, see its registry entry) — cheap at steady state,
+    // heavy at cold start (audit F9).
     ...(selectedDataset.zoomOverride !== undefined && {
       zoomOverride: selectedDataset.zoomOverride,
     }),
     ...((selectedDataset.useGlobalBounds || useGlobe) && {
       useGlobalBounds: true,
     }),
+    // Vertical extent of the rendered scene, for tile selection at pitch.
+    // Used to be wired only inside the storm4d composite; any dataset whose
+    // content rides above the ground plane (volumetrics, terrain-draped dots)
+    // can now declare it. Absent → chassis default (ground plane).
+    ...(selectedDataset.zRange && { zRange: selectedDataset.zRange }),
   };
 
   switch (selectedDataset.type) {
@@ -756,6 +781,21 @@ export function buildDemoLayers({
           headRadius: selectedDataset.headRadius,
           headRadiusMinPixels: selectedDataset.headRadiusMinPixels,
           headRadiusMaxPixels: selectedDataset.headRadiusMaxPixels,
+          // Terrain riding, two mutually-exclusive sources (baked wins):
+          // - baked: the archive's vertexValues channel is per-vertex metres
+          //   (`--bake-elevation`); zero runtime terrain queries.
+          // - runtime drape (basemapTerrain demos without the channel):
+          //   per-frame probe; `terrainRevision` is an inert cache-buster so
+          //   a PAUSED frame re-drapes once terrain tiles land.
+          ...(selectedDataset.elevationFromVertexValues
+            ? {
+                elevationFromVertexValues: true,
+                elevationScale: selectedDataset.elevationScale ?? 1,
+              }
+            : getTerrainElevation && {
+                getTerrainElevation,
+                terrainRevision,
+              }),
         }),
       ];
     case 'trips': {
@@ -1629,6 +1669,13 @@ export function buildDemoLayers({
               selectedDataset.overlayGatesPlayback ?? true,
             ),
             data: selectedDataset.lightningUrl,
+            // Raw flashes at every zoom. `overlayBase` inherits the dataset's
+            // unset `tier` (= 'auto'), and the GLM archive's H3 summary tier
+            // spans z0–4, so the weather/storm openings (z4–4.2) drew summary
+            // cells whose per-cell `energy_fj` SUM fed `radius`, then flipped
+            // representation crossing z5 (audit E4/F7). The standalone
+            // `goes-glm-lightning` demo keeps its summary tier by design.
+            tier: 'raw' as const,
             // De-emphasized copy of the standalone `lightning` case's flash
             // look (smaller radii; the flat Dataset type can't carry a second
             // set of radius fields here — they belong to the precip cells).
@@ -2093,6 +2140,13 @@ export function buildDemoLayers({
             id: `${selectedDataset.id}-lightning`,
             ...sourceProps(`${selectedDataset.id}-lightning`, gates),
             data: selectedDataset.lightningUrl,
+            // Raw flashes at every zoom. `overlayBase` inherits the dataset's
+            // unset `tier` (= 'auto'), and the GLM archive's H3 summary tier
+            // spans z0–4, so the weather/storm openings (z4–4.2) drew summary
+            // cells whose per-cell `energy_fj` SUM fed `radius`, then flipped
+            // representation crossing z5 (audit E4/F7). The standalone
+            // `goes-glm-lightning` demo keeps its summary tier by design.
+            tier: 'raw' as const,
             fillColor: LIGHTNING_FLASH_COLOR,
             radius: 'energy_fj',
             radiusUnits: 'pixels',

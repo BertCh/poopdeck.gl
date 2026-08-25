@@ -17,8 +17,8 @@ geometry, so a browser can decode a tile with one library (`apache-arrow`) and
 feed the resulting columnar buffers directly to deck.gl.
 
 **This document is the normative spec for the tile payload.** The reference
-implementations are `crates/stt-core/src/arrow_tile.rs` (payload),
-`crates/stt-core/src/pack.rs` (packed container) and
+implementations are `crates/stt-core/src/arrow_tile/` (payload),
+`crates/stt-core/src/pack/` (packed container) and
 `crates/stt-core/src/directory.rs` (the tile index codec) on the Rust side,
 and `packages/core/src/archive.ts` / `tile.ts` on the TypeScript side. If an
 implementation and this document disagree, that divergence is a **bug in one
@@ -29,7 +29,7 @@ promise and changelog in the
 (This spec page is CC-BY-4.0 alongside `docs/spec/` — see the license note in
 the packed spec's header.)
 
-## Top-level layout (single-file container)
+## Legacy single-file envelope (non-normative)
 
 > The container below is the **single-file** archive. The primary
 > container is the packed format (`manifest.json` + content-addressed
@@ -61,7 +61,7 @@ live in the header itself, so a reader can fetch the header, then the
 dictionary (if present), index and metadata, then each tile, with O(1) range
 requests per addressable unit.
 
-## Magic and version
+### Magic and version
 
 The first four bytes are the magic number; the trailing byte is the format
 version.
@@ -83,7 +83,7 @@ version.
 > fixture left to read and no caller. Readers MUST refuse archives whose
 > version they do not understand.
 
-## Header (64 bytes, little-endian)
+### Header (64 bytes, little-endian)
 
 ```rust
 struct ArchiveHeader {
@@ -843,7 +843,7 @@ case changes). The input reader matches the plural column name exactly, with no
 singular fallback: a singular `vertex_time` / `vertex_value` _input_ column is
 not recognized and its data decodes to a silent `null`.
 
-## Dictionary (optional — no shipped producer)
+## Legacy dictionary slot (non-normative)
 
 The single-file header reserves a slot (`dictionary_offset` /
 `dictionary_length`) for a single shared zstd dictionary that would apply to
@@ -894,11 +894,11 @@ issue one HTTP Range request that covers several tiles.
 `cover_t_min` is `None` on pre-covering builds (readers fall back to
 `time_start`).
 
-## Metadata (UTF-8 JSON)
+## Legacy metadata block (non-normative)
 
-Stored as a single `serde_json::Value`. Schema below; unknown fields are
-preserved on round-trip via serde defaults so old readers don't break on
-new fields.
+The retired single-file container stored a `serde_json::Value` with the shape
+below. Current packed archives use `manifest.json`; its normative schema is
+[`manifest.schema.json`](../spec/manifest.schema.json).
 
 ```jsonc
 {
@@ -971,8 +971,7 @@ overridable via `ArchiveOptions.coalesceGapBytes`) — tuned for HTTP/2
 against edge caches, where re-fetching a small gap is cheaper than an
 extra request.
 
-**Single-file container** (the retired format's read order, mirrored by the
-`parseV4` test helper that transcodes the `sample.stt` fixture to packed):
+**Single-file container** (historical; no reference implementation reads it):
 
 1. Bytes `[0, 64)` → header. Verify magic and version.
 2. If `dictionary_length > 0`: read the dictionary slot and construct a
@@ -988,8 +987,9 @@ extra request.
 
 - The `compression` byte is the only place new compression algorithms are
   added; readers MUST reject values they do not understand.
-- The directory codec carries its own version byte (currently v5 packed /
-  v4 single-file) and evolves independently of the container.
+- The directory codec carries its own version byte. Current packed writers use
+  v6; readers also accept packed v5 read-only. The retired single-file layout
+  used v4. This axis evolves independently of the container.
 - New per-layer columns are tolerated automatically — they appear in the
   Arrow schema and a property-aware client passes them through to the
   renderer.

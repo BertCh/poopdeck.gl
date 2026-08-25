@@ -1,5 +1,8 @@
 # @poopdeck.gl/layers
 
+> **Status: stable, pre-1.0.** This is the recommended renderer. See the
+> [support and compatibility policy](../../docs/intro/status-and-support.md).
+
 **deck.gl layers for SpatioTemporal Tiles (STT)** — stream a packed STT
 dataset into animated points, paths, polygons, trips, OD flows, splats, and
 server-aggregated summary tiers, with GPU time filtering driven by a shared

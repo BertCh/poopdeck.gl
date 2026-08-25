@@ -158,8 +158,24 @@ const deckClock = useDeckClock(playback.timeController, playback.isPlaying);
 | Prop             | Type                                          | Description                                                                                                                                                                              |
 | :--------------- | :-------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `_animate`       | `boolean`                                     | deck.gl's unconditional-redraw flag. `true` while playing, so `onBeforeRender` fires every frame; `false` while paused (seeks and interactions still redraw through deck's normal path). |
-| `onBeforeRender` | `() => void`                                  | Advances `timeController` by one frame, in lockstep with deck's render loop.                                                                                                             |
+| `onBeforeRender` | `() => void`                                  | Advances `timeController` by one frame, in lockstep with deck's render loop. Coalesced per animation frame (see below), so extra draws in the same frame do not advance time again.      |
 | `userData`       | `{ stt: { timeController: TimeController } }` | The `context.userData.stt` channel every STT layer reads time from, so layers need no per-layer `timeController` prop.                                                                   |
+
+### One advance per frame, not per render
+
+deck.gl's React wrapper redraws **synchronously from a dependency-less layout
+effect** (`deck.redraw('Initial render')` in `DeckGLWithRef`), so
+`onBeforeRender` fires once per React **commit**, not once per frame. The
+controller therefore coalesces `advanceFrame()` on the browser's frame token
+(`document.timeline.currentTime`) and advances at most once per frame; no
+sim-time is lost, because the next accepted advance integrates the whole
+elapsed span.
+
+This is load-bearing, not tidiness. Without it, any playback state a tick
+produces — the governor freezing the clock at the low watermark, a gate opening
+it again — re-enters React from inside its own commit → render → draw → tick
+chain, and React ends that chain by throwing `Maximum update depth exceeded`.
+It also decouples the governor's per-tick work from the app's render rate.
 
 ## usePlaybackHotkeys
 

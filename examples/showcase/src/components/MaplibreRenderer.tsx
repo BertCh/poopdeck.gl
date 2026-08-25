@@ -17,7 +17,9 @@
  */
 
 import React, { useEffect, useMemo, useRef } from 'react';
-import maplibregl from 'maplibre-gl';
+// MapLibre 6 is ESM-only and publishes no default export;
+// the namespace carries both the classes and the types.
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   STTPointLayer,

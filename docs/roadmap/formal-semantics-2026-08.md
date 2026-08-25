@@ -8,6 +8,11 @@ renderer backends, and every existing spec/conformance surface. File:line
 citations were read from real code at HEAD on 2026-08-11 — re-verify before
 acting on them later._
 
+> **Audit snapshot.** This document preserves findings as they were observed.
+> C2 and C3 were resolved in the August 24 launch documentation pass; current
+> format truth lives in `docs/spec/stt-packed-format.md` and
+> `docs/architecture/data-format.md`.
+
 This is the fourth document in the formalization family. The trilogy —
 [optimization-problems](./optimization-problems-2026-08.md),
 [optimization-informed-design](./optimization-informed-design-2026-08.md),

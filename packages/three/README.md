@@ -1,5 +1,9 @@
 # @poopdeck.gl/three
 
+> **Status: preview.** Published and tested, with a narrower compatibility
+> surface than the primary deck.gl renderer. See the
+> [support policy](../../docs/intro/status-and-support.md).
+
 A **Three.js + TSL (Three Shading Language / WebGPU) renderer for SpatioTemporal
 Tiles** — an independent, GPU-native alternative to the deck.gl renderer
 (`@poopdeck.gl/layers`). It consumes the **same** decoded tiles from
@@ -128,11 +132,11 @@ in-engine tile layer.
 Pure-function logic (projection round-trip, quaternion math, time-filter alpha,
 colour expansion, tile→attribute wiring) is unit-tested. The GPU material +
 renderer paths have no headless coverage (no WebGL/WebGPU in CI) and are verified
-in-browser. See the [renderer decision record](../../docs/roadmap/renderer-architecture.md).
+in-browser. See the [Three.js renderer reference](../../docs/api/stt-three.md).
 
 ## Docs
 
 - [@poopdeck.gl/three reference](../../docs/api/stt-three.md)
-- [Renderer architecture & SoTA-upgrade decision record](../../docs/roadmap/renderer-architecture.md)
+- [Backend capability matrix](../../docs/spec/backend-capabilities.md)
 
 MIT.

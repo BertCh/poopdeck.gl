@@ -97,6 +97,13 @@ export class TimeController {
   private externalDriver = false;
 
   /**
+   * The animation-frame token {@link advanceFrame} last advanced on, so a
+   * frame that draws more than once still advances the playhead exactly once.
+   * `null` until the first host-driven advance.
+   */
+  private lastAdvancedFrameToken: number | null = null;
+
+  /**
    * Re-anchor the frame clock on tab refocus: rAF was suspended in the
    * background, so the next frame's raw delta is the whole background
    * duration. MAX_FRAME_DELTA_MS bounds the damage; re-anchoring removes
@@ -266,6 +273,9 @@ export class TimeController {
   attachExternalClock(): void {
     if (this.externalDriver) return;
     this.externalDriver = true;
+    // A fresh host loop starts un-billed: the token of the frame it attaches
+    // in must not suppress that frame's first advance.
+    this.lastAdvancedFrameToken = null;
     // Stop the self-owned loop; the host loop takes over from here.
     if (this.animationFrameId !== undefined) {
       cancelAnimationFrame(this.animationFrameId);
@@ -295,9 +305,37 @@ export class TimeController {
    * external render loop after {@link attachExternalClock}. No-op unless an
    * external clock is attached; the underlying step also no-ops while paused, so
    * it is safe to call every frame regardless of play state.
+   *
+   * COALESCED per animation frame: a host that draws several times inside one
+   * frame advances the playhead once. This is not a nicety — deck.gl's React
+   * wrapper redraws SYNCHRONOUSLY from a dependency-less layout effect
+   * (`deck.redraw('Initial render')` in `DeckGLWithRef`), so `onBeforeRender`
+   * fires once per React COMMIT, not once per frame. Without the coalesce the
+   * clock ticks per render, and any playback state a tick produces (a stall
+   * freezing the clock, a gate opening it) re-enters React from inside its own
+   * commit → render → draw → tick → … chain. That chain is what React reports
+   * as "Maximum update depth exceeded"; it also multiplies the governor's
+   * per-tick work by the app's render rate.
+   *
+   * No sim-time is lost by skipping a draw: {@link _step} integrates
+   * `performance.now() - lastUpdateTime`, so the next accepted advance covers
+   * the whole elapsed span.
+   *
+   * The frame token is `document.timeline.currentTime`, which the browser
+   * updates once per rendering opportunity and holds constant for every task
+   * in between — so it is the same value for all draws in a frame regardless
+   * of callback ORDER (an rAF-callback token cannot promise that: whether the
+   * host schedules its next frame before or after drawing would decide it).
+   * Where no document timeline exists (workers, Node, headless hosts) every
+   * call advances, exactly as before.
    */
   advanceFrame(): void {
     if (!this.externalDriver) return;
+    const token = currentFrameToken();
+    if (token !== null) {
+      if (token === this.lastAdvancedFrameToken) return;
+      this.lastAdvancedFrameToken = token;
+    }
     this._step();
   }
 
@@ -529,4 +567,26 @@ export class TimeController {
       listener(this.currentTime);
     }
   }
+}
+
+/**
+ * A token identifying the CURRENT animation frame, or `null` where the host
+ * has no document timeline (workers, Node, headless renderers).
+ *
+ * `document.timeline.currentTime` advances once per rendering opportunity and
+ * is constant for every task that runs between two of them — which is exactly
+ * the "same frame" equivalence {@link TimeController.advanceFrame} needs, and
+ * unlike an rAF-callback counter it does not depend on the order in which the
+ * host schedules its next frame relative to its draw.
+ *
+ * `currentTime` is typed `CSSNumberish` (a number in every browser that ships
+ * it today, a `CSSNumericValue` in principle), so anything non-finite after
+ * coercion reads as "no token" and every call advances.
+ */
+function currentFrameToken(): number | null {
+  if (typeof document === 'undefined') return null;
+  const timeline = document.timeline as { currentTime?: unknown } | undefined;
+  if (!timeline) return null;
+  const value = Number(timeline.currentTime);
+  return Number.isFinite(value) ? value : null;
 }

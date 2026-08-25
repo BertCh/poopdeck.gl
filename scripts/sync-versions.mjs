@@ -2,9 +2,9 @@
 /**
  * Version sync for the files changesets does NOT touch.
  *
- * `changeset version` bumps every `@poopdeck.gl/*` package.json (they are a
- * `fixed` group, so they always move together) and stops there. Everything
- * else in the lockstep is a hand edit:
+ * `changeset version` is expected to bump every public `@poopdeck.gl/*`
+ * package.json (they are a `fixed` group), but this script verifies that
+ * assumption too. Everything else in the lockstep is a hand edit:
  *
  *   - the cargo workspace version in `Cargo.toml` — the bug this file exists
  *     to prevent. npm shipped 0.5.0 while crates.io sat at 0.4.0 because the
@@ -15,7 +15,10 @@
  *     one release at a time.
  *
  * Canonical version = `packages/core/package.json` (the root of the fixed
- * group; every other @poopdeck.gl package carries the same number).
+ * group; every other public @poopdeck.gl package carries the same number).
+ * Private packages are deliberately excluded: for example, the frozen Cesium
+ * backend remains at its last published version while workspace development
+ * continues.
  *
  * Usage:
  *   node scripts/sync-versions.mjs            # rewrite the stragglers in place
@@ -198,6 +201,25 @@ function collectTargets() {
       ['plugins', 0, 'version'],
     ]),
   ];
+  // Verify changesets' fixed-group promise rather than assuming it. Private
+  // workspace packages may intentionally have a different lifecycle/version.
+  const packagesDir = join(ROOT, 'packages');
+  if (existsSync(packagesDir)) {
+    for (const entry of readdirSync(packagesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      const manifest = join(packagesDir, entry.name, 'package.json');
+      if (!existsSync(manifest)) continue;
+      const pkg = JSON.parse(read(manifest));
+      if (
+        pkg.private === true ||
+        !String(pkg.name).startsWith('@poopdeck.gl/')
+      ) {
+        continue;
+      }
+      targets.push(jsonVersionTarget(manifest, [['version']]));
+    }
+  }
   // Every workspace member's internal path-deps, in a stable order.
   const cratesDir = join(ROOT, 'crates');
   if (existsSync(cratesDir)) {

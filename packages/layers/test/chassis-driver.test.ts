@@ -591,3 +591,145 @@ describe('SpatioTemporalLayer.stateSlot', () => {
     expect(layer.state.b).toBe(second);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tile-loading audit 2026-08 — E1 (timeRange cull + wake), E7 (warmTile
+// wiring), TO-2 (probe-off cost). Runs against EVERY per-tile-sublayer kind.
+// ---------------------------------------------------------------------------
+
+describe.each([...FULL_CASES, ...COMPARATOR_ONLY_CASES])(
+  '$name — tile-loading audit 2026-08',
+  (c) => {
+    let h: LayerHarness;
+
+    beforeEach(async () => {
+      vi.resetModules();
+      const Ctor = await c.load();
+      h = makeLayerHarness(Ctor, c.props, c.init);
+    });
+
+    /** Enough chassis for `_handleTimeUpdate` to run its unthrottled part. */
+    function attachTileset(layer: any, tiles: any[]) {
+      layer.state.tileset = {
+        update: vi.fn(() => 0),
+        getVisibleTiles: () => tiles,
+        getCacheStats: () => ({}),
+      };
+      layer.setState = (patch: Record<string, unknown>) =>
+        Object.assign(layer.state, patch);
+      layer.setNeedsRedraw = vi.fn();
+      layer.context = {};
+    }
+
+    it('E1: skips tiles whose timeRange cannot intersect the render window, and wakes when the playhead reaches one', () => {
+      // playhead 0; timeWindow 1000 → window kinds reach ±500, trail kinds
+      // [−trailLength, 0]. Verdicts below hold under both.
+      const layer = h.makeLayer();
+      const past = c.makeTile(3);
+      past.id = { z: 14, x: 1, y: 1, t: 0 };
+      past.timeRange = { start: -5000, end: -4000 };
+      const live = c.makeTile(3);
+      live.id = { ...idA };
+      live.timeRange = { start: -100, end: 10_000 };
+      const future = c.makeTile(3);
+      future.id = { ...idB };
+      future.timeRange = { start: 4000, end: 5000 };
+      const tiles = [past, live, future];
+
+      expect(h.render(layer, tiles)).toHaveLength(1);
+
+      attachTileset(layer, tiles);
+      const epoch = layer.state.frameNumber || 0;
+      layer._handleTimeUpdate(3000); // still short of the future tile's edge
+      expect(layer.state.frameNumber || 0).toBe(epoch);
+      layer._handleTimeUpdate(4000); // inside its range → the render wakes
+      expect(layer.state.frameNumber).toBe(epoch + 1);
+      expect(layer.renderLayers()).toHaveLength(2);
+    });
+
+    it('E1: a tile without a timeRange is never skipped', () => {
+      const layer = h.makeLayer();
+      const t = c.makeTile(3);
+      t.id = { ...idA };
+      t.timeRange = undefined;
+      layer._currentTime = 9_999_999;
+      expect(h.render(layer, [t])).toHaveLength(1);
+    });
+
+    it('E1: reverse playback wakes a tile culled as PAST', () => {
+      const layer = h.makeLayer();
+      const past = c.makeTile(3);
+      past.id = { ...idA };
+      past.timeRange = { start: 0, end: 1000 };
+      const live = c.makeTile(3);
+      live.id = { ...idB };
+      live.timeRange = { start: 9000, end: 20_000 };
+      const tiles = [past, live];
+      // State first, then the playhead: the lifecycle accessors write to
+      // `state` once it exists, and `render` would replace it.
+      layer.state = { tiles };
+      layer._currentTime = 10_000;
+      expect(layer.renderLayers()).toHaveLength(1);
+      attachTileset(layer, tiles);
+      const epoch = layer.state.frameNumber || 0;
+      layer._handleTimeUpdate(900); // back inside the past tile's reach
+      expect(layer.state.frameNumber).toBe(epoch + 1);
+      // At 900 the live tile [9000, 20000] is now the far one under a ±500
+      // window / a 500 trail → exactly the past tile draws.
+      expect(layer.renderLayers()).toHaveLength(1);
+    });
+
+    it('E1: the probe payload reports liveTiles', () => {
+      const g = globalThis as any;
+      const prev = g.__sttProbe;
+      g.__sttProbe = { enabled: true, captureSamples: true };
+      try {
+        const layer = h.makeLayer();
+        const a = c.makeTile(2);
+        a.id = { ...idA };
+        a.timeRange = { start: -10, end: 10 };
+        const b = c.makeTile(2);
+        b.id = { ...idB };
+        b.timeRange = { start: 4000, end: 5000 };
+        h.render(layer, [a, b]);
+        const samples = g.__sttProbe.renderLayers as any[];
+        const last = samples[samples.length - 1];
+        expect(last.tiles).toBe(2);
+        expect(last.liveTiles).toBe(1);
+      } finally {
+        g.__sttProbe = prev;
+      }
+    });
+
+    it('E7: warmTile routes every layer of a tile through prepareTile', () => {
+      const layer = h.makeLayer();
+      const tile = c.makeTile(3);
+      tile.id = { ...idA };
+      layer.prepareTile = vi.fn(() => null);
+      layer.warmTile(tile);
+      expect(layer.prepareTile).toHaveBeenCalledTimes(tile.layers.length);
+      expect(layer.prepareTile.mock.calls[0][0]).toBe(tile);
+      expect(layer.prepareTile.mock.calls[0][1]).toBe(tile.layers[0]);
+    });
+
+    it('TO-2: with no probe installed, renderLayers() over 100 tiles makes zero performance.now() calls', () => {
+      const g = globalThis as any;
+      const prev = g.__sttProbe;
+      delete g.__sttProbe;
+      try {
+        const layer = h.makeLayer();
+        const tiles = Array.from({ length: 100 }, (_, i) => {
+          const t = c.makeTile(2);
+          t.id = { z: 14, x: i, y: 0, t: 0 };
+          return t;
+        });
+        const spy = vi.spyOn(performance, 'now');
+        h.render(layer, tiles);
+        expect(spy).not.toHaveBeenCalled();
+        spy.mockRestore();
+      } finally {
+        if (prev !== undefined) g.__sttProbe = prev;
+      }
+    });
+  },
+);

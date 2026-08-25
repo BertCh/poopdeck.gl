@@ -227,6 +227,18 @@ interface PendingRequest {
    * controller's EWMA (BH-6).
    */
   queueWaitMs: number;
+  /**
+   * Worker-side service breakdown (decompress vs Arrow parse), set from the
+   * response just before `resolve` so the `decode` sample can carry it. Absent
+   * on the sync/main-thread fallback path, which never crosses a worker.
+   */
+  timing?: {
+    decompressMs: number;
+    parseMs: number;
+    prepMs: number;
+    handlerMs: number;
+    transferables: number;
+  };
 }
 
 /**
@@ -237,12 +249,17 @@ interface PendingRequest {
  */
 interface PooledWorkerEntry {
   worker: Worker;
-  /** The one request currently executing in this worker. */
-  activeRequestId?: number;
+  /**
+   * The requests currently executing in this worker — one BATCH (BH-7), which
+   * settles as a unit. Empty ⇔ the worker is idle and may pull again.
+   */
+  activeRequestIds: Set<number>;
   /** `now()` when this worker last pulled a job — the idle-shrink clock (BH-6). */
   lastPullAt: number;
   /** `now()` when the active job was pulled; closes the service-time sample. */
   activeStartedAt: number;
+  /** Size of the in-flight batch, for the per-tile service average. */
+  activeBatchSize: number;
 }
 
 interface QueuedWorkerDecode {
@@ -276,8 +293,10 @@ export interface PoolStats {
   pendingBytes: number;
   /** EWMA of host-enqueue → worker-dispatch latency, ms. */
   queueWaitEwmaMs: number;
-  /** EWMA of worker-dispatch → settle latency, ms. */
+  /** EWMA of worker-dispatch → settle latency, ms (per BATCH). */
   serviceEwmaMs: number;
+  /** EWMA of worker-side per-tile decode, ms — the batch-size divisor (BH-7). */
+  tileServiceEwmaMs: number;
 }
 
 /** What {@link decidePoolResize} concluded from one sample stream. */
@@ -305,6 +324,129 @@ export interface PoolResizeInput {
  * spends more time waiting for a worker than being decoded by one.
  */
 const POOL_GROW_RATIO = 1.5;
+
+/**
+ * Max tiles a worker pulls in one `decodeBatch` message (BH-7).
+ *
+ * A decode costs a fixed per-MESSAGE overhead — two postMessage hops, each
+ * quantised by the receiving thread's event-loop turn — that is paid whatever
+ * the message carries. Measured on the live showcase, GPU-backed, one tile per
+ * message (`ms - queueWaitMs`, split by worker-side timestamps):
+ *
+ *   demo                 median tile   service   in-worker   transit
+ *   goes-glm-lightning         580 B    1.7 ms      1.1 ms    0.3 ms  (44% of total)
+ *   earthquake-activity       1073 B    4.3 ms      3.1 ms    0.9 ms  (28%)
+ *   drifters                    20 KB   15.2 ms     12.3 ms    1.2 ms  ( 9%)
+ *   flights                    155 KB   28.6 ms     26.3 ms    0.8 ms  (11%)
+ *
+ * Transit is roughly constant at ~0.3-1.2 ms, so it is negligible against a
+ * 155 KB tile and a large fraction of the cost of a sub-KB one. An archive that
+ * is tile-COUNT-heavy therefore spends much of its decode pipeline couriering:
+ * earthquake-activity's 4096 tiles cost 5.1 s of transit against 13.3 s of
+ * actual work. Batching amortises that term and nothing else.
+ *
+ * 32 sits past the knee — most of the win is already banked by ~8, and the
+ * remainder buys little while lengthening the batch — but the fair-share bound
+ * in `pullNext` is what actually governs size in practice, so this is a ceiling
+ * rather than a target.
+ *
+ * HISTORICAL NOTE, since it nearly shipped as the rationale: the first
+ * measurements put transit at ~22 ms and "88% of decode". Those were taken in
+ * headless Chromium WITHOUT GPU flags, i.e. on SwiftShader, where blocking
+ * `glReadPixels` on the renderer main thread inflates every main-thread-stamped
+ * duration — and the `decode` sample's end stamp is taken in `handleMessage`,
+ * on the main thread. Benchmark this pool with `--use-gl=angle --enable-gpu
+ * --ignore-gpu-blocklist` (as `tools/bench/*` already does) or the numbers are
+ * about the rasteriser, not the decoder.
+ */
+const DECODE_BATCH_MAX_TILES = 32;
+
+/**
+ * FIRST-TILE latency budget for one `decodeBatch`, in ms of expected decode
+ * (BH-7). This, not the byte cap, is what bounds the cost of batching.
+ *
+ * A batch is answered with ONE reply, so its first tile settles when its last
+ * one does: batching trades first-tile latency for throughput. The bound has to
+ * be denominated in the currency being spent — TIME — because the whole reason
+ * this pool needed fixing is that a cost model and a budget were in different
+ * units. Sizing by COMPRESSED BYTES gets this wrong in the worst way: 512 KiB
+ * buys ~8 tiles of a volumetric archive whose tiles cost ~23 ms each, so the
+ * first tile would wait ~184 ms instead of ~23 ms — an 8x latency regression on
+ * exactly the demos that can least afford one, and invisible on the small-tile
+ * demos the batching was built for.
+ *
+ * Divided by the measured per-tile decode EWMA this self-scales: ~32 tiles of a
+ * 3 ms archive, ~4 of a 23 ms one, ~3 of a 30 ms one (which needs little
+ * batching — transit is 11% of its cost).
+ *
+ * 100 ms was CHOSEN BY MEASUREMENT, not taste. Decode-queue wait (p50/p95 ms,
+ * GPU-backed, live archives) against the two alternatives:
+ *
+ *   demo                  512 KiB byte cap   50 ms budget   100 ms budget
+ *   earthquake-activity        195 /  371     438 / 1021      152 /  384
+ *   goes-glm-lightning         8.5 /   47      52 /  124      5.6 /   47
+ *   drifters                   1.7 /  8.7     3.5 /   31      2.5 /  8.5
+ *   flights                    0.4 /   31     3.9 /  146      1.6 /   56
+ *   storm-4d-greenfield          — /    —    15.6 /  444      6.0 /   44
+ *
+ * 50 ms was tried first and is materially WORSE than doing nothing clever: it
+ * caps earthquake-activity at ~16 tiles where 32 pay off, and the extra round
+ * trips cost more than the latency it saves. 100 ms matches or beats the byte
+ * cap on every archive measured while still bounding first-tile latency, which
+ * the byte cap did not do at all.
+ *
+ * ─── AFTER D1, this budget rarely binds ─────────────────────────────────────
+ *
+ * The table above predates the zstd frame-header rewrite (audit D1), which cut
+ * worker-side decode ~10x — earthquake-activity 3.1 → 0.3 ms/tile, its
+ * decompress term 2.6 → 0.1 ms. Re-measured on the same archives afterwards:
+ *
+ *   demo                  100 ms budget   50 ms budget
+ *   earthquake-activity      16.1 / 52.5     4.1 / 24.1
+ *   goes-glm-lightning        8.1 / 52.9    13.2 / 20.0
+ *   flights                   0.0 / 18.0     0.2 / 24.2
+ *   storm-4d-greenfield       1.7 / 29.3     0.7 /  102
+ *
+ * Every wait is now sub-frame and the two budgets trade places by archive, i.e.
+ * the choice is inside the noise where it used to be a 3x difference. At
+ * 0.3 ms/tile the budget admits ~333 tiles, so DECODE_BATCH_MAX_TILES is what
+ * actually bounds a small-tile batch now; the time budget binds only on
+ * expensive tiles (flights at 6.3 ms/tile ⇒ ~15). Kept at 100 because nothing
+ * measured argues for moving it and 50 showed the worse storm-4d tail.
+ *
+ * The pre-D1 table is retained deliberately: it is the evidence for preferring
+ * a TIME budget over a byte cap at all, and that argument does not weaken as
+ * decode gets cheaper — it is why this constant needed no edit when D1 landed.
+ * The divisor is a measured EWMA, so the sizing re-derived itself.
+ *
+ * Confirmed once more against the final loader build on a QUIET machine: every
+ * decode-queue p50 ≤ 20 ms and every p95 ≤ 53 ms across those five archives.
+ *
+ * ⚠️ MEASUREMENT NOTE for whoever revisits these numbers. Two cautions, both
+ * learned the hard way here:
+ *   - Run the browser with `--use-gl=angle --enable-gpu --ignore-gpu-blocklist`
+ *     (as `tools/bench/*` does). Bare headless Chromium is SwiftShader, whose
+ *     blocking `glReadPixels` on the renderer main thread inflates every
+ *     main-thread-stamped duration 10-90x — and the `decode` sample's end stamp
+ *     is taken in `handleMessage`, on the main thread. It reported a fictional
+ *     22 ms transit against a true 0.3-1.2 ms.
+ *   - Measure on an OTHERWISE IDLE box. The same five archives, measured while
+ *     a second benchmark shared the machine, returned p95s of 208 / 438 / 483 ms
+ *     and disagreed with themselves by 10-30x run to run. Even quiet, expect
+ *     ±2-10x on the p50s at these small magnitudes (network jitter to the tile
+ *     origin, tile-arrival timing, and the settled zoom all move); read them as
+ *     an order of magnitude, never as a point value.
+ */
+const DECODE_BATCH_TARGET_SERVICE_MS = 100;
+
+/**
+ * Byte ceiling on one `decodeBatch` (BH-7) — a MEMORY guard, not a latency one
+ * (see {@link DECODE_BATCH_TARGET_SERVICE_MS} for that). `pullNext` copies each
+ * member's compressed bytes at pull time, so this bounds the transient copy a
+ * single batch can hold. It also governs the very first batch of a session,
+ * before there is any service sample to divide by.
+ */
+const DECODE_BATCH_MAX_BYTES = 512 * 1024;
 /**
  * Shrink only once queue wait falls below this much smaller multiple. The gap
  * between the two ratios is the hysteresis band that stops an oscillating load
@@ -394,6 +536,14 @@ export class WorkerTileDecoder implements TileDecoder {
   private readonly poolSizePinned: boolean;
   private queueWaitEwmaMs = 0;
   private serviceEwmaMs = 0;
+  /**
+   * EWMA of WORKER-SIDE per-tile decode (`DecodeTiming.handlerMs`) — the cost
+   * batching cannot amortise away, and so the right divisor for the batch-size
+   * time budget. Deliberately NOT derived from `serviceEwmaMs`, which is
+   * main-thread dispatch→settle and includes the per-message cost (see the note
+   * at its assignment in `settleResponse`). 0 = no sample yet.
+   */
+  private tileServiceEwmaMs = 0;
   /** Completions since the last resize (the sustain requirement). */
   private samplesSinceResize = 0;
   /** Injectable clock. TEST SEAM only; production reads the real one. */
@@ -450,9 +600,10 @@ export class WorkerTileDecoder implements TileDecoder {
     const worker = new Worker(this.workerUrl, { type: 'module' });
     const entry: PooledWorkerEntry = {
       worker,
-      activeRequestId: undefined,
+      activeRequestIds: new Set<number>(),
       lastPullAt: this.now(),
       activeStartedAt: 0,
+      activeBatchSize: 0,
     };
     worker.onmessage = (e) => this.handleMessage(e);
     worker.onerror = (e) => this.handleWorkerError(entry, e);
@@ -532,6 +683,17 @@ export class WorkerTileDecoder implements TileDecoder {
             queueWaitMs: record.queueWaitMs,
             compressedBytes,
             path: 'worker',
+            // Service-time split. `ms - queueWaitMs - decompressMs - parseMs`
+            // is per-message overhead (clone + transfer + task scheduling on
+            // both hops) PLUS any main-thread stall, since `ms` ends inside
+            // `handleMessage` on the main thread. Under a software rasteriser
+            // that stall dominates and the residual is meaningless — measure
+            // with GPU flags (see DECODE_BATCH_MAX_TILES).
+            decompressMs: record.timing?.decompressMs,
+            parseMs: record.timing?.parseMs,
+            prepMs: record.timing?.prepMs,
+            handlerMs: record.timing?.handlerMs,
+            transferables: record.timing?.transferables,
           });
           resolve(tile);
         },
@@ -622,7 +784,7 @@ export class WorkerTileDecoder implements TileDecoder {
   private postCancel(requestId: number): void {
     if (this.disposed) return;
     const owner = this.requestOwner.get(requestId);
-    if (!owner || owner.activeRequestId !== requestId) return;
+    if (!owner || !owner.activeRequestIds.has(requestId)) return;
     owner.worker.postMessage({ type: 'cancel', requestId });
   }
 
@@ -659,7 +821,7 @@ export class WorkerTileDecoder implements TileDecoder {
     if (this.disposed) return;
     for (const entry of this.workers) {
       if (this.hostQueue.length === 0) return;
-      if (entry.activeRequestId === undefined) this.pullNext(entry);
+      if (entry.activeRequestIds.size === 0) this.pullNext(entry);
     }
   }
 
@@ -674,19 +836,56 @@ export class WorkerTileDecoder implements TileDecoder {
    * doubled peak memory for work the worker never saw.
    */
   private pullNext(entry: PooledWorkerEntry): void {
-    if (this.disposed || entry.activeRequestId !== undefined) return;
+    if (this.disposed || entry.activeRequestIds.size > 0) return;
     this.sortHostQueue();
-    while (this.hostQueue.length > 0) {
+    // BH-7: take a BATCH, most-urgent first, so one round trip carries many
+    // tiles. The sort above already ordered the queue, so slicing from the
+    // front preserves the priority the single-job pull had.
+    //
+    // BOUNDED BY AVAILABLE PARALLELISM. Batching trades latency for throughput
+    // and is only ever a win once there is MORE work than workers: handing one
+    // worker 32 tiles while ten others sit idle would serialise work the pool
+    // could have run at once — the exact head-of-line stall BH-5's pool-wide
+    // queue exists to prevent. So a pull takes at most its fair share of the
+    // backlog. With a short queue that share is 1 and the dispatch is
+    // byte-for-byte the single-job behaviour; only a real backlog batches.
+    let idleWorkers = 0;
+    for (const candidate of this.workers) {
+      if (candidate.activeRequestIds.size === 0) idleWorkers++;
+    }
+    const fairShare = Math.max(
+      1,
+      Math.ceil(this.hostQueue.length / Math.max(1, idleWorkers)),
+    );
+    // FIRST-TILE LATENCY BOUND: how many tiles fit in the service-time budget
+    // at the measured per-tile cost. Before the first sample this abstains and
+    // the byte cap governs (see DECODE_BATCH_MAX_BYTES).
+    const latencyCap =
+      this.tileServiceEwmaMs > 0
+        ? Math.max(
+            1,
+            Math.floor(DECODE_BATCH_TARGET_SERVICE_MS / this.tileServiceEwmaMs),
+          )
+        : DECODE_BATCH_MAX_TILES;
+    const maxTiles = Math.min(DECODE_BATCH_MAX_TILES, fairShare, latencyCap);
+    const items: Array<Record<string, unknown>> = [];
+    const transfer: ArrayBuffer[] = [];
+    let batchBytes = 0;
+    const dispatchedAt = this.now();
+    while (
+      this.hostQueue.length > 0 &&
+      items.length < maxTiles &&
+      // A batch always takes at least one tile, even one larger than the whole
+      // byte budget — it has to decode eventually and alone is its own batch.
+      (items.length === 0 || batchBytes < DECODE_BATCH_MAX_BYTES)
+    ) {
       const requestId = this.hostQueue.shift()!;
       const queued = this.queuedDecodes.get(requestId);
       if (!queued || !this.pending.has(requestId)) continue;
       this.queuedDecodes.delete(requestId);
       this.hostQueueBytes = Math.max(0, this.hostQueueBytes - queued.costBytes);
-      entry.activeRequestId = requestId;
+      entry.activeRequestIds.add(requestId);
       this.requestOwner.set(requestId, entry);
-      const dispatchedAt = this.now();
-      entry.lastPullAt = dispatchedAt;
-      entry.activeStartedAt = dispatchedAt;
       const waitMs = Math.max(0, dispatchedAt - queued.queuedAt);
       // Feed the BH-6 controller unconditionally — it is a control loop, not
       // observation, and must not depend on whether a probe is attached.
@@ -696,27 +895,48 @@ export class WorkerTileDecoder implements TileDecoder {
       // OBSERVATION (P0-2): close the host-queue span for the `decodeQueue`
       // roll-up. `hostQueue.length` is the O(1) host queue depth.
       if (isProbeEnabled()) recordDecodeWait(waitMs, this.hostQueue.length);
+      // The transferable `slice(0)` is made HERE, when a worker actually takes
+      // the job — never at enqueue. Copy-at-enqueue is a recorded rejected
+      // design: it doubled peak memory for work the worker never saw.
       const compressed = queued.compressed.slice(0);
-      entry.worker.postMessage({ ...queued.message, compressed }, [compressed]);
-      return;
+      items.push({ ...queued.message, compressed });
+      transfer.push(compressed);
+      batchBytes += queued.costBytes;
     }
+    if (items.length === 0) return;
+    entry.lastPullAt = dispatchedAt;
+    entry.activeStartedAt = dispatchedAt;
+    entry.activeBatchSize = items.length;
+    entry.worker.postMessage({ type: 'decodeBatch', items }, transfer);
   }
 
+  /**
+   * Settle ONE request of a worker's in-flight batch. The worker's slot frees
+   * only when the last member settles (BH-7) — a batch is posted as a unit and
+   * the worker processes it as a unit, so pulling more work while part of it is
+   * still running would overlap two batches on one worker.
+   */
   private finishWorkerRequest(requestId: number): void {
-    const entry = this.workers.find(
-      (candidate) => candidate.activeRequestId === requestId,
+    const entry = this.workers.find((candidate) =>
+      candidate.activeRequestIds.has(requestId),
     );
     if (!entry) return;
-    entry.activeRequestId = undefined;
+    entry.activeRequestIds.delete(requestId);
     this.requestOwner.delete(requestId);
+    // The BH-6 controller's sustain window is denominated in COMPLETIONS, and a
+    // completion is a tile — batching is transport, not work. Counting batches
+    // instead would stretch its cadence by the batch size and make the pool
+    // adapt ~32x more slowly for no reason the controller can see.
+    this.samplesSinceResize++;
+    if (entry.activeRequestIds.size > 0) return;
     if (entry.activeStartedAt > 0) {
       this.serviceEwmaMs = ewma(
         this.serviceEwmaMs,
         Math.max(0, this.now() - entry.activeStartedAt),
       );
       entry.activeStartedAt = 0;
+      entry.activeBatchSize = 0;
     }
-    this.samplesSinceResize++;
     this.maybeResizePool();
     this.pumpQueue();
   }
@@ -730,7 +950,7 @@ export class WorkerTileDecoder implements TileDecoder {
     const now = this.now();
     let idleMs: number | null = null;
     for (const entry of this.workers) {
-      if (entry.activeRequestId !== undefined) continue;
+      if (entry.activeRequestIds.size > 0) continue;
       const idle = Math.max(0, now - entry.lastPullAt);
       if (idleMs === null || idle > idleMs) idleMs = idle;
     }
@@ -754,7 +974,7 @@ export class WorkerTileDecoder implements TileDecoder {
     // Shrink: retire the MOST-idle worker, and only one that holds no job.
     let victim: PooledWorkerEntry | undefined;
     for (const entry of this.workers) {
-      if (entry.activeRequestId !== undefined) continue;
+      if (entry.activeRequestIds.size > 0) continue;
       if (!victim || entry.lastPullAt < victim.lastPullAt) victim = entry;
     }
     if (!victim) return;
@@ -775,6 +995,7 @@ export class WorkerTileDecoder implements TileDecoder {
       pendingBytes: this.hostQueueBytes,
       queueWaitEwmaMs: this.queueWaitEwmaMs,
       serviceEwmaMs: this.serviceEwmaMs,
+      tileServiceEwmaMs: this.tileServiceEwmaMs,
     };
   }
 
@@ -804,9 +1025,35 @@ export class WorkerTileDecoder implements TileDecoder {
     this.hostQueueDirty = false;
   }
 
+  /**
+   * One reply per BATCH (BH-7): unwrap it and settle each member. Settling is
+   * per request — a batch is a transport unit, never a failure unit.
+   */
   private handleMessage(event: MessageEvent<unknown>) {
-    const data = event.data as
-      | { requestId: number; tile: Tile; payload?: Uint8Array }
+    const envelope = event.data as
+      | { type?: string; responses?: unknown[] }
+      | undefined;
+    if (envelope && Array.isArray(envelope.responses)) {
+      for (const response of envelope.responses) this.settleResponse(response);
+      return;
+    }
+    this.settleResponse(event.data);
+  }
+
+  private settleResponse(raw: unknown) {
+    const data = raw as
+      | {
+          requestId: number;
+          tile: Tile;
+          payload?: Uint8Array;
+          timing?: {
+            decompressMs: number;
+            parseMs: number;
+            prepMs: number;
+            handlerMs: number;
+            transferables: number;
+          };
+        }
       | { requestId: number; error: string }
       | { requestId: number; cancelled: true }
       | undefined;
@@ -827,6 +1074,21 @@ export class WorkerTileDecoder implements TileDecoder {
         // delivered BEFORE resolve so the caller observes it by the time the
         // decode promise settles.
         if (data.payload && pending.onPayload) pending.onPayload(data.payload);
+        pending.timing = data.timing;
+        // BH-7 batch sizing divides a TIME budget by this, so it must be the
+        // per-tile cost that batching CANNOT remove — the worker-side decode.
+        // `serviceEwmaMs` is main-thread dispatch→settle and therefore includes
+        // the per-message cost that batching exists to amortise; dividing THAT
+        // by batch size is a feedback loop (at size 1 it is dominated by the
+        // fixed cost, which shrinks the next batch, which keeps the fixed cost
+        // dominant) and it converges on never batching. Measured: it drove
+        // earthquake-activity's decode-queue p50 from 195 ms to 1116 ms.
+        if (data.timing) {
+          this.tileServiceEwmaMs = ewma(
+            this.tileServiceEwmaMs,
+            data.timing.handlerMs,
+          );
+        }
         pending.resolve(data.tile);
       }
     }
@@ -848,11 +1110,13 @@ export class WorkerTileDecoder implements TileDecoder {
     // the worker. Under the old per-worker assignment they were bound to this
     // entry and were failed alongside it; with one pool-wide queue they were
     // never this worker's to lose, so they stay queued and the replacement (or
-    // any other idle worker) pulls them. Crash blast radius = the active job.
-    const failedId = entry.activeRequestId;
-    entry.activeRequestId = undefined;
+    // any other idle worker) pulls them. Crash blast radius = the active BATCH
+    // (BH-7) — every member of the one batch this worker was running, and
+    // nothing else.
+    const failedIds = [...entry.activeRequestIds];
+    entry.activeRequestIds.clear();
     entry.activeStartedAt = 0;
-    if (failedId !== undefined) {
+    for (const failedId of failedIds) {
       const pending = this.pending.get(failedId);
       this.pending.delete(failedId);
       this.queuedDecodes.delete(failedId);

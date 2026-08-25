@@ -2,7 +2,10 @@
   "extends": "../../tsconfig.pkg.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    // TypeScript 7 does not auto-include pnpm's symlinked
+    // `node_modules/@types` the way 5.x did — and the server, CLI runner and doc bundler are Node programs.
+    "types": ["node"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]

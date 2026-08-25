@@ -28,11 +28,12 @@ import React, {
 } from 'react';
 import DeckGL from '@deck.gl/react';
 import { SolidPolygonLayer } from '@deck.gl/layers';
-import { Map } from 'react-map-gl';
+import { Map } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import type { TimeController } from '@poopdeck.gl/playback';
 import type { SourceRegistry } from '@poopdeck.gl/react';
 import { buildDemoLayers } from '../demo/buildDemoLayers';
+import { subscribeThrottledTick } from './throttledTick';
 import { buildGoogle3DTilesLayer } from './googleTiles';
 import {
   buildEgoFootprintLayer,
@@ -467,14 +468,20 @@ const AvDeck: React.FC<AvDeckProps> = ({
   }, [visibleStreams, registry, dataset.id]);
 
   // Ego car footprint + openpilot-style path-prediction ribbon. These are
-  // single-instance OVERLAY layers (not tile layers), so they ride a lightweight
-  // per-tick `egoTime` state while the heavy tile tree stays memoized and
-  // animates on the controller's own clock.
+  // single-instance OVERLAY layers (not tile layers), so they ride a
+  // lightweight `egoTime` state while the heavy tile tree stays memoized and
+  // animates on the controller's own clock. That state is published at the
+  // 10 Hz UI rate, not per 60 Hz tick: each publish re-renders this tree and
+  // rebuilds the deck `layers` array, and per-tick it was the dominant commit
+  // source on /drive (119 commits/s × ~440 components → 18.8/s at 10 Hz;
+  // display-capped fps unchanged, so the win is main-thread headroom on
+  // slower machines). The ego dot moving in 100 ms steps is invisible at the
+  // cockpit's speeds; a pause flushes the exact stop time.
   const [egoTime, setEgoTime] = useState(() => timeController.getTime());
   useEffect(() => {
     if (!egoPath || egoPath.length === 0) return;
     setEgoTime(timeController.getTime());
-    return timeController.on('tick', (t: number) => setEgoTime(t));
+    return subscribeThrottledTick(timeController, setEgoTime);
   }, [egoPath, timeController]);
   const egoLayers = useMemo(() => {
     if (!egoPath || egoPath.length === 0 || !visibleStreams.has('ego'))

@@ -570,10 +570,12 @@ export class TimeFilterExtension extends LayerExtension<
 
   /**
    * Memoized shader-injection object. deck.gl calls `getShaders()` on every
-   * sublayer construction; returning a NEW object literal each time would
-   * trigger a fresh shader-cache miss and pipeline re-link per tile.
-   * Building once per extension instance preserves object identity across
-   * all sublayers that share the singleton.
+   * sublayer construction — one per visible tile. luma 9.3.3 keys its shader
+   * and pipeline caches on SOURCE TEXT, so a NEW object literal carrying the
+   * same strings still hits both caches (there is no re-link per tile); what
+   * the memo saves is the per-sublayer allocation of the modules array +
+   * inject strings and deck's `mergeShaders` pass over them. Cheap, and it
+   * keeps object identity stable across all sublayers sharing the singleton.
    */
   private cachedShaders: {
     modules: unknown[];

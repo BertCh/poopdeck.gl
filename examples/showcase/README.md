@@ -32,7 +32,7 @@ are chrome-free and never prerendered.
 
 Datasets are built by `stt-generate`, which fetches the source,
 normalises it into GeoParquet, and shells out to `stt-build`. The
-generators share `crates/stt-generate/src/common.rs` for coordinate
+generators share `tools/stt-generate/src/common.rs` for coordinate
 transforms, chrono-based temporal bucketing, and latitude-adjusted
 distance math. CSV sources are ingested directly; HTTP sources are
 cached under `data/`.
@@ -79,24 +79,33 @@ regenerate locally with `stt-generate`.
 
 ## Regenerating Datasets
 
+`stt-generate` is a repo-only tool with its own Cargo workspace. Install it
+separately from the published CLI bundle; building the root Cargo workspace
+does not build the generator.
+
 ```bash
-# Build the toolchain once
-cargo build --release
+# From the repository root, install the published CLIs (including stt-build)
+# and the repo-only showcase generator.
+cargo install --path crates/spatiotemporal-tiles
+cargo install --path tools/stt-generate
 
-# `all` builds ONLY the no-setup datasets — earthquakes, hurricanes,
-# wildfires — into the showcase's data directory.
-./target/release/stt-generate all \
-  --output-dir examples/showcase/public/data --skip-existing
+# Each dataset is generated explicitly; there is no `all` subcommand.
+stt-generate earthquakes \
+  --output examples/showcase/public/data/earthquakes.stt
+stt-generate hurricanes \
+  --output examples/showcase/public/data/hurricanes.stt
+stt-generate wildfires \
+  --output examples/showcase/public/data/wildfires.stt
 
-# The rest need per-run parameters and must be run individually, e.g.:
-./target/release/stt-generate ais --date 2024-01-01 \
+# Other generators need per-run parameters, for example:
+stt-generate ais --date 2024-01-01 \
   --output examples/showcase/public/data/ais-traffic.stt
-./target/release/stt-generate flights --date 2020-01-06 \
+stt-generate flights --date 2020-01-06 \
   --output examples/showcase/public/data/flights.stt
-./target/release/stt-generate nyc-rideshare --synthetic \
+stt-generate nyc-rideshare --synthetic \
   --osrm-url http://localhost:5000 \
   --output examples/showcase/public/data/nyc-rideshare.stt
-./target/release/stt-generate satellites \
+stt-generate satellites \
   --output examples/showcase/public/data/satellites.stt
 ```
 
@@ -107,6 +116,6 @@ recipes.
 ## Tech Stack
 
 - **React 19** + **TypeScript** + **Vite** + **react-router** (framework mode)
-- **deck.gl 9.x** via `@poopdeck.gl/layers`
-- **MapLibre GL 3+** via `@poopdeck.gl/maplibre`
+- **deck.gl 9.3.x** via `@poopdeck.gl/layers`
+- **MapLibre GL 3–6** via `@poopdeck.gl/maplibre`
 - **`@poopdeck.gl/core`** for the archive reader, decoder pool, and tileset

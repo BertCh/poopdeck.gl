@@ -215,8 +215,13 @@ describe('SpatioTemporalTileset byte-denominated enqueue budget', () => {
       temporalBucketMs: BUCKET_MS,
       // Count budget = floor(300 × 0.5) = 150 tiles...
       maxCacheSize: 300,
-      // ...byte budget = max(4 MiB, 0.5 × 8 MiB) = 4 MiB = FOUR of these tiles.
-      maxCacheByteSize: 8 * MIB,
+      // ...byte budget = 0.5 × 64 MiB ÷ the cold 8× expansion = 4 MiB = FOUR
+      // of these tiles. (Re-blessed from an 8 MiB cap, whose 512 KiB share
+      // the old 4 MiB FLOOR lifted to the same four tiles — 32 MiB decoded
+      // against 8; since G3-2 the floor yields to the cache, and that cap
+      // honestly admits none beyond the head — pinned at the end of this
+      // file.)
+      maxCacheByteSize: 64 * MIB,
       getTileByteSize: () => 1 * MIB,
       getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
       getTileData: async (id: TileId) => fakeTile(id),
@@ -228,24 +233,28 @@ describe('SpatioTemporalTileset byte-denominated enqueue budget', () => {
     await settleMs(80);
 
     const prefetched = prefetchedBuckets(batchSpy.mock.calls);
-    // FOUR tiles — the byte budget, not the 150-tile count budget.
-    expect(prefetched.size).toBe(4);
+    // FOUR tiles of runway — the byte budget, not the 150-tile count budget.
+    // Since A2 the budget is a RESIDENCY bound inside the horizon: the play
+    // head's own bucket-0 tile (fetched on the priority path, distance 0) is
+    // charged first, so THREE further buckets are admitted. (Re-blessed from
+    // four: the old count bounded admissions per pass, not what is held.)
+    expect(prefetched.size).toBe(3);
     expect([...prefetched].sort((a, b) => a - b)).toEqual([
       1 * BUCKET_MS,
       2 * BUCKET_MS,
       3 * BUCKET_MS,
-      4 * BUCKET_MS,
     ]);
-    // The runway's byte sum respects the cache fraction.
-    expect(prefetched.size * MIB).toBeLessThanOrEqual(
-      Math.max(PREFETCH_MIN_BUDGET_BYTES, PREFETCH_CACHE_FRACTION * 8 * MIB),
+    // The runway's byte sum — head tile included — respects the cache share
+    // in the directory's currency (the cold expansion divides the cap).
+    expect((prefetched.size + 1) * MIB).toBeLessThanOrEqual(
+      (PREFETCH_CACHE_FRACTION * 64 * MIB) / PREFETCH_COLD_BYTE_EXPANSION,
     );
 
-    // ...and the truncated pass re-anchored on the last ENQUEUED bucket, so
+    // ...and the truncated pass re-anchored on the last COVERED bucket, so
     // the next pass re-plans at the real frontier rather than at a span
-    // nobody fetched. (Nearest-first ordering ⇒ that is bucket 4.)
+    // nobody fetched. (Nearest-first ordering ⇒ that is bucket 3.)
     expect(anchorSpy).toHaveBeenCalledTimes(1);
-    expect(anchorSpy.mock.calls[0][1]).toBe(4 * BUCKET_MS);
+    expect(anchorSpy.mock.calls[0][1]).toBe(3 * BUCKET_MS);
     expect(anchorSpy.mock.calls[0][2]).toBe(BUCKET_MS);
 
     tileset.finalize();
@@ -937,6 +946,116 @@ describe('SpatioTemporalTileset byte-aware parent-fallback skip', () => {
       expect(flat.has(PARENT_KEY)).toBe(true);
     });
 
+    /**
+     * C5 (tile-loading audit 2026-08, SEL-1). The rule fetches `u` iff
+     * `P < A · C_missing / 16`, so for `A > 16` it admits a parent that
+     * downloads SLOWER than every child it is placeholding — a placeholder
+     * that lands after the detail is dropped unseen by pass 2, having spent
+     * link time in the same priority batch as the children. Mirror of the
+     * measured Zürich z14 pitched camera (`scratchpad/selproof/selection.test.ts`
+     * Q3): a 10 × 10 z14 box, 10 KB primaries, parents 28 / 98 / 272 / 850 KB
+     * at z13 / z12 / z11 / z10, a warm 4 MB/s link, children in flight.
+     */
+    it('C5: never buys a placeholder that would land AFTER the children it stands in for', async () => {
+      const Z = 14;
+      const X0 = 8574;
+      const Y0 = 5748;
+      const W = 10;
+      const H = 10;
+      const n = 1 << Z;
+      const tile2lon = (x: number): number => (x / n) * 360 - 180;
+      const tile2lat = (y: number): number => {
+        const t = Math.PI - (2 * Math.PI * y) / n;
+        return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(t) - Math.exp(-t)));
+      };
+      const VIEW: BoundingBox = {
+        minLon: tile2lon(X0) + 1e-6,
+        maxLon: tile2lon(X0 + W) - 1e-6,
+        minLat: tile2lat(Y0 + H) + 1e-6,
+        maxLat: tile2lat(Y0) - 1e-6,
+      };
+      const SIZE: Record<number, number> = {
+        14: 10_000,
+        13: 28_000,
+        12: 98_000,
+        11: 272_000,
+        10: 850_000,
+      };
+      const BYTES_PER_MS = 4000;
+      /** Every tile at zoom `z` covering the 10 × 10 primary box. */
+      function cellsIn(z: number): TileId[] {
+        const d = Z - z;
+        const out: TileId[] = [];
+        const seen = new Set<string>();
+        for (let x = X0; x < X0 + W; x++) {
+          for (let y = Y0; y < Y0 + H; y++) {
+            const id = { z, x: x >> d, y: y >> d, t: 0 };
+            const k = `${id.z}/${id.x}/${id.y}`;
+            if (!seen.has(k)) {
+              seen.add(k);
+              out.push(id);
+            }
+          }
+        }
+        return out;
+      }
+      /** Primary cells of the box under parent `u`. */
+      const cellsUnder = (u: TileId): number => {
+        const d = Z - u.z;
+        let c = 0;
+        for (let x = X0; x < X0 + W; x++)
+          for (let y = Y0; y < Y0 + H; y++)
+            if (x >> d === u.x && y >> d === u.y) c++;
+        return c;
+      };
+
+      const batches: TileId[][] = [];
+      const tileset = new SpatioTemporalTileset({
+        minZoom: 6,
+        maxZoom: 14,
+        enablePrefetch: false,
+        refinementStrategy: 'best-available',
+        temporalBucketMs: 3_600_000,
+        placeholderPolicy: 'expected-value',
+        getAvailableTiles: async (_b: BoundingBox, z: number) => cellsIn(z),
+        getTileByteSize: (id: TileId) => SIZE[id.z],
+        getThroughput: () => ({ bytesPerMs: BYTES_PER_MS, samples: 10 }),
+        // Everything stays in flight: every child counts as missing.
+        getTileData: () => new Promise<Tile>(() => {}),
+        getTileDataBatch: async (ids: TileId[]) => {
+          batches.push(ids);
+          return new Promise<Tile[]>(() => {});
+        },
+      });
+      tileset.update({ bounds: VIEW, zoom: Z, time: 0, timeWindow: 20_000 });
+      await settleMs(40);
+      tileset.finalize();
+
+      const requested = batches.flat();
+      const primaries = requested.filter((id) => id.z === Z);
+      const parents = requested.filter((id) => id.z < Z);
+      expect(primaries).toHaveLength(W * H);
+      expect(parents.length).toBeGreaterThan(0);
+
+      // THE RULE: every admitted placeholder lands before its own missing
+      // children would — `bytes(u)/θ < C_missing(u)/θ`, uncapped.
+      for (const u of parents) {
+        const arrivalMs = SIZE[u.z] / BYTES_PER_MS;
+        const coverMs = (cellsUnder(u) * SIZE[Z]) / BYTES_PER_MS;
+        expect(arrivalMs, `${u.z}/${u.x}/${u.y}`).toBeLessThan(coverMs);
+      }
+      // The z10 over the 80-cell block: 212 ms to arrive against 200 ms of
+      // children — pre-fix the λ·A weighting (80/16 × 200 = 1 000 ms) bought
+      // it, and it was the single largest tile in the batch.
+      expect(parents.some((id) => id.z === 10)).toBe(false);
+      // A z11 over 48 cells: 68 ms to arrive against 120 ms of children —
+      // it lands first, so the expected-value rule still buys it. The
+      // precondition prunes, it does not replace the weighting.
+      expect(parents.some((id) => id.z === 11 && cellsUnder(id) === 48)).toBe(
+        true,
+      );
+    });
+
     it('reproduces the flat rule bit-for-bit while the estimator is cold', async () => {
       // A scripted sweep across the flat cutoff. With no throughput sample the
       // expected-value rule cannot be priced, so every verdict must come back
@@ -1005,6 +1124,234 @@ describe('SpatioTemporalTileset byte-aware parent-fallback skip', () => {
     expect(requested.map((id) => `${id.z}/${id.x}/${id.y}/${id.t}`)).toContain(
       '14/1/1/0',
     );
+    tileset.finalize();
+  });
+});
+
+/**
+ * CO-7: the prefetch runway warms the PRIMARY zoom only.
+ *
+ * A coarse parent is a PLACEHOLDER — it covers the screen while the detail
+ * tiles for the CURRENT play head are in flight. The runway is by construction
+ * about buckets the head has not reached, where nothing is blank and the
+ * primary-zoom tiles for that bucket are being warmed by the same pass. So a
+ * parent fetched on the prefetch path stands in for a blankness that never
+ * happens, while being charged against the same byte budget as the tiles it
+ * would have covered.
+ *
+ * Measured on the live `flights` demo (camera z4, archive z0-10,
+ * PARENT_FALLBACK_LEVELS = 4): 35.1 MB of 52.3 MB of prefetch-tier traffic
+ * (67%) was z0-z3 ancestors, on a link that was the binding constraint.
+ *
+ * `shouldSkipParentFetch` cannot catch it: the expected-value rule prices a
+ * parent against the ETA of its still-MISSING children, and at a future bucket
+ * every child is missing — so the further ahead the runway looks, the more
+ * attractive a parent appears.
+ */
+describe('SpatioTemporalTileset prefetch zoom fan-out', () => {
+  /** Every prefetched (t > 0) tile's zoom, for one settled prefetch pass. */
+  async function prefetchedZooms(
+    lodMode: 'additive' | 'parent-fallback',
+  ): Promise<Set<number>> {
+    const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      maxCacheSize: 300,
+      enablePrefetch: true,
+      // The mode that walks parents at all — 'no-overlap' would make the
+      // assertion vacuous.
+      refinementStrategy: 'best-available',
+      lodMode,
+      // Echoes back whatever zoom is asked for, so a parent request is visible.
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: batchSpy,
+    });
+
+    tileset.setAnimationState(true, 1000);
+    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settleMs(80);
+
+    const zooms = new Set<number>();
+    for (const call of batchSpy.mock.calls) {
+      for (const id of call[0] as TileId[]) if (id.t > 0) zooms.add(id.z);
+    }
+    tileset.finalize();
+    return zooms;
+  }
+
+  it('prefetches ONLY the primary zoom under parent-fallback LOD', async () => {
+    const zooms = await prefetchedZooms('parent-fallback');
+
+    // The runway ran at all...
+    expect(zooms.size).toBeGreaterThan(0);
+    // ...and bought nothing but the zoom actually being drawn. Pre-CO-7 this
+    // also contained 5, 4, 3 and 2 (PARENT_FALLBACK_LEVELS = 4).
+    expect([...zooms].sort((a, b) => a - b)).toEqual([6]);
+  });
+
+  it('still prefetches the full coarse union under additive LOD', async () => {
+    const zooms = await prefetchedZooms('additive');
+
+    // Additive LOD is EXEMPT: each point lives at exactly one home zoom, so the
+    // coarse levels are distinct DATA that is kept resident and drawn — not
+    // throwaway placeholders. Warming the union is the point of the mode.
+    expect(zooms.has(6)).toBe(true);
+    expect([...zooms].some((z) => z < 6)).toBe(true);
+  });
+});
+
+/**
+ * A2 (tile-loading audit 2026-08, PR-1 / CE-2): at fast playback the horizon
+ * is the speed-scaled gate floor (`speed × 5 s`), the per-pass budget used to
+ * bound ADMISSIONS rather than residency, and the pass re-ran as soon as its
+ * slice drained — so residency converged on the whole horizon, the over-limit
+ * pass evicted tier C (the far edge just fetched), and the next pass saw
+ * `header === undefined` and bought it again. Ported from
+ * `scratchpad/proof-runway-a2.mts` (experiment A): 5 tiles per bucket, a
+ * 400-tile cache (= 80 buckets), speed 40 sim-ms/real-ms so `speed × 5 s` is
+ * 200 buckets > 64 and the horizon addresses 1 000 tiles. Pre-fix: 515 ids
+ * fetched twice, 555 runway evictions, pressure pinned at 0.25.
+ */
+describe('A2: the prefetch budget bounds RESIDENCY within the horizon', () => {
+  const TILES_PER_BUCKET = 5;
+  const N = 6000;
+  const SPEED = 40;
+  const MAX_CACHE = 400;
+
+  const available = (
+    _b: BoundingBox,
+    z: number,
+    r: { start: number; end: number },
+  ): TileId[] => {
+    const ids: TileId[] = [];
+    const first = Math.max(0, Math.floor(r.start / BUCKET_MS));
+    const last = Math.min(N - 1, Math.floor(r.end / BUCKET_MS));
+    for (let i = first; i <= last; i++) {
+      const t = i * BUCKET_MS;
+      if (t + BUCKET_MS >= r.start && t <= r.end) {
+        for (let x = 0; x < TILES_PER_BUCKET; x++) ids.push({ z, x, y: 0, t });
+      }
+    }
+    return ids;
+  };
+
+  it('never refetches a tile nor evicts the runway when horizon × tiles/bucket exceeds the cache', async () => {
+    installClock();
+    // The regime the finding is about, asserted rather than assumed.
+    expect(SPEED * 5000).toBeGreaterThan(64 * BUCKET_MS);
+    expect((SPEED * 5000 * TILES_PER_BUCKET) / BUCKET_MS).toBeGreaterThan(
+      MAX_CACHE,
+    );
+
+    const counts = new Map<string, number>();
+    const record = (id: TileId): void => {
+      const k = `${id.z}/${id.x}/${id.y}/${id.t}`;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    };
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      temporalBucketMs: BUCKET_MS,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      prefetchAhead: BUCKET_MS,
+      prefetchSteps: 4,
+      maxCacheSize: MAX_CACHE,
+      maxCacheByteSize: 2 * 1024 ** 3,
+      getTileByteSize: () => 5000,
+      getAvailableTiles: async (b, z, r) => available(b, z, r),
+      getTileData: async (id: TileId) => {
+        record(id);
+        return fakeTile(id);
+      },
+      getTileDataBatch: async (ids: TileId[]) => {
+        for (const id of ids) record(id);
+        return ids.map(fakeTile);
+      },
+    });
+
+    let time = 500;
+    tileset.setAnimationState(true, SPEED);
+    tileset.update({ bounds: BOUNDS, zoom: 6, time, timeWindow: BUCKET_MS });
+    // Coverage tracking on: the tiered eviction, `runwayEvictions` and the
+    // CO-2 oracle all read the index — the same call the proof script makes.
+    tileset.getBufferedRunway(time, 1);
+    await settleMs(60);
+    for (let i = 0; i < 80; i++) {
+      advanceClock(100);
+      time += SPEED * 100;
+      tileset.update(
+        { bounds: BOUNDS, zoom: 6, time, timeWindow: BUCKET_MS },
+        true,
+      );
+      await settleMs(30);
+    }
+
+    let refetched = 0;
+    for (const n of counts.values()) if (n > 1) refetched++;
+    const st = tileset.getCacheStats();
+    // The runway ran: the head consumed 320 buckets and everything it drew
+    // came from a fetch that happened exactly once.
+    expect(counts.size).toBeGreaterThan(MAX_CACHE);
+    expect(refetched).toBe(0);
+    expect(st.refetches).toBe(0); // the tileset's own churn counter (G2) agrees
+    expect(st.runwayEvictions).toBe(0);
+    expect(st.prefetchPressureScale).toBe(1);
+    // ...and the cache itself never ran away. `tileCount` counts HEADERS —
+    // loaded tiles plus the queued/in-flight runway (≤ the 200-tile budget)
+    // plus whatever a coalesced trim has not yet reclaimed — so the honest
+    // bound is the cache cap plus one runway budget. Pre-fix this climbed
+    // without bound while the far edge was bought back over and over.
+    expect(st.tileCount).toBeLessThanOrEqual(MAX_CACHE + MAX_CACHE / 2 + 20);
+
+    tileset.finalize();
+  });
+});
+
+// ─── Tile-loading audit 2026-08: G3-2 (the byte budget yields to the cache)
+
+describe('G3-2: the byte budget yields to the cache', () => {
+  const MIB = 1024 * 1024;
+
+  it('admits NO speculative tile on a cold pass whose head tile already prices at the whole cache share', async () => {
+    const batchSpy = vi.fn(async (batch: TileId[]) => batch.map(fakeTile));
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 12,
+      enablePrefetch: true,
+      refinementStrategy: 'no-overlap',
+      temporalBucketMs: BUCKET_MS,
+      maxCacheSize: 300,
+      // ½ × 8 MiB ÷ the cold 8× expansion = 512 KiB of compressed runway;
+      // one 1 MiB tile is 8 MiB decoded at that price — the whole cache. The
+      // old 4 MiB floor lifted this to FOUR such tiles (32 MiB decoded
+      // against an 8 MiB cap), which were evicted before the head arrived
+      // and bought back. Zero is the honest answer until the measured
+      // expansion (four resident tiles priced both ways) says otherwise.
+      maxCacheByteSize: 8 * MIB,
+      getTileByteSize: () => 1 * MIB,
+      getAvailableTiles: async (b, z, r) => availableTiles(b, z, r),
+      getTileData: async (id: TileId) => fakeTile(id),
+      getTileDataBatch: batchSpy,
+    });
+    tileset.setAnimationState(true, 1000);
+    tileset.update({ bounds: BOUNDS, zoom: 6, time: 0, timeWindow: BUCKET_MS });
+    await settleMs(80);
+
+    const future = new Set<number>();
+    let headFetched = false;
+    for (const call of batchSpy.mock.calls) {
+      for (const id of call[0] as TileId[]) {
+        if (id.t > 0) future.add(id.t);
+        else headFetched = true;
+      }
+    }
+    expect(future.size).toBe(0);
+    // The play head's own data still loads: the budget bounds speculation,
+    // never the resident window.
+    expect(headFetched).toBe(true);
     tileset.finalize();
   });
 });

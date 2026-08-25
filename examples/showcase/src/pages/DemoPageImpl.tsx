@@ -10,6 +10,11 @@
  * transport bar bottom-centre — matching the AV cockpit and the in-map
  * legend/cube chips. This inverts the old "map inset inside page chrome"
  * frame into "UI inside the map".
+ *
+ * Below `md` that floating chrome would cover roughly half a phone screen, so
+ * the same map gets {@link DemoMobileChrome} instead: a slim top bar, an
+ * "About" disclosure, and the transport in its `compact` layout. The map, the
+ * playback wiring and the in-map chips are untouched — only the chrome swaps.
  */
 import React, {
   Suspense,
@@ -30,7 +35,16 @@ import {
   datasetSupportsThree,
 } from '../lib/rendererEligibility';
 import { useDemoPlayback } from '../components/demo/useDemoPlayback';
-import { usePlaybackHotkeys, PlaybackControls } from '@poopdeck.gl/react';
+import {
+  usePlaybackHotkeys,
+  PlaybackControls,
+  type PlaybackControlsProps,
+} from '@poopdeck.gl/react';
+import DemoMobileChrome, {
+  type RendererOption,
+} from '../components/demo/DemoMobileChrome';
+import { useIsMobile } from '../lib/useMediaQuery';
+import { DARK_CONTROL_THEME } from '../lib/controlTheme';
 // The site's own reduced-motion hook, as every other animated surface here uses
 // (`@poopdeck.gl/react` re-exports an equivalent one, but it is a symlinked
 // workspace package that Vite PRE-BUNDLES; that cache is not invalidated when
@@ -47,25 +61,6 @@ const MaplibreRenderer = React.lazy(
 const SttThreeGeoViewer = React.lazy(
   () => import('../components/demo/SttThreeGeoViewer'),
 );
-
-/**
- * `PlaybackControls` is authored in the site's light editorial theme (dark ink
- * on a white surface). Floated over the dark map it needs the inverse palette,
- * so we remap its CSS custom properties on the wrapper instead of forking the
- * shared, published component. Values mirror the dark in-map chips already in
- * `DemoViewer` (cube/summary controls) and the app's cyan data accent.
- */
-const DARK_CONTROL_THEME = {
-  '--ink-900': '#f4f5f7',
-  '--ink-700': '#d5d8de',
-  '--ink-500': '#a0a7b4',
-  '--ink-400': '#7b8494',
-  '--surface': '#262a33',
-  '--hairline': 'rgba(255, 255, 255, 0.14)',
-  '--accent': '#1fbad6',
-  '--accent-soft': 'rgba(31, 186, 214, 0.16)',
-  '--page-bg': '#15171c',
-} as React.CSSProperties;
 
 const DemoPage: React.FC = () => {
   const { datasetId } = useParams<{ datasetId: string }>();
@@ -107,6 +102,9 @@ const DemoPage: React.FC = () => {
   // Live camera from the deck viewer — fed to the scrubber's hover preview so
   // the thumbnail mirrors what the user is looking at.
   const [camera, setCamera] = useState<DemoCamera | null>(null);
+
+  // Phone-width layouts swap the whole floating chrome — see DemoMobileChrome.
+  const isMobile = useIsMobile();
 
   // ── Idle-hide the floating transport (video-player convention) ─────────────
   // The bar sits ON the map, so during playback it is permanently spending map
@@ -154,6 +152,24 @@ const DemoPage: React.FC = () => {
     };
   }, [isPlaying]);
 
+  // The phone transport spans the full width, so the bottom-right in-map
+  // legend has to be pushed above it. Its height is not a constant — the
+  // density strip and the multi-source runway rows are per-dataset — so it is
+  // measured rather than guessed. Desktop centres a max-w-4xl bar and the
+  // legend clears it on its own, hence the mobile-only observer.
+  const [transportHeight, setTransportHeight] = useState(0);
+  useEffect(() => {
+    const el = transportRef.current;
+    if (!isMobile || !el || typeof ResizeObserver === 'undefined') {
+      setTransportHeight(0);
+      return;
+    }
+    const ro = new ResizeObserver(() => setTransportHeight(el.offsetHeight));
+    ro.observe(el);
+    setTransportHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  }, [isMobile, selectedDataset]);
+
   if (!selectedDataset) return <Navigate to="/" replace />;
   const useMaplibre = renderer === 'maplibre' && maplibreCapable;
   const useThree = renderer === 'three' && threeCapable;
@@ -164,18 +180,81 @@ const DemoPage: React.FC = () => {
     ? `/demos/${selectedDataset.id}`
     : '/demos';
 
+  // The renderer switch, built once and laid out twice (a row of chips in the
+  // desktop title card, the same radios inside the phone's About sheet).
+  const rendererOptions: RendererOption[] = [
+    { id: 'deck', label: 'deck.gl', active: !useMaplibre && !useThree },
+    ...(maplibreCapable
+      ? [{ id: 'maplibre' as const, label: 'MapLibre', active: useMaplibre }]
+      : []),
+    ...(threeCapable
+      ? [{ id: 'three' as const, label: 'Three', active: useThree }]
+      : []),
+  ];
+
   // Push DemoViewer's top-left in-map chips (cube / summary toggle) below the
   // floating header so they don't collide. The header grows by one row when
-  // the renderer toggle is present, so budget a little more for it.
-  const headerInset = hasAltRenderer ? 148 : 112;
+  // the renderer toggle is present, so budget a little more for it. The phone
+  // header is one slim bar (safe area + a 36px row + its scrim padding).
+  const headerInset = isMobile ? 60 : hasAltRenderer ? 148 : 112;
+  // …and the phone legend above the full-width transport (+ a 12px gutter).
+  const bottomInset =
+    isMobile && transportHeight > 0 ? transportHeight + 12 : 0;
+
+  // Everything the transport bar needs, in one object: the desktop shell and
+  // DemoMobileChrome render the SAME bar, so its wiring must not be authored
+  // twice and drift.
+  const transportProps: PlaybackControlsProps = {
+    currentTime: playback.currentTime,
+    timeRange: selectedDataset.timeRange,
+    isPlaying: playback.isPlaying,
+    bufferState: playback.bufferState,
+    governor: playback.governor,
+    onPlayPause: playback.onPlayPause,
+    onSeek: playback.onSeek,
+    onSpeedChange: playback.onSpeedChange,
+    currentSpeedMultiplier: playback.speedMultiplier,
+    targetPlaybackSeconds: selectedDataset.targetPlaybackSeconds ?? 30,
+    autoSpeed: playback.autoSpeed,
+    onAutoSpeedSelect: playback.onAutoSpeedSelect,
+    ended: playback.ended,
+    loop: playback.loop,
+    onLoopToggle: playback.onLoopToggle,
+    // This page mounts usePlaybackHotkeys, so the bar may advertise keys and
+    // offer the shortcuts panel. (`compact` suppresses both — a phone has no
+    // key map to document.)
+    keyboardShortcuts: true,
+    // Hover preview is deck-only (it needs the deck camera/render path); the
+    // maplibre + Three renderers don't feed a deck camera, so omit it. It is
+    // also a hover affordance, so the compact bar drops it regardless.
+    renderPreview:
+      useMaplibre || useThree
+        ? undefined
+        : (time) => (
+            <DemoHoverPreview
+              key={selectedDataset.id}
+              dataset={selectedDataset}
+              camera={camera}
+              time={time}
+            />
+          ),
+  };
 
   return (
     <div
       className="h-full relative overflow-hidden"
       style={{ background: '#0a0d12' }}
     >
-      {/* Full-bleed map — fills the whole surface; the chrome floats on top. */}
-      <div className="absolute inset-0">
+      {/* Full-bleed map — fills the whole surface; the chrome floats on top.
+          The custom property tells the basemap's bottom-docked controls (the
+          attribution and logo, which are a licensing requirement) how much
+          floating chrome they have to clear — see index.css. */}
+      <div
+        className="absolute inset-0"
+        style={
+          { '--stt-bottom-chrome': `${bottomInset}px` } as React.CSSProperties
+        }
+      >
         <Suspense
           fallback={
             <div className="w-full h-full" style={{ background: '#0a0d12' }} />
@@ -194,6 +273,7 @@ const DemoPage: React.FC = () => {
               dataset={selectedDataset}
               playback={playback}
               topLeftInset={headerInset}
+              bottomInset={bottomInset}
             />
           ) : (
             <DemoViewer
@@ -201,139 +281,103 @@ const DemoPage: React.FC = () => {
               playback={playback}
               showPerfHud={showPerfHud}
               topLeftInset={headerInset}
+              bottomInset={bottomInset}
               onCameraChange={setCamera}
             />
           )}
         </Suspense>
       </div>
 
-      {/* Floating header (top-left): back link, title, description, and the
-          optional renderer toggle — a dark frosted panel over the map. */}
-      <div className="glass rounded-md absolute top-3 left-3 z-10 max-w-xs px-3.5 py-3">
-        <Link
-          to={backTarget}
-          className="inline-flex items-center gap-1 text-xs mb-1.5 text-slate-400 transition-colors hover:text-cyan-300"
-        >
-          <span>←</span>{' '}
-          {getDemoMeta(selectedDataset.id) ? 'About this demo' : 'Demos'}
-        </Link>
-        <h1 className="font-display text-base font-semibold leading-tight text-slate-100">
-          {selectedDataset.name}
-        </h1>
-        <p className="text-xs mt-1 leading-snug text-slate-400 line-clamp-2">
-          {selectedDataset.description}
-        </p>
-        {hasAltRenderer && (
-          <div
-            className="mt-2.5 inline-flex gap-1.5"
-            role="radiogroup"
-            aria-label="Renderer"
-            title="Swap the rendering library for the same tileset"
-          >
-            {(
-              [
-                {
-                  id: 'deck',
-                  label: 'deck.gl',
-                  active: !useMaplibre && !useThree,
-                },
-                ...(maplibreCapable
-                  ? [
-                      {
-                        id: 'maplibre' as const,
-                        label: 'MapLibre',
-                        active: useMaplibre,
-                      },
-                    ]
-                  : []),
-                ...(threeCapable
-                  ? [{ id: 'three' as const, label: 'Three', active: useThree }]
-                  : []),
-              ] as {
-                id: 'deck' | 'maplibre' | 'three';
-                label: string;
-                active: boolean;
-              }[]
-            ).map((r) => (
-              // A REAL radio, not a button with role="radio": the native input
-              // brings arrow-key traversal of the group and the checked state
-              // for free, which the button version had to fake and never wired.
-              // The input is visually hidden, so the ring lives on the label.
-              <label
-                key={r.id}
-                className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-cyan-300/70 ${
-                  r.active
-                    ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
-                    : 'border-white/15 text-slate-300 hover:bg-white/5'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name={rendererGroup}
-                  className="sr-only"
-                  checked={r.active}
-                  onChange={() => setRenderer(r.id)}
-                />
-                {r.label}
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Floating transport bar (bottom, centred). Dark frosted panel; the
-          shared PlaybackControls is light-themed, so we remap its CSS vars to
-          the dark palette on the wrapper (see DARK_CONTROL_THEME). */}
-      <div
-        ref={transportRef}
-        className="glass rounded-md absolute bottom-3 left-3 right-3 z-10 mx-auto max-w-4xl px-4 py-3"
-        style={{
-          ...DARK_CONTROL_THEME,
-          opacity: transportIdle ? 0 : 1,
-          // Must not eat pointer events from the map once invisible.
-          pointerEvents: transportIdle ? 'none' : 'auto',
-          transform:
-            transportIdle && !reducedMotion ? 'translateY(8px)' : undefined,
-          transition: reducedMotion
-            ? undefined
-            : 'opacity 220ms ease, transform 220ms ease',
-        }}
-      >
-        <PlaybackControls
-          currentTime={playback.currentTime}
-          timeRange={selectedDataset.timeRange}
-          isPlaying={playback.isPlaying}
-          bufferState={playback.bufferState}
-          governor={playback.governor}
-          onPlayPause={playback.onPlayPause}
-          onSeek={playback.onSeek}
-          onSpeedChange={playback.onSpeedChange}
-          currentSpeedMultiplier={playback.speedMultiplier}
-          targetPlaybackSeconds={selectedDataset.targetPlaybackSeconds ?? 30}
-          autoSpeed={playback.autoSpeed}
-          onAutoSpeedSelect={playback.onAutoSpeedSelect}
-          ended={playback.ended}
-          loop={playback.loop}
-          onLoopToggle={playback.onLoopToggle}
-          // This page mounts usePlaybackHotkeys, so the bar may advertise keys
-          // and offer the shortcuts panel.
-          keyboardShortcuts
-          // Hover preview is deck-only (it needs the deck camera/render path);
-          // the maplibre + Three renderers don't feed a deck camera, so omit it.
-          renderPreview={
-            useMaplibre || useThree
-              ? undefined
-              : (time) => (
-                  <DemoHoverPreview
-                    key={selectedDataset.id}
-                    dataset={selectedDataset}
-                    camera={camera}
-                    time={time}
-                  />
-                )
+      {isMobile ? (
+        <DemoMobileChrome
+          dataset={selectedDataset}
+          backTo={backTarget}
+          backLabel={
+            getDemoMeta(selectedDataset.id) ? 'About this demo' : 'Demos'
           }
+          renderers={hasAltRenderer ? rendererOptions : undefined}
+          rendererGroup={rendererGroup}
+          onRendererChange={setRenderer}
+          transport={transportProps}
+          transportRef={transportRef}
+          transportIdle={transportIdle}
+          reducedMotion={reducedMotion}
         />
-      </div>
+      ) : (
+        <>
+          {/* Floating header (top-left): back link, title, description, and the
+              optional renderer toggle — a dark frosted panel over the map. */}
+          <div className="glass rounded-md absolute top-3 left-3 z-10 max-w-xs px-3.5 py-3">
+            <Link
+              to={backTarget}
+              className="inline-flex items-center gap-1 text-xs mb-1.5 text-slate-400 transition-colors hover:text-cyan-300"
+            >
+              <span>←</span>{' '}
+              {getDemoMeta(selectedDataset.id) ? 'About this demo' : 'Demos'}
+            </Link>
+            <h1 className="font-display text-base font-semibold leading-tight text-slate-100">
+              {selectedDataset.name}
+            </h1>
+            <p className="text-xs mt-1 leading-snug text-slate-400 line-clamp-2">
+              {selectedDataset.description}
+            </p>
+            {hasAltRenderer && (
+              <div
+                className="mt-2.5 inline-flex gap-1.5"
+                role="radiogroup"
+                aria-label="Renderer"
+                title="Swap the rendering library for the same tileset"
+              >
+                {rendererOptions.map((r) => (
+                  // A REAL radio, not a button with role="radio": the native
+                  // input brings arrow-key traversal of the group and the
+                  // checked state for free, which the button version had to
+                  // fake and never wired. The input is visually hidden, so the
+                  // ring lives on the label.
+                  <label
+                    key={r.id}
+                    className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors cursor-pointer focus-within:ring-2 focus-within:ring-cyan-300/70 ${
+                      r.active
+                        ? 'border-cyan-300/60 bg-cyan-400/20 text-cyan-100'
+                        : 'border-white/15 text-slate-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={rendererGroup}
+                      className="sr-only"
+                      checked={r.active}
+                      onChange={() => setRenderer(r.id)}
+                    />
+                    {r.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Floating transport bar (bottom, centred). Dark frosted panel; the
+              shared PlaybackControls is light-themed, so we remap its CSS vars
+              to the dark palette on the wrapper (see DARK_CONTROL_THEME). */}
+          <div
+            ref={transportRef}
+            className="glass rounded-md absolute bottom-3 left-3 right-3 z-10 mx-auto max-w-4xl px-4 py-3"
+            style={{
+              ...DARK_CONTROL_THEME,
+              opacity: transportIdle ? 0 : 1,
+              // Must not eat pointer events from the map once invisible.
+              pointerEvents: transportIdle ? 'none' : 'auto',
+              transform:
+                transportIdle && !reducedMotion ? 'translateY(8px)' : undefined,
+              transition: reducedMotion
+                ? undefined
+                : 'opacity 220ms ease, transform 220ms ease',
+            }}
+          >
+            <PlaybackControls {...transportProps} />
+          </div>
+        </>
+      )}
     </div>
   );
 };

@@ -249,6 +249,18 @@ export class StreamingTileSource {
 
   /** Last resident set published to `onTilesChanged` (for diffing). */
   private resident: Tile[] = [];
+  /**
+   * Tileset frame number at the last update-path publish. An unchanged one is
+   * the tileset's guarantee that the visible set cannot have moved THROUGH
+   * `update()`, which keeps the `getVisibleTiles()` + Set diff walk off a
+   * host's per-frame pump. Arrivals and evictions never bump it — they come
+   * through {@link publishPending}.
+   */
+  private lastPublishedFrame = -1;
+  /** A resident-set change may be outstanding; re-derive on the next flush. */
+  private publishPending = false;
+  /** A microtask flush is already queued. */
+  private publishScheduled = false;
   private disposed = false;
 
   constructor(opts: StreamingTileSourceOptions) {
@@ -277,6 +289,9 @@ export class StreamingTileSource {
    */
   attachTileset(tileset: DrivableTileset, metadata?: ArchiveMetadata): this {
     this.tileset = tileset;
+    // A fresh tileset numbers its frames from scratch: the first update must
+    // walk, whatever the previous one last reported.
+    this.lastPublishedFrame = -1;
     if (metadata) this.metadata = metadata;
     return this;
   }
@@ -336,9 +351,14 @@ export class StreamingTileSource {
       // getTileDataBatch / getTileByteSize / getThroughput / summary tiles) —
       // shared with the deck path via the core adapter.
       ...makeTilesetCallbacks(archive, metadata),
-      // A wired onTileLoad means tiles arrive after the synchronous update()
-      // returns — re-publish the resident set so the layer picks them up.
-      onTileLoad: () => this.publishIfChanged(),
+      // Tiles arrive — and leave — AFTER the synchronous update() returns,
+      // one callback per tile. Both edges mark the resident set stale and
+      // re-derive it ONCE per task (audit E5): a burst of M arrivals used to
+      // cost M replace-all `setTiles` rebuilds (O(N·M) point packing + M GPU
+      // re-uploads), and evictions were not surfaced at all, so an evicted
+      // tile's points stayed on the GPU until some later change moved the set.
+      onTileLoad: () => this.schedulePublish(),
+      onTileUnload: () => this.schedulePublish(),
     } as ConstructorParameters<typeof SpatioTemporalTileset>[0]);
     this.tileset = tileset;
 
@@ -390,12 +410,47 @@ export class StreamingTileSource {
       this.optTimeWindowMs ??
       this.metadata?.temporalBucketMs ??
       3600 * 1000;
-    this.tileset.update({
+    const frame = this.tileset.update({
       bounds: viewport.bounds,
       zoom: viewport.zoom,
       time: viewport.time,
       timeWindow,
     });
+    // Same frame number ⇒ the visible set cannot have changed through the
+    // update path since the last publish — skip the diff walk (a host pumps
+    // this every frame; the walk is O(resident) with a Set allocation).
+    if (frame !== this.lastPublishedFrame) {
+      this.lastPublishedFrame = frame;
+      this.publishPending = true;
+    }
+    // Flush here rather than wait for the microtask: `tileset.update()` has
+    // returned, so any eviction it ran synchronously is complete, and the
+    // frame that drove the tileset gets the corrected set inside itself.
+    this.flushPublish();
+  }
+
+  /**
+   * Coalesce resident-set changes: mark stale, re-derive once at the end of
+   * the current task. A microtask, not a frame callback, because the browser
+   * cannot paint between a task and its microtask drain — so a correction
+   * always beats the next frame to the screen — and because core fires the
+   * unload callback BEFORE it deletes the header, so a re-derive inside the
+   * callback would still see the evicted tile as resident.
+   */
+  private schedulePublish(): void {
+    this.publishPending = true;
+    if (this.publishScheduled) return;
+    this.publishScheduled = true;
+    queueMicrotask(() => {
+      this.publishScheduled = false;
+      this.flushPublish();
+    });
+  }
+
+  /** Run a queued republish now, if one is outstanding. */
+  private flushPublish(): void {
+    if (!this.publishPending) return;
+    this.publishPending = false;
     this.publishIfChanged();
   }
 
@@ -432,11 +487,13 @@ export class StreamingTileSource {
 
   dispose(): void {
     this.disposed = true;
+    // AFTER clear(): it fires onTileUnload per header, which re-arms the flag.
     this.tileset?.clear?.();
     this.archive?.finalize?.();
     this.tileset = null;
     this.archive = null;
     this.resident = [];
+    this.publishPending = false;
     this.onTilesChanged = undefined;
   }
 }

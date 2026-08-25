@@ -262,7 +262,7 @@ export class STTIconLayer extends BaseSTTLayer implements STTIdPickable {
    * `stableColorMapping` is on and a categorical `colorProperty` is set; else null
    * (byte-identical CPU tint path). STATIC path only — the glide path bakes a
    * per-entity tint that is already stable across tiles. CPU-only; the palette
-   * TEXTURE is built after `disposeGpu` in `setTiles`.
+   * TEXTURE is built once, in `ensureStaticBundle`.
    */
   private resolveCategoryPalette(): {
     property: string;
@@ -365,7 +365,7 @@ export class STTIconLayer extends BaseSTTLayer implements STTIdPickable {
     this.provenance = buf.provenance;
     this.binaryByTileKey = buf.binaryByTileKey;
 
-    this.disposeGpu();
+    this.disposeGeometry();
     if (buf.count === 0) {
       this.object.geometry = makeBillboardQuadGeometry();
       this.object.visible = false;
@@ -429,11 +429,33 @@ export class STTIconLayer extends BaseSTTLayer implements STTIdPickable {
       );
     }
 
-    // Stable palette: build the texture AFTER disposeGpu (frees the previous one).
-    const paletteTexture =
-      cat && buf.categoryIndices.length > 0
-        ? makePaletteTexture(cat.palette)
-        : null;
+    const bundle = this.ensureStaticBundle(cat, buf.categoryIndices.length > 0);
+    this.object.geometry = geometry;
+    this.object.material = bundle.material;
+    this.pushUniforms(this.timeOrigin);
+  }
+
+  /** Whether the live static bundle samples the stable-palette texture. */
+  private bundleUsesPalette = false;
+
+  /**
+   * The static-path material (+ its palette texture), built ONCE per variant
+   * (audit E5). Every input is fixed at construction except whether the
+   * buffers carry category slots, which is constant for a given palette
+   * config — so the variant flips at most once. Disposing per `setTiles`
+   * evicted three's `nodeBuilderCache` entry, program and pipeline: a shader
+   * rebuild per tile arrival. Only the geometry churns now. The glide path
+   * still rebuilds, because it bakes its keyframe texture into the node graph.
+   */
+  private ensureStaticBundle(
+    cat: { palette: StablePalette } | null,
+    hasCategories: boolean,
+  ): IconMaterialBundle {
+    const usePalette = cat !== null && hasCategories;
+    if (this.bundle && this.bundleUsesPalette === usePalette)
+      return this.bundle;
+    this.disposeMaterials();
+    const paletteTexture = usePalette ? makePaletteTexture(cat.palette) : null;
     this.paletteTexture = paletteTexture;
 
     // The shader maps quad-top → atlas v0 (top-left origin). A TextureLoader atlas
@@ -455,9 +477,8 @@ export class STTIconLayer extends BaseSTTLayer implements STTIdPickable {
     if (this.bundle.palette && cat) {
       this.bundle.palette.invWidth.value = 1 / cat.palette.colors.length;
     }
-    this.object.geometry = geometry;
-    this.object.material = this.bundle.material;
-    this.pushUniforms(this.timeOrigin);
+    this.bundleUsesPalette = usePalette;
+    return this.bundle;
   }
 
   /**
@@ -768,17 +789,26 @@ export class STTIconLayer extends BaseSTTLayer implements STTIdPickable {
     return this.resolvePick(index, [cssX, cssY]);
   }
 
-  private disposeGpu(): void {
+  /** Release the geometry (and the per-geometry pick attribute flag) only. */
+  private disposeGeometry(): void {
     if (this.object.geometry) this.object.geometry.dispose();
+    this.idColorsPresent = false;
+  }
+
+  private disposeMaterials(): void {
     this.bundle?.material.dispose();
     this.bundle = null;
     this.idBundle?.material.dispose();
     this.idBundle = null;
-    this.idColorsPresent = false;
     this.glideTexture?.dispose();
     this.glideTexture = null;
     this.paletteTexture?.dispose();
     this.paletteTexture = null;
+  }
+
+  private disposeGpu(): void {
+    this.disposeGeometry();
+    this.disposeMaterials();
   }
 
   dispose(): void {

@@ -138,6 +138,16 @@ export const PRESSURE_RECOVERY_STEP_INTERVAL_MS = 1000;
  * temporal ordering (nearest upcoming bucket first), a finite budget always
  * covers the IMMINENT future rather than a spatially-arbitrary slice of a
  * multi-year span.
+ *
+ * The fraction is a bound on what is COMMITTED inside the horizon (resident,
+ * in flight, queued, plus this pass's admissions — see
+ * {@link PrefetchPolicy.enqueueBudget}), not on one pass's admissions: a
+ * per-pass cap alone could not keep the runway resident at fast playback,
+ * because the pass re-ran as each slice drained and residency converged on
+ * the whole horizon regardless (tile-loading audit 2026-08, A2). The same
+ * fraction, divided by the viewport's tiles per bucket, is the sim-time
+ * "residency capacity" the speed-scaled gate floor bends to in
+ * {@link PrefetchPolicy.plan}.
  */
 export const PREFETCH_CACHE_FRACTION = 0.5;
 
@@ -145,12 +155,14 @@ export const PREFETCH_CACHE_FRACTION = 0.5;
 export const PREFETCH_MIN_BUDGET_TILES = 64;
 
 /**
- * Floor on the per-pass enqueue BYTE budget, whatever the cache byte budget
- * scales to (M6/BH-2). Mirrors {@link PREFETCH_MIN_BUDGET_TILES}: a tiny or
- * misconfigured `maxCacheByteSize` must still leave a workable runway rather
- * than collapsing the enqueue to a handful of tiles. 4 MiB ≈ one cold prefetch
- * slice ({@link PREFETCH_SLICE_COLD_BYTES}), so the floor is always at least
- * one dispatchable slice of work.
+ * Stand-in for the per-pass enqueue BYTE budget when the cache byte budget
+ * cannot be priced at all — a NaN, zero or negative `maxCacheByteSize`
+ * (M6/BH-2). 4 MiB ≈ one cold prefetch slice
+ * ({@link PREFETCH_SLICE_COLD_BYTES}), one dispatchable slice of work. It is
+ * NOT a floor under a cap that can be priced: a runway the cache cannot hold
+ * is evicted before the play head arrives and bought back, so the budget
+ * yields to the cache's share instead (G3-2, tile-loading audit 2026-08; see
+ * {@link PrefetchPolicy.enqueueBudgetBytes}).
  *
  * CURRENCY: COMPRESSED directory bytes — the same unit
  * `STTArchive.getTileByteSize` (`entry.length`) reports and the same unit the
@@ -379,6 +391,53 @@ export interface PrefetchPlanRequest {
    * construction (a widening window over non-negative per-bucket totals).
    */
   bytesForHorizon?: HorizonBytesOracle | null;
+  /**
+   * Tile-count cache cap of the requesting tileset. With
+   * {@link keysPerBucket} it prices the runway's share of the cache in
+   * SIM-TIME — the "residency capacity" the speed-scaled gate floor bends to
+   * (A2, see {@link PrefetchPolicy.plan}). Absent ⇒ no bend; the plan is
+   * byte-identical to one issued before the field existed.
+   */
+  maxCacheSize?: number;
+  /**
+   * Primary-zoom tiles per temporal bucket in the viewport: the coverage
+   * index's average when one is built, otherwise the last pass's own
+   * enumeration. `null` / absent when nothing has been observed yet, which
+   * also means no bend.
+   */
+  keysPerBucket?: number | null;
+  /**
+   * Byte cap of the requesting tileset's DECODED cache — its effective
+   * `maxCacheByteSize` (G3-2, tile-loading audit 2026-08). With
+   * {@link bytesPerBucket} and {@link byteExpansion} it prices the runway's
+   * share of the BYTE cache in sim-time, exactly as {@link maxCacheSize} and
+   * {@link keysPerBucket} price its share of the tile cache; the gate floor
+   * bends to whichever capacity is smaller. Absent ⇒ the count price alone.
+   */
+  maxCacheBytes?: number;
+  /**
+   * COMPRESSED directory bytes per temporal bucket at the primary zoom in
+   * the viewport: the coverage index's average when its byte channel is
+   * known, otherwise the last pass's own enumeration. `null` / absent when
+   * unobserved or byte-blind, which also means no byte-priced bend.
+   */
+  bytesPerBucket?: number | null;
+  /**
+   * Decoded bytes per compressed directory byte — the same exchange rate the
+   * enqueue's byte budget is converted with (see
+   * {@link PREFETCH_COLD_BYTE_EXPANSION}). Absent ⇒ the cold value.
+   */
+  byteExpansion?: number;
+  /**
+   * Declared playback LOOP window in sim-time (B5, tile-loading audit
+   * 2026-08), or `null`/absent for one-directional playback. When set, a
+   * horizon that runs past the loop's far edge WRAPS: the plan carries a
+   * second query range from the near edge, and
+   * {@link PrefetchPlan.aheadDistance} measures a bucket behind the head but
+   * inside the loop by its distance ALONG the loop. Without a loop the plan
+   * is byte-identical to one issued before the field existed.
+   */
+  loop?: { start: number; end: number } | null;
 }
 
 /** What one planning pass decided. */
@@ -397,9 +456,20 @@ export interface PrefetchPlan {
    */
   readonly queryRange: { start: number; end: number };
   /**
+   * The WRAPPED remainder of a looping horizon (B5): the directory range
+   * from the loop's near edge that the span past its far edge maps onto,
+   * widened like {@link queryRange}. `null` when no loop is declared or the
+   * horizon stays inside it. Never overlaps `queryRange` — it ends before the
+   * play head — so a bucket is enumerated by at most one of the two.
+   */
+  readonly wrapQueryRange: { start: number; end: number } | null;
+  /**
    * Sim-ms from the play head to `bucketStart` ALONG the plan's direction.
    * Buckets already behind the head yield a sentinel above every genuine
-   * ahead-distance, so ordering candidates by this value sorts them last.
+   * ahead-distance, so ordering candidates by this value sorts them last —
+   * unless a loop is declared and the bucket lies inside it, in which case
+   * the head reaches it again after the wrap and the distance is measured
+   * along the loop (B5).
    */
   aheadDistance(bucketStart: number): number;
 }
@@ -436,6 +506,17 @@ export class PrefetchPolicy {
 
   /** End of the last planned span in sim-time (the runway throttle anchor). */
   private lastPlannedEndTime?: number;
+  /**
+   * Set once the caller reports that the last released pass found every
+   * candidate inside its horizon already resident and enqueued nothing (F1,
+   * tile-loading audit 2026-08). While set, {@link plan} throttles on the
+   * runway anchor even with an idle pipeline: the idle bypass exists so a
+   * budget-truncated or gate-frozen pass can re-arm, and a fully resident
+   * archive is neither — re-planning it every debounce window re-ran the
+   * directory slice and sort for nothing. Cleared by the next released plan
+   * and by {@link invalidatePlan}.
+   */
+  private lastPassResident = false;
 
   /** Pressure-adaptive horizon scale in `[PRESSURE_SCALE_MIN, 1]`. */
   private pressure = 1;
@@ -645,6 +726,31 @@ export class PrefetchPolicy {
   invalidatePlan(): void {
     this.generation++;
     this.lastPlannedEndTime = undefined;
+    this.lastPassResident = false;
+  }
+
+  /**
+   * Report that the pass just completed enqueued nothing because everything
+   * inside its horizon was already resident (F1). The anchor the plan claimed
+   * stands, and the throttle measures against it regardless of pipeline
+   * idleness — until the play head consumes the reload fraction of the span,
+   * at which point the next pass re-checks.
+   */
+  noteResidentPass(): void {
+    this.lastPassResident = true;
+  }
+
+  /**
+   * The play head just wrapped from one end of the declared loop to the
+   * other (B5) — a CONTINUATION, not a seek. The anchor was claimed in
+   * unwrapped time (`plan.endTime` past the loop's far edge), so translate it
+   * by one loop span in the committed direction; the throttle then reads the
+   * warmed post-wrap buckets as exactly the runway they are, instead of a
+   * span a whole loop ahead. Nothing is flushed and the generation stands.
+   */
+  observeLoopWrap(loopSpan: number): void {
+    if (!(loopSpan > 0) || this.lastPlannedEndTime === undefined) return;
+    this.lastPlannedEndTime -= this.committedDirection * loopSpan;
   }
 
   // ── Planning ──────────────────────────────────────────────────────────
@@ -681,6 +787,7 @@ export class PrefetchPolicy {
       prefetchAhead,
       prefetchSteps,
       pipelineIdle,
+      loop,
     } = request;
 
     const direction = this.committedDirection;
@@ -720,10 +827,24 @@ export class PrefetchPolicy {
     // deadlocks at the start-wait rather than degrading. Named once here because
     // three separate mechanisms (the run-ahead cap, the feasibility solve, the
     // pressure ladder) are each forbidden to cut below it.
+    //
+    // RESIDENCY CAPACITY (A2, tile-loading audit 2026-08). The speed term is a
+    // floor on SIM-TIME with no relation to how many tiles that span
+    // addresses: at 2 383× (`nyc-taxi-paths`) it is 199 one-minute buckets ×
+    // ~36 z14 tiles = 7 164 tiles against a 2 000-tile cap. A floor the cache
+    // cannot hold is not a gate the runway can ever satisfy — it is a standing
+    // order to evict the far edge and buy it back, forever. So the speed term
+    // bends to what the runway's share of the cache can hold (see
+    // residencyCapacitySimMs). The window terms do NOT bend: the play head's
+    // own data keeps loading whatever the cache size, and it is the governor's
+    // 8 s escape hatch — not over-commitment here — that absorbs a gate
+    // residency cannot meet. Inert until the tileset offers a density.
+    const speedFloor = speed * PREFETCH_CAP_FLOOR_REAL_MS;
+    const capacity = this.residencyCapacitySimMs(request);
     const gateFloor = Math.max(
       bucketMs,
       timeWindow,
-      speed * PREFETCH_CAP_FLOOR_REAL_MS,
+      capacity === null ? speedFloor : Math.min(speedFloor, capacity),
     );
 
     // Governor run-ahead fairness cap. The internal safety floor keeps a
@@ -784,18 +905,67 @@ export class PrefetchPolicy {
     // span, AND whenever the span GROWS (e.g. the animation speeds up, so the
     // last claim falls short) — anchoring the throttle on the claim's START
     // time instead suppresses that case and leaves playback to drip per-frame.
-    if (this.lastPlannedEndTime !== undefined && !pipelineIdle) {
+    //
+    // A resident pass (F1) keeps the throttle armed through an idle pipeline:
+    // nothing was enqueued because nothing was missing, and the idle bypass
+    // is for passes that could not enqueue what they claimed.
+    if (
+      this.lastPlannedEndTime !== undefined &&
+      (!pipelineIdle || this.lastPassResident)
+    ) {
       const runway = direction * (this.lastPlannedEndTime - time);
       if (runway > effectiveAhead * (1 - PREFETCH_RELOAD_FRACTION)) return null;
     }
     this.lastPlannedEndTime = endTime;
+    this.lastPassResident = false; // this pass reports its own verdict
 
     // One query covering the whole span. Enumerating every bucket boundary
     // instead costs O(buckets × zoomLevels) directory calls for the SAME tile
     // ids (availability already filters by interval overlap) — for a large
     // span with small buckets that dominates the main thread.
-    const nearEdge = direction > 0 ? time : endTime;
-    const farEdge = direction > 0 ? endTime : time;
+    let nearEdge = direction > 0 ? time : endTime;
+    let farEdge = direction > 0 ? endTime : time;
+
+    // LOOP WRAP (B5). Under a declared loop the span past the far edge is not
+    // empty directory time — it is the loop start, which the head reaches
+    // next. Clip the primary query at the loop edge and carry the overrun as
+    // a second range from the near edge, capped so it ends BEFORE the play
+    // head (the buckets from the head to the edge are the primary query's;
+    // enumerating them twice would double-enqueue). The eviction tiering
+    // already reasons modulo the loop; this is the same arithmetic on the
+    // fetch side, so the loop start is warm before the wrap instead of being
+    // a cold seek on every lap.
+    const loopSpan = loop && loop.end > loop.start ? loop.end - loop.start : 0;
+    let wrapQueryRange: { start: number; end: number } | null = null;
+    if (loop && loopSpan > 0) {
+      if (direction > 0 && endTime > loop.end) {
+        const overrun = Math.min(
+          endTime - loop.end,
+          Math.max(0, time - loop.start),
+        );
+        farEdge = loop.end;
+        if (overrun > 0) {
+          wrapQueryRange = {
+            start: loop.start - timeWindow / 2,
+            end: loop.start + overrun + timeWindow / 2,
+          };
+        }
+      } else if (direction < 0 && endTime < loop.start) {
+        const overrun = Math.min(
+          loop.start - endTime,
+          Math.max(0, loop.end - time),
+        );
+        nearEdge = loop.start;
+        if (overrun > 0) {
+          wrapQueryRange = {
+            start: loop.end - overrun - timeWindow / 2,
+            end: loop.end + timeWindow / 2,
+          };
+        }
+      }
+    }
+    const loopStart = loop?.start ?? 0;
+    const loopEnd = loop?.end ?? 0;
 
     return {
       direction,
@@ -806,9 +976,20 @@ export class PrefetchPolicy {
         start: nearEdge - timeWindow / 2,
         end: farEdge + timeWindow / 2,
       },
+      wrapQueryRange,
       aheadDistance(bucketStart: number): number {
         const d = direction > 0 ? bucketStart - time : time - bucketStart;
-        return d >= 0 ? d : Number.MAX_SAFE_INTEGER + d; // behind-head last
+        if (d >= 0) return d;
+        // Behind the head but inside the loop: reached again after the wrap,
+        // so its distance runs along the loop (B5).
+        if (
+          loopSpan > 0 &&
+          bucketStart >= loopStart &&
+          bucketStart <= loopEnd
+        ) {
+          return d + loopSpan;
+        }
+        return Number.MAX_SAFE_INTEGER + d; // behind-head last
       },
     };
   }
@@ -891,10 +1072,74 @@ export class PrefetchPolicy {
   }
 
   /**
-   * Ceiling on how many tiles one pass may enqueue: a fraction of the tile-count
-   * cache budget, never below {@link PREFETCH_MIN_BUDGET_TILES}. Bounding the
-   * runway this way keeps it RESIDENT — an enqueue larger than the LRU is
-   * evicted before the play head arrives and re-fetched one tile at a time.
+   * Sim-time the runway's share of the cache can hold at the viewport's
+   * observed density — the SMALLER of two prices, rounded DOWN to the bucket
+   * grid so the bent floor never claims a partial bucket the budget would
+   * then truncate:
+   *
+   * - TILE COUNT: `enqueueBudget(maxCacheSize) / keysPerBucket` buckets;
+   * - BYTES (G3-2, tile-loading audit 2026-08): `enqueueBudgetBytes(
+   *   maxCacheBytes, expansion) / bytesPerBucket` buckets, i.e.
+   *   `PREFETCH_CACHE_FRACTION × maxCacheBytes ÷ (expansion × bytesPerBucket)`
+   *   with both sides in compressed currency.
+   *
+   * A count-only price misses the archive whose tiles are BIG: 2 MiB tiles
+   * under an 8 MiB byte cap price at 1 000 buckets of count capacity and fit
+   * two, so the `speed × 5 s` floor stood five tiles deep in a cache that
+   * holds four — the fetch → evict → refetch loop A2 closed for count caps
+   * survived for byte caps (measured: 32 MiB resident, 344 runway
+   * evictions, 333 refetches).
+   *
+   * `null` when neither price can be computed (no cap, no density, or no
+   * bucket grid — an archive without buckets has no per-bucket density to
+   * price with), which the caller reads as "no bend".
+   */
+  private residencyCapacitySimMs(request: PrefetchPlanRequest): number | null {
+    const {
+      maxCacheSize,
+      keysPerBucket,
+      maxCacheBytes,
+      bytesPerBucket,
+      byteExpansion,
+      bucketMs,
+    } = request;
+    if (!(bucketMs > 0)) return null;
+    let buckets: number | null = null;
+    if (
+      typeof maxCacheSize === 'number' &&
+      maxCacheSize > 0 &&
+      typeof keysPerBucket === 'number' &&
+      keysPerBucket > 0
+    ) {
+      buckets = Math.floor(this.enqueueBudget(maxCacheSize) / keysPerBucket);
+    }
+    if (
+      typeof maxCacheBytes === 'number' &&
+      Number.isFinite(maxCacheBytes) &&
+      maxCacheBytes > 0 &&
+      typeof bytesPerBucket === 'number' &&
+      bytesPerBucket > 0
+    ) {
+      const budget = this.enqueueBudgetBytes(
+        maxCacheBytes,
+        byteExpansion ?? PREFETCH_COLD_BYTE_EXPANSION,
+      );
+      const byBytes = Math.floor(budget / bytesPerBucket);
+      buckets = buckets === null ? byBytes : Math.min(buckets, byBytes);
+    }
+    if (buckets === null) return null;
+    return Math.max(0, buckets) * bucketMs;
+  }
+
+  /**
+   * Ceiling on how many tiles one pass may COMMIT to the runway — resident,
+   * in flight, queued, and newly admitted together: a fraction of the
+   * tile-count cache budget, never below {@link PREFETCH_MIN_BUDGET_TILES}.
+   * Charged against what is already committed inside the horizon (A2), it
+   * bounds the runway's RESIDENCY rather than one pass's admissions — an
+   * enqueue larger than the LRU is evicted before the play head arrives and
+   * re-fetched one tile at a time, and a per-pass admission cap could not
+   * stop that at fast playback because the passes simply repeated.
    */
   enqueueBudget(maxCacheSize: number): number {
     return Math.max(
@@ -905,7 +1150,8 @@ export class PrefetchPolicy {
 
   /**
    * The same ceiling denominated in BYTES (M6/BH-2): a fraction of the cache's
-   * BYTE budget, never below {@link PREFETCH_MIN_BUDGET_BYTES}.
+   * BYTE budget. {@link PREFETCH_MIN_BUDGET_BYTES} stands in only for a cap
+   * that cannot be priced at all (NaN, zero, negative) — see below.
    *
    * Why both exist. {@link enqueueBudget} meters the runway in TILES, but the
    * LRU's binding constraint is `maxCacheByteSize`, not tile count — and tiles
@@ -931,6 +1177,18 @@ export class PrefetchPolicy {
    * is about one dispatchable slice of network work, is already compressed. See
    * {@link PREFETCH_COLD_BYTE_EXPANSION} for where the rate comes from.
    *
+   * ## The floor yields to the cache (G3-2, tile-loading audit 2026-08)
+   *
+   * The floor used to bind BELOW the share: a cap the share could not reach
+   * 4 MiB under was lifted to 4 MiB compressed anyway — at expansion 8 that
+   * is 32 MiB decoded against an 8 MiB cache, the whole cache four times
+   * over, and the "workable runway" it guaranteed was evicted before the play
+   * head arrived and bought back, forever. A runway the cache cannot hold is
+   * not workable. So a cap that can be priced is the budget, full stop, and
+   * the floor survives only where there is no cap to price: NaN, zero or
+   * negative (the previous misconfiguration cases). `Infinity` stays the
+   * documented rollback (count-only behavior).
+   *
    * @param maxCacheByteSize          Cache cap in DECODED bytes.
    * @param decodedPerCompressedByte  Expansion, from {@link byteExpansionRatio}.
    *                                  Passing `1` reverts to the pre-repair
@@ -945,10 +1203,13 @@ export class PrefetchPolicy {
     decodedPerCompressedByte: number,
   ): number {
     const expansion = clampByteExpansion(decodedPerCompressedByte);
-    const scaled = (maxCacheByteSize * PREFETCH_CACHE_FRACTION) / expansion;
-    // A NaN budget is a misconfiguration, not a licence to enqueue forever.
-    if (Number.isNaN(scaled)) return PREFETCH_MIN_BUDGET_BYTES;
-    return Math.max(PREFETCH_MIN_BUDGET_BYTES, scaled);
+    const share = (maxCacheByteSize * PREFETCH_CACHE_FRACTION) / expansion;
+    // A NaN, zero or negative cap is a misconfiguration, not a licence to
+    // enqueue forever — and not a cache that can be priced either.
+    if (Number.isNaN(share) || !(maxCacheByteSize > 0)) {
+      return PREFETCH_MIN_BUDGET_BYTES;
+    }
+    return share;
   }
 
   /**
@@ -980,17 +1241,28 @@ export class PrefetchPolicy {
    * fixed byte count) keeps the hostage window — how long a play head that
    * catches the slice must wait for it — roughly constant across link speeds.
    *
+   * Capped at `maxBytes` when given (G3-2): the caller passes the runway's
+   * share of the byte cache in the slice's own compressed currency
+   * ({@link enqueueBudgetBytes}), because a slice lands as ONE delivery and
+   * a delivery larger than the share evicts the very runway it was fetched
+   * to extend. The caller still admits at least one tile per slice.
+   *
    * @param bytesPerMs Measured throughput, or `null` when unmeasured.
+   * @param maxBytes   Ceiling in compressed bytes; non-positive/absent ⇒ none.
    */
-  sliceBytes(bytesPerMs: number | null): number {
-    if (bytesPerMs === null || bytesPerMs <= 0)
-      return PREFETCH_SLICE_COLD_BYTES;
-    return Math.min(
-      PREFETCH_SLICE_MAX_BYTES,
-      Math.max(
-        PREFETCH_SLICE_MIN_BYTES,
-        bytesPerMs * PREFETCH_SLICE_TARGET_REAL_MS,
-      ),
-    );
+  sliceBytes(bytesPerMs: number | null, maxBytes?: number | null): number {
+    const sized =
+      bytesPerMs === null || bytesPerMs <= 0
+        ? PREFETCH_SLICE_COLD_BYTES
+        : Math.min(
+            PREFETCH_SLICE_MAX_BYTES,
+            Math.max(
+              PREFETCH_SLICE_MIN_BYTES,
+              bytesPerMs * PREFETCH_SLICE_TARGET_REAL_MS,
+            ),
+          );
+    return typeof maxBytes === 'number' && maxBytes > 0 && maxBytes < sized
+      ? maxBytes
+      : sized;
   }
 }

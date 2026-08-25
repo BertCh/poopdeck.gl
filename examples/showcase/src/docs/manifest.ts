@@ -54,9 +54,23 @@ export const docSections: DocSection[] = [
       {
         slug: 'intro/choosing',
         file: 'intro/choosing.md',
-        title: 'Choosing a Layer & Backend',
+        title: 'Choosing STT, a Deployment & Renderer',
         blurb:
-          'Which layer fits your data shape, and which renderer backend fits your stack.',
+          'When STT fits, static versus served deployment, and which renderer or layer to choose.',
+      },
+      {
+        slug: 'intro/status-and-support',
+        file: 'intro/status-and-support.md',
+        title: 'Status, Support & Compatibility',
+        blurb:
+          'Stable, preview, and experimental surfaces plus the current format compatibility window.',
+      },
+      {
+        slug: 'intro/glossary',
+        file: 'intro/glossary.md',
+        title: 'Glossary & Naming',
+        blurb:
+          'Canonical names for STT, poopdeck.gl, archives, packs, variants, and public identifiers.',
       },
     ],
   },
@@ -91,7 +105,7 @@ export const docSections: DocSection[] = [
     id: 'spec',
     label: 'Format Spec',
     blurb:
-      'The canonical packed container: manifest + content-addressed packs + the v5 directory codec.',
+      'The canonical packed container: formatVersion 3 manifest + content-addressed packs + the v6 directory codec.',
     entries: [
       {
         slug: 'spec/stt-packed-format',
@@ -434,14 +448,14 @@ export const docSections: DocSection[] = [
     id: 'cli',
     label: 'CLI',
     blurb:
-      'stt-build, stt-generate, stt-optimize, stt-validate and stt-serve — every flag, with examples.',
+      'The five published stt-* CLIs plus the repo-only stt-generate dataset tool — every flag, with examples.',
     entries: [
       {
         slug: 'api/cli-reference',
         file: 'api/cli-reference.md',
         title: 'CLI Reference',
         blurb:
-          'stt-build · stt-generate · stt-optimize · stt-validate · stt-serve',
+          'stt-build · stt-optimize · stt-validate · stt-bundle · stt-serve · stt-generate (repo-only)',
       },
     ],
   },
@@ -528,21 +542,10 @@ export const docSections: DocSection[] = [
  * docs/) yet deliberately not published. The README is a link hub that
  * duplicates the sidebar.
  *
- * `architecture/archive-format-performance.md` is excluded rather than routed,
- * for two independent reasons — either alone would be sufficient:
- *
- *  1. It self-describes as "the implementation record for the STT archive
- *     audit". That is the internal decision-record genre this glob's own
- *     docstring says must not ship as a published page, alongside roadmap/ and
- *     the audit docs; the sibling `architecture/*.md` entries are reference
- *     documentation for users, and this is not one.
- *  2. Its stated contract is `formatVersion: 3` with "no v1/v2 archive reader",
- *     which describes an IN-FLIGHT break, not what readers can open today: the
- *     published fleet at tiles.poopdeck.gl is `formatVersion: 2`. Routing it
- *     would publish, as current reference, a statement that contradicts the
- *     shipped reader. It becomes routable once the v3 rebuild window lands and
- *     the fleet is republished — at which point move it into the Architecture
- *     section above and delete this entry.
+ * `architecture/archive-format-performance.md` is excluded because it
+ * self-describes as the implementation record for the archive audit. That is
+ * internal decision-record material, while the routed architecture pages are
+ * current user-facing reference documentation.
  */
 export const EXCLUDED_DOC_FILES = [
   'README.md',
@@ -554,8 +557,23 @@ export const flatDocEntries: DocEntry[] = docSections.flatMap((s) => s.entries);
 
 const bySlug = new Map(flatDocEntries.map((e) => [e.slug, e]));
 
+/**
+ * Canonicalize a slug taken from the URL before it is looked up here.
+ *
+ * `/docs/*` is a SPLAT route, and React Router keeps a trailing slash inside
+ * the splat param (`spec/stt-packed-format/`), unlike a dynamic segment which
+ * strips it. A slashed URL is not hypothetical: the pages are prerendered to
+ * `docs/<slug>/index.html`, so Cloudflare's asset handler redirects a hard load
+ * of `/docs/spec/stt-packed-format` onto the slashed form. Without this the
+ * page hydrated straight into the 404 card even though its baked loader data
+ * was sitting in the HTML.
+ */
+export function normalizeDocSlug(slug: string): string {
+  return slug.replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
 export function getDocEntry(slug: string): DocEntry | undefined {
-  return bySlug.get(slug);
+  return bySlug.get(normalizeDocSlug(slug));
 }
 
 export function getPrevNext(slug: string): {

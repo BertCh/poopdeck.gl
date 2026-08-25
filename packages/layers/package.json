@@ -35,7 +35,7 @@
   "dependencies": {
     "@poopdeck.gl/core": "workspace:*",
     "@poopdeck.gl/playback": "workspace:*",
-    "h3-js": "^4.1.0"
+    "h3-js": "^4.5.0"
   },
   "peerDependencies": {
     "@deck.gl/aggregation-layers": ">=9.3.0 <10.0.0",
@@ -48,17 +48,18 @@
     "@luma.gl/engine": ">=9.3.0 <10.0.0"
   },
   "devDependencies": {
-    "@deck.gl/aggregation-layers": "^9.3.2",
-    "@deck.gl/core": "^9.3.2",
-    "@deck.gl/extensions": "^9.3.2",
-    "@deck.gl/geo-layers": "^9.3.2",
-    "@deck.gl/layers": "^9.3.2",
-    "@deck.gl/mesh-layers": "^9.3.2",
-    "@luma.gl/core": "^9.3.0",
-    "@luma.gl/engine": "^9.3.0",
-    "@types/node": "^20.14.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "@deck.gl/aggregation-layers": "9.3.10",
+    "@deck.gl/core": "9.3.10",
+    "@deck.gl/extensions": "9.3.10",
+    "@deck.gl/geo-layers": "9.3.10",
+    "@deck.gl/layers": "9.3.10",
+    "@deck.gl/mesh-layers": "9.3.10",
+    "@luma.gl/core": "9.3.6",
+    "@luma.gl/engine": "9.3.6",
+    "@types/node": "^24.9.2",
+    "typescript": "^7.0.2",
+    "typescript-api": "npm:typescript@^5.9.3",
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",
@@ -78,6 +79,6 @@
   "author": "Robert Christie",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.0.0"
   }
 }

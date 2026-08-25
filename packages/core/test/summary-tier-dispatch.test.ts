@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { SpatioTemporalTileset } from '../src/spatiotemporal-tileset';
-import type { TileId, BoundingBox } from '../src/types';
+import type { Tile, TileId, BoundingBox } from '../src/types';
 
 const BOUNDS: BoundingBox = {
   minLon: -180,
@@ -109,6 +109,88 @@ describe('SpatioTemporalTileset tier dispatch', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(rawSpy).toHaveBeenCalledTimes(1);
     expect(summarySpy).not.toHaveBeenCalled();
+    tileset.finalize();
+  });
+});
+
+/**
+ * E4 (tile-loading audit 2026-08, SEL-3): under `tier: 'auto'` the tier is
+ * picked PER ZOOM, and `best-available` walks up to four parent levels. At
+ * `summary.maxZoom + 1 … + 4` the primary is raw while every parent level lies
+ * inside the summary range — so H3/Quadbin centroid cells with `count`
+ * columns were handed to the raw layer as parent fallbacks (and, under the
+ * old pass-2 rule, kept there). Parent levels now stay on the primary's tier.
+ */
+describe('E4: parent fallbacks never cross the tier edge', () => {
+  function makeAutoTileset() {
+    const rawZooms: number[] = [];
+    const summaryZooms: number[] = [];
+    const tileset = new SpatioTemporalTileset({
+      minZoom: 0,
+      maxZoom: 10,
+      tier: 'auto',
+      summaryZoomRange: { minZoom: 0, maxZoom: 4 },
+      enablePrefetch: false,
+      refinementStrategy: 'best-available',
+      temporalBucketMs: 3_600_000,
+      getAvailableTiles: async (
+        _b: BoundingBox,
+        z: number,
+      ): Promise<TileId[]> => {
+        rawZooms.push(z);
+        return [{ z, x: 1, y: 1, t: 0, variantId: 0 }];
+      },
+      getAvailableSummaryTiles: async (
+        _b: BoundingBox,
+        z: number,
+      ): Promise<TileId[]> => {
+        summaryZooms.push(z);
+        return [{ z, x: 1, y: 1, t: 0, variantId: 7 }];
+      },
+      getTileData: async (id: TileId) =>
+        ({
+          id,
+          timeRange: { start: 0, end: 3_600_000 },
+          layers: [],
+        }) as unknown as Tile,
+    });
+    return { tileset, rawZooms, summaryZooms };
+  }
+
+  const VIEW: BoundingBox = { minLon: 8, minLat: 46, maxLon: 9, maxLat: 47 };
+  const settle = async (n = 6): Promise<void> => {
+    for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  it('at summary.maxZoom + 1 no summary-variant parent is scanned, needed, or delivered', async () => {
+    const { tileset, rawZooms, summaryZooms } = makeAutoTileset();
+    tileset.update({ bounds: VIEW, zoom: 5, time: 0, timeWindow: 100 }, true);
+    await settle();
+
+    // Pre-fix: summary scans [4, 3, 2, 1] and four `#7` keys in the needed
+    // set, all delivered to the raw layer as "parents".
+    expect(summaryZooms).toEqual([]);
+    expect(rawZooms).toEqual([5]);
+    const delivered = tileset.getVisibleTiles().map((t) => t.id);
+    expect(delivered.length).toBeGreaterThan(0);
+    expect(delivered.every((id) => (id.variantId ?? 0) === 0)).toBe(true);
+
+    tileset.finalize();
+  });
+
+  it('inside the summary range the parent band is summary all the way down', async () => {
+    const { tileset, rawZooms, summaryZooms } = makeAutoTileset();
+    tileset.update({ bounds: VIEW, zoom: 4, time: 0, timeWindow: 100 }, true);
+    await settle();
+
+    expect(rawZooms).toEqual([]);
+    // The full parent band (PARENT_FALLBACK_LEVELS = 4) — z0 is inside the
+    // range too, so it is a legitimate summary parent.
+    expect(summaryZooms).toEqual([4, 3, 2, 1, 0]);
+    const delivered = tileset.getVisibleTiles().map((t) => t.id);
+    expect(delivered.length).toBeGreaterThan(0);
+    expect(delivered.every((id) => id.variantId === 7)).toBe(true);
+
     tileset.finalize();
   });
 });

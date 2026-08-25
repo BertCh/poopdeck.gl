@@ -381,3 +381,169 @@ describe('decodePagedRoot error branches', () => {
     ).toThrow(/page count 0 disagrees with manifest 1/);
   });
 });
+
+// ── H2 (core hot-spot audit 2026-08): varints decode as Numbers below 2^53 ──
+//
+// The per-leaf decode loop accumulated every varint as a BigInt (~42 ns each
+// vs ~6 ns as a Number — a third of a 4,096-entry leaf's ~4.9 ms, on the main
+// thread, 4–8 leaves per pan). Every field the reader surfaces is narrowed to
+// a safe integer anyway, so a Number fast path is exact wherever the old path
+// could succeed; a value at or beyond 2^53 is re-read exactly as a BigInt so
+// the rejection message still carries the true value. These pin the edges;
+// the oracle comparison + fuzz live in `core-hotspots-audit-2026-08.test.ts`.
+describe('H2: varint Number fast path', () => {
+  const MAX = Number.MAX_SAFE_INTEGER;
+  /** Every LEB128 byte-length boundary, the 2^32 / 2^49 / 2^52 edges, and 2^53−1. */
+  const EDGES = [
+    0,
+    1,
+    127,
+    128,
+    16383,
+    16384,
+    2 ** 21 - 1,
+    2 ** 21,
+    2 ** 28 - 1,
+    2 ** 28,
+    2 ** 32 - 1,
+    2 ** 32,
+    2 ** 35 - 1,
+    2 ** 35,
+    2 ** 42 - 1,
+    2 ** 42,
+    2 ** 49 - 1,
+    2 ** 49,
+    2 ** 52 - 1,
+    2 ** 52,
+    MAX,
+  ];
+
+  it('round-trips every byte-length boundary and both signs up to ±(2^53−1) exactly', () => {
+    const entries: DirectoryEncodeEntry[] = EDGES.map((v, i) => {
+      const signed = i % 2 ? -v : v;
+      return {
+        ...base,
+        zoom: 7,
+        hilbert: i, // keeps encode order == EDGES order
+        x: i,
+        timeStart: signed,
+        // A short positive duration where it stays safe; +MAX itself cannot grow.
+        timeEnd: signed < 0 ? signed + (i % 3) : signed,
+        packId: i,
+        offset: v,
+        // The run's ENDING offset is range-checked too, so nothing may follow MAX.
+        length: v === MAX ? 0 : 1 + (i % 5),
+        uncompressedSize: v,
+        featureCount: v % 2 ** 32,
+        temporalBucketMs: v,
+        coverTMin: 0, // cover delta = −timeStart: a full-width signed varint
+        crc32c: 0,
+      };
+    });
+    const back = decodeDirectory(encodeDirectory(entries));
+    expect(back.length).toBe(EDGES.length);
+    EDGES.forEach((v, i) => {
+      const signed = i % 2 ? -v : v;
+      const e = back[i];
+      expect(e.timeStart).toBe(signed);
+      expect(e.timeEnd).toBe(signed < 0 ? signed + (i % 3) : signed);
+      expect(e.offset).toBe(v);
+      expect(e.uncompressedSize).toBe(v);
+      expect(e.featureCount).toBe(v % 2 ** 32);
+      expect(e.temporalBucketMs).toBe(v);
+      expect(e.coverTMin).toBe(0);
+      expect(e.packId).toBe(i);
+    });
+    // Consecutive entries at −MAX then +MAX: a Δtime of 2·MAX, whose zig-zag
+    // is ~2^55 — beyond the fast path, so the exact fallback must carry it.
+    const swing = decodeDirectory(
+      encodeDirectory([
+        { ...base, hilbert: 0, timeStart: -MAX, timeEnd: MAX, crc32c: 0 },
+        { ...base, hilbert: 1, timeStart: MAX, timeEnd: MAX, crc32c: 0 },
+      ]),
+    );
+    expect(swing.map((e) => [e.timeStart, e.timeEnd])).toEqual([
+      [-MAX, MAX],
+      [MAX, MAX],
+    ]);
+  });
+
+  /** A one-entry, one-run v6 directory with `offset` given as raw LEB128 bytes. */
+  function withOffsetBytes(offset: number[]): Uint8Array {
+    return Uint8Array.from([
+      6, // version
+      1, // n
+      1, // runs
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, // Δzoom Δhilbert Δx Δy Δtime duration
+      0, // featureCount
+      0, // bucketPresent
+      0, // variantId
+      1, // run length
+      0, // Δpack_id
+      1, // offset flag: explicit
+      ...offset,
+      0, // length
+      0, // uncompressed_size
+      0,
+      0,
+      0,
+      0, // crc32c
+    ]);
+  }
+
+  it('rejects a surfaced value at exactly 2^53 with the incumbent message carrying the EXACT value', () => {
+    // 2^53 = 0x20000000000000 → LEB128: seven 0x80 continuation bytes then 0x10.
+    const twoPow53 = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10];
+    expect(() => decodeDirectory(withOffsetBytes(twoPow53))).toThrow(
+      /run 0 offset 9007199254740992 is outside JavaScript's safe integer range/,
+    );
+    // …while one less decodes on the fast path.
+    const maxSafe = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f];
+    expect(decodeDirectory(withOffsetBytes(maxSafe))[0].offset).toBe(MAX);
+    // u64::MAX (ten bytes) is still a well-formed varint the reader rejects
+    // on range, exactly; an eleventh byte is rejected on width.
+    const u64Max = [...new Array(9).fill(0xff), 0x01];
+    expect(() => decodeDirectory(withOffsetBytes(u64Max))).toThrow(
+      /run 0 offset 18446744073709551615 is outside/,
+    );
+    expect(() =>
+      decodeDirectory(withOffsetBytes([...new Array(10).fill(0xff), 0x01])),
+    ).toThrow(/varint exceeds 64 bits/);
+  });
+
+  it('consumes a full-width Hilbert delta without surfacing or rejecting it', () => {
+    // The Hilbert column is read only to stay aligned (the reader addresses
+    // by z/x/y/t), so a 60-bit key — legal at zoom 30 — must pass untouched.
+    const bytes = Uint8Array.from([
+      6,
+      1,
+      1,
+      0, // Δzoom
+      ...new Array(8).fill(0xff),
+      0x0f, // Δhilbert = 2^60 − 1 (zig-zag raw)
+      0,
+      0,
+      0,
+      0, // Δx Δy Δtime duration
+      0,
+      0,
+      0, // featureCount bucketPresent variantId
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, // one run, contiguous
+    ]);
+    const [e] = decodeDirectory(bytes);
+    expect(e).toMatchObject({ zoom: 0, x: 0, y: 0, timeStart: 0, offset: 0 });
+  });
+});

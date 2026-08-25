@@ -355,8 +355,11 @@ export class ChevronFlowExtension extends LayerExtension<
 
   /**
    * Memoized shader-injection objects — deck.gl calls `getShaders()` on every
-   * sublayer construction, and a new object literal each time would thrash the
-   * shader cache. Keyed by the HOST CAPABILITY signature (see
+   * sublayer construction (one per visible tile). luma 9.3.3 keys its shader
+   * and pipeline caches on SOURCE TEXT, so a new literal with the same strings
+   * would NOT thrash them; the memo saves the per-sublayer string assembly
+   * below (and the host-capability warnings it emits) instead. Keyed by the
+   * HOST CAPABILITY signature (see
    * {@link resolveHostCapabilities}) so every sublayer of a given host family
    * shares one entry, while a different host kind gets its own correctly
    * degraded variant instead of silently reusing another's.

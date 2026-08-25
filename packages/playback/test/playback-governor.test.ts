@@ -29,6 +29,8 @@ function makeSource() {
   const state = {
     runwaySimMs: 0,
     complete: false,
+    /** B8: the loader wrote the next tile off as permanently unavailable. */
+    blockedPermanently: false,
     bytesPending: 0,
     ranges: [] as Array<{ start: number; end: number }>,
     costBytes: 0,
@@ -53,6 +55,9 @@ function makeSource() {
         bytesPending: state.bytesPending,
         horizonSimMs: horizonSimMs ?? state.runwaySimMs,
         complete: state.complete,
+        // Only present when set, so the default mock still exercises the
+        // flag-absent (pre-B8 loader) path.
+        ...(state.blockedPermanently ? { blockedPermanently: true } : {}),
       };
     },
     getBufferedRanges() {
@@ -168,12 +173,29 @@ describe('PlaybackGovernor', () => {
     expect(g.state).toBe('playing'); // no 250ms wait
   });
 
-  it('starts degraded after maxStartWaitMs even with no source', () => {
+  it('G8: never hatches into a source-less playing — the hatch is timed from the first registration', () => {
+    // Re-blessed from "starts degraded after maxStartWaitMs even with no
+    // source" (audit G8 / CS-9): embed autoplay calls requestPlay before the
+    // tileset registers, and a hatch fired against an EMPTY registry
+    // free-runs the clock into the timeline with no clamp. With no source
+    // there is nothing to be degraded ABOUT, so the hatch waits for one.
     const g = makeGovernor({ maxStartWaitMs: 4000 });
     const ready = vi.fn();
     g.on('ready', ready);
 
     g.requestPlay();
+    expect(g.state).toBe('starting');
+    vi.advanceTimersByTime(9000);
+    expect(g.state).toBe('starting'); // no source ⇒ no hatch, however long
+    expect(tc.isPlaying()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+
+    // The first registration starts the hatch clock — not the requestPlay
+    // 9 s ago — so an incomplete runway holds the gate for a FULL
+    // maxStartWaitMs from here.
+    const { source, state } = makeSource();
+    state.runwaySimMs = 0;
+    g.addSource('a', source, { required: true });
     expect(g.state).toBe('starting');
     vi.advanceTimersByTime(3900);
     expect(g.state).toBe('starting');
@@ -893,6 +915,30 @@ describe('PlaybackGovernor', () => {
       g.notifyBufferChange(runway(20_000));
       expect(g.state).toBe('playing');
       expect(tc.isPlaying()).toBe(true);
+    });
+
+    it('B5: a wrap does not flush a loop-aware source (one that accepts the loop window) — its post-wrap runway is the one it just warmed', () => {
+      const clock = makeLoopingClock(99_000);
+      const { source, state } = makeSource();
+      state.runwaySimMs = 1_000_000;
+      const loopWindows: Array<{ start: number; end: number } | null> = [];
+      source.setLoopWindow = (range) => {
+        loopWindows.push(range);
+      };
+      const g = makeGovernor({ source, startGateWallMs: 2000 });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      state.runwaySimMs = 0;
+      const flushesBefore = state.flushes;
+      clock.frame(200); // wraps 101_000 → 0
+      expect(tc.getTime()).toBe(0);
+      expect(g.state).toBe('seeking'); // the gate still re-checks the frontier
+      // …but the loop-aware source keeps its in-flight lookahead across the
+      // wrap: no flush. (A plain source is still flushed — see the previous
+      // case, whose fake has no setLoopWindow.)
+      expect(state.flushes).toBe(flushesBefore);
+      expect(loopWindows.length).toBeGreaterThan(0);
     });
 
     it('keeps a wrap into fully-buffered time seamless (gate passes synchronously)', () => {
@@ -1824,24 +1870,33 @@ describe('PlaybackGovernor', () => {
         expect(tc.isPlaying()).toBe(true);
       });
 
-      it('cold-start throughput floor: a fast network passes the gate at empty buffer via predictsPlaythrough', () => {
+      it('cold-start throughput floor: a fast network passes the gate on a THIN buffer via predictsPlaythrough — never on an EMPTY one (G3-4a)', () => {
         // The cold-start throughput FLOOR already exists: predictsPlaythrough
-        // (PLAYTHROUGH_MIN_WALL_MS) lets a fast network start with ~zero
+        // (PLAYTHROUGH_MIN_WALL_MS) lets a fast network start with a thin
         // buffered runway, folded over ALL required sources (max ETA). No
-        // separate floor was added.
+        // separate floor was added. Since the tile-loading audit (G3-4a) it
+        // needs the head's own data FIRST: with nothing resident the gate
+        // holds however fast the link reads — HAVE_ENOUGH_DATA implies
+        // HAVE_CURRENT_DATA. (This test pinned the empty-buffer pass before.)
         const a = makeTrackedSource();
         const b = makeTrackedSource();
         a.state.runwaySimMs = 0; // empty buffer…
         b.state.runwaySimMs = 0;
-        a.state.etaMs = 10; // …but both predicted to download near-instantly
+        a.state.etaMs = 10; // …though both predicted to download near-instantly
         b.state.etaMs = 10;
         const g = makeGovernor({ startGateWallMs: 2000 });
         g.addSource('a', a.source, { required: true });
         g.addSource('b', b.source, { required: true });
 
         g.requestPlay();
-        // Empty buffer, but the throughput-implied ETA is within the floor for
-        // BOTH required sources → start immediately, no degraded escape hatch.
+        expect(g.state).toBe('starting'); // empty: the predictor may not release
+        expect(tc.isPlaying()).toBe(false);
+        // One probe interval of runway under the head (200 ms × 10 — the
+        // floor for a source that declares no bucket) and the same ETAs start
+        // it immediately, no degraded escape hatch.
+        a.state.runwaySimMs = 2000;
+        b.state.runwaySimMs = 2000;
+        g.notifyBufferChange(runway(2000));
         expect(g.state).toBe('playing');
         expect(tc.isPlaying()).toBe(true);
       });
@@ -2130,7 +2185,12 @@ describe('PlaybackGovernor', () => {
       expect(leader.state.weightCalls).toHaveLength(1);
 
       // Identical runways probed again (buffer events while playing) → memo hit.
+      // The fairness pass rides the frontier probe, and buffer events are
+      // coalesced onto it at the 200 ms probe cadence (audit G6): step one
+      // interval before each event so every event below is actually probed.
+      vi.advanceTimersByTime(200);
       g.notifyBufferChange(runway(50_000));
+      vi.advanceTimersByTime(200);
       g.notifyBufferChange(runway(50_000));
       expect(leader.state.capCalls).toEqual([80_000]);
       expect(laggard.state.capCalls).toEqual([null]); // null never re-broadcast
@@ -2138,11 +2198,13 @@ describe('PlaybackGovernor', () => {
 
       // A small laggard advance (cap 80_000 → 82_000, +2.5% ≤ 20%) is jitter.
       laggard.state.runwaySimMs = 52_000;
+      vi.advanceTimersByTime(200);
       g.notifyBufferChange(runway(52_000));
       expect(leader.state.capCalls).toEqual([80_000]);
 
       // A real advance (cap → 120_000, +50% > 20%) re-sends.
       laggard.state.runwaySimMs = 90_000;
+      vi.advanceTimersByTime(200);
       g.notifyBufferChange(runway(90_000));
       expect(leader.state.capCalls).toEqual([80_000, 120_000]);
     });
@@ -2267,13 +2329,16 @@ describe('PlaybackGovernor', () => {
       expect(b.state.capCalls).toEqual([null]);
 
       // b creeps ahead but stays inside the EXIT band (0.5 × 30_000 =
-      // 15_000): membership is sticky, no cap flap.
+      // 15_000): membership is sticky, no cap flap. (One probe interval per
+      // event — buffer events are coalesced onto the frontier probe, G6.)
       b.state.runwaySimMs = 60_000;
+      vi.advanceTimersByTime(200);
       g.notifyBufferChange(runway(50_000));
       expect(b.state.capCalls).toEqual([null]);
 
       // Clearing the EXIT band finally reclassifies b as a leader.
       b.state.runwaySimMs = 70_000;
+      vi.advanceTimersByTime(200);
       g.notifyBufferChange(runway(50_000));
       expect(b.state.capCalls).toEqual([null, 80_000]);
       expect(a.state.capCalls).toEqual([null]); // the true laggard never flapped
@@ -2296,6 +2361,7 @@ describe('PlaybackGovernor', () => {
       const replacement = makeFairSource();
       replacement.state.runwaySimMs = 200_000;
       g.addSource('leader', replacement.source, { required: true });
+      vi.advanceTimersByTime(200); // next frontier probe (G6 coalescing)
       g.notifyBufferChange(runway(50_000));
       expect(replacement.state.capCalls).toEqual([80_000]);
       // Same fill as the first case: the replacement is the leader, its need
@@ -2573,16 +2639,21 @@ describe('PlaybackGovernor', () => {
         expect(laggard.state.costCalls).toHaveLength(1);
 
         // Three more probes inside the same 30_000 sim-ms frontier bucket: the
-        // directory walk is not repeated (the BH-3 cost bound).
+        // directory walk is not repeated (the BH-3 cost bound). One probe
+        // interval per event — buffer events are coalesced onto the frontier
+        // probe (G6), and this test is about what a PROBE costs.
         laggard.state.runwaySimMs = 51_000;
+        vi.advanceTimersByTime(200);
         g.notifyBufferChange(runway(51_000));
         laggard.state.runwaySimMs = 52_000;
+        vi.advanceTimersByTime(200);
         g.notifyBufferChange(runway(52_000));
         expect(laggard.state.costCalls).toHaveLength(1);
 
         // Crossing into the next bucket re-measures — the frontier moved
         // somewhere the old density no longer describes.
         laggard.state.runwaySimMs = 95_000;
+        vi.advanceTimersByTime(200);
         g.notifyBufferChange(runway(95_000));
         expect(laggard.state.costCalls).toHaveLength(2);
       });
@@ -2611,13 +2682,16 @@ describe('PlaybackGovernor', () => {
         expect(overlay.state.weightCalls).toEqual([]);
 
         // mid drifts to a 2.1667 weight: +8.3% is inside the deadband, so the
-        // scheduler hears nothing.
+        // scheduler hears nothing. (One probe interval per event — buffer
+        // events are coalesced onto the frontier probe, G6.)
         mid.state.runwaySimMs = 105_000;
+        vi.advanceTimersByTime(200);
         g.notifyBufferChange(runway(50_000));
         expect(mid.state.weightCalls).toEqual([2]);
 
         // A real move (weight → 3.667, +83%) re-sends.
         mid.state.runwaySimMs = 60_000;
+        vi.advanceTimersByTime(200);
         g.notifyBufferChange(runway(50_000));
         expect(mid.state.weightCalls).toHaveLength(2);
         expect(mid.state.weightCalls[1]).toBeCloseTo(
@@ -2629,6 +2703,7 @@ describe('PlaybackGovernor', () => {
         // weight traffic for it.
         const before = mid.state.weightCalls.length;
         mid.state.complete = true;
+        vi.advanceTimersByTime(200);
         g.notifyBufferChange(runway(50_000));
         expect(mid.state.weightCalls).toHaveLength(before);
       });
@@ -2692,15 +2767,37 @@ describe('PlaybackGovernor', () => {
    * on today's band bit-for-bit.
    */
   describe('per-source cadence tolerance τ (BH-4 — §11.2)', () => {
-    /** Mock source that may or may not declare a temporal bucket (sim-ms). */
+    /**
+     * Mock source that may or may not declare a temporal bucket (sim-ms).
+     *
+     * HONOURS `horizonSimMs` the way the core tileset does (audit B7 / G2):
+     * the probe horizon is floored at the declared bucket and the reported
+     * runway is capped at that horizon. The previous mock echoed
+     * `runwaySimMs` regardless of the horizon, which made every test below
+     * that reasons about the watermark probe vacuous — the real tileset
+     * never reports a watermark-probed leader past `max(watermark, Δ)`.
+     *
+     * Also TIME-AWARE like the coverage index: `runwaySimMs` is the
+     * contiguous reach measured from time 0 (every test here parks the
+     * clock there), and a probe at `t` reads `reach − t`. The B6 clamp
+     * re-probes AT the cached frontier, where a time-blind echo would read
+     * the whole runway again and push the frontier out by a second fold.
+     */
     function makeCadenceSource(bucketMs: number | null) {
       const state = { runwaySimMs: 0, complete: false };
       const source: BufferSource = {
-        getBufferedRunway(_time, _direction, horizonSimMs) {
+        getBufferedRunway(time, direction, horizonSimMs) {
+          const horizon =
+            horizonSimMs === undefined
+              ? Infinity
+              : Math.max(horizonSimMs, bucketMs ?? 0);
+          const ahead =
+            direction > 0 ? state.runwaySimMs - time : state.runwaySimMs + time;
+          const simMs = Math.min(Math.max(0, ahead), horizon);
           return {
-            simMs: state.runwaySimMs,
+            simMs,
             bytesPending: 0,
-            horizonSimMs: horizonSimMs ?? state.runwaySimMs,
+            horizonSimMs: Number.isFinite(horizon) ? horizon : simMs,
             complete: state.complete,
           };
         },
@@ -2770,11 +2867,16 @@ describe('PlaybackGovernor', () => {
       return stalled;
     }
 
-    it('absorbs coarse-bucket quantization the 200 ms constant under-absorbs (1 h + 1 min at low speed)', () => {
-      // speed 1 → the incumbent band is 200 sim-ms, but an hourly-bucketed
-      // field's horizon can only move in 1 h steps: a ~1 h gap to its
-      // minute-bucketed peer is pure quantization, not starvation.
-      // τ_coarse = max(1 h, 1 min) + 200 × 1 = 3_600_200 sim-ms.
+    it('B7: at the watermark a coarse laggard under the watermark stalls even against a healthy fine-bucket leader', () => {
+      // Re-blessed (audit B7 / G2). This used to assert NO stall: "a ~1 h gap
+      // to a minute-bucketed peer is pure quantization". But the watermark
+      // probe caps the leader at max(600, Δ_L) = 60_000 — it is PINNED at the
+      // probe horizon and says nothing about how far ahead it really is — so
+      // the derived band τ = max(1 h, 1 min) + 200 cannot be measured against
+      // it. The laggard's own 500 sim-ms is what gates: its next hour is not
+      // resident and is needed in 0.5 wall-s; playing on would render the
+      // hole (overlay pop). The band falls back to the wall default (200),
+      // which the 59_500 gap clears → honest stall.
       expect(
         foldStalls({
           speed: 1,
@@ -2783,14 +2885,42 @@ describe('PlaybackGovernor', () => {
           leadBucketMs: MINUTE,
           lagBucketMs: HOUR,
         }),
-      ).toBe(false);
+      ).toBe(true);
     });
 
-    it('…and the SAME composite still stalls under the incumbent constant (the gap this closes)', () => {
-      // Identical runways, nothing declared: band 200 sim-ms → the 999_500 gap
-      // is not lifted → raw min 500 < watermark 600 → stall. This is the
-      // false-stall BH-4 removes, and the byte-identical fold for sources
-      // without the method (test 5).
+    it('B7: a starved required laggard trips the low watermark on a bucket-coarse composite (storm-4d shape)', () => {
+      // The audit's verification vector: Δ = 300 s on both sources, speed 285
+      // (one bucket ≈ 1.05 wall-s ≥ 0.4 s), watermark = 600 × 285 = 171_000
+      // sim-ms. The watermark probe caps the leader at max(171_000, 300_000)
+      // = 300_000; the unauthored band τ = 300_000 + 57_000 used to lift a
+      // laggard at ZERO to the leader (gap 300_000 ≤ 357_000) → min 300_000 ≥
+      // watermark → the clock played through the laggard's missing bucket.
+      expect(
+        foldStalls({
+          speed: 285,
+          leadSimMs: 10_000_000,
+          lagSimMs: 0,
+          leadBucketMs: 300_000,
+          lagBucketMs: 300_000,
+        }),
+      ).toBe(true);
+    });
+
+    it('…and the SAME composite stalls under the incumbent constant too (the undeclared fold is untouched)', () => {
+      // Nothing declared: band 200 sim-ms at speed 1. The watermark probe
+      // caps the leader at 600, so the only gap the fold can see is
+      // `600 − lag`; 300 is outside the band → raw min 300 < 600 → stall.
+      // (A lag of 500 sits INSIDE the incumbent band and is lifted — that is
+      // the documented Phase 1 sub-probe-interval absorption, unchanged.)
+      expect(
+        foldStalls({
+          speed: 1,
+          leadSimMs: 1_000_000,
+          lagSimMs: 300,
+          leadBucketMs: null,
+          lagBucketMs: null,
+        }),
+      ).toBe(true);
       expect(
         foldStalls({
           speed: 1,
@@ -2799,14 +2929,17 @@ describe('PlaybackGovernor', () => {
           leadBucketMs: null,
           lagBucketMs: null,
         }),
-      ).toBe(true);
+      ).toBe(false);
     });
 
-    it('does not mask a genuine laggard between two FINE-bucket sources (the over-absorb guard)', () => {
-      // Both at 1 min: τ = 60_000 + 200 × 10 = 62_000 sim-ms. A 99_000 sim-ms
-      // gap is well past that, so it is real starvation and still stalls — the
-      // derived band widens for the cadence a pair actually has, never
-      // globally.
+    it('B7: does not mask a genuine laggard between two FINE-bucket sources (the over-absorb guard, now with a horizon-honouring mock)', () => {
+      // Both at 1 min, speed 10: the watermark probe (6_000) is floored at the
+      // bucket, so the leader reports min(100_000, 60_000) = 60_000 and the
+      // gap is 59_000 — INSIDE the old τ = 60_000 + 200 × 10 = 62_000. The
+      // horizon-blind mock this test used to run on echoed 100_000 (gap
+      // 99_000 > τ), which is why it passed while the product masked the
+      // laggard. The leader is pinned at the probe horizon, so the band falls
+      // back to 2_000 and the 1_000 sim-ms laggard stalls.
       expect(
         foldStalls({
           speed: 10,
@@ -2816,8 +2949,10 @@ describe('PlaybackGovernor', () => {
           lagBucketMs: MINUTE,
         }),
       ).toBe(true);
-      // The identical gap IS absorbed once the leader declares an hourly
-      // cadence — per-source, exactly as specified.
+      // Re-blessed: the LEADER declaring an hourly cadence does not excuse a
+      // minute-bucketed laggard with 100 wall-ms of runway — the leader's
+      // coarseness says nothing about the laggard's starvation, and at the
+      // watermark the leader is pinned at its probe cap anyway.
       expect(
         foldStalls({
           speed: 10,
@@ -2826,7 +2961,37 @@ describe('PlaybackGovernor', () => {
           leadBucketMs: HOUR,
           lagBucketMs: MINUTE,
         }),
-      ).toBe(false);
+      ).toBe(true);
+    });
+
+    it('still absorbs coarse-bucket quantization where the leader is measurable: the frontier fold', () => {
+      // The derived band's legitimate job survives on the frontier path,
+      // where the probe has no requested horizon (the source's own generous
+      // default) and the leader's runway is therefore real information:
+      // a 1 h-bucketed laggard 999_500 sim-ms behind a minute-bucketed leader
+      // is lifted to the leader (τ = 3_600_200), so the per-tick clamp does
+      // not snap the playhead back to the coarse peer's frontier.
+      tc.pause();
+      tc.setTime(0);
+      tc.setSpeed(1);
+      const lead = makeCadenceSource(MINUTE);
+      const lag = makeCadenceSource(HOUR);
+      lead.state.runwaySimMs = 10_000_000;
+      lag.state.runwaySimMs = 10_000_000;
+      const g = makeGovernor({ startGateWallMs: 0, lowWatermarkWallMs: 0 });
+      g.addSource('lead', lead.source, { required: true });
+      g.addSource('lag', lag.source, { required: true });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      lead.state.runwaySimMs = 1_000_000;
+      lag.state.runwaySimMs = 500;
+      vi.advanceTimersByTime(200); // invalidate the throttled frontier probe
+      tc.setTime(0);
+      tc.setTime(900); // ≤ |speed| × 1 s past the laggard's own 500 frontier
+      expect(tc.getTime()).toBe(900); // lifted to the leader — no snap
+      expect(g.state).toBe('playing');
+      g.dispose();
+      governor = null;
     });
 
     it('treats a declared temporalBucketMs of 0 as UNDECLARED — the wall default, never τ = 0', () => {
@@ -2846,7 +3011,10 @@ describe('PlaybackGovernor', () => {
         foldStalls({
           speed: 10,
           leadSimMs: 7_000,
-          lagSimMs: 4_000, // gap 3_000 > 2_000 → genuine, stalls
+          // The watermark probe caps the leader at 6_000, so the visible gap
+          // is 2_500 > 2_000 → genuine, stalls. (4_000 would sit exactly ON
+          // the band edge against the capped leader.)
+          lagSimMs: 3_500,
           leadBucketMs: 0,
           lagBucketMs: 0,
         }),
@@ -3602,6 +3770,16 @@ describe('PlaybackGovernor', () => {
       expect(snap.startupMs).toBe(stats.startupMs);
       expect(snap.degradedResumeCount).toBe(stats.degradedResumeCount);
       expect(snap.creepMs).toBe(stats.creepMs);
+      // G2: the audit's canonical names ride the same snapshot.
+      expect(snap.stallMs).toBe(stats.totalStallMs);
+      expect(snap.frontierSnapBacks).toBe(stats.frontierSnapBacks);
+      expect(snap.seekCount).toBe(stats.seekCount);
+      expect(snap.gateEntriesByReason).toEqual(stats.gateEntriesByReason);
+      expect(snap.gateEntriesByReason).toEqual({
+        starting: 1,
+        buffering: 1,
+        seeking: 0,
+      });
     });
 
     it('republishes on the buffer pulse, with no state transition at all', () => {
@@ -4747,5 +4925,614 @@ describe('PlaybackGovernor', () => {
     vi.advanceTimersByTime(5000); // escape hatch must NOT fire post-dispose
     expect(g.state).toBe('starting'); // frozen — no further transitions
     expect(tc.isPlaying()).toBe(false);
+  });
+
+  /**
+   * Tile-loading audit 2026-08 (docs/roadmap/tile-loading-audit-2026-08.md
+   * §2, governor side): B6 re-probe before clamp, B8 permanent blocks, G2
+   * QoE counters, G6 probe coalescing, G8/CS-9 source-less hatch. B7 lives
+   * in the BH-4 block above, next to the mock it repairs.
+   */
+  describe('tile-loading audit 2026-08 (B6 / B8 / G2 / G6 / G8)', () => {
+    /**
+     * A source whose runway is a function of the probe TIME, like the real
+     * coverage index: contiguous data through `reach`, so a probe past the
+     * reach reads zero. The horizon-blind `makeSource` cannot distinguish a
+     * re-probe at the frontier from one at the overrun playhead; this can.
+     */
+    function makeReachSource(reachSimMs: number) {
+      const state = { reach: reachSimMs, complete: false, probes: 0 };
+      const source: BufferSource = {
+        getBufferedRunway(time, direction, horizonSimMs) {
+          state.probes++;
+          const ahead = direction > 0 ? state.reach - time : time - state.reach;
+          const simMs = Math.max(0, Math.min(ahead, horizonSimMs ?? Infinity));
+          return {
+            simMs,
+            bytesPending: 0,
+            horizonSimMs: horizonSimMs ?? simMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return [];
+        },
+        estimateCost() {
+          return { bytes: 0, tiles: 0 };
+        },
+        estimateTimeToReadyMs() {
+          return null;
+        },
+        flushPrefetch() {},
+      };
+      return { source, state };
+    }
+
+    it('B6: a frontier that advanced between two probes neither gates nor snaps the clock back', () => {
+      // The audit's G3 vector: play with 100_000 of runway; the bucket lands
+      // 150 wall-ms later (inside the 200 ms probe interval, no buffer event);
+      // the playhead crosses the CACHED frontier. Before: a spurious
+      // one-frame stall + a backward snap of one frame × |speed|.
+      const src = makeReachSource(100_000);
+      const g = makeGovernor({ source: src.source });
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // frontier probed at 0 → 100_000
+      vi.advanceTimersByTime(150);
+      src.state.reach = 200_000; // the bucket landed; nobody told the governor
+      tc.setTime(100_400);
+      expect(tc.getTime()).toBe(100_400); // no snap…
+      expect(g.state).toBe('playing'); // …no gate
+      expect(g.getQoeStats().stallCount).toBe(0);
+      expect(g.getQoeStats().frontierSnapBacks).toBe(0);
+    });
+
+    it('B6: the re-probe is taken AT the cached frontier, so a confirmed frontier still snaps the clock back onto loaded data', () => {
+      // A re-probe at the OVERRUN playhead would read runway 0 there and set
+      // the frontier to the playhead itself — a stall in the void, the exact
+      // thing the clamp exists to prevent. The probe must ask "did data land
+      // past the frontier I know about?", i.e. probe at the frontier.
+      const src = makeReachSource(100_000);
+      const g = makeGovernor({ source: src.source });
+      g.requestPlay();
+      vi.advanceTimersByTime(150);
+      tc.setTime(100_400);
+      expect(tc.getTime()).toBe(100_000); // snapped to the TRUE frontier
+      expect(g.state).toBe('buffering');
+      expect(g.getQoeStats().frontierSnapBacks).toBe(1);
+      expect(g.getQoeStats().gateEntriesByReason.buffering).toBe(1);
+    });
+
+    it('B6: creep pins on the cached frontier without counting a snap-back (pins are the design, not a defect)', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source, maxStartWaitMs: 4000 });
+      g.requestPlay();
+      state.runwaySimMs = 2000;
+      vi.advanceTimersByTime(250);
+      tc.setTime(3000);
+      expect(g.state).toBe('buffering');
+      vi.advanceTimersByTime(4000); // hatch → creep
+      expect(g.isCreeping).toBe(true);
+      const before = g.getQoeStats().frontierSnapBacks;
+      tc.setTime(5600);
+      expect(tc.getTime()).toBe(5000); // pinned
+      expect(g.getQoeStats().frontierSnapBacks).toBe(before);
+    });
+
+    it('G6: notifyBufferChange coalesces frontier walks to one per probe interval per source', () => {
+      // N = 5 required sources × 20 buffer events in 100 wall-ms. Each event
+      // used to walk EVERY source's runway at the frontier horizon (100
+      // probes); the bound is one walk per 200 ms interval per source, plus
+      // the walk the interval boundary itself may trigger.
+      const N = 5;
+      const sources = Array.from({ length: N }, () => makeSource());
+      for (const s of sources) s.state.runwaySimMs = 10_000_000;
+      const g = makeGovernor({ startGateWallMs: 2000 });
+      sources.forEach((s, i) =>
+        g.addSource(`s${i}`, s.source, { required: true }),
+      );
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      for (const s of sources) s.state.runwayCalls.length = 0;
+
+      for (let i = 0; i < 20; i++) {
+        vi.advanceTimersByTime(5);
+        g.notifyBufferChange(runway(10_000_000));
+      }
+      // Frontier walks probe at the source's DEFAULT horizon (undefined);
+      // the watermark check's capped probes are the honest part and are not
+      // bounded here.
+      let frontierProbes = 0;
+      for (const s of sources) {
+        frontierProbes += s.state.runwayCalls.filter(
+          (c) => c.horizonSimMs === undefined,
+        ).length;
+      }
+      expect(frontierProbes).toBeLessThanOrEqual(N * Math.ceil(100 / 200) + N);
+    });
+
+    it('G6: coalescing never blinds the stall check — a drained runway on a coalesced event still gates', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      vi.advanceTimersByTime(50); // inside the probe interval
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+    });
+
+    it('G8: addSource re-bases the hatch clock only when it fills an EMPTY registry', () => {
+      // A second source registered into a live gate must not extend the
+      // hatch: the first source's gate has been held since requestPlay.
+      const a = makeSource();
+      const b = makeSource();
+      const g = makeGovernor({ maxStartWaitMs: 4000 });
+      g.addSource('a', a.source, { required: true });
+      g.requestPlay();
+      vi.advanceTimersByTime(3000);
+      g.addSource('b', b.source, { required: true });
+      vi.advanceTimersByTime(1100);
+      expect(g.state).toBe('playing'); // hatched 4 s after requestPlay
+      expect(g.getQoeStats().degradedResumeCount).toBe(1);
+    });
+
+    it('G8: a legacy source without the buffering API still arms the hatch (the documented degrade)', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const g = makeGovernor({ maxStartWaitMs: 1000 });
+      g.requestPlay();
+      vi.advanceTimersByTime(5000);
+      expect(g.state).toBe('starting'); // nothing offered yet
+      g.addSource('legacy', {} as unknown as BufferSource);
+      vi.advanceTimersByTime(900);
+      expect(g.state).toBe('starting'); // timed from the offer, not requestPlay
+      vi.advanceTimersByTime(200);
+      expect(g.state).toBe('playing');
+      warn.mockRestore();
+    });
+
+    it('B8: a runway flagged blockedPermanently (complete:false) is treated as buffered for gating and counted once per flip', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 0;
+      state.blockedPermanently = true; // the next tile 404s forever
+      const g = makeGovernor({ source, startGateWallMs: 2000 });
+      g.requestPlay();
+      expect(g.state).toBe('playing'); // nothing will ever arrive — do not wait
+      expect(tc.isPlaying()).toBe(true);
+      expect(g.getQoeStats().blockedPermanentlyCount).toBe(1);
+      // Edge-triggered: re-probing the same blocked runway is not a new event.
+      g.notifyBufferChange(runway(0));
+      vi.advanceTimersByTime(250);
+      tc.setTime(2500);
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().blockedPermanentlyCount).toBe(1);
+      // The block clears (a retry landed data) and the runway is honestly
+      // thin → the watermark gates again; a later block is a second event.
+      state.blockedPermanently = false;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      state.blockedPermanently = true;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().blockedPermanentlyCount).toBe(2);
+    });
+
+    it('B8: a blocked runway with complete:true is just complete — no double count', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 0;
+      state.complete = true;
+      state.blockedPermanently = true;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().blockedPermanentlyCount).toBe(0);
+    });
+
+    it('G2: every QoE counter increments on its own transition', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        lowWatermarkWallMs: 600,
+        resumeFactor: 2,
+      });
+      expect(g.getQoeStats()).toMatchObject({
+        stallCount: 0,
+        stallMs: 0,
+        totalStallMs: 0,
+        startupMs: null,
+        degradedResumeCount: 0,
+        seekCount: 0,
+        seekSettleMsP50: null,
+        gateEntriesByReason: { starting: 0, buffering: 0, seeking: 0 },
+        frontierSnapBacks: 0,
+        blockedPermanentlyCount: 0,
+      });
+
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().gateEntriesByReason.starting).toBe(1);
+
+      // Three committed seeks with settle times 300 / 0 / 100 ms → p50 100.
+      state.runwaySimMs = 0;
+      g.seekTo(50_000);
+      expect(g.state).toBe('seeking');
+      expect(g.getQoeStats().seekCount).toBe(1);
+      expect(g.getQoeStats().gateEntriesByReason.seeking).toBe(1);
+      expect(g.getQoeStats().seekSettleMsP50).toBeNull(); // nothing settled yet
+      vi.advanceTimersByTime(300);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().seekSettleMsP50).toBe(300);
+      g.seekTo(60_000); // cached: settles synchronously (0 ms)
+      expect(g.state).toBe('playing');
+      state.runwaySimMs = 0;
+      g.seekTo(70_000);
+      vi.advanceTimersByTime(100);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.getQoeStats().seekCount).toBe(3);
+      expect(g.getQoeStats().seekSettleMsP50).toBe(100);
+
+      // One honest stall: stallMs mirrors totalStallMs, buffering entries
+      // mirror stallCount.
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      vi.advanceTimersByTime(1000);
+      const mid = g.getQoeStats();
+      expect(mid.stallCount).toBe(1);
+      expect(mid.stallMs).toBe(mid.totalStallMs);
+      expect(mid.stallMs).toBeGreaterThanOrEqual(1000);
+      expect(mid.gateEntriesByReason.buffering).toBe(1);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.state).toBe('playing');
+
+      // A frontier snap-back: a fresh probe reads exactly one watermark of
+      // runway (6_000 — passes the check), then the network goes silent and
+      // the clock overruns that frontier inside the probe interval.
+      state.runwaySimMs = 6_000;
+      vi.advanceTimersByTime(250);
+      const probedAt = tc.getTime() + 10;
+      tc.setTime(probedAt); // fresh probe → frontier = probedAt + 6_000
+      expect(g.state).toBe('playing');
+      state.runwaySimMs = 0;
+      tc.setTime(probedAt + 6_400);
+      expect(tc.getTime()).toBe(probedAt + 6_000);
+      expect(g.state).toBe('buffering');
+      const end = g.getQoeStats();
+      expect(end.frontierSnapBacks).toBe(1);
+      expect(end.stallCount).toBe(2);
+      expect(end.gateEntriesByReason).toEqual({
+        starting: 1,
+        buffering: 2,
+        seeking: 3,
+      });
+    });
+
+    it('G2: a loop wrap is not a seek (seekCount) but is a seeking gate entry', () => {
+      const frames: Array<() => void> = [];
+      vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+        frames.push(cb);
+        return frames.length;
+      });
+      tc.destroy();
+      tc = new TimeController({
+        initialTime: 99_000,
+        speed: 10,
+        loop: true,
+        timeRange: { start: 0, end: 100_000 },
+      });
+      const { source, state } = makeSource();
+      state.runwaySimMs = 1_000_000;
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      vi.advanceTimersByTime(200); // 2_000 sim-ms past 99_000 → wraps
+      for (const cb of frames.splice(0, frames.length)) cb();
+      expect(tc.getTime()).toBe(0); // wrapped
+      expect(g.getQoeStats().seekCount).toBe(0);
+      expect(g.getQoeStats().gateEntriesByReason.seeking).toBe(1);
+    });
+  });
+
+  describe('tile-loading audit 2026-08 (G3-4: a gate must not pass onto nothing)', () => {
+    /**
+     * Resident data through `reach` — a probe past it reads zero, like the
+     * real coverage index — AND a buffered-ranges bar that says so (unless
+     * `bare`). The two channels G3-4b joins.
+     */
+    function makeRangeSource(reachSimMs: number, bare = false) {
+      const state = { reach: reachSimMs, complete: false };
+      const source: BufferSource = {
+        getBufferedRunway(time, direction, horizonSimMs) {
+          const ahead = direction > 0 ? state.reach - time : time - state.reach;
+          const simMs = Math.max(0, Math.min(ahead, horizonSimMs ?? Infinity));
+          return {
+            simMs,
+            bytesPending: 0,
+            horizonSimMs: horizonSimMs ?? simMs,
+            complete: state.complete,
+          };
+        },
+        getBufferedRanges() {
+          return bare ? [] : [{ start: 0, end: state.reach }];
+        },
+        estimateCost() {
+          return { bytes: 0, tiles: 0 };
+        },
+        estimateTimeToReadyMs() {
+          return null;
+        },
+        flushPrefetch() {},
+      };
+      return { source, state };
+    }
+
+    it('G3-4a: the canplaythrough predictor never releases a gate with NOTHING under the head, however cheap the remainder reads', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 0;
+      state.etaMs = 0; // a warm estimator over a stale rate: "free"
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        maxStartWaitMs: 60_000,
+      });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      expect(tc.isPlaying()).toBe(false);
+      vi.advanceTimersByTime(1000);
+      expect(g.state).toBe('starting');
+      // Just under the floor (one probe interval: 200 ms × 10) still holds…
+      state.runwaySimMs = 1999;
+      g.notifyBufferChange(runway(1999));
+      expect(g.state).toBe('starting');
+      // …at the floor the same ETA releases it, honestly.
+      state.runwaySimMs = 2000;
+      g.notifyBufferChange(runway(2000));
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().degradedResumeCount).toBe(0);
+    });
+
+    it('G3-4a: the floor is one BUCKET when the source declares one shorter than the probe interval', () => {
+      const { source, state } = makeSource();
+      source.getTemporalBucketMs = () => 500; // < 2000 (200 ms × 10)
+      state.runwaySimMs = 499;
+      state.etaMs = 0;
+      const g = makeGovernor({
+        source,
+        startGateWallMs: 2000,
+        maxStartWaitMs: 60_000,
+      });
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      state.runwaySimMs = 500;
+      g.notifyBufferChange(runway(500));
+      expect(g.state).toBe('playing');
+    });
+
+    it('G3-4a: the watermark stall is not talked out of by the predictor when the runway is dry', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      state.etaMs = 0; // "instant" — which used to veto the stall
+      const g = makeGovernor({ source });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      expect(g.getQoeStats().stallCount).toBe(1);
+    });
+
+    it('G3-4b: a zero-runway probe anchors the frontier BEHIND the head, so the clamp snaps back onto loaded data instead of stalling in the void', () => {
+      // Play with 100_000 of runway. The probe interval elapses, and on the
+      // very tick that re-probes the head has already crossed the frontier
+      // (one frame past it, as a fast clock does). The fresh probe AT the
+      // head reads zero. Before: `bufferedUntil = head`, a `buffering` gate
+      // frozen 400 sim-ms into unloaded data, and every later pass played on
+      // from there. After: the frontier is the end of resident data, the
+      // clock snaps to it, and the gate holds THERE.
+      const src = makeRangeSource(100_000);
+      const g = makeGovernor({ source: src.source });
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      vi.advanceTimersByTime(250); // > TICK_PROBE_INTERVAL_MS: the next tick re-probes
+      tc.setTime(100_400);
+      expect(tc.getTime()).toBe(100_000);
+      expect(g.state).toBe('buffering');
+      const q = g.getQoeStats();
+      expect(q.frontierSnapBacks).toBe(1);
+      expect(q.gateEntriesByReason.buffering).toBe(1);
+      expect(q.gateHoldsByReason.buffering).toBe(1);
+    });
+
+    it('G3-4b: with nothing resident behind the head the frontier stays AT the head — a gate, no snap', () => {
+      const src = makeRangeSource(100_000, true);
+      const g = makeGovernor({ source: src.source });
+      g.requestPlay();
+      vi.advanceTimersByTime(250);
+      tc.setTime(100_400);
+      expect(tc.getTime()).toBe(100_400);
+      expect(g.state).toBe('buffering');
+      expect(g.getQoeStats().frontierSnapBacks).toBe(0);
+    });
+
+    it('G3-4b: a crossing INSIDE the probe interval still re-probes at the cached frontier (B6 unchanged)', () => {
+      const src = makeRangeSource(100_000);
+      const g = makeGovernor({ source: src.source });
+      g.requestPlay();
+      vi.advanceTimersByTime(150);
+      src.state.reach = 200_000; // landed, unannounced
+      tc.setTime(100_400);
+      expect(tc.getTime()).toBe(100_400);
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().frontierSnapBacks).toBe(0);
+    });
+
+    it('G3-4c: a gate that passes synchronously is an ENTRY but not a HOLD; a real stall is both', () => {
+      const { source, state } = makeSource();
+      state.runwaySimMs = 100_000;
+      const g = makeGovernor({ source });
+      expect(g.getQoeStats().gateHoldsByReason).toEqual({
+        starting: 0,
+        buffering: 0,
+        seeking: 0,
+      });
+      g.requestPlay(); // resident: passes inside enterGate
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().gateEntriesByReason.starting).toBe(1);
+      expect(g.getQoeStats().gateHoldsByReason.starting).toBe(0);
+      g.seekTo(50_000); // cached: synchronous
+      expect(g.state).toBe('playing');
+      expect(g.getQoeStats().gateEntriesByReason.seeking).toBe(1);
+      expect(g.getQoeStats().gateHoldsByReason.seeking).toBe(0);
+      // A real stall: entry AND hold.
+      state.runwaySimMs = 0;
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      expect(g.getQoeStats().gateEntriesByReason.buffering).toBe(1);
+      expect(g.getQoeStats().gateHoldsByReason.buffering).toBe(1);
+      state.runwaySimMs = 100_000;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.state).toBe('playing');
+      // A held seek.
+      state.runwaySimMs = 0;
+      g.seekTo(70_000);
+      expect(g.state).toBe('seeking');
+      expect(g.getQoeStats().gateEntriesByReason.seeking).toBe(2);
+      expect(g.getQoeStats().gateHoldsByReason.seeking).toBe(1);
+    });
+
+    it('G3-4c: gateHoldsByReason rides the playback.state snapshot beside gateEntriesByReason', () => {
+      interface ProbeBag {
+        enabled?: boolean;
+        snapshots?: Record<string, Record<string, unknown>>;
+        [k: string]: unknown;
+      }
+      const bag: ProbeBag = { enabled: true };
+      (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe = bag;
+      try {
+        const { source, state } = makeSource();
+        state.runwaySimMs = 100_000;
+        const g = makeGovernor({ source });
+        g.requestPlay();
+        state.runwaySimMs = 0;
+        g.notifyBufferChange(runway(0));
+        expect(g.state).toBe('buffering');
+        const snap = bag.snapshots?.['playback.state'];
+        expect(snap).toBeDefined();
+        expect(snap!.gateEntriesByReason).toEqual({
+          starting: 1,
+          buffering: 1,
+          seeking: 0,
+        });
+        expect(snap!.gateHoldsByReason).toEqual({
+          starting: 0,
+          buffering: 1,
+          seeking: 0,
+        });
+      } finally {
+        delete (globalThis as unknown as { __sttProbe?: ProbeBag }).__sttProbe;
+      }
+    });
+  });
+  /**
+   * The watermark and the resume gate measure the same question over DIFFERENT
+   * windows (600 wall-ms vs resumeFactor × 2000), and reach it through
+   * different predicates (`predictsPlaythrough`, the escape hatch, a probe
+   * capped at its own horizon). They can therefore disagree — and a stall the
+   * resume gate re-opens on the spot is not a stall, it is a pause + a play
+   * per tick. In a React host each of those is a state update whose render
+   * draws deck.gl, which ticks the clock, which re-decides… until React aborts
+   * the chain with "Maximum update depth exceeded".
+   */
+  describe('anti-flap: never stall into a state the resume gate would re-open', () => {
+    /**
+     * A source whose answer depends on the HORIZON it is asked about: thin and
+     * incomplete inside the watermark window, complete once the probe reaches
+     * the resume gate's. Stands in for every real way the two checks can
+     * disagree; the governor's contract is the same whatever the cause.
+     */
+    function makeDisagreeingSource(completeAtOrAboveSimMs: number) {
+      const calls: number[] = [];
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          const horizon = horizonSimMs ?? Infinity;
+          calls.push(horizon);
+          return horizon >= completeAtOrAboveSimMs
+            ? {
+                simMs: horizon,
+                bytesPending: 0,
+                horizonSimMs: horizon,
+                complete: true,
+              }
+            : {
+                simMs: 0,
+                bytesPending: 1_000,
+                horizonSimMs: horizon,
+                complete: false,
+              };
+        },
+        getBufferedRanges: () => [],
+        estimateCost: () => ({ bytes: 0, tiles: 0 }),
+        estimateTimeToReadyMs: () => null, // blind ⇒ the predictor never releases
+        flushPrefetch: () => {},
+      };
+      return { source, calls };
+    }
+
+    it('keeps playing (no pause, no state churn) when the resume gate would pass', () => {
+      // Start gate 2000 × 10 = 20000 sim-ms; resume gate 2× that; watermark
+      // 600 × 10 = 6000. The source is complete from 20000 up, so both gates
+      // pass and only the watermark's own probe reads a dry runway.
+      const { source } = makeDisagreeingSource(20_000);
+      const g = makeGovernor({ source });
+      const playStates: boolean[] = [];
+      tc.on('playState', (playing) => playStates.push(playing));
+
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      expect(playStates).toEqual([true]); // the start gate's own resume
+
+      // Every buffer event runs the watermark check; none may stall.
+      for (let i = 0; i < 25; i++) g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+      expect(playStates).toEqual([true]); // ← the flap: pause/play per event
+      expect(states).toEqual(['starting', 'playing']);
+    });
+
+    it('says so once when the disagreement is standing, not marginal', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { source } = makeDisagreeingSource(20_000);
+        const g = makeGovernor({ source });
+        g.requestPlay();
+        for (let i = 0; i < 60; i++) g.notifyBufferChange(runway(0));
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0][0])).toContain('resume gate');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('still stalls when the resume gate would NOT pass (the honest case)', () => {
+      // Complete only far beyond the resume gate (40000) ⇒ no disagreement.
+      const { source } = makeDisagreeingSource(10_000_000);
+      const g = makeGovernor({ source, maxStartWaitMs: 1_000_000 });
+      // A runway that clears the start gate, then collapses.
+      const opening = makeSource();
+      opening.state.runwaySimMs = 100_000;
+      g.setSource(opening.source);
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+
+      g.setSource(source); // now every probe reads dry
+      g.notifyBufferChange(runway(0));
+      expect(g.state).toBe('buffering');
+      expect(tc.isPlaying()).toBe(false);
+    });
   });
 });

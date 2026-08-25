@@ -10,12 +10,14 @@
  * that the per-tile fallback still works when no batch callback is set.
  *
  * The second half covers CO-7 — the ADAPTIVE coalesce gap. The fuse rule is
- * unchanged (`gap <= G` fuses, and a range never crosses an object boundary);
- * only the constant `G` is now fitted from the link, as `clamp(L̂ × θ̂, 256 KiB,
- * 4 MiB)`. Everything that could make that fit wrong — an explicit pin, a cold
- * estimator, or an archive whose layout was optimized against a specific gap —
- * falls back to the historic 2 MiB constant, and those fallbacks are pinned
- * here as regression guards rather than left implicit.
+ * `gap <= min(G, 4 × useful + 256 KiB)` (a range never crosses an object
+ * boundary, and — audit C3 — never bridges more than a few times the useful
+ * bytes it carries); the constant `G` is fitted from the link, as
+ * `clamp(L̂ × θ̂, 256 KiB, 4 MiB)`. Everything that could make that fit wrong —
+ * an explicit pin, a cold estimator, or an archive whose layout was optimized
+ * against a specific gap — falls back to the historic 2 MiB constant, and
+ * those fallbacks are pinned here as regression guards rather than left
+ * implicit.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -24,6 +26,7 @@ import {
   STTArchive,
   adaptiveCoalesceGapBand,
   adaptiveCoalesceGapBytes,
+  planCoalescedRanges,
   DEFAULT_RANGE_COALESCE_GAP,
   MIN_ADAPTIVE_COALESCE_GAP,
   MAX_ADAPTIVE_COALESCE_GAP,
@@ -677,7 +680,13 @@ describe('the co-versioning guard: only a DECLARED build gap licenses adaptation
 });
 
 describe('legacy guard: an un-adapted session plans byte-identical requests (CO-7)', () => {
-  /** Six blobs, spaced so 2 MiB fuses everything the floor would split. */
+  /**
+   * Six ~830 B blobs 512 KiB apart. Under the raw 2 MiB gap these all fused;
+   * since the amplification bound (audit C3: a fuse may bridge at most
+   * `4 × useful + 256 KiB`, ≈ 260 KB for blobs this small) they do NOT, and
+   * — the point of this block — the adaptive and pinned readers agree on
+   * that plan byte-for-byte.
+   */
   const SCRIPT_BLOBS: BlobPlacement[] = [
     { pack: 0, padBefore: 0 },
     { pack: 0, padBefore: 512 * 1024 },
@@ -695,7 +704,7 @@ describe('legacy guard: an un-adapted session plans byte-identical requests (CO-
     await archive.getTiles([ids[0], ids[3], ids[5]]); // all cached
   }
 
-  /** Wider spacing: 2 MiB still fuses these, the 1 MiB band floor does not. */
+  /** Wider spacing (1.5 MB): outside the amplification bound at any G. */
   const WIDE_BLOBS: BlobPlacement[] = SCRIPT_BLOBS.map((b, i) =>
     i === 0 ? b : { pack: 0, padBefore: 1_500_000 },
   );
@@ -727,8 +736,10 @@ describe('legacy guard: an un-adapted session plans byte-identical requests (CO-
     // plans are literally comparable string-for-string.
     expect(rangePlan(a.log)).toEqual(rangePlan(b.log));
     expect(a.archive.getCoalesceGapEstimate().source).toBe('no-build-gap');
-    // …and the ranges really were fused (2 tiles per batch, 1 request each).
-    expect(a.log.ranges.length).toBe(3);
+    // …and a 512 KiB pad between ~830 B tiles is NOT bridged by either reader
+    // (re-blessed for audit C3: this used to pin 3 fused requests, i.e. a
+    // ~600× over-fetch per batch): 2 tiles per batch, 1 request each.
+    expect(a.log.ranges.length).toBe(6);
   });
 
   it('a COLD adaptive archive plans its first batch exactly as today', async () => {
@@ -747,12 +758,13 @@ describe('legacy guard: an un-adapted session plans byte-identical requests (CO-
     const b = openWithLog(reference, {
       coalesceGapBytes: DEFAULT_RANGE_COALESCE_GAP,
     });
-    // First batch only: nothing has been measured yet, so the 512 KiB pad is
-    // bridged by the incumbent constant exactly as it always was.
+    // First batch only: nothing has been measured yet, so the cold reader and
+    // the pinned reader plan identically — and (audit C3) neither bridges a
+    // 512 KiB pad between ~830 B tiles: 2 requests, not 1 fused over-fetch.
     await a.archive.getTiles([adaptive.ids[0], adaptive.ids[1]]);
     await b.archive.getTiles([reference.ids[0], reference.ids[1]]);
     expect(rangePlan(a.log)).toEqual(rangePlan(b.log));
-    expect(a.log.ranges.length).toBe(1);
+    expect(a.log.ranges.length).toBe(2);
   });
 
   it('once warm, the fitted gap actually changes the plan (the item is not a no-op)', async () => {
@@ -765,18 +777,33 @@ describe('legacy guard: an un-adapted session plans byte-identical requests (CO-
     });
     const { archive, log } = openWithLog(gap);
     await archive.getTiles([gap.ids[0], gap.ids[1]]);
-    expect(log.ranges.length).toBe(1); // cold ⇒ 2 MiB ⇒ fused
+    // Re-blessed for audit C3: a 1.5 MB pad between ~830 B tiles is outside
+    // the amplification bound at ANY G, so it is 2 requests cold as well as
+    // warm — the fitted gap can only ever matter for tiles large enough that
+    // bridging is not mostly over-fetch.
+    expect(log.ranges.length).toBe(2);
 
     const warmFrom = log.ranges.length;
     await archive.getTiles([gap.ids[2], gap.ids[3]]);
-    // Warm ⇒ G = 1 MiB (the declared band's floor) < the 1.5 MB pad ⇒ the pair
-    // no longer fuses. The reader stopped paying 1.5 MB of over-fetch for a
-    // round trip that this link says is worth ~nothing — while staying inside
-    // ×2 of what the layout was priced at.
     expect(log.ranges.length - warmFrom).toBe(2);
+    // Warm ⇒ G = 1 MiB (the declared band's floor). Where it DOES bind — MB-
+    // scale tiles, whose `4 × useful` clears the bound — the plan changes
+    // with it: 1 MB tiles 1.5 MB apart fuse at the cold 2 MiB and split at
+    // the fitted 1 MiB. The reader stopped paying 1.5 MB of over-fetch for a
+    // round trip this link says is worth ~nothing, while staying inside ×2
+    // of what the layout was priced at.
     const estimate = archive.getCoalesceGapEstimate();
     expect(estimate.source).toBe('adaptive');
     expect(estimate.gapBytes).toBe(1_048_576);
+    const big = [
+      { packId: 0, offset: 8, length: 1_000_000 },
+      { packId: 0, offset: 8 + 1_000_000 + 1_500_000, length: 1_000_000 },
+    ];
+    const extent = (e: (typeof big)[number]) => e;
+    expect(
+      planCoalescedRanges(big, extent, DEFAULT_RANGE_COALESCE_GAP).length,
+    ).toBe(1);
+    expect(planCoalescedRanges(big, extent, estimate.gapBytes).length).toBe(2);
   });
 });
 
@@ -892,8 +919,8 @@ describe('determinism: a fixed sample sequence is a fixed request plan (CO-7)', 
     const third = await planFor('mem://gap-det-3/manifest.json');
     expect(second).toEqual(first);
     expect(third).toEqual(first);
-    // The plan is non-trivial: the later, warm batches split where the first,
-    // cold one fused.
+    // The plan is non-trivial: every pad here is outside the amplification
+    // bound for ~830 B tiles (audit C3), so each 2-tile batch is 2 requests.
     expect(first.length).toBeGreaterThan(3);
   });
 });

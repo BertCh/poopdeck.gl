@@ -221,9 +221,11 @@ export class STTScene {
     return out;
   }
 
-  /** Advance the playhead (absolute epoch-ms). Cheap — uniform writes only.
-   * Each layer is isolated: a throw in one must not abort the frame (and the
-   * render after it) for the others. */
+  /** Advance the playhead (absolute epoch-ms). Cheap for the GPU-filtered
+   * kinds (uniform writes only); the CPU-sampled kinds — bounding boxes, trip
+   * heads, flowmap dynamics — do work proportional to their ACTIVE set per
+   * call, and skip it on a repeated time. Each layer is isolated: a throw in
+   * one must not abort the frame (and the render after it) for the others. */
   setTime(absoluteTimeMs: number): void {
     for (const l of this.layers) {
       try {

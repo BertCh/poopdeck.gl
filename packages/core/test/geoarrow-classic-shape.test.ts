@@ -556,8 +556,8 @@ describe('toGeoArrowTable: real Rust writer output, not hand-built frames', () =
     // The manifest's must-understand declaration…
     expect(manifest.capabilities).toContain('time-delta');
     // …and the per-tile TILE_META that backs it, in EVERY tile.
-    const packs: Uint8Array[] = manifest.packs.map(
-      (p: { key: string }) => ds.objects.get(p.key)!,
+    const packs: Uint8Array[] = manifest.packs.map((p: { key: string }) =>
+      ds.objects.get(p.key)!,
     );
     const archive = new STTArchive({
       url: ds.manifestUrl,

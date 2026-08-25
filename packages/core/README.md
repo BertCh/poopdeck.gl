@@ -1,9 +1,13 @@
 # @poopdeck.gl/core
 
+> **Status: stable, pre-1.0.** See the
+> [support and compatibility policy](../../docs/intro/status-and-support.md).
+
 The framework-free TypeScript core for **SpatioTemporal Tiles (STT)**: the
 packed-archive reader, the tile decoder, the viewport + time-aware tileset,
-and the render kernel every renderer backend
-(`@poopdeck.gl/{layers,three,maplibre,cesium}`) is built on.
+and the render kernel used by the published renderer packages
+(`@poopdeck.gl/{layers,three,maplibre}`) and the experimental, workspace-only
+Cesium backend.
 
 ## Install
 
@@ -63,7 +67,7 @@ tileset.update({ bounds, zoom, time, timeWindow });
 - **Render kernel** — framework-free subpaths (`core/time-filter`,
   `core/style`, `core/geometry`, `core/geo`, `core/picking`,
   `core/tileset-adapter`, `core/shader-codegen`, `core/capabilities`) shared
-  by all four renderer backends.
+  by every renderer backend.
 
 ## Docs
 

@@ -159,7 +159,7 @@ export class STTFlowmapLayer extends BaseSTTLayer {
     this.timeOrigin = ctx.timeOrigin;
     this.tiles = tiles;
     this.projection = ctx.projection;
-    this.disposeGpu();
+    this.disposeGeometries();
     this.lastStepKey = Number.NaN;
     // Build at the time origin so the layer is renderable before the first
     // setTime; setTime re-expands the dynamic attributes as the playhead moves.
@@ -244,11 +244,16 @@ export class STTFlowmapLayer extends BaseSTTLayer {
       );
       ag.boundingSphere = ag.boundingBox.getBoundingSphere(new Sphere());
     }
-    this.arrowBundle = createFlowArrowMaterial({
-      additive: this.opts.additive,
-      depthWrite: this.opts.depthWrite,
-      alphaCutoff: this.opts.alphaCutoff,
-    });
+    // Materials are built ONCE (audit E5): their inputs are constructor
+    // options, and disposing them per rebuild evicted three's
+    // nodeBuilderCache entry, program and pipeline each time.
+    if (!this.arrowBundle) {
+      this.arrowBundle = createFlowArrowMaterial({
+        additive: this.opts.additive,
+        depthWrite: this.opts.depthWrite,
+        alphaCutoff: this.opts.alphaCutoff,
+      });
+    }
     this.arrows.geometry = ag;
     this.arrows.material = this.arrowBundle.material;
     this.pushArrowUniforms();
@@ -288,10 +293,12 @@ export class STTFlowmapLayer extends BaseSTTLayer {
     // relative-magnitude cue, and a per-instance-sized node material is a future
     // enhancement; the per-node radii still drive the arrow endpoint insets via
     // `sttEndpointOffsets`, which is where exact radius matters most.
-    this.nodeBundle = createPointMaterial({
-      mode: 'window',
-      sizeUnits: 'pixels',
-    });
+    if (!this.nodeBundle) {
+      this.nodeBundle = createPointMaterial({
+        mode: 'window',
+        sizeUnits: 'pixels',
+      });
+    }
     this.nodes.geometry = ng;
     this.nodes.material = this.nodeBundle.material;
     this.nodeRadiiRepresentative = representativeRadius(buf.nodeRadii);
@@ -316,11 +323,11 @@ export class STTFlowmapLayer extends BaseSTTLayer {
       (eAttr.array as Float32Array).set(buf.endpointOffsets);
       eAttr.needsUpdate = true;
     }
-    // Node set membership can change with the playhead → rebuild node geometry.
+    // Node set membership can change with the playhead → rebuild node
+    // GEOMETRY (the material is kept: rebuilding it here was a shader
+    // recompile per cross-fade sub-step).
     if (!this.opts.hideNodes) {
       this.nodes.geometry?.dispose();
-      this.nodeBundle?.material.dispose();
-      this.nodeBundle = null;
       this.buildNodeGeometry(buf);
     }
   }
@@ -357,9 +364,13 @@ export class STTFlowmapLayer extends BaseSTTLayer {
     if (!this.nodes.geometry) this.nodes.geometry = makeBillboardQuadGeometry();
   }
 
-  private disposeGpu(): void {
+  private disposeGeometries(): void {
     this.arrows.geometry?.dispose();
     this.nodes.geometry?.dispose();
+  }
+
+  private disposeGpu(): void {
+    this.disposeGeometries();
     this.arrowBundle?.material.dispose();
     this.nodeBundle?.material.dispose();
     this.arrowBundle = null;

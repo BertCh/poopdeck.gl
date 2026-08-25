@@ -6,12 +6,14 @@ import {
   useParams,
   type ClientLoaderFunctionArgs,
   type LoaderFunctionArgs,
+  type MetaFunction,
 } from 'react-router';
 import {
   GITHUB_BLOB_BASE,
   docSections,
   getDocEntry,
   getSectionForSlug,
+  normalizeDocSlug,
 } from './manifest';
 import { fileLoader, manifestSchemaRaw } from './content';
 import { extractHeadings } from './headings';
@@ -20,6 +22,7 @@ import CodeBlock from './CodeBlock';
 import Toc from './Toc';
 import PrevNext from './PrevNext';
 import { useDocsContext } from './DocsLayout';
+import { createSeoMeta } from '../lib/seo';
 
 /**
  * One documentation page. The markdown body is read in the route `loader` so
@@ -40,7 +43,7 @@ type DocData =
   | { slug: string; notFound?: false; kind: 'markdown' | 'json'; raw: string };
 
 export async function loader({ params }: LoaderFunctionArgs): Promise<DocData> {
-  const slug = params['*'] ?? '';
+  const slug = normalizeDocSlug(params['*'] ?? '');
   const entry = getDocEntry(slug);
   if (!entry) throw new Response('Not found', { status: 404 });
   if (entry.kind === 'json') {
@@ -51,11 +54,31 @@ export async function loader({ params }: LoaderFunctionArgs): Promise<DocData> {
   return { slug, kind: 'markdown', raw: await load() };
 }
 
+export const meta: MetaFunction<typeof loader> = ({ params, loaderData }) => {
+  const slug = normalizeDocSlug(params['*'] ?? '');
+  const entry = getDocEntry(slug);
+  if (!entry || loaderData?.notFound) {
+    return createSeoMeta({
+      title: 'Documentation page not found',
+      description: 'Browse the published SpatioTemporal Tiles documentation.',
+      path: '/docs',
+      noIndex: true,
+    });
+  }
+  return createSeoMeta({
+    title: entry.title,
+    description:
+      entry.blurb ??
+      `${entry.title}: reference documentation for SpatioTemporal Tiles and poopdeck.gl.`,
+    path: `/docs/${entry.slug}`,
+  });
+};
+
 export async function clientLoader({
   params,
   serverLoader,
 }: ClientLoaderFunctionArgs): Promise<DocData> {
-  const slug = params['*'] ?? '';
+  const slug = normalizeDocSlug(params['*'] ?? '');
   // Unknown slug isn't prerendered → no baked data to fetch; render the 404.
   if (!getDocEntry(slug)) return { slug, notFound: true };
   return serverLoader<DocData>();
@@ -63,7 +86,9 @@ export async function clientLoader({
 
 const DocPage: React.FC = () => {
   const params = useParams();
-  const slug = params['*'] ?? '';
+  // Trailing slash stripped here, at the one place the URL enters the page —
+  // `slug` flows on to the section lookup, PrevNext and the GitHub edit link.
+  const slug = normalizeDocSlug(params['*'] ?? '');
   const data = useLoaderData() as DocData;
   const entry = getDocEntry(slug);
   const section = getSectionForSlug(slug);

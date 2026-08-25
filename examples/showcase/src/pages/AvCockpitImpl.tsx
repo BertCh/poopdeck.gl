@@ -122,6 +122,8 @@ const AvCockpit: React.FC = () => {
   const { sceneId } = useParams<{ sceneId?: string }>();
   const reducedMotion = useReducedMotion();
   const isMobile = useIsMobile();
+  // Height of the phone chrome's bottom stack, reported by AvMobileChrome.
+  const [bottomChrome, setBottomChrome] = useState(0);
 
   // All AV scenes for the switcher — EXCLUDING the camera-splat / surfel render
   // variants. Those are no longer separate entries: they're folded into the
@@ -484,22 +486,20 @@ const AvCockpit: React.FC = () => {
     if (!show3DTiles) setTiles3dAttribution('');
   }, [show3DTiles]);
   // Manual vertical trim (`?tiles3dz=`, metres) on top of AvDeck's auto-detected
-  // ground height — the user nudges the photoreal ground onto the cloud's streets
-  // when auto-detect sits a touch high/low. Positive raises the mesh. Clamped to
-  // ±40 m; 0 (centred) keeps the URL clean.
+  // ground height, for seating the photoreal ground on the cloud's streets when
+  // auto-detect sits a touch high/low. Positive raises the mesh. Clamped to
+  // ±150 m; 0 (centred) is the default. URL-only now — the trim slider was
+  // removed from the cockpit chrome, so nothing writes this param in-app.
   const tiles3dElevAdjust = (() => {
     const n = Number(searchParams.get('tiles3dz'));
     return Number.isFinite(n) ? Math.max(-150, Math.min(150, n)) : 0;
   })();
-  const setTiles3dElevAdjust = useCallback(
-    (v: number) => setParam('tiles3dz', v === 0 ? null : String(v)),
-    [setParam],
-  );
   // Photoreal mesh opacity (`?tiles3dop=`, 0–100 → 0..1). Ghosts the buildings so
   // the LIDAR cloud reads against them (useful when the animated cloud drifts
   // slightly out of sync with the static mesh). Defaults to the scene's baked
-  // `tiles3dOpacity`, else a global ghosted default (the user's repeated pick); the
-  // URL param overrides ⇒ clean URL when it matches the default.
+  // `tiles3dOpacity`, else a global ghosted default (the user's repeated pick).
+  // URL-only now — the opacity slider was removed from the cockpit chrome, so
+  // nothing writes this param in-app.
   const tiles3dDefaultOpacity =
     baseDataset?.tiles3dOpacity ?? DEFAULT_TILES3D_OPACITY;
   const tiles3dOpacity = (() => {
@@ -510,10 +510,6 @@ const AvCockpit: React.FC = () => {
       ? Math.max(0, Math.min(1, n / 100))
       : tiles3dDefaultOpacity;
   })();
-  const setTiles3dOpacityPct = useCallback(
-    (pct: number) => setParam('tiles3dop', pct >= 100 ? null : String(pct)),
-    [setParam],
-  );
 
   const egoPath = useMemo<{ t: number; lon: number; lat: number }[] | null>(
     () => (scene?.streams?.ego as any)?.path ?? null,
@@ -593,6 +589,13 @@ const AvCockpit: React.FC = () => {
         : {}),
     };
   }, [dataset, lidarDensityId, lidarDensities]);
+  // Referentially stable per scene: `CameraInset` keys a TimeController
+  // subscription on it, so an inline arrow tore that listener down and
+  // re-subscribed it on every cockpit render (inferred, not profiled).
+  const resolveFrameUrl = useCallback(
+    (rel: string) => (dataset ? `${sceneBaseUrl(dataset)}/${rel}` : rel),
+    [dataset],
+  );
 
   if (!dataset) {
     return (
@@ -608,7 +611,6 @@ const AvCockpit: React.FC = () => {
   // Base-stable name so the switcher label doesn't flip as the render mode
   // swaps the active dataset to a `-splat` / `-surfel` bundle.
   const sceneName = baseDataset?.name ?? dataset.name;
-  const resolveFrameUrl = (rel: string) => `${sceneBaseUrl(dataset)}/${rel}`;
   const hasTelemetry =
     presentStreams.includes('telemetry') &&
     telemetry != null &&
@@ -635,7 +637,15 @@ const AvCockpit: React.FC = () => {
     : null;
 
   return (
-    <div className="fixed inset-0 bg-slate-950 overflow-hidden">
+    <div
+      className="fixed inset-0 bg-slate-950 overflow-hidden"
+      // Tells the basemap's bottom-docked controls (attribution + logo, a
+      // licensing requirement) how much floating chrome to clear. Only the
+      // phone layout stacks anything across the full width — see index.css.
+      style={
+        { '--stt-bottom-chrome': `${bottomChrome}px` } as React.CSSProperties
+      }
+    >
       {/* The map fills the viewport; chrome floats over it. */}
       <div className="absolute inset-0">
         {renderer === 'three' ? (
@@ -749,6 +759,7 @@ const AvCockpit: React.FC = () => {
           selectedObject={selectedObject}
           onCloseObject={() => setSelectedObject(null)}
           timeline={timelineProps}
+          onBottomChromeHeight={setBottomChrome}
         />
       ) : (
         <>
@@ -977,58 +988,14 @@ const AvCockpit: React.FC = () => {
         </>
       )}
 
-      {/* Google Photorealistic 3D Tiles chrome (shown while the mesh is on):
-          a vertical-trim slider to seat the photoreal ground on the cloud's
-          streets, plus the data-attribution credit Google's ToS requires (the
-          union of the visible tiles' sources, reported by AvDeck). Centered above
-          the timeline so it clears the corner telemetry / inspector panels. */}
+      {/* Google Photorealistic 3D Tiles credit (shown while the mesh is on):
+          the data attribution Google's ToS requires — the union of the visible
+          tiles' sources, reported by AvDeck. Centered above the timeline so it
+          clears the corner telemetry / inspector panels. (The height/opacity
+          sliders that used to sit here were removed; both still read from their
+          URL params — see `tiles3dz` / `tiles3dop` above.) */}
       {show3DTiles && (
-        <div className="absolute bottom-24 left-1/2 z-20 flex -translate-x-1/2 flex-col items-center gap-1">
-          <div className="flex flex-col gap-1.5 rounded-md border border-white/10 bg-black/60 px-3 py-1.5 backdrop-blur-md">
-            <div className="flex items-center gap-2">
-              <span className="w-20 text-[10px] uppercase tracking-wider text-slate-400">
-                Tiles height
-              </span>
-              <span className="text-[10px] text-slate-500">low</span>
-              <input
-                type="range"
-                min={-150}
-                max={150}
-                step={1}
-                value={tiles3dElevAdjust}
-                onChange={(e) => setTiles3dElevAdjust(Number(e.target.value))}
-                className="w-40"
-                style={{ accentColor: '#34d399' }}
-                aria-label="3D tiles vertical alignment (metres)"
-              />
-              <span className="text-[10px] text-slate-500">high</span>
-              <span className="w-10 text-right font-mono text-[10px] text-emerald-200">
-                {tiles3dElevAdjust > 0 ? '+' : ''}
-                {tiles3dElevAdjust}m
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-20 text-[10px] uppercase tracking-wider text-slate-400">
-                Tiles opacity
-              </span>
-              <span className="text-[10px] text-slate-500">ghost</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={Math.round(tiles3dOpacity * 100)}
-                onChange={(e) => setTiles3dOpacityPct(Number(e.target.value))}
-                className="w-40"
-                style={{ accentColor: '#34d399' }}
-                aria-label="3D tiles opacity (percent)"
-              />
-              <span className="text-[10px] text-slate-500">solid</span>
-              <span className="w-10 text-right font-mono text-[10px] text-emerald-200">
-                {Math.round(tiles3dOpacity * 100)}%
-              </span>
-            </div>
-          </div>
+        <div className="absolute bottom-24 left-1/2 z-20 -translate-x-1/2">
           <div className="pointer-events-none max-w-[80vw] truncate rounded bg-black/60 px-2 py-0.5 text-[10px] text-slate-300 backdrop-blur-md">
             {tiles3dAttribution || 'Google Photorealistic 3D Tiles'}
           </div>

@@ -14,6 +14,8 @@
 - [Agent guide (AGENTS.md)](https://github.com/BertCh/spatiotemporal-tiles/blob/main/AGENTS.md): how coding agents should work in this repo.
 - [Concepts](docs/intro/concepts.md): the space×time tile model, packed archives, playback.
 - [Choosing an approach](docs/intro/choosing.md): static vs served; which renderer.
+- [Status and support](docs/intro/status-and-support.md): maturity tiers, compatibility window, and support expectations.
+- [Glossary and naming](docs/intro/glossary.md): canonical project, archive, format, and API terminology.
 - [CSV quickstart](docs/guides/csv-quickstart.md): fastest path from a table to a map.
 - [System overview](docs/architecture/system-overview.md): how the pieces fit.
 
@@ -30,7 +32,7 @@
 - [Playback](docs/api/stt-player.md): `SttPlayer` / `PlaybackGovernor` and the React bindings.
 
 ## Format & protocol
-- [Packed format spec](docs/spec/stt-packed-format.md): manifest + content-addressed packs, directory v5, quant/zstd.
+- [Packed format spec](docs/spec/stt-packed-format.md): manifest + content-addressed packs, directory v6, quant/zstd.
 - [Serve protocol](docs/spec/stt-serve-protocol.md): dynamic tile routes.
 - [Time model](docs/spec/time-model.md): buckets, LOD pyramid, temporal bounds.
 

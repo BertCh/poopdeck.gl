@@ -265,16 +265,33 @@ export async function createSTTAtmosphere(
   ctx.matrixWorldToECEF.value.copy(computeWorldToEcef(projection, cfg.anchor));
 
   // Publish the context to the renderer so the sky/light/aerial nodes can find it.
+  // @types/three r185 types `Renderer.contextNode` as `ContextNode<unknown>`, so
+  // its `.value` is no longer a spreadable object type — it still is one at
+  // runtime, and the node library keeps it keyed by name.
   const prevContextNode = renderer.contextNode;
+  const prevContextValue = (prevContextNode?.value ?? {}) as Record<
+    string,
+    unknown
+  >;
   const ctxValue = {
-    ...prevContextNode?.value,
+    ...prevContextValue,
     getAtmosphere: () => ctx,
   };
   const atmosphereContextNode = context(ctxValue);
 
   // 2) Sun/moon directional light (registered once on the renderer's node library).
   const light = cfg.light ? new AtmosphereLight() : null;
-  if (light) renderer.library.addLight(AtmosphereLightNode, AtmosphereLight);
+  // r185 re-declared `NodeLibrary` as an opaque `@private` class in
+  // @types/three, dropping `addLight` from the typings. The method is still
+  // there at runtime (three.webgpu `NodeLibrary.addLight`), and the r184 types
+  // accept this shape too, so one narrow cast covers the whole peer range.
+  if (light) {
+    (
+      renderer.library as unknown as {
+        addLight(lightNodeClass: unknown, lightClass: unknown): void;
+      }
+    ).addLight(AtmosphereLightNode, AtmosphereLight);
+  }
 
   // 1'/3) Sky background + environment IBL nodes (built once, attached on demand).
   const backgroundNode = cfg.sky ? skyBackground() : null;

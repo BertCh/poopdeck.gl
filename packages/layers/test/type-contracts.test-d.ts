@@ -6,7 +6,8 @@
  * Compile-only contracts for the upstream generics pattern (audit B3).
  *
  * NOT executed by vitest (the `.test-d.ts` suffix is outside the runner's
- * `test/**​/*.test.ts` glob) — it is type-checked by `pnpm typecheck` via
+ * glob of `.test.ts` files under `test/`) — it is type-checked by
+ * `pnpm typecheck` via
  * `tsconfig.typetest.json`. Each block pins one piece of the public typing
  * surface:
  *
