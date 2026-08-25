@@ -46,7 +46,16 @@ const chunkBudgets = [
   [/^entry\.client-.*\.js$/, 'client entry', 65],
   [/^datasets-.*\.js$/, 'dataset catalog', 27],
   [/^DemoPageImpl-.*\.js$/, 'demo shell', 5],
-  [/^DemoViewer-.*\.js$/, 'deck viewer', 7],
+  // 7 -> 9.5: the interleaved MapboxOverlay terrain path, the mobile chrome
+  // (`useIsMobile`) and the pitch/camera limits all landed in this component
+  // on 2026-08-25, measured at 5.1 -> 9.0 KiB gzip (14,004 -> 26,697 B raw for
+  // the same chunk). The 7 KiB number was calibrated against the 5.1 KiB
+  // component and predates all three, so it is stale rather than breached.
+  // Reviewed and re-based deliberately — see docs/roadmap/launch-readiness-2026-08.md.
+  // The real reduction available here is splitting the terrain path behind a
+  // dynamic import: most demos never load it, and it is the largest single
+  // addition. Tracked as a follow-up, not a launch blocker.
+  [/^DemoViewer-.*\.js$/, 'deck viewer', 9.5],
   [/^MaplibreRenderer-.*\.js$/, 'MapLibre renderer', 70],
   [/^SttThreeGeoViewer-.*\.js$/, 'Three renderer shell', 5],
   [/^HomeGlobe-.*\.js$/, 'home globe shell', 2.5],
