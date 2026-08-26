@@ -222,6 +222,12 @@ if (!existsSync(statusSrc)) {
   const block = {};
   for (const key of pin.status.keys)
     if (key in upstream) block[key] = upstream[key];
+  // This file has exactly ONE formatter, and it is this line's `JSON.stringify`
+  // — `project-status.json` is in `.oxfmtrc.json`'s ignorePatterns on purpose.
+  // Its served mirror under `examples/showcase/public/` is oxfmt-ignored too
+  // (`**/public/**`), so letting oxfmt own the root copy made the two agree or
+  // disagree depending on whether you ran `stt:sync` or `format` first. Two
+  // formatters, one file, is an ordering trap; one formatter is not.
   const local = JSON.parse(readFileSync(statusDst, 'utf8'));
   const wantJson = JSON.stringify(block, null, 2);
   const haveJson = JSON.stringify(local.stt ?? null, null, 2);
@@ -302,9 +308,6 @@ if (CHECK) {
   console.log(
     synced === 0
       ? `sync-stt: already up to date with ${sourceLabel}`
-      : `sync-stt: updated ${synced} file(s) from ${sourceLabel}\n` +
-          '         run `pnpm format` — project-status.json is re-serialized here ' +
-          'and oxfmt owns its layout (the `stt` comparison is semantic, so ' +
-          'formatting it back does not reintroduce drift)',
+      : `sync-stt: updated ${synced} file(s) from ${sourceLabel}`,
   );
 }

@@ -17,6 +17,7 @@
   "ignorePatterns": [
     "docs/spec/backend-capabilities.md",
     "docs/spec/av-palettes.json",
+    "project-status.json",
     "**/dist/**",
     "**/build/**",
     "**/.react-router/**",

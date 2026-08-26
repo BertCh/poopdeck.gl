@@ -80,14 +80,8 @@
         "directoryVersion": 6
       },
       "reads": {
-        "formatVersions": [
-          2,
-          3
-        ],
-        "directoryVersions": [
-          5,
-          6
-        ]
+        "formatVersions": [2, 3],
+        "directoryVersions": [5, 6]
       }
     },
     "commands": [
