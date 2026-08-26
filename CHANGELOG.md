@@ -6,7 +6,7 @@ release notes are the historical record for individual artifacts. Changes to the
 **archive format itself** are recorded upstream, in the
 [SpatioTemporal Tiles changelog](https://github.com/BertCh/poopdeck.gl/blob/main/CHANGELOG.md).
 
-## Unreleased
+## 0.8.0 — 2026-08-26
 
 ### Repository split
 

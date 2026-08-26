@@ -143,6 +143,14 @@ To release:
    `--check` reports drift and exits non-zero; CI runs it on every PR. These
    files sit outside the changesets fixed group, so nothing else bumps them.
 
+3. **Bump `examples/minimal` afterwards.** It installs the packages from **npm**,
+   not from the workspace — that is the whole point of it — so it can only name
+   a version that already exists. `changeset version` rewrites its ranges to the
+   version being released, which does not resolve until the publish lands and
+   breaks `pnpm install --frozen-lockfile` in the meantime. Hold it at the last
+   published range through the release commit, then bump it once npm has the new
+   one.
+
 Changelogs: `packages/*/CHANGELOG.md` are written by changesets — do not
 hand-edit them.
 

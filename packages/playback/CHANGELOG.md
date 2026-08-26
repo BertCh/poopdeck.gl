@@ -1,5 +1,27 @@
 # @poopdeck.gl/playback
 
+## 0.8.0
+
+### Minor Changes
+
+- The renderer moved to its own repository, [BertCh/poopdeck.gl](https://github.com/BertCh/poopdeck.gl).
+
+  No runtime code changed in this release — every export, entry point and peer
+  range is identical to 0.7.0. What changed is package metadata that was wrong:
+  `repository`, `homepage` and `bugs` pointed at the monorepo these packages no
+  longer live in, so "Repository" on npm, the source links in the docs, and
+  "Report an issue" all led somewhere the code is not.
+
+  **The npm and crates.io version numbers are no longer in lockstep.** They last
+  agreed at 0.7.0 by history, not by promise. The Rust toolchain that builds `.stt`
+  archives (`stt-build`, `stt-optimize`, `stt-serve`, `stt-validate`, `stt-bundle`)
+  now releases on its own cadence from
+  [BertCh/spatiotemporal-tiles](https://github.com/BertCh/spatiotemporal-tiles).
+  What relates the two stacks is the archive's `formatVersion`, declared in
+  `project-status.json` on both sides — read that, not the version string. Readers
+  in this release open packed `formatVersion` 3 / `directoryVersion` 6, plus
+  published v2/v5 archives read-only, exactly as 0.7.0 did.
+
 ## 0.7.0
 
 ### Minor Changes
