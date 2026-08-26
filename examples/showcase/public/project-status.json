@@ -1,7 +1,7 @@
 {
   "$schema": "./project-status.schema.json",
   "schemaVersion": 1,
-  "updated": "2026-08-24",
+  "updated": "2026-08-26",
   "release": {
     "rust": "0.7.0",
     "javascript": "0.7.0"
