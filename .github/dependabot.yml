@@ -1,21 +1,20 @@
 version: 2
 updates:
-  # Rust only. The published crates are what a `cargo install` user gets, and
-  # their dep tree (arrow/parquet, duckdb, geo) is where a stale pin actually
-  # costs something.
-  - package-ecosystem: cargo
+  # GitHub Actions only.
+  #
+  # Deliberately NOT enabled for npm: the workspace hard-pins the deck.gl and
+  # luma.gl 9.3.x line through `overrides` in pnpm-workspace.yaml (a documented
+  # invariant, see CONTRIBUTING.md), and dependabot would open PRs against it
+  # every week. The cargo ecosystem this file used to carry moved upstream with
+  # the crates (BertCh/spatiotemporal-tiles) in the 2026-08-26 split; pointing
+  # it at a workspace that is not here would just fail weekly.
+  #
+  # Action versions are the one dependency class that is both worth tracking and
+  # unaffected by the pin.
+  - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      # One PR for the routine drift; majors still arrive on their own so an
-      # arrow or duckdb bump gets read rather than rubber-stamped.
-      cargo-minor-and-patch:
-        patterns: ['*']
-        update-types: [minor, patch]
+    open-pull-requests-limit: 3
     commit-message:
-      prefix: 'deps'
-# Deliberately NOT enabled for npm: the workspace hard-pins the deck.gl and
-# luma.gl 9.3.x line through `pnpm.overrides` (a documented invariant, see
-# CONTRIBUTING.md), and dependabot would open PRs against it every week.
+      prefix: 'ci'
