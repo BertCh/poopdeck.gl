@@ -59,6 +59,14 @@ minimumReleaseAgeExclude:
   - maplibre-gl@6.6.0
   - mermaid@11.17.1
   - oxlint@1.80.0
+  # Our OWN 0.7.0 release, added by pnpm on the install that followed the
+  # publish. `examples/minimal` depends on the PUBLISHED packages (that is what
+  # it exists to prove), so on release day it necessarily wants versions younger
+  # than the age gate. Drop these four once 0.7.0 has aged past the cutoff.
+  - '@poopdeck.gl/core@0.7.0'
+  - '@poopdeck.gl/layers@0.7.0'
+  - '@poopdeck.gl/playback@0.7.0'
+  - '@poopdeck.gl/react@0.7.0'
 
 # pnpm 11 no longer reads `pnpm.overrides` / `pnpm.patchedDependencies` from
 # package.json — both live here now. The luma patch is load-bearing: it is the
