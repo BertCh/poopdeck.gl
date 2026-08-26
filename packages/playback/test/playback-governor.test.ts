@@ -5535,4 +5535,89 @@ describe('PlaybackGovernor', () => {
       expect(tc.isPlaying()).toBe(false);
     });
   });
+  describe('inert sources (a torn-down loader must not hold the clock)', () => {
+    /**
+     * A source that can be switched to INERT — the shape a finalized
+     * `SpatioTemporalTileset` takes: its tile registry is cleared but its
+     * coverage index survives, so it answers "runway 0, never complete"
+     * forever while reporting `isInert() === true`.
+     */
+    function makeInertibleSource() {
+      const state = { runwaySimMs: 100_000, complete: false, inert: false };
+      const source: BufferSource = {
+        getBufferedRunway(_time, _direction, horizonSimMs) {
+          const simMs = state.inert ? 0 : state.runwaySimMs;
+          return {
+            simMs,
+            bytesPending: 0,
+            horizonSimMs: horizonSimMs ?? simMs,
+            complete: state.inert ? false : state.complete,
+          };
+        },
+        getBufferedRanges: () => [],
+        estimateCost: () => ({ bytes: 0, tiles: 0 }),
+        estimateTimeToReadyMs: () => null,
+        flushPrefetch: () => {},
+        isInert: () => state.inert,
+      };
+      return { source, state };
+    }
+
+    it('drops an inert required source so its bone-dry runway stops gating', () => {
+      const dead = makeInertibleSource();
+      const live = makeInertibleSource();
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        maxStartWaitMs: 1_000_000,
+      });
+      g.addSource('dead', dead.source, { required: true });
+      g.addSource('live', live.source, { required: true });
+      live.state.runwaySimMs = 100_000;
+
+      // The renderer swapped datasets: the old loader is finalized but never
+      // unregistered, so the min-gate now folds a source that can never fill.
+      dead.state.inert = true;
+      dead.state.runwaySimMs = 0;
+
+      g.requestPlay();
+      expect(g.state).toBe('playing');
+      expect(tc.isPlaying()).toBe(true);
+      expect(g.getSourceRunways().map((s) => s.id)).toEqual(['live']);
+    });
+
+    it('unjams a gate that a source went inert UNDER', () => {
+      const dead = makeInertibleSource();
+      const live = makeInertibleSource();
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        maxStartWaitMs: 1_000_000,
+      });
+      g.addSource('dead', dead.source, { required: true });
+      g.addSource('live', live.source, { required: true });
+      dead.state.runwaySimMs = 0; // below the 20_000 sim-ms gate
+      live.state.runwaySimMs = 100_000;
+
+      g.requestPlay();
+      expect(g.state).toBe('starting'); // held at the laggard
+
+      dead.state.inert = true;
+      g.notifyBufferChange(runway(100_000));
+      expect(g.state).toBe('playing');
+      expect(g.getSourceRunways().map((s) => s.id)).toEqual(['live']);
+    });
+
+    it('leaves sources without the optional isInert method alone', () => {
+      const { source, state } = makeSource(); // no isInert on this mock
+      const g = makeGovernor({
+        startGateWallMs: 2000,
+        maxStartWaitMs: 1_000_000,
+      });
+      g.addSource('plain', source, { required: true });
+      state.runwaySimMs = 0;
+
+      g.requestPlay();
+      expect(g.state).toBe('starting');
+      expect(g.getSourceRunways().map((s) => s.id)).toEqual(['plain']);
+    });
+  });
 });

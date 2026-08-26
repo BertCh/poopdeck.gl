@@ -201,6 +201,25 @@ export interface BufferSource {
    * band, which would re-introduce the raw-min false stall.
    */
   getTemporalBucketMs?(): number;
+  /**
+   * Optional (the core tileset has it): `true` once the source has been torn
+   * down and can never load another byte — a finalized `SpatioTemporalTileset`.
+   *
+   * A dead source is not a slow source. Its tile registry is cleared but its
+   * coverage index survives, so every readiness API keeps answering "nothing
+   * buffered, not complete" forever — and the gate is `min(runway)` over the
+   * REQUIRED set, so ONE stale entry pins the clock at zero for the rest of the
+   * session. The renderer is supposed to unregister on teardown, but a layer
+   * whose id changes underneath it (a dataset swap that keeps the same time
+   * range) hands the old tileset to `finalize()` without any callback the app
+   * can hang an `unregisterSource` off. This bit is what lets the governor
+   * notice on its own: {@link PlaybackGovernor} drops inert sources from the
+   * registry at the top of every evaluation, so a leaked one self-heals instead
+   * of deadlocking playback.
+   *
+   * Sources without the method are never inert (the incumbent behaviour).
+   */
+  isInert?(): boolean;
 }
 
 /** Network throughput estimate (archive dual-EWMA, see WS-A5). */
@@ -2224,6 +2243,43 @@ export class PlaybackGovernor {
     return out;
   }
 
+  /**
+   * Drop every registered source that reports itself INERT — torn down, and so
+   * permanently unable to buffer another byte (see {@link BufferSource.isInert}).
+   *
+   * This is a SAFETY NET for the registration contract, not a substitute for
+   * it: a renderer that swaps datasets should still `unregisterSource` the ids
+   * it is retiring. But a layer whose id changes with the dataset finalizes its
+   * old tileset with no callback the app can hook, and a finalized required
+   * source answers "runway 0, not complete" for the rest of the session — which
+   * the min-gate reads as a laggard that never catches up, so the clock never
+   * advances again. Leaving is the only correct thing such a source can do.
+   *
+   * No restore calls on the way out (unlike {@link removeSource}): a finalized
+   * source cannot act on `setPrefetchRunAheadLimit` / `setBandwidthWeight` /
+   * `setLoopWindow`, so we only drop the bookkeeping that named it. Fairness is
+   * deactivated on the same terms as a removal — losing the laggard leaves
+   * every peer capped against a stale floor.
+   */
+  private pruneInertSources(): void {
+    let removedLaggard = false;
+    let removedAny = false;
+    for (const [id, entry] of this.sources) {
+      if (entry.source.isInert?.() !== true) continue;
+      this.lastSentCaps.delete(id);
+      this.lastSentWeights.delete(id);
+      this.lastSentLoopRanges.delete(id);
+      this.betaMemo.delete(id);
+      this.blockedSourceIds.delete(id);
+      if (this.lastLaggardIds.delete(id)) removedLaggard = true;
+      this.sources.delete(id);
+      removedAny = true;
+    }
+    if (removedAny && (removedLaggard || this.sources.size < 2)) {
+      this.deactivateFairness();
+    }
+  }
+
   /** True once any source (required or not) is resident — the historical `this.source` truthiness check. */
   private hasAnySource(): boolean {
     return this.sources.size > 0;
@@ -2680,6 +2736,11 @@ export class PlaybackGovernor {
   /** Immediate re-evaluation: gate check while gated, stall check while playing. */
   private evaluateNow(): void {
     if (this.disposed) return;
+    // Evict any source that has been torn down under us BEFORE reading the
+    // registry: a finalized tileset reports a bone-dry, never-complete runway
+    // forever, and the gate min()s over the required set (see
+    // BufferSource.isInert).
+    this.pruneInertSources();
     // Loop mode / range can change without announcing itself (the clock has no
     // event for either), so re-derive on the evaluation cadence. Two getters
     // and a numeric compare per source — no probe, no timer of its own.
@@ -2769,6 +2830,12 @@ export class PlaybackGovernor {
    * held for `maxStartWaitMs`.
    */
   private evaluateGate(): boolean {
+    // The gate min()s over the required set, so it must not read a source that
+    // has been torn down under it. `evaluateNow` already prunes, but
+    // `enterGate` evaluates ONCE directly (the gate may already be satisfied) —
+    // without this, a gate entered while a dead source is still registered
+    // holds for one eval-timer cadence before it can notice.
+    this.pruneInertSources();
     if (!this.userWantsPlayback) {
       // Intent evaporated while gated (requestPause already handled state;
       // this is pure defense).

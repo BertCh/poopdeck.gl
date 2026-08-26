@@ -192,6 +192,29 @@ describe('SpatioTemporalTileset.getBufferedRunway', () => {
   });
 });
 
+describe('SpatioTemporalTileset.isInert', () => {
+  it('flips on finalize, and the readiness APIs go bone-dry underneath it', async () => {
+    const { tileset, loadBucket } = makeHarness();
+    await loadBucket(0);
+    await loadBucket(1);
+    await primeCoverage(tileset);
+
+    expect(tileset.isInert()).toBe(false);
+    expect(tileset.getBufferedRunway(0, 1, 10_000).simMs).toBe(2000);
+
+    // finalize() clears the tile registry but NOT the coverage index, so every
+    // bucket now reads as missing and the runway is pinned at zero for good.
+    // A PlaybackGovernor min-gates over its required sources, so a finalized
+    // source left in its registry would hold the clock forever — the inertness
+    // bit is what lets the governor drop it instead of waiting on it.
+    tileset.finalize();
+    const dead = tileset.getBufferedRunway(0, 1, 10_000);
+    expect(dead.simMs).toBe(0);
+    expect(dead.complete).toBe(false);
+    expect(tileset.isInert()).toBe(true);
+  });
+});
+
 describe('SpatioTemporalTileset.estimateCost', () => {
   it('sums directory lengths of NOT-loaded tiles intersecting the range', async () => {
     const { tileset, loadBucket } = makeHarness();

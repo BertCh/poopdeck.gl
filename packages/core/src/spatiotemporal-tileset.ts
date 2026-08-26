@@ -5009,6 +5009,19 @@ export class SpatioTemporalTileset {
    *                     `max(4 × timeWindow, |animationSpeed| × 10 s)`, and
    *                     always at least one temporal bucket.
    */
+  /**
+   * `true` once {@link finalize} has run — the tileset is torn down and can
+   * never load another byte. The `BufferSource` readiness contract's inertness
+   * bit: a `PlaybackGovernor` min-gates the clock over its REQUIRED sources, so
+   * a finalized one left in its registry would pin the gate at zero forever
+   * (`clear()` empties the tile registry but the coverage index survives, so
+   * every bucket reads as missing). Reporting inertness lets the governor drop
+   * it instead of waiting on it. One-way — a finalized tileset is never revived.
+   */
+  isInert(): boolean {
+    return this.finalized;
+  }
+
   getBufferedRunway(
     time: number,
     direction: 1 | -1,

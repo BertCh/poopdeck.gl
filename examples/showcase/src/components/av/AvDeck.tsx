@@ -34,6 +34,12 @@ import type { TimeController } from '@poopdeck.gl/playback';
 import type { SourceRegistry } from '@poopdeck.gl/react';
 import { buildDemoLayers } from '../demo/buildDemoLayers';
 import { subscribeThrottledTick } from './throttledTick';
+import {
+  GOVERNED_STREAMS,
+  allSourceIds,
+  layerStream,
+  streamSourceIds,
+} from './sourceIds';
 import { buildGoogle3DTilesLayer } from './googleTiles';
 import {
   buildEgoFootprintLayer,
@@ -142,21 +148,6 @@ export interface AvDeckProps {
   tiles3dOpacity?: number;
 }
 
-/** Which streams own which built layer (by the id suffix buildDemoLayers sets). */
-function layerStream(layerId: string, datasetId: string): AvStreamKey {
-  if (layerId === `${datasetId}-ego`) return 'ego';
-  if (layerId === `${datasetId}-objects`) return 'objects';
-  if (
-    layerId === `${datasetId}-map-poly` ||
-    layerId === `${datasetId}-map-line`
-  )
-    return 'map';
-  return 'lidar'; // the primary layer carries the bare dataset id
-}
-
-/** Tile streams that register a governor source (telemetry/camera are sidecars). */
-const GOVERNED_STREAMS: AvStreamKey[] = ['lidar', 'ego', 'objects', 'map'];
-
 /**
  * Camera pitch ceiling for every AvDeck framing (street-level AND the
  * space-time cube). Deliberately below deck's 71.57° horizon crossing at the
@@ -164,22 +155,6 @@ const GOVERNED_STREAMS: AvStreamKey[] = ['lidar', 'ego', 'objects', 'map'];
  * docs/roadmap/tile-loading-3d-2026-07.md §1/§4.
  */
 const AV_MAX_PITCH = 70;
-
-/** Governor source id(s) a stream registers — the inverse of {@link layerStream}. */
-function streamSourceIds(stream: AvStreamKey, datasetId: string): string[] {
-  switch (stream) {
-    case 'ego':
-      return [`${datasetId}-ego`];
-    case 'objects':
-      return [`${datasetId}-objects`];
-    case 'map':
-      return [`${datasetId}-map-poly`, `${datasetId}-map-line`];
-    case 'lidar':
-      return [datasetId]; // primary layer carries the bare dataset id
-    default:
-      return []; // telemetry / camera are sidecar JSON, not governor sources
-  }
-}
 
 const AvDeck: React.FC<AvDeckProps> = ({
   dataset,
@@ -255,10 +230,24 @@ const AvDeck: React.FC<AvDeckProps> = ({
   // top-down pitch (a switch made while top-down stays top-down); the easing /
   // ego-follow effects take over from there. Guarded by a ref so it fires only
   // on a real scene change, not the initial mount (already framed above).
-  const framedSceneIdRef = useRef(dataset.id);
+  //
+  // Keyed on the framing VALUES, not on `dataset.id`. A LIDAR render-mode switch
+  // swaps the active dataset to a `-surfel` / `-iso` / `-lod` bundle of the SAME
+  // drive — different id, same city, same framing — and re-snapping there threw
+  // away whatever the user had panned, zoomed and rotated to. Value equality is
+  // the honest test: those variants are built by the same scene factory from the
+  // same coordinates, while a genuine scene switch moves them and still frames.
+  const {
+    longitude: ivLon,
+    latitude: ivLat,
+    zoom: ivZoom,
+  } = dataset.initialViewState;
+  const ivBearing = dataset.initialViewState.bearing;
+  const framingKey = `${ivLon},${ivLat},${ivZoom},${ivBearing}`;
+  const framedKeyRef = useRef(framingKey);
   useEffect(() => {
-    if (framedSceneIdRef.current === dataset.id) return;
-    framedSceneIdRef.current = dataset.id;
+    if (framedKeyRef.current === framingKey) return;
+    framedKeyRef.current = framingKey;
     setViewState({
       ...dataset.initialViewState,
       pitch: targetPitch,
@@ -267,7 +256,7 @@ const AvDeck: React.FC<AvDeckProps> = ({
     // targetPitch is read fresh from this render's closure but is deliberately
     // NOT a dep — toggling top-down WITHIN a scene must not recenter the camera.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataset]);
+  }, [framingKey]);
 
   // scene.json's `initialView` is authoritative (always matches the bundle's tile
   // georef). The `[dataset]` effect + useState seed frame from the hardcoded
@@ -466,6 +455,29 @@ const AvDeck: React.FC<AvDeckProps> = ({
       }
     }
   }, [visibleStreams, registry, dataset.id]);
+
+  // The OTHER half of that reconciliation: retire the whole scene's sources
+  // when the active dataset changes id.
+  //
+  // A LIDAR render-mode switch re-ids every layer (`<id>` → `<id>-surfel`), so
+  // deck unmounts the old tree and finalizes its tilesets — but a finalized
+  // tileset keeps its coverage index while its tile registry is cleared, so it
+  // answers "runway 0, never complete" forever, and the governor's gate is
+  // min(runway) over the REQUIRED sources. Left registered, the dead LIDAR
+  // source holds the clock permanently and every further switch stacks another
+  // pair on top (measured: 2 → 4 → 6 → 8 sources, the first one gating). The
+  // variants all share one time range, so `usePlayback`'s range-change reset —
+  // which clears the registry — correctly does not fire and cannot cover this.
+  //
+  // Cleanup, not effect body: it must name the id being RETIRED, and it runs
+  // before the replacement's `onTilesetReady` (that lands a metadata fetch
+  // later), so it can never unregister the incoming tree.
+  useEffect(() => {
+    const retiringId = dataset.id;
+    return () => {
+      for (const id of allSourceIds(retiringId)) registry.unregisterSource(id);
+    };
+  }, [dataset.id, registry]);
 
   // Ego car footprint + openpilot-style path-prediction ribbon. These are
   // single-instance OVERLAY layers (not tile layers), so they ride a

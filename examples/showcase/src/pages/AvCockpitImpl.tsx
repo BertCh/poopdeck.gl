@@ -17,7 +17,14 @@
  * Missing streams simply hide their panel; a missing/blank bundle shows a
  * loading or "scene not generated yet" state instead of crashing.
  */
-import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { usePlayback } from '@poopdeck.gl/react';
 import { datasets, getDatasetById } from '../datasets';
@@ -300,37 +307,68 @@ const AvCockpit: React.FC = () => {
     setSelectedObject(null);
   }, [dataset]);
 
+  // A REAL scene switch (the switcher / a `/drive/:sceneId` navigation) blanks
+  // the chrome: the next scene is a different drive in a different city, so the
+  // old stream list, gauges and camera frames describe nothing. Keyed on the
+  // BASE id, NOT on `dataset` — a LIDAR render-mode switch stays inside the same
+  // drive and must NOT blank anything (see the fetch effect below).
   useEffect(() => {
-    if (!dataset) return;
-    let cancelled = false;
     setScene(null);
     setTelemetry(null);
     setCameras(null);
     setLoadError(false);
+  }, [baseId]);
+
+  // Sidecar fetch, keyed on the URLS rather than the dataset object.
+  //
+  // A render-mode switch points these at the variant bundle's copies
+  // (`/data/<id>-surfel/…`), which for every stream but the LIDAR one are
+  // byte-identical to the base bundle's. So this effect REPLACES on success and
+  // never clears up-front: the left rail, the density picker, the CAN gauges and
+  // the camera inset stay mounted across a mode switch instead of unmounting
+  // behind a full-screen "Loading scene…" card and remounting ~a fetch later.
+  // Only a failure (or the base-scene reset above) empties them.
+  const avSceneUrl = dataset?.avSceneUrl;
+  const avTelemetryUrl = dataset?.avTelemetryUrl;
+  const avCamerasUrl = dataset?.avCamerasUrl;
+  useEffect(() => {
+    if (!avSceneUrl) {
+      // No manifest to fetch: an AV dataset without a scene url can never
+      // resolve, so say so instead of sitting on "Loading scene…" forever.
+      if (dataset) setLoadError(true);
+      return;
+    }
+    let cancelled = false;
 
     const run = async () => {
       try {
-        const sceneUrl = dataset.avSceneUrl;
-        const sc: AvScene | null = sceneUrl
-          ? await fetch(sceneUrl).then((r) => (r.ok ? r.json() : null))
-          : null;
+        const sc: AvScene | null = await fetch(avSceneUrl).then((r) =>
+          r.ok ? r.json() : null,
+        );
         if (cancelled) return;
+        if (!sc) {
+          // The bundle isn't there — surface the error rather than leaving the
+          // previous mode's chrome up describing tiles that aren't loading.
+          setScene(null);
+          setLoadError(true);
+          return;
+        }
         setScene(sc);
+        setLoadError(false);
         // Sidecars: prefer the scene's stream urls (resolved relative to the
         // bundle root); fall back to the Dataset's resolved urls.
-        if (dataset.avTelemetryUrl) {
-          const tel = await fetch(dataset.avTelemetryUrl)
+        if (avTelemetryUrl) {
+          const tel = await fetch(avTelemetryUrl)
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null);
           if (!cancelled && tel) setTelemetry(tel);
         }
-        if (dataset.avCamerasUrl) {
-          const cam = await fetch(dataset.avCamerasUrl)
+        if (avCamerasUrl) {
+          const cam = await fetch(avCamerasUrl)
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null);
           if (!cancelled && cam) setCameras(cam);
         }
-        if (!sc) setLoadError(true);
       } catch {
         if (!cancelled) setLoadError(true);
       }
@@ -339,7 +377,10 @@ const AvCockpit: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [dataset]);
+    // `dataset` is read only for the no-url guard above; the fetch itself is
+    // keyed on the urls so an identity-only dataset change never refetches.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avSceneUrl, avTelemetryUrl, avCamerasUrl]);
 
   // Authoritative time range: scene.json wins; fall back to the Dataset's
   // placeholder window until it loads.
@@ -388,15 +429,23 @@ const AvCockpit: React.FC = () => {
   // Stream visibility (`?streams=`). No param ⇒ every present LAYER stream is
   // visible (the default); otherwise only the comma-listed present streams are.
   // Toggling writes the param, dropping it once everything is back on.
+  //
+  // Depends on the `streams` PARAM, not on the whole `searchParams` object: every
+  // write to the query string mints a fresh URLSearchParams, so keying on it gave
+  // this Set a new identity whenever ANY unrelated toggle moved (perf, follow,
+  // top-down, 3D tiles, density) — and the Set is a dep of AvDeck's layer memo,
+  // so each of those rebuilt the entire scene layer tree.
+  const streamsParam = searchParams.get('streams');
   const visibleStreams = useMemo<Set<AvStreamKey>>(() => {
     const layerPresent = presentStreams.filter((s) =>
       LAYER_STREAMS.includes(s),
     );
-    const param = searchParams.get('streams');
-    if (param === null) return new Set(layerPresent);
-    const wanted = new Set(param ? (param.split(',') as AvStreamKey[]) : []);
+    if (streamsParam === null) return new Set(layerPresent);
+    const wanted = new Set(
+      streamsParam ? (streamsParam.split(',') as AvStreamKey[]) : [],
+    );
     return new Set(layerPresent.filter((s) => wanted.has(s)));
-  }, [presentStreams, searchParams]);
+  }, [presentStreams, streamsParam]);
   const toggleStream = useCallback(
     (s: AvStreamKey) => {
       const layerPresent = presentStreams.filter((x) =>
@@ -511,10 +560,47 @@ const AvCockpit: React.FC = () => {
       : tiles3dDefaultOpacity;
   })();
 
-  const egoPath = useMemo<{ t: number; lon: number; lat: number }[] | null>(
-    () => (scene?.streams?.ego as any)?.path ?? null,
-    [scene],
+  // ── Scene-derived values that must be stable BY VALUE, not by identity ─────
+  // A render-mode switch re-fetches the variant bundle's scene.json, so `scene`
+  // is a fresh object even where the numbers are identical (the variants are
+  // rebuilds of the SAME drive: same georef, same ego track). Downstream
+  // consumers key camera snaps and rAF loops off these identities, so handing
+  // them a new object for unchanged data is a visible reset, not a no-op.
+
+  // AvDeck snaps the camera to `sceneView` whenever the identity changes (that
+  // is how a scene switch re-frames). Compare by value so a mode switch keeps
+  // the user's pan / zoom / bearing, and still re-frames if a variant really
+  // was georeferenced somewhere else.
+  const iv = scene?.initialView;
+  const sceneView = useMemo(
+    () => (iv ? { ...iv } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [iv?.longitude, iv?.latitude, iv?.zoom, iv?.pitch, iv?.bearing],
   );
+
+  // The ego polyline keys AvDeck's follow-camera rAF loop, whose first frame
+  // SNAPS. Latch the previous array whenever the new one describes the same
+  // track (same length, same endpoints) so a mode switch doesn't restart the
+  // chase mid-glide or rebuild the ego overlay layers for nothing.
+  type EgoPoint = { t: number; lon: number; lat: number };
+  const egoPathRef = useRef<EgoPoint[] | null>(null);
+  const egoPath = useMemo<EgoPoint[] | null>(() => {
+    const next = ((scene?.streams?.ego as any)?.path ?? null) as
+      | EgoPoint[]
+      | null;
+    const prev = egoPathRef.current;
+    const same =
+      prev != null &&
+      next != null &&
+      prev.length === next.length &&
+      (prev.length === 0 ||
+        (prev[0].t === next[0].t &&
+          prev[0].lon === next[0].lon &&
+          prev[prev.length - 1].t === next[next.length - 1].t));
+    if (same) return prev;
+    egoPathRef.current = next;
+    return next;
+  }, [scene]);
 
   // ── Space-time cube (Spacetime render mode) ────────────────────────────────
   // `heightFactor` is the squash slider (`?squash=`, 0–100 → 0..1): 0 = flat map,
@@ -580,9 +666,17 @@ const AvCockpit: React.FC = () => {
     const splat = !!dataset.lidarSplat;
     const r = (v: number) => (splat ? Math.max(v * 2, 1.4) : v);
     const rMin = (v: number) => (splat ? Math.max(v * 2, 1.0) : v);
+    const lidarUrl = `${sceneBaseUrl(dataset)}/${tier.url}`;
     return {
       ...dataset,
-      avLidarUrl: `${sceneBaseUrl(dataset)}/${tier.url}`,
+      // `url` moves WITH `avLidarUrl`. buildDemoLayers decides which of a
+      // scene's archives is the PRIMARY one — the one that keeps the storyboard
+      // / overview-preload tier — by comparing each stream url against `url`,
+      // so leaving `url` pinned to the default tier silently demoted the LIDAR
+      // stream to an overlay (and left the scene with no primary at all) the
+      // moment you picked any other density.
+      url: lidarUrl,
+      avLidarUrl: lidarUrl,
       ...(tier.radius != null ? { radius: r(tier.radius) } : {}),
       ...(tier.radiusMinPixels != null
         ? { radiusMinPixels: rMin(tier.radiusMinPixels) }
@@ -659,7 +753,7 @@ const AvCockpit: React.FC = () => {
             topDown={topDown}
             perfMode={perfMode}
             reducedMotion={reducedMotion}
-            sceneView={scene?.initialView ?? null}
+            sceneView={sceneView}
             onSelectObject={setSelectedObject}
           />
         ) : (
@@ -672,7 +766,7 @@ const AvCockpit: React.FC = () => {
             topDown={topDown}
             reducedMotion={reducedMotion}
             egoPath={egoPath}
-            sceneView={scene?.initialView ?? null}
+            sceneView={sceneView}
             onSelectObject={setSelectedObject}
             perfMode={perfMode}
             showBasemap={showBasemap}
