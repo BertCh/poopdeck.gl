@@ -87,11 +87,11 @@ importers:
         specifier: 9.3.6
         version: 9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))(@luma.gl/shadertools@9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))
       '@poopdeck.gl/layers':
-        specifier: ^0.7.0
-        version: 0.7.0(ff8a858f996abd706b2718a9fcbea0ae)
+        specifier: ^0.8.0
+        version: 0.8.0(ff8a858f996abd706b2718a9fcbea0ae)
       '@poopdeck.gl/react':
-        specifier: ^0.7.0
-        version: 0.7.0(@deck.gl/core@9.3.10)(@deck.gl/react@9.3.10(@deck.gl/core@9.3.10)(@deck.gl/widgets@9.3.10(@deck.gl/core@9.3.10)(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: ^0.8.0
+        version: 0.8.0(@deck.gl/core@9.3.10)(@deck.gl/react@9.3.10(@deck.gl/core@9.3.10)(@deck.gl/widgets@9.3.10(@deck.gl/core@9.3.10)(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       react:
         specifier: '>=19.2.0 <19.3.0'
         version: 19.2.8
@@ -1852,12 +1852,12 @@ packages:
     resolution: {integrity: sha512-pOr5+q1fLYKwFN3LAJuGZEnfXDcQ73zqgDHMtGy+K+uIoUqyY+6MeDCWFwfu+4EFuq76I5EPFofoNAI+Bmmq4A==}
     engines: {node: '>=22.13'}
 
-  '@poopdeck.gl/core@0.7.0':
-    resolution: {integrity: sha512-oFn7cUJbg5Dd9Tsw1u0BEz5mo5xzhlhyQ9MEUbDuWXVCL2uRrIckIs0XzdHS2VMkLVZt2Ekuxp9KQBnXyLCfvw==}
+  '@poopdeck.gl/core@0.8.0':
+    resolution: {integrity: sha512-IPRZ3+wJkvt+5Xs3roqohodYXDN3ShtJiXvhX90hO257OFLD40wDpM70MxbJ2FvYblyrNumpR8FR2X5TDVnzmg==}
     engines: {node: '>=20'}
 
-  '@poopdeck.gl/layers@0.7.0':
-    resolution: {integrity: sha512-mxmQOCaBZFpvKEPoI10Lr49UGoN5hDv/CxRJq4v3chpAGZZDhCsx7AFJ/Kvui356o3acJtp9iQoLGhpD1nWnFw==}
+  '@poopdeck.gl/layers@0.8.0':
+    resolution: {integrity: sha512-M6OVf0ND7erijo1VS8jx/Edrv9v4vYPafHeiDlPi7XJKHS1QFM9Eols/RyqtYKtdKfwRu9RzVPzoT57u2OfkFA==}
     engines: {node: '>=20'}
     peerDependencies:
       '@deck.gl/aggregation-layers': 9.3.10
@@ -1869,12 +1869,12 @@ packages:
       '@luma.gl/core': 9.3.6
       '@luma.gl/engine': 9.3.6
 
-  '@poopdeck.gl/playback@0.7.0':
-    resolution: {integrity: sha512-L9GhRmNqAYqXfL9gtIjTf9wkUE/M6bPDgjuCXRWBky6mC91aiYF5UJ0sfIe2lIpTPKLIhmARcxHeZuq7Q9OCAQ==}
+  '@poopdeck.gl/playback@0.8.0':
+    resolution: {integrity: sha512-in1UGpr964pkOpfUhZp4LmSD48Q3/lh/CaNrURAK0354J5rUbnj/NDvZrkG85NGc1iOfu0kv7lIB8fMQAtOQJw==}
     engines: {node: '>=20'}
 
-  '@poopdeck.gl/react@0.7.0':
-    resolution: {integrity: sha512-3MlKN+4b2tc7OsWgj7R/IcTWIPz5qsqnYU3Z1Pzi92wn7d3CE6PPa8xFkS5eKhJOLj7pEA9mWRxMHpYrvv7Hkg==}
+  '@poopdeck.gl/react@0.8.0':
+    resolution: {integrity: sha512-45iFpklaL2LSD22tO/FDvhKBDupwXASDsxt7v0QI/VZ8CJcceNqDGrV0YjXY5mWlT9Dp/lLt9FScy4Fw+rXERA==}
     engines: {node: '>=20'}
     peerDependencies:
       '@deck.gl/core': 9.3.10
@@ -6570,13 +6570,13 @@ snapshots:
 
   '@pnpm/deps.graph-sequencer@1100.0.1': {}
 
-  '@poopdeck.gl/core@0.7.0':
+  '@poopdeck.gl/core@0.8.0':
     dependencies:
       apache-arrow: 21.2.0
       earcut: 3.2.3
       fzstd: 0.1.1
 
-  '@poopdeck.gl/layers@0.7.0(ff8a858f996abd706b2718a9fcbea0ae)':
+  '@poopdeck.gl/layers@0.8.0(ff8a858f996abd706b2718a9fcbea0ae)':
     dependencies:
       '@deck.gl/aggregation-layers': 9.3.10(@deck.gl/core@9.3.10)(@deck.gl/layers@9.3.10(@deck.gl/core@9.3.10)(@loaders.gl/core@4.4.5)(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))(@luma.gl/engine@9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))(@luma.gl/shadertools@9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))))(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))(@luma.gl/engine@9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))(@luma.gl/shadertools@9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))))
       '@deck.gl/core': 9.3.10
@@ -6586,16 +6586,16 @@ snapshots:
       '@deck.gl/mesh-layers': 9.3.10(bc38d1ea7073b3d9dd739c33adf3b528)
       '@luma.gl/core': 9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)
       '@luma.gl/engine': 9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef))(@luma.gl/shadertools@9.3.6(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))
-      '@poopdeck.gl/core': 0.7.0
-      '@poopdeck.gl/playback': 0.7.0
+      '@poopdeck.gl/core': 0.8.0
+      '@poopdeck.gl/playback': 0.8.0
       h3-js: 4.5.0
 
-  '@poopdeck.gl/playback@0.7.0': {}
+  '@poopdeck.gl/playback@0.8.0': {}
 
-  '@poopdeck.gl/react@0.7.0(@deck.gl/core@9.3.10)(@deck.gl/react@9.3.10(@deck.gl/core@9.3.10)(@deck.gl/widgets@9.3.10(@deck.gl/core@9.3.10)(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@poopdeck.gl/react@0.8.0(@deck.gl/core@9.3.10)(@deck.gl/react@9.3.10(@deck.gl/core@9.3.10)(@deck.gl/widgets@9.3.10(@deck.gl/core@9.3.10)(@luma.gl/core@9.3.6(patch_hash=369035a459bcfd4e5fee3e71e0efc137a697509419512913fd5857537941bcef)))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@poopdeck.gl/core': 0.7.0
-      '@poopdeck.gl/playback': 0.7.0
+      '@poopdeck.gl/core': 0.8.0
+      '@poopdeck.gl/playback': 0.8.0
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
     optionalDependencies:
