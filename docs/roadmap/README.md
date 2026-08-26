@@ -552,6 +552,37 @@ the real geometry bbox, `z_range` lands as an additive
 byte-identically), and both ride the next rebuild rather than a dedicated one.
 ([tile-loading-3d-2026-07.md §6, §6b](./tile-loading-3d-2026-07.md))
 
+**K12. The per-feature LOD floor is consumed but never computed, so a cross-codebase
+constant has to be policed instead.** `stt-build` reads a feature's LOD floor from a
+property named by `--min-zoom-field` (`feature_min_zoom`,
+`crates/stt-build/src/tiler.rs:731`) and confines the feature to a `[min_zoom,
+max_zoom]` band from there. It computes that floor **nowhere**: the values are baked
+upstream by the generation scripts (`scripts/data-generation/mrms_refloor.py`,
+`mrms_volume.py`, `nexrad_volume.py`, the AV extractors) against a thinning grid whose
+temporal bucket is a constant in a second codebase. Nothing asserted the two equal, and
+when they diverged on 2026-07-28 the archive still built, still validated and still
+rendered — at a median 13 % (worst 0 %) of the features visible in the displayed
+bucket, with no decode-time signal at all. `crates/stt-build/src/lod_bucket.rs` (SH-4)
+closed that hole by stamping the grid's bucket width into the Parquet footer and
+hard-erroring on a mismatch. That is the right guard for the architecture, but it
+leaves the architecture in place: a progressive or thinned build is reachable only by
+users who also run our Python, and the guard's two warn paths — footer absent, column
+absent — are exactly the cases it cannot check.
+
+**Named fix:** a producer-side assigner inside `stt-build` that computes the floor from
+the features it is already parsing, so the floor and the bucket come from one place and
+cannot disagree. Shape, three quarters of it taken from COGP's `assign_levels`
+([stt-packed-format-decisions.md §6](./stt-packed-format-decisions.md)): grid cells
+keyed on the **resolved** temporal bucket (the SH-4 lesson is a precondition here, not
+a follow-up — COGP's own grid is space-only because it has no time axis); an extent gate
+for lines and polygons (enter as soon as the bbox diagonal is resolvable) against cell
+competition for points; and a **hashed row index as the final tiebreak** after sort key
+and bbox diagonal, so assignment is deterministic under input reordering and builds stay
+byte-reproducible. **Accept:** an archive built from a floor-free input carries per-zoom
+feature counts equal to one built from a baked column on the same source; the SH-4
+warn paths become the legacy path rather than the normal one; and `lod_bucket.rs`
+keeps policing externally baked columns without being the only way to obtain one.
+
 ### TL — Tile loading (full audit, 2026-08-24)
 
 **TL1. Four shipped demos are in a permanent fetch → evict → refetch loop, and

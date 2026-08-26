@@ -345,9 +345,68 @@ split into simple/advanced profiles — the source of the **cap the toolbox, no
 adaptive per-tile selection** rule here. MLT has no temporal semantics, so the wedge
 stays uncontested.
 
+**COGP** (Cloud Optimized GeoParquet Profile, reviewed 2026-08-26) — a _profile_, not
+a container: a valid GeoParquet 1.1 file whose row groups are physically ordered
+coarse → fine, plus one footer key `cogp` carrying
+`{version, levels:[{row_group_end, gsd}]}`. Each feature appears **exactly once,
+geometry verbatim** — a partition across levels, not per-zoom duplication (the
+Potree-additive shape). A reader takes the finest level whose `gsd` is still ≥ its
+target, fetches that row-group **prefix**, and prunes it with GeoParquet 1.1
+`covering.bbox` statistics; a reader that has never heard of COGP opens the same file
+as ordinary GeoParquet and still gets coarse-first streaming. v0.1 draft, MIT +
+CC BY 4.0, Rust producer/validator/CLI + a TS reader
+(<https://github.com/Kanahiro/cloud-optimized-geoparquet>).
+
+**What transfers — producer-side level assignment, which we do not have.** Their
+`assign_levels` _computes_ the per-feature LOD floor that `stt-build` only ever
+_consumes_ (`--min-zoom-field`, **K12**): points compete for grid cells at pitch
+`gsd × thinning_factor` with cells blocked by a coarser level skipped, winner by
+(sort key desc, bbox diagonal, **hashed row index**); lines and polygons skip the
+competition entirely and enter as soon as their bbox diagonal is resolvable at that
+`gsd`; each level is independently STR-packed with the snake direction alternating so
+consecutive row groups stay spatially adjacent. Two pieces are worth taking whether or
+not we ever emit COGP — the **geometry-type split** (extent gate for extended
+geometries, cell competition for points; we thin everything the same way) and the
+**hashed row index as final tiebreak**, which makes assignment deterministic under
+input reordering, a byte-reproducibility property we care about more than they do.
+`gsd` is also the right level unit for anything we emit as interchange: metres per
+pixel, with Web Mercator zoom a mere derivation (`z0 / 2^z`), so the ladder does not
+presume a tile matrix set. One caveat is ours, not theirs: over animated data any such
+grid **MUST** key the temporal bucket, or it reproduces the 2026-07-28 space-only
+failure (z8 carrying a median 13 %, worst 0 %, of the displayed bucket) — the coupling
+`crates/stt-build/src/lod_bucket.rs` exists to police.
+
+**What doesn't.** A prefix is a _global_ ordering, so a deep-zoom viewport still walks
+every coarser level's row groups — the bbox statistics prune row groups, not the
+prefix. That is fine for the well-distributed POI / building-footprint datasets their
+README scopes it to, and it is not a tile directory; their reader (run merge capped at
+50 K rows plus a coalescing buffer) is behind `packages/core/src/request-scheduler.ts`
+and the prefetch policy. And COGP has **no time axis at all** — one ladder, space.
+Residency, runway, eviction and the playhead-relative working set are the whole hard
+part here and are simply out of scope there, so this is the third entry in this section
+(COPC, MLT, COGP) whose absence of temporal semantics leaves the wedge uncontested.
+Their spec's own honesty line is worth keeping in view — _"validators can only check
+structural and metadata conformance … achieving meaningful level semantics is a
+producer responsibility"_ — which is the same limit `docs/spec/conformance.md` §3.1
+already marks per-rule with ⚠️ rather than as a blanket disclaimer.
+
+**Where it would land, and why it is not scheduled.** `stt-optimize export` already
+emits GeoParquet 1.1 with the `covering.bbox` struct, tile-coherent row groups in
+`(zoom, hilbert, time_start)` order and `start_time` statistics
+(`crates/stt-optimize/src/export.rs`), so a level table looks like the only missing
+piece — but it is not. COGP requires geometry **verbatim**, and our tiles are simplified
+per zoom and clipped at tile boundaries with the parent's feature id, so the coarse
+levels of a tile-sourced export would carry simplified fragments and could not be
+conformant. A COGP emitter therefore belongs in **`stt-build`**, from source features,
+where geometry is unsimplified and the zoom band is already resolved — a sidecar
+artifact, not an `export` flag. It is a **loss to close, not a defect**: nothing we
+publish lets a plain GeoParquet reader get a coarse overview without an STT
+implementation. The assigner it depends on is K12; the emitter has no owner.
+
 **Still-open losses:** column stats + predicate pushdown and column projection
 (Parquet/GeoParquet), extension-registry governance (COPC), spec governance and
-brand neutrality (PMTiles). Closed since: single-file interchange (bundle), per-tile
+brand neutrality (PMTiles), and progressive coarse-first read by a reader that has
+never heard of us (COGP). Closed since: single-file interchange (bundle), per-tile
 fixed overhead and schema-once amortization (v2 templates), magic bytes + `vnd.`
 media types, `capabilities` must-understand (exactly Zarr v3's `must_understand`).
 
