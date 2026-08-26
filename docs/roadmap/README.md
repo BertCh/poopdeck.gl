@@ -33,6 +33,10 @@ Three house rules:
 
 ## Records
 
+- [**repo-split-2026-08.md**](./repo-split-2026-08.md) — the **two-repository
+  contract**: what STT keeps and what moved to poopdeck, why `@poopdeck.gl/core`
+  was not split in half, the three vendored seam artifacts (docs, conformance
+  vectors, AV palettes) and their drift gates, and the costs accepted.
 - [**launch-readiness-2026-08.md**](./launch-readiness-2026-08.md) — the short,
   active launch contract and gate list; use this instead of mining historical
   records for current launch status.
