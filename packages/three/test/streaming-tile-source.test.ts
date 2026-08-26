@@ -8,7 +8,7 @@ import {
   type RunwayTileset,
 } from '../src/scene/streaming-tile-source';
 import { mockTileset, tile, VIEWPORT } from './_support/streaming';
-import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTPointLayer } from '../src/layers/point-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile } from './_support/features';
 
@@ -550,7 +550,7 @@ describe('E5 — coalesced publish, frame gate, unload wiring (audit 2026-08)', 
         { endTimes: new Float32Array([1000, 1000, 1000]) },
         { id: { z: 12, x, y: 0, t: 0 } },
       );
-    const layer = new STTPointCloudLayer({ id: 'pts' });
+    const layer = new STTPointLayer({ id: 'pts' });
     const src = new StreamingTileSource({
       url: 'x',
       onTilesChanged: (tiles) => layer.setTiles(tiles, ctx),

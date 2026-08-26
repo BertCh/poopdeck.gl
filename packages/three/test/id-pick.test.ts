@@ -23,7 +23,7 @@ import {
 } from '../src/lib/id-pick';
 import { STTColumnLayer } from '../src/layers/column-layer';
 import { STTArcLayer } from '../src/layers/arc-layer';
-import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTPointLayer } from '../src/layers/point-layer';
 import { STTPolygonLayer } from '../src/layers/polygon-layer';
 import { STTIsoLayer } from '../src/layers/iso-layer';
 
@@ -31,7 +31,7 @@ describe('isIdPickable (auto-registration signal)', () => {
   it('is true for anything exposing a pick() method', () => {
     expect(isIdPickable({ pick() {} })).toBe(true);
     // The real instanced layers all satisfy it (constructor-only, no GPU).
-    expect(isIdPickable(new STTPointCloudLayer())).toBe(true);
+    expect(isIdPickable(new STTPointLayer())).toBe(true);
     expect(
       isIdPickable(
         new STTColumnLayer({

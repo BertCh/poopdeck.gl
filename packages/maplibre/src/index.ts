@@ -404,3 +404,75 @@ export {
   type LayerFeature,
   type LayerFeatureSupport,
 } from './backend-descriptor.js';
+
+// ─── Path (multi-vertex polylines with progressive reveal) ────────────────────
+// A thin subclass of STTLineLayer: an OD line is a 2-vertex LineString and a
+// path is the same primitive with more vertices, so the renderer is shared and
+// only the deck-parity defaults + the reveal tile-load window differ.
+export {
+  STTPathLayer,
+  type STTPathLayerOptions,
+  type PathTimeFilterMode,
+} from './layers/path-layer.js';
+
+// ─── Kinds closed by the 2026-08-26 parity completion pass ────────────────────
+export {
+  STTIsoLayer,
+  type STTIsoLayerOptions,
+  buildIsoVertexSource,
+  resolveIsoTimeFilterMode,
+} from './layers/iso-layer.js';
+export {
+  STTPointCloudLayer,
+  type STTPointCloudLayerOptions,
+  buildPointCloudVertexSource,
+  buildPointCloudIdVertexSource,
+  resolvePointCloudTimeFilterMode,
+} from './layers/point-cloud-layer.js';
+export {
+  STTTextLayer,
+  type STTTextLayerOptions,
+  buildTextVertexSource,
+  buildTextIdVertexSource,
+  resolveTextTimeFilterMode,
+} from './layers/text-layer.js';
+export {
+  STTBoundingBoxLayer,
+  type STTBoundingBoxLayerOptions,
+  buildBoundingBoxVertexSource,
+  buildBoundingBoxIdVertexSource,
+  resolveBoundingBoxTimeFilterMode,
+} from './layers/bounding-box-layer.js';
+export {
+  STTMeshLayer,
+  type STTMeshLayerOptions,
+  buildMeshVertexSource,
+  buildMeshIdVertexSource,
+  resolveMeshTimeFilterMode,
+} from './layers/mesh-layer.js';
+export {
+  STTEgoLayer,
+  type STTEgoLayerOptions,
+  buildEgoVertexSource,
+  buildEgoIdVertexSource,
+  resolveEgoTimeFilterMode,
+} from './layers/ego-layer.js';
+export {
+  STTSurfelLayer,
+  type STTSurfelLayerOptions,
+  buildSurfelVertexSource,
+  buildSurfelIdVertexSource,
+  resolveSurfelTimeFilterMode,
+} from './layers/surfel-layer.js';
+
+// ─── ViewState ⇄ host camera bridge (the shared cross-renderer vocabulary) ─────
+// Small on purpose: the HOST map owns the camera here, so this is a seam, not a
+// rig. It exists so an app driving several backends from one `ViewState` can
+// include this one, and so `ViewState.roll` is honoured rather than dropped.
+export {
+  readViewState,
+  applyViewState,
+  supportsRoll,
+  type ViewStateHost,
+  type ViewStateApplyResult,
+} from './lib/view-state.js';

@@ -58,6 +58,12 @@ import {
   type DataFilterOptions,
 } from './data-filter.js';
 import { TimeHeightUniforms } from './time-height.js';
+import {
+  resolveExtensions,
+  extensionHooks,
+  type ResolvedExtensions,
+  type STTExtensionOptions,
+} from './extensions.js';
 
 // The space-time-cube lift holder is shared with the other lifting materials;
 // re-exported here so a bundle's `timeHeight` field is nameable from the module
@@ -66,7 +72,7 @@ export { TimeHeightUniforms };
 
 export type PolygonTimeMode = 'window' | 'none';
 
-export interface PolygonMaterialOptions {
+export interface PolygonMaterialOptions extends STTExtensionOptions {
   /** `window` time-filters by `[sttStart,sttEnd]`; `none` is static. @default 'none' */
   mode?: PolygonTimeMode;
   /** Discard fragments below this final alpha. @default 0.004 */
@@ -106,6 +112,12 @@ export interface PolygonMaterialBundle {
   filter?: DataFilterUniforms;
   /** Present only when built with `timeHeight: true`; drives the space-time-cube lift. */
   timeHeight?: TimeHeightUniforms;
+  /**
+   * Present ONLY when at least one user extension was composed (see
+   * `./extensions.ts`); carries their uniform nodes and the attributes the host
+   * must bind onto the live geometry.
+   */
+  extensions?: ResolvedExtensions;
 }
 
 /**
@@ -119,6 +131,10 @@ export function createPolygonMaterial(
   const mode = opts.mode ?? 'none';
   const time = new TimeFilterUniforms();
   const opacity = uniform(1);
+  // User extensions (`./extensions.ts`). Empty ⇒ the shared identity hooks, so
+  // every expression below is byte-identical to the un-extended material.
+  const ext = resolveExtensions('polygon', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'polygon', pass: 'color', time });
   const dataFilter = opts.dataFilter ?? false;
   const filter = dataFilter ? new DataFilterUniforms() : undefined;
   const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
@@ -168,11 +184,18 @@ export function createPolygonMaterial(
       .mul(height.heightScale);
     basePos = positionGeometry.add(lift.mul(heightMeters));
   }
-  if (posGate) material.positionNode = basePos.mul(posGate);
-  else if (height) material.positionNode = basePos;
+  // `position` seam, gate LAST: with a hook this becomes `hook(basePos)·posGate`,
+  // so a gated feature still degenerates to the local origin; without one it is
+  // `basePos·posGate` (or `basePos`), node for node.
+  if (posGate) material.positionNode = hooks.scaledPosition(basePos, posGate);
+  else if (height || hooks.has('position')) {
+    material.positionNode = hooks.scaledPosition(basePos, null);
+  }
 
-  material.colorNode = srgbToWorking(vColor.xyz);
-  material.opacityNode = vColor.a.mul(opacity).mul(alpha);
+  // `color` seam sits INSIDE srgbToWorking; the `alpha` seam takes the base
+  // alpha and the soft window / filter ramps multiply AFTER it.
+  material.colorNode = srgbToWorking(hooks.color(vColor.xyz));
+  material.opacityNode = hooks.alpha(vColor.a.mul(opacity)).mul(alpha);
   material.transparent = true;
   material.side = DoubleSide;
   material.depthTest = true;
@@ -180,7 +203,15 @@ export function createPolygonMaterial(
   material.blending = NormalBlending;
   material.alphaTest = opts.alphaCutoff ?? 0.004;
 
-  return { material, time, poly: { opacity }, filter, timeHeight: height };
+  const bundle: PolygonMaterialBundle = {
+    material,
+    time,
+    poly: { opacity },
+    filter,
+    timeHeight: height,
+  };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }
 
 export interface PolygonUniformValues {
@@ -240,6 +271,11 @@ export function createPolygonIdMaterial(
   const mode = opts.mode ?? 'none';
   const time = new TimeFilterUniforms();
   const opacity = uniform(1);
+  // SAME extension seams as the colour material (position / alpha), so a hook
+  // that moves geometry picks exactly where it draws. The `color` seam is inert
+  // in the id pass — the index must decode bit-exact.
+  const ext = resolveExtensions('polygon', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'polygon', pass: 'id', time });
   const dataFilter = opts.dataFilter ?? false;
   const filter = dataFilter ? new DataFilterUniforms() : undefined;
   const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
@@ -286,13 +322,22 @@ export function createPolygonIdMaterial(
       .mul(height.heightScale);
     basePos = positionGeometry.add(lift.mul(heightMeters));
   }
-  if (posGate) material.positionNode = basePos.mul(posGate);
-  else if (height) material.positionNode = basePos;
+  if (posGate) material.positionNode = hooks.scaledPosition(basePos, posGate);
+  else if (height || hooks.has('position')) {
+    material.positionNode = hooks.scaledPosition(basePos, null);
+  }
 
   // FRAGMENT: flat per-vertex id colour, opaque wherever the fill is drawn AND
   // on-time AND in-range; a hard 0/1 alpha so a barely-faded feature never
   // registers a partial-alpha id.
   material.colorNode = varying(idColor);
+  if (hooks.has('alpha')) {
+    // The id is opaque, so the alpha seam is fed `1` and its result thresholded
+    // into the pick gate: an extension that MASKS a feature to zero makes it
+    // unpickable (matching the eye); one that merely dims it does not.
+    const ug = hooks.alpha(float(1)).greaterThan(float(cutoff));
+    onGate = onGate ? onGate.and(ug) : ug;
+  }
   material.opacityNode = onGate ? select(onGate, float(1), float(0)) : float(1);
   material.transparent = false;
   material.side = DoubleSide;
@@ -301,5 +346,13 @@ export function createPolygonIdMaterial(
   material.blending = NormalBlending;
   material.alphaTest = 0.5;
 
-  return { material, time, poly: { opacity }, filter, timeHeight: height };
+  const bundle: PolygonMaterialBundle = {
+    material,
+    time,
+    poly: { opacity },
+    filter,
+    timeHeight: height,
+  };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }

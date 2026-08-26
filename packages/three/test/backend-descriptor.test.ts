@@ -24,7 +24,7 @@ import * as three from '../src/index';
  * `assertDescriptorConsistent` is designed to enforce.
  */
 const KIND_TO_EXPORT: Record<LayerKind, string | null> = {
-  point: 'STTPointCloudLayer',
+  point: 'STTPointLayer',
   path: 'STTStaticPathLayer',
   polygon: 'STTStaticPolygonLayer',
   arc: 'STTArcLayer',
@@ -41,13 +41,15 @@ const KIND_TO_EXPORT: Record<LayerKind, string | null> = {
   flowCorridor: 'STTFlowCorridorLayer',
   isoLines: 'STTIsoLayer',
   ego: 'STTEgoLayer',
-  // Not natively rendered by three; no class expected.
-  heatmap: null,
-  flowStroke: null,
-  text: null,
-  mesh: null,
-  pointCloud: null,
-  hexbin: null,
+  // Closed by the non-deck parity campaign — three now renders all 23 kinds
+  // natively, so there is no `null` entry left. A future unsupported kind gets
+  // one back, and case (a) below then requires it to carry a fallback.
+  heatmap: 'STTHeatmapLayer',
+  flowStroke: 'STTFlowStrokeLayer',
+  text: 'STTTextLayer',
+  mesh: 'STTMeshLayer',
+  pointCloud: 'STTPointCloudLayer',
+  hexbin: 'STTHexbinLayer',
 };
 
 const exports = three as Record<string, unknown>;
@@ -95,6 +97,10 @@ describe('threeBackend descriptor — structural conformance gate', () => {
   });
 
   it('unsupported kinds fall back to a supported kind', () => {
+    // Vacuous today (three renders all 23), and deliberately kept: it is the
+    // gate a future unsupported kind trips if it names no fallback, or names one
+    // three does not itself render. The companion case below asserts the
+    // all-native state directly so this file cannot go quietly vacuous.
     for (const kind of LAYER_KINDS) {
       const support = threeBackend.layerKinds[kind];
       if (support.supported) continue;
@@ -108,6 +114,14 @@ describe('threeBackend descriptor — structural conformance gate', () => {
         `fallback of "${kind}" (${support.fallbackKind}) must itself be supported`,
       ).toBe(true);
     }
+  });
+
+  it('renders every frozen LayerKind natively — the parity claim, stated once', () => {
+    const unsupported = LAYER_KINDS.filter(
+      (k) => !threeBackend.layerKinds[k].supported,
+    );
+    expect(unsupported).toEqual([]);
+    expect(LAYER_KINDS.length).toBe(23);
   });
 
   it('(b) assertDescriptorConsistent flags no over-claim for layer kinds (real exports) or modes', () => {

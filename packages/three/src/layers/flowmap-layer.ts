@@ -33,6 +33,18 @@
  * attributes (`sttWidth`, `sttEndpointOffsets`, node centres/radii) in place —
  * gated to a cross-fade sub-step grid so it re-expands ~5 Hz, not per frame
  * (mirroring deck's `flowStep` setState). The endpoint geometry stays resident.
+ *
+ * OPT-IN BUNDLING (`bundling`): with it on, the arrows are replaced by KDEEB
+ * bundled rivers — `../lib/edge-bundler.ts` resamples each OD flow into control
+ * points, hands them to the ONE shared iteration in
+ * `@poopdeck.gl/core/edge-bundling`, and the result is drawn as per-segment
+ * ribbons by {@link createBundledFlowMaterial} (direction read from the
+ * source→target gradient, not an arrowhead). A bundle is STATIC GEOMETRY: it is
+ * a function of the edge SET, so it is recomputed in {@link setTiles} and never
+ * on the playhead — the per-edge width refresh above is unchanged, just fanned
+ * across each edge's segments. When the bundle cannot be built (no renderer
+ * backend, too few flows, or over the CPU work budget) the layer says so ONCE
+ * and keeps drawing straight arrows; nothing throws and nothing half-draws.
  */
 
 import {
@@ -47,16 +59,26 @@ import type { Tile } from '@poopdeck.gl/core';
 import { BaseSTTLayer, type STTLayerContext } from './layer.js';
 import { makeArrowTemplateGeometry } from '../geometry/arrow-template.js';
 import { makeBillboardQuadGeometry } from '../geometry/billboard-quad.js';
+import { makeSegmentQuadGeometry } from '../geometry/segment-quad.js';
 import {
   buildFlowmapBuffers,
   type FlowmapBufferOptions,
   type FlowmapBuffers,
 } from '../lib/flowmap-buffers.js';
 import {
+  bundleFlowEdges,
+  collectFlowEndpoints,
+  isBundlingSupported,
+  type BundledFlowEdges,
+  type BundleRenderer,
+  type ThreeBundleOptions,
+} from '../lib/edge-bundler.js';
+import {
   createFlowArrowMaterial,
   updateFlowArrowUniforms,
   type FlowArrowMaterialBundle,
 } from '../tsl/flow-arrow-material.js';
+import { createBundledFlowMaterial } from '../tsl/bundle-material.js';
 import {
   createPointMaterial,
   updatePointUniforms,
@@ -68,6 +90,14 @@ import type { RGBA } from '../lib/color.js';
 const STEP = 0.1;
 /** A node's window is forced wide-open (always visible) with this half-width. */
 const OPEN_WINDOW_HALF = 1e12;
+
+/** Console-warn at most once per key — a fallback must say so, not spam. */
+const warnedKeys = new Set<string>();
+function warnOnce(key: string, ...args: unknown[]): void {
+  if (warnedKeys.has(key)) return;
+  warnedKeys.add(key);
+  console.warn(...args);
+}
 
 export interface STTFlowmapLayerOptions extends FlowmapBufferOptions {
   id?: string;
@@ -90,6 +120,21 @@ export interface STTFlowmapLayerOptions extends FlowmapBufferOptions {
   alphaCutoff?: number;
   /** Hide node circles entirely. @default false */
   hideNodes?: boolean;
+  /**
+   * Draw KDEEB-**bundled rivers** instead of straight arrows (`true` for the
+   * defaults, or an options object to tune the bundler). Geometrically close
+   * flows are advected together into smooth rivers by the shared iteration in
+   * `@poopdeck.gl/core/edge-bundling`, which turns an unreadable hairball of OD
+   * lines into legible corridors. Direction is then carried by the
+   * source→target colour gradient rather than an arrowhead.
+   *
+   * COST: the bundle is recomputed synchronously on the main thread whenever
+   * the tile set changes — never per frame — and is capped by
+   * {@link BUNDLE_WORK_BUDGET}. Over budget (or with fewer than 2 flows in
+   * view), the layer warns once and keeps drawing straight arrows.
+   * @default false
+   */
+  bundling?: boolean | ThreeBundleOptions;
 }
 
 const DEFAULT_SOURCE_COLOR: RGBA = [56, 196, 232, 235];
@@ -113,12 +158,25 @@ export class STTFlowmapLayer extends BaseSTTLayer {
   private readonly nodes = new Mesh();
   private arrowBundle: FlowArrowMaterialBundle | null = null;
   private nodeBundle: PointMaterialBundle | null = null;
+  /** Ribbon material for the bundled path; built lazily, alongside the arrows'. */
+  private bundleMaterial: FlowArrowMaterialBundle | null = null;
 
   private tiles: Tile[] = [];
   private projection: STTLayerContext['projection'] | null = null;
   private viewport: [number, number] = [1280, 720];
   private lastStepKey = Number.NaN;
   private readonly opts: STTFlowmapLayerOptions;
+
+  /** The bundled rivers for the CURRENT tile set; `null` = straight arrows. */
+  private bundle: BundledFlowEdges | null = null;
+  /** Whether the resident arrow geometry is the ribbon form or the arrow form. */
+  private bundledGeometry = false;
+  /** True once geometry exists, so the sub-step cache knows it may skip. */
+  private built = false;
+  /** Set when the device gate downgrades us mid-life; drains on the next frame. */
+  private pendingGeometryRebuild = false;
+  /** The host renderer, learned from the first `onBeforeRender` (heatmap idiom). */
+  private renderer: BundleRenderer | null = null;
 
   constructor(options: STTFlowmapLayerOptions = {}) {
     super();
@@ -134,15 +192,80 @@ export class STTFlowmapLayer extends BaseSTTLayer {
     this.object.add(this.nodes);
     this.object.add(this.arrows);
     this.object.visible = false;
+    // The only place a layer sees the host renderer (the `STTHeatmapLayer`
+    // idiom). It is the bundler's device gate; before the first frame there is
+    // no renderer and `isBundlingSupported(undefined)` is deliberately `true`.
+    this.arrows.onBeforeRender = (renderer): void => {
+      this.noteRenderer(renderer as unknown as BundleRenderer);
+    };
   }
 
   /** Host pushes the drawing-buffer size on resize so widths/radii are true px. */
   setViewport(width: number, height: number): void {
     this.viewport = [width, height];
-    if (this.arrowBundle)
-      this.arrowBundle.arrow.viewport.value.set(width, height);
+    this.forEachArrowBundle((b) => b.arrow.viewport.value.set(width, height));
     if (this.nodeBundle)
       this.nodeBundle.point.viewport.value.set(width, height);
+  }
+
+  /** Run `fn` over whichever arrow/ribbon materials exist (uniforms are shared). */
+  private forEachArrowBundle(fn: (b: FlowArrowMaterialBundle) => void): void {
+    if (this.arrowBundle) fn(this.arrowBundle);
+    if (this.bundleMaterial) fn(this.bundleMaterial);
+  }
+
+  /**
+   * Learn the host renderer and re-check the bundling device gate against it. A
+   * renderer that cannot host the bundle downgrades us to straight arrows on the
+   * next frame rather than mid-render: only flags are set here.
+   */
+  private noteRenderer(renderer: BundleRenderer): void {
+    if (this.renderer === renderer) return;
+    this.renderer = renderer;
+    if (!this.bundlingRequested() || isBundlingSupported(renderer)) return;
+    warnOnce(
+      `flowmap-bundling:${this.id}`,
+      `[stt-three] STTFlowmapLayer '${this.id}': bundling is not supported by ` +
+        'this renderer; falling back to straight arrows.',
+    );
+    if (this.bundle) {
+      this.bundle = null;
+      this.pendingGeometryRebuild = true;
+    }
+  }
+
+  /** The caller's bundling knobs, or `null` when bundling is off (the default). */
+  private bundlingRequested(): ThreeBundleOptions | null {
+    const b = this.opts.bundling;
+    if (!b) return null;
+    return b === true ? {} : b;
+  }
+
+  /**
+   * Recompute the bundled rivers for the current tile set — the ONLY place the
+   * KDEEB iteration runs. A bundle is static geometry, so this is called from
+   * `setTiles` and never from `setTime`.
+   */
+  private rebuildBundle(): void {
+    this.bundle = null;
+    const requested = this.bundlingRequested();
+    if (!requested) return;
+    const ends = collectFlowEndpoints(this.tiles);
+    const result = bundleFlowEdges(
+      ends.endpoints,
+      ends.edgeCount,
+      requested,
+      this.renderer,
+    );
+    if (result.bundled) {
+      this.bundle = result.edges;
+      return;
+    }
+    warnOnce(
+      `flowmap-bundling:${this.id}`,
+      `[stt-three] STTFlowmapLayer '${this.id}': drawing straight arrows — ` +
+        `${result.reason}.`,
+    );
   }
 
   private bufferOptions(): FlowmapBufferOptions {
@@ -161,6 +284,10 @@ export class STTFlowmapLayer extends BaseSTTLayer {
     this.projection = ctx.projection;
     this.disposeGeometries();
     this.lastStepKey = Number.NaN;
+    this.built = false;
+    // The edge SET just changed, so this is exactly when (and the only time) the
+    // bundle is recomputed.
+    this.rebuildBundle();
     // Build at the time origin so the layer is renderable before the first
     // setTime; setTime re-expands the dynamic attributes as the playhead moves.
     this.rebuild(this.timeOrigin, /* forceGeometry */ true);
@@ -175,10 +302,11 @@ export class STTFlowmapLayer extends BaseSTTLayer {
    * refreshed, and only when the playhead crosses a cross-fade sub-step. */
   private rebuild(absoluteTimeMs: number, forceGeometry: boolean): void {
     if (!this.projection) return;
+    const force = forceGeometry || this.pendingGeometryRebuild;
     const stepKey = this.stepKey(absoluteTimeMs);
-    if (!forceGeometry && this.arrowBundle && stepKey === this.lastStepKey)
-      return;
+    if (!force && this.built && stepKey === this.lastStepKey) return;
     this.lastStepKey = stepKey;
+    this.pendingGeometryRebuild = false;
 
     const buf = buildFlowmapBuffers(
       this.tiles,
@@ -189,13 +317,13 @@ export class STTFlowmapLayer extends BaseSTTLayer {
 
     if (buf.count === 0) {
       this.object.visible = false;
-      if (forceGeometry) this.ensureEmptyGeometry();
+      if (force) this.ensureEmptyGeometry();
       return;
     }
     this.object.visible = true;
     this.object.position.set(buf.origin[0], buf.origin[1], buf.origin[2]);
 
-    if (forceGeometry || !this.arrowBundle) this.buildGeometry(buf);
+    if (force || !this.built) this.buildGeometry(buf);
     else this.updateDynamic(buf);
   }
 
@@ -221,7 +349,23 @@ export class STTFlowmapLayer extends BaseSTTLayer {
   }
 
   private buildGeometry(buf: FlowmapBuffers): void {
-    // ── Arrows ────────────────────────────────────────────────────────────────
+    // A bundle is only usable when it describes THIS edge set. Both derive from
+    // the same tiles, so a mismatch means the two got out of step; drawing
+    // straight arrows is the safe read rather than indexing widths by a stale
+    // edge index.
+    const bundle =
+      this.bundle && this.bundle.edgeCount === buf.count ? this.bundle : null;
+    this.bundledGeometry = bundle !== null;
+    if (bundle) this.buildBundledGeometry(buf, bundle);
+    else this.buildArrowGeometry(buf);
+
+    // ── Nodes ─────────────────────────────────────────────────────────────────
+    this.buildNodeGeometry(buf);
+    this.built = true;
+  }
+
+  /** Straight tapered half-arrows: one instance per OD flow (the default path). */
+  private buildArrowGeometry(buf: FlowmapBuffers): void {
     const ag = makeArrowTemplateGeometry();
     ag.instanceCount = buf.count;
     ag.setAttribute(
@@ -257,9 +401,99 @@ export class STTFlowmapLayer extends BaseSTTLayer {
     this.arrows.geometry = ag;
     this.arrows.material = this.arrowBundle.material;
     this.pushArrowUniforms();
+  }
 
-    // ── Nodes ─────────────────────────────────────────────────────────────────
-    this.buildNodeGeometry(buf);
+  /**
+   * KDEEB bundled rivers: one instance per SEGMENT of each bundled edge
+   * (`E × (P-1)`), on the shared segment quad. The bundled control points arrive
+   * in lon/lat from `../lib/edge-bundler.ts` and are projected here, RTC-relative
+   * to the same `buf.origin` the straight path uses, so switching paths cannot
+   * move the map. Each control point is projected ONCE and shared by the two
+   * segments that meet at it.
+   */
+  private buildBundledGeometry(
+    buf: FlowmapBuffers,
+    bundle: BundledFlowEdges,
+  ): void {
+    const projection = this.projection;
+    if (!projection) return;
+    const { edgeCount, pointsPerEdge, lonLat } = bundle;
+    const segs = pointsPerEdge - 1;
+    const count = edgeCount * segs;
+    const [ox, oy, oz] = buf.origin;
+
+    const posSource = new Float32Array(count * 3);
+    const posTarget = new Float32Array(count * 3);
+    const widths = new Float32Array(count);
+    const bundleT = new Float32Array(count * 2);
+    const local = new Float64Array(pointsPerEdge * 3);
+
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
+
+    for (let e = 0; e < edgeCount; e++) {
+      for (let i = 0; i < pointsPerEdge; i++) {
+        const p = projection.project(
+          lonLat[(e * pointsPerEdge + i) * 2],
+          lonLat[(e * pointsPerEdge + i) * 2 + 1],
+          0,
+        );
+        const x = p[0] - ox,
+          y = p[1] - oy,
+          z = p[2] - oz;
+        local[i * 3] = x;
+        local[i * 3 + 1] = y;
+        local[i * 3 + 2] = z;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (z < minZ) minZ = z;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (z > maxZ) maxZ = z;
+      }
+      const w = buf.widths[e];
+      for (let s = 0; s < segs; s++) {
+        const j = e * segs + s;
+        posSource[j * 3] = local[s * 3];
+        posSource[j * 3 + 1] = local[s * 3 + 1];
+        posSource[j * 3 + 2] = local[s * 3 + 2];
+        posTarget[j * 3] = local[(s + 1) * 3];
+        posTarget[j * 3 + 1] = local[(s + 1) * 3 + 1];
+        posTarget[j * 3 + 2] = local[(s + 1) * 3 + 2];
+        widths[j] = w;
+        bundleT[j * 2] = s / segs;
+        bundleT[j * 2 + 1] = (s + 1) / segs;
+      }
+    }
+
+    const rg = makeSegmentQuadGeometry();
+    rg.instanceCount = count;
+    rg.setAttribute('sttPosSource', new InstancedBufferAttribute(posSource, 3));
+    rg.setAttribute('sttPosTarget', new InstancedBufferAttribute(posTarget, 3));
+    rg.setAttribute('sttWidth', new InstancedBufferAttribute(widths, 1));
+    rg.setAttribute('sttBundleT', new InstancedBufferAttribute(bundleT, 2));
+    if (count > 0) {
+      rg.boundingBox = new Box3(
+        new Vector3(minX, minY, minZ),
+        new Vector3(maxX, maxY, maxZ),
+      );
+      rg.boundingSphere = rg.boundingBox.getBoundingSphere(new Sphere());
+    }
+    // Built ONCE, like the arrow material (audit E5).
+    if (!this.bundleMaterial) {
+      this.bundleMaterial = createBundledFlowMaterial({
+        additive: this.opts.additive,
+        depthWrite: this.opts.depthWrite,
+        alphaCutoff: this.opts.alphaCutoff,
+      });
+    }
+    this.arrows.geometry = rg;
+    this.arrows.material = this.bundleMaterial.material;
+    this.pushArrowUniforms();
   }
 
   private buildNodeGeometry(buf: FlowmapBuffers): void {
@@ -315,13 +549,29 @@ export class STTFlowmapLayer extends BaseSTTLayer {
       | InstancedBufferAttribute
       | undefined;
     // Instance count is invariant (geometry fixed); update if shapes still match.
-    if (wAttr && wAttr.array.length === buf.widths.length) {
-      (wAttr.array as Float32Array).set(buf.widths);
-      wAttr.needsUpdate = true;
-    }
-    if (eAttr && eAttr.array.length === buf.endpointOffsets.length) {
-      (eAttr.array as Float32Array).set(buf.endpointOffsets);
-      eAttr.needsUpdate = true;
+    if (this.bundledGeometry && this.bundle) {
+      // The bundled ribbon is `E × (P-1)` instances, so each edge's width fans
+      // out across its segments. The RIVER itself never moves here — it is a
+      // function of the edge set, not the playhead.
+      const segs = this.bundle.pointsPerEdge - 1;
+      if (wAttr && wAttr.array.length === buf.widths.length * segs) {
+        const array = wAttr.array as Float32Array;
+        for (let e = 0; e < buf.widths.length; e++) {
+          const w = buf.widths[e];
+          const base = e * segs;
+          for (let s = 0; s < segs; s++) array[base + s] = w;
+        }
+        wAttr.needsUpdate = true;
+      }
+    } else {
+      if (wAttr && wAttr.array.length === buf.widths.length) {
+        (wAttr.array as Float32Array).set(buf.widths);
+        wAttr.needsUpdate = true;
+      }
+      if (eAttr && eAttr.array.length === buf.endpointOffsets.length) {
+        (eAttr.array as Float32Array).set(buf.endpointOffsets);
+        eAttr.needsUpdate = true;
+      }
     }
     // Node set membership can change with the playhead → rebuild node
     // GEOMETRY (the material is kept: rebuilding it here was a shader
@@ -334,16 +584,20 @@ export class STTFlowmapLayer extends BaseSTTLayer {
 
   private nodeRadiiRepresentative = 6;
 
+  /** One values object, fanned out to whichever arrow/ribbon materials exist —
+   *  the bundled ribbon reuses `FlowArrowUniforms` verbatim, so the straight and
+   *  bundled paths cannot drift on colours, clamps, gap or opacity. */
   private pushArrowUniforms(): void {
-    if (!this.arrowBundle) return;
-    updateFlowArrowUniforms(this.arrowBundle, {
-      sourceColor: toVec4(this.opts.sourceColor ?? DEFAULT_SOURCE_COLOR),
-      targetColor: toVec4(this.opts.targetColor ?? DEFAULT_TARGET_COLOR),
-      widthMinPixels: this.opts.widthMinPixels ?? 1,
-      widthMaxPixels: this.opts.widthMaxPixels ?? 12,
-      gap: this.opts.gap ?? 0.5,
-      opacity: this.opts.opacity ?? 1,
-      viewport: this.viewport,
+    this.forEachArrowBundle((bundle) => {
+      updateFlowArrowUniforms(bundle, {
+        sourceColor: toVec4(this.opts.sourceColor ?? DEFAULT_SOURCE_COLOR),
+        targetColor: toVec4(this.opts.targetColor ?? DEFAULT_TARGET_COLOR),
+        widthMinPixels: this.opts.widthMinPixels ?? 1,
+        widthMaxPixels: this.opts.widthMaxPixels ?? 12,
+        gap: this.opts.gap ?? 0.5,
+        opacity: this.opts.opacity ?? 1,
+        viewport: this.viewport,
+      });
     });
   }
 
@@ -360,7 +614,9 @@ export class STTFlowmapLayer extends BaseSTTLayer {
 
   private ensureEmptyGeometry(): void {
     if (!this.arrows.geometry)
-      this.arrows.geometry = makeArrowTemplateGeometry();
+      this.arrows.geometry = this.bundledGeometry
+        ? makeSegmentQuadGeometry()
+        : makeArrowTemplateGeometry();
     if (!this.nodes.geometry) this.nodes.geometry = makeBillboardQuadGeometry();
   }
 
@@ -372,9 +628,13 @@ export class STTFlowmapLayer extends BaseSTTLayer {
   private disposeGpu(): void {
     this.disposeGeometries();
     this.arrowBundle?.material.dispose();
+    this.bundleMaterial?.material.dispose();
     this.nodeBundle?.material.dispose();
     this.arrowBundle = null;
+    this.bundleMaterial = null;
     this.nodeBundle = null;
+    this.bundle = null;
+    this.built = false;
   }
 
   dispose(): void {

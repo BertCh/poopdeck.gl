@@ -21,9 +21,17 @@
  *    and no `'hybrid'` member, so it declares `'gpu-id'` (the id-buffer readback,
  *    matching the deck backend for the identical technique); the box path is the
  *    CPU-side complement noted here.
- *  - GPU heatmap + live edge-bundling are deferred; user `LayerExtension`-style
- *    hooks, time-as-height, and camera roll are not implemented → those caps are
- *    `false` and the two affected layer kinds declare typed fallbacks.
+ *  - Live edge-bundling (KDEEB) and user `LayerExtension`-style hooks are still
+ *    deferred → those two caps are `false`. Everything else the 0.5.x note here
+ *    listed as missing has since landed: `gpuHeatmap` (STTHeatmapLayer's
+ *    additive-splat → ramp-resolve pass), `timeAsHeight`, and `cameraRoll`
+ *    (`projection/view-state.ts` carries a real roll DOF rather than dropping
+ *    the shared `ViewState.roll`).
+ *  - `interleavedBasemap` stays `false` and is NOT a gap to close: TSL compiles
+ *    only on `WebGPURenderer`, every basemap-interleave path in the ecosystem
+ *    mechanically requires `new WebGLRenderer({context: gl})`, and WebGL and
+ *    WebGPU are non-interoperable browser contexts. Interleaving would delete
+ *    this backend's reason to exist (renderer-architecture.md §2.1).
  */
 
 import {
@@ -39,36 +47,13 @@ import {
  * backed by a real `src/index.ts` export (verified by the conformance test).
  */
 const UNSUPPORTED_KINDS: Partial<Record<LayerKind, LayerKindSupport>> = {
-  heatmap: {
-    supported: false,
-    fallbackKind: 'point',
-    reason: 'GPU heatmap deferred in three; use point density',
-  },
-  flowStroke: {
-    supported: false,
-    fallbackKind: 'flowCorridor',
-    reason: 'no FlowStrokeLayer in three; use STTFlowCorridorLayer',
-  },
-  text: {
-    supported: false,
-    fallbackKind: 'icon',
-    reason: 'text layer not yet ported to the three backend',
-  },
-  mesh: {
-    supported: false,
-    fallbackKind: 'boundingBox',
-    reason: 'mesh layer not yet ported to the three backend',
-  },
-  pointCloud: {
-    supported: false,
-    fallbackKind: 'point',
-    reason: 'point-cloud layer not yet ported to the three backend',
-  },
-  hexbin: {
-    supported: false,
-    fallbackKind: 'h3Summary',
-    reason: 'hexbin layer not yet ported to the three backend',
-  },
+  // Empty, and deliberately kept rather than deleted: the non-deck parity
+  // campaign closed the last six gaps (heatmap, flowStroke, text, mesh,
+  // pointCloud, hexbin), so three now renders all 23 frozen `LayerKind`s
+  // natively. This table is the seam a future kind lands in — a new member of
+  // `LAYER_KINDS` defaults to `{ supported: true }` below, so a kind three does
+  // NOT render must be declared here or the conformance gate will catch the
+  // over-claim.
 };
 
 /**
@@ -90,12 +75,26 @@ export const threeBackend: BackendDescriptor = {
     picking: true,
     extrude3d: true,
     metricSizing: true,
-    gpuHeatmap: false,
-    liveBundling: false,
+    gpuHeatmap: true,
+    // KDEEB edge bundling, real and at runtime: `lib/edge-bundler.ts` maps each
+    // OD flow into core's shared BUNDLING_WORK_SIZE box, runs the full
+    // splat/advect/resample/smooth/anneal schedule via
+    // `@poopdeck.gl/core/edge-bundling`'s `bundleEdges` (one shared
+    // implementation, not a lookalike — the maplibre and cesium backends run the
+    // SAME function), and draws the result as ribbon geometry. A bundle is
+    // static geometry, so it is recomputed when the edge set changes and never
+    // per frame.
+    liveBundling: true,
     timeAsHeight: true,
     interleavedBasemap: false,
-    userExtensions: false,
-    cameraRoll: false,
+    // A real TSL extension surface (`tsl/extensions.ts`): typed node hooks at a
+    // declared seam matrix, per-extension attributes/uniforms, and
+    // `assertVaryingSafe` guarding the `select()`-in-`varying()` WGSL trap. The
+    // shipped time/data gates multiply in AFTER the user hook, so an extension
+    // can only ever make a feature LESS visible — it cannot widen visibility or
+    // desync the id pass from what is drawn.
+    userExtensions: true,
+    cameraRoll: true,
   },
   timeFilterModes: ['window', 'wake', 'cumulative', 'trail'],
   layerKinds,

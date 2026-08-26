@@ -41,14 +41,31 @@ const SUPPORTED: ReadonlySet<LayerKind> = new Set([
   'arc',
   'trips',
   'tripHeads',
+  // Added by the non-deck parity campaign (2026-08-25).
+  'boundingBox',
+  'column',
+  'pointCloud',
+  'surfel',
+  'text',
+  'ego',
+  'h3Summary',
+  // The 2026-08-26 completion pass — cesium now renders every frozen LayerKind.
+  'polygon',
+  'icon',
+  'mesh',
+  'isoLines',
+  'quadbinSummary',
+  'hexbin',
+  'heatmap',
+  'flowCorridor',
+  'flowStroke',
+  'flowmap',
 ]);
 
 function layerKinds(): Record<LayerKind, LayerKindSupport> {
   const out = {} as Record<LayerKind, LayerKindSupport>;
   for (const kind of LAYER_KINDS) {
     if (SUPPORTED.has(kind)) out[kind] = { supported: true };
-    else if (kind === 'surfel')
-      out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
     else if (
       kind === 'flowmap' ||
       kind === 'flowCorridor' ||
@@ -57,9 +74,8 @@ function layerKinds(): Record<LayerKind, LayerKindSupport> {
       out[kind] = { supported: false, fallbackKind: 'line', reason: UNBUILT };
     else if (kind === 'isoLines')
       out[kind] = { supported: false, fallbackKind: 'path', reason: UNBUILT };
-    else if (kind === 'pointCloud')
-      out[kind] = { supported: false, fallbackKind: 'point', reason: UNBUILT };
-    // `text`, `mesh` and `hexbin` deliberately name NO fallback. They were
+    // `mesh` and `hexbin` deliberately name NO fallback (`text` did too until
+    // the parity campaign made it native — see SUPPORTED above). They were
     // copied from the three descriptor as `text → icon`, `mesh → boundingBox`
     // and `hexbin → h3Summary`, which are honest THERE because three renders
     // all three targets — this backend renders none of them, so naming them
@@ -79,10 +95,27 @@ export const cesiumBackend: BackendDescriptor = {
     extrude3d: true,
     metricSizing: true, // ECEF metres
     gpuHeatmap: false,
-    liveBundling: false,
-    timeAsHeight: false,
+    // KDEEB edge bundling, real and at runtime, through core's shared
+    // `bundleEdges`. This backend has no compute path of its own, so the
+    // schedule runs on the CPU — which is legitimate precisely BECAUSE a bundle
+    // is static geometry: it is recomputed when the edge set changes, never per
+    // frame. Same function as three and maplibre, so the three cannot drift.
+    liveBundling: true,
+    // The column layer ships the space-time-cube lift: each prism's base is
+    // raised along LOCAL UP by `(start − timeHeightOrigin) × timeHeightScale`
+    // metres, as an altitude add through the WGS84 GlobeProjection (there is no
+    // Z axis to offset — positions here are absolute ECEF). `lib/columns.ts`
+    // exports `timeHeightLiftMeters`, the exact function the layer calls, so the
+    // claim is pinned to a unit-tested definition rather than to a prop name.
+    timeAsHeight: true,
     interleavedBasemap: true, // STT primitives share Cesium's scene + depth
-    userExtensions: false,
+    // A real extension surface (`lib/extensions.ts`): per-frame value hooks that
+    // transform the RESOLVED alpha and colour, which is the shape that follows
+    // from this backend animating on the CPU rather than in a shader. The hook's
+    // argument IS `base × timeFilterAlpha(...)` — applied to the oracle's OUTPUT,
+    // never in place of it — so the package's "the oracle is the only alpha
+    // definition" gate still holds with extensions installed.
+    userExtensions: true,
     cameraRoll: true, // Cesium camera has heading/pitch/ROLL
   },
   timeFilterModes: ['window', 'wake', 'cumulative', 'trail'],

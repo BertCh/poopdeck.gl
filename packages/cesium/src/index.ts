@@ -37,6 +37,59 @@ export {
   type STTTripHeadsLayerOptions,
 } from './cesium-trip-heads-layer.js';
 export {
+  STTBoundingBoxLayer,
+  type STTBoundingBoxLayerOptions,
+} from './cesium-bounding-box-layer.js';
+export {
+  STTColumnLayer,
+  type STTColumnLayerOptions,
+} from './cesium-column-layer.js';
+export {
+  STTPointCloudLayer,
+  type STTPointCloudLayerOptions,
+} from './cesium-point-cloud-layer.js';
+export {
+  STTSurfelLayer,
+  type STTSurfelLayerOptions,
+} from './cesium-surfel-layer.js';
+export { STTTextLayer, type STTTextLayerOptions } from './cesium-text-layer.js';
+export { STTEgoLayer, type STTEgoLayerOptions } from './cesium-ego-layer.js';
+export {
+  STTPolygonLayer,
+  type STTPolygonLayerOptions,
+} from './cesium-polygon-layer.js';
+export { STTIconLayer, type STTIconLayerOptions } from './cesium-icon-layer.js';
+export { STTMeshLayer, type STTMeshLayerOptions } from './cesium-mesh-layer.js';
+export { STTIsoLayer, type STTIsoLayerOptions } from './cesium-iso-layer.js';
+export {
+  STTH3SummaryLayer,
+  type STTH3SummaryLayerOptions,
+} from './cesium-h3-summary-layer.js';
+export {
+  STTQuadbinSummaryLayer,
+  type STTQuadbinSummaryLayerOptions,
+} from './cesium-quadbin-summary-layer.js';
+export {
+  STTHexbinLayer,
+  type STTHexbinLayerOptions,
+} from './cesium-hexbin-layer.js';
+export {
+  STTHeatmapLayer,
+  type STTHeatmapLayerOptions,
+} from './cesium-heatmap-layer.js';
+export {
+  STTFlowCorridorLayer,
+  type STTFlowCorridorLayerOptions,
+} from './cesium-flow-corridor-layer.js';
+export {
+  STTFlowStrokeLayer,
+  type STTFlowStrokeLayerOptions,
+} from './cesium-flow-stroke-layer.js';
+export {
+  STTFlowmapLayer,
+  type STTFlowmapLayerOptions,
+} from './cesium-flowmap-layer.js';
+export {
   STTBatchedPolylineLayer,
   type STTBatchedPolylineOptions,
 } from './batched-polyline-layer.js';
@@ -60,6 +113,90 @@ export {
   type PointBuild,
   type PointBuildOptions,
 } from './lib/points.js';
+export {
+  buildTrackedBoxes,
+  trackedBoxSampleConfig,
+  enuBasis,
+  writeBoxModelMatrix,
+  type TrackedBoxColumns,
+  type TrackedBoxBuildOptions,
+  type TrackedBoxSampleOptions,
+  type TrackedBox,
+  type TrackedBoxBuild,
+  type BoxPose,
+} from './lib/tracked-boxes.js';
+export {
+  buildColumnEntries,
+  timeHeightLiftMeters,
+  columnAxisOffsetMeters,
+  prismSlices,
+  type FeatureColumn,
+  type ColumnBuild,
+  type ColumnBuildOptions,
+} from './lib/columns.js';
+export {
+  buildPointCloudEntries,
+  lambertShade,
+  type PointCloudLighting,
+  type PointCloudBuildOptions,
+  type CloudPoint,
+  type PointCloudBuild,
+} from './lib/point-clouds.js';
+export {
+  buildEgoTrack,
+  sampleEgoPose,
+  bracketIndex,
+  lerpAngle,
+  wrapAngle,
+  normalizeHeading,
+  type HeadingUnits,
+  type HeadingReference,
+  type EgoKeyframe,
+  type EgoTrack,
+  type EgoPose,
+  type EgoBuildOptions,
+} from './lib/ego-pose.js';
+export {
+  buildSummaryCells,
+  collectSummaryLayers,
+  h3IndexFromU64,
+  h3BoundaryResolver,
+  unwrapRing,
+  ringCentroid,
+  ringToEcef,
+  type H3CellToBoundary,
+  type CellBoundaryResolver,
+  type SummaryCell,
+  type SummaryCellDiagnostics,
+  type SummaryCellBuild,
+  type SummaryCellBuildOptions,
+} from './lib/summary-cells.js';
+export {
+  buildLabelEntries,
+  formatNumericLabel,
+  shortestFloat32String,
+  type LabelAnchor,
+  type LabelBaseline,
+  type FeatureLabel,
+  type LabelBuild,
+  type LabelBuildOptions,
+} from './lib/labels.js';
+export {
+  buildSurfelEntries,
+  detectSurfelLayout,
+  collectSurfelLayouts,
+  unpackSmallestThree,
+  quaternionToBasis,
+  enuToEcefBasis,
+  surfelFrame,
+  surfelModelMatrix,
+  unitDiskRim,
+  diskIndices,
+  type FeatureSurfel,
+  type SurfelBuild,
+  type SurfelBuildOptions,
+  type SurfelLayout,
+} from './lib/surfels.js';
 
 // ViewState ⇄ Cesium camera bridge: pure math (camera) + the runtime applier.
 export {

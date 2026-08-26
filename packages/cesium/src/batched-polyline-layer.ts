@@ -42,6 +42,11 @@ import {
 } from '@poopdeck.gl/core/time-filter';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import type { FeaturePolyline, PolylineBuild } from './lib/polylines.js';
+import {
+  compileExtensions,
+  type CesiumLayerExtension,
+  type CompiledExtensions,
+} from './lib/extensions.js';
 
 /** Pick/attribute identity for one polyline instance. */
 interface InstanceId {
@@ -79,12 +84,31 @@ export interface STTBatchedPolylineOptions {
    * ground-hugging lines). @default 'none'
    */
   arcType?: 'none' | 'geodesic' | 'rhumb';
+  /**
+   * User extensions — per-feature hooks composed ON TOP of the resolved alpha
+   * and colour (`lib/extensions.ts`, the `userExtensions` capability). Declared
+   * here rather than on the two wrappers deliberately: `STTPathLayerOptions`
+   * extends this interface and `STTArcLayerOptions` extends `Omit<…,'arcType'>`
+   * of it, and both hand their whole options object to this constructor, so
+   * `path` / `line` / `arc` inherit the seam without either file changing.
+   *
+   * Channels reaching a hook are 0..1, the same contract every layer's
+   * extensions see; this layer's own storage is u8 (batch-table colours are
+   * bytes), so it converts either side of the call. That conversion is the only
+   * cost the extension path adds here, and it is inside the `ext !== null`
+   * branch — an empty or absent list compiles to `null` and this loop is
+   * byte-for-byte the one it always was.
+   */
+  extensions?: readonly CesiumLayerExtension[];
 }
 
 // Reused for every per-frame colour write; the batch-table setter copies the
 // four bytes immediately, so one shared scratch is safe (same argument as the
 // point layer's SCRATCH_COLOR).
 const SCRATCH_RGBA = new Uint8Array(4);
+
+/** u8 → 0..1 for the extension contract; the round trip is exact after `Math.round`. */
+const INV_255 = 1 / 255;
 
 /** Map the option string onto Cesium's enum (default `'none'`). */
 function toArcType(a: STTBatchedPolylineOptions['arcType']): ArcType {
@@ -104,6 +128,8 @@ export class STTBatchedPolylineLayer {
   private readonly params: TimeFilterParams;
   private readonly width: number;
   private readonly arcType: ArcType;
+  /** Folded user extensions, or `null` — the zero-cost case. */
+  private readonly ext: CompiledExtensions | null;
   private primitive: Primitive | null = null;
   private entries: PolylineEntry[] = [];
   private attrsCached = false;
@@ -120,6 +146,9 @@ export class STTBatchedPolylineLayer {
     this.params = options.timeFilter ?? {};
     this.width = options.width ?? 3;
     this.arcType = toArcType(options.arcType);
+    // Compile once, at construction: a bad list (blank/duplicate name) throws
+    // here rather than on the first drawn frame.
+    this.ext = compileExtensions(options.extensions, layerId);
   }
 
   /** Replace the rendered polylines (replace-all, like `STTPointLayer.setTiles`). */
@@ -217,7 +246,16 @@ export class STTBatchedPolylineLayer {
     return p.binary.positions[v0 * dims + 1];
   }
 
-  /** Advance to an absolute playhead time (same contract as `STTPointLayer.setTime`). */
+  /**
+   * Advance to an absolute playhead time (same contract as `STTPointLayer.setTime`).
+   *
+   * User extensions compose ON TOP of the oracle's alpha and the resolved
+   * colour, never in place of them — the hook's argument IS
+   * `e.a * timeFilterAlpha(...)`. They run BEFORE the skip compare and the
+   * compare tests the COMPOSED alpha; a `color` hook clears `skipUnchanged`
+   * altogether, because a cache keyed on alpha cannot see a colour move. With no
+   * extensions `ext` is `null` and none of that is reached.
+   */
   setTime(absoluteMs: number): void {
     const prim = this.primitive;
     if (!prim || !prim.ready) return; // batch table exists only after the first render
@@ -232,14 +270,39 @@ export class STTBatchedPolylineLayer {
 
     const cur = absoluteMs - this.timeOrigin;
     const v = SCRATCH_RGBA;
+    const ext = this.ext;
+    if (ext !== null) ext.beginFrame(cur);
+    const skipUnchanged = ext === null || ext.skipUnchanged;
     for (const e of this.entries) {
-      const alpha =
+      let alpha =
         e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
-      if (alpha === e.lastAlpha || !e.attrs) continue;
+      let r = e.r;
+      let g = e.g;
+      let b = e.b;
+      if (ext !== null) {
+        const out = ext.apply(
+          alpha,
+          e.start,
+          e.end,
+          e.id.binary,
+          e.id.featureIndex,
+          e.r * INV_255,
+          e.g * INV_255,
+          e.b * INV_255,
+        );
+        alpha = out.alpha;
+        // Back to u8. Rounding (not the Uint8Array store's truncation) keeps an
+        // identity colour hook a true identity: 200 → 200/255 → ×255 is
+        // 199.999…, which would truncate to 199 and drift a channel per frame.
+        r = Math.round(out.r * 255);
+        g = Math.round(out.g * 255);
+        b = Math.round(out.b * 255);
+      }
+      if ((skipUnchanged && alpha === e.lastAlpha) || !e.attrs) continue;
       e.lastAlpha = alpha;
-      v[0] = e.r;
-      v[1] = e.g;
-      v[2] = e.b;
+      v[0] = r;
+      v[1] = g;
+      v[2] = b;
       v[3] = Math.round(alpha * 255);
       e.attrs.color = v; // setter copies the bytes into the batch table
     }

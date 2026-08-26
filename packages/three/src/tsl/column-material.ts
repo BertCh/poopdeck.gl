@@ -69,6 +69,13 @@ import {
   type DataFilterOptions,
 } from './data-filter.js';
 import { TimeHeightUniforms } from './time-height.js';
+import {
+  resolveExtensions,
+  extensionHooks,
+  type MaterialHooks,
+  type ResolvedExtensions,
+  type STTExtensionOptions,
+} from './extensions.js';
 
 // The space-time-cube lift holder is shared with the other lifting materials;
 // re-exported here so a bundle's `timeHeight` field is nameable from the module
@@ -80,7 +87,7 @@ export class ColumnUniforms {
   readonly opacity: UniformNode = uniform(1);
 }
 
-export interface ColumnMaterialOptions {
+export interface ColumnMaterialOptions extends STTExtensionOptions {
   /** Apply the window time-filter (fade by `[start,end]` overlap). @default true */
   timeFiltered?: boolean;
   /** Translucent columns (window fade). @default false (opaque, depth-sorted) */
@@ -126,10 +133,26 @@ export interface ColumnMaterialBundle {
   timeHeight?: TimeHeightUniforms;
   /** Present only when built with `colorPalette`; carries the palette-texture width. */
   palette?: PaletteUniforms;
+  /**
+   * Present ONLY when at least one user extension was composed (see
+   * `./extensions.ts`); carries their uniform nodes and the attributes the host
+   * must bind onto the live geometry.
+   */
+  extensions?: ResolvedExtensions;
 }
 
 function normalizeNode(v: TSLNode): TSLNode {
   return v.normalize();
+}
+
+/**
+ * The `size` seam for a prism. A column carries its extent in the three basis
+ * vectors, not in a scalar, so the seam is fed the neutral scale `1` and its
+ * result multiplies the object-space offset — the shipped expression is left
+ * untouched when nobody declares the seam.
+ */
+function scaledPrismOffset(hooks: MaterialHooks, offset: TSLNode): TSLNode {
+  return hooks.has('size') ? offset.mul(hooks.size(float(1))) : offset;
 }
 
 export function createColumnMaterial(
@@ -137,6 +160,10 @@ export function createColumnMaterial(
 ): ColumnMaterialBundle {
   const time = new TimeFilterUniforms();
   const column = new ColumnUniforms();
+  // User extensions (`./extensions.ts`). Empty ⇒ the shared identity hooks, so
+  // every expression below is byte-identical to the un-extended material.
+  const ext = resolveExtensions('column', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'column', pass: 'color', time });
   const timeFiltered = opts.timeFiltered ?? true;
   const transparent = opts.transparent ?? false;
   const dataFilter = opts.dataFilter ?? false;
@@ -159,7 +186,10 @@ export function createColumnMaterial(
   const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
 
   const op = positionGeometry; // unit-prism object position
-  const offset = bx.mul(op.x).add(by.mul(op.y)).add(bz.mul(op.z));
+  const offset = scaledPrismOffset(
+    hooks,
+    bx.mul(op.x).add(by.mul(op.y)).add(bz.mul(op.z)),
+  );
   // HARD vertex-stage collapse: an out-of-window (time-filtered) OR out-of-range
   // (column-filtered) prism shrinks to a zero-volume prism at `base` (all
   // vertices coincide → dies at assembly). Not filtered ⇒ gate = 1 (no collapse).
@@ -182,7 +212,11 @@ export function createColumnMaterial(
     const heightMeters = start.sub(height.heightOrigin).mul(height.heightScale);
     foot = base.add(lift.mul(heightMeters));
   }
-  const local = foot.add(offset.mul(visible));
+  // `position` seam, gate LAST: with a hook this becomes
+  // `foot + (hook(foot+offset) − foot)·visible`, so a gated prism still
+  // degenerates exactly at `foot`; without one it is `foot + offset·visible`,
+  // node for node.
+  const local = hooks.offsetPosition(foot, offset, visible);
 
   const material = new MeshBasicNodeMaterial();
   material.positionNode = vec3(local);
@@ -205,7 +239,9 @@ export function createColumnMaterial(
   // The shade multiplies INSIDE the conversion because deck darkens the 0–255
   // colour the same way — converting first would change the falloff curve.
   const vColor = varying(color);
-  material.colorNode = srgbToWorking(vColor.xyz.mul(shade));
+  // `color` seam sits INSIDE srgbToWorking and AFTER the baked shade, so an
+  // extension sees exactly the sRGB value deck would have written.
+  material.colorNode = srgbToWorking(hooks.color(vColor.xyz.mul(shade)));
 
   // Time window → opacity (vary raw start/end; recompute the select() alpha here).
   const vStart = varying(start);
@@ -213,7 +249,9 @@ export function createColumnMaterial(
   const fragAlpha = timeFiltered
     ? timeFilterAlphaNode('window', time, vStart, vEnd)
     : float(1);
-  let opacityNode = vColor.a.mul(column.opacity).mul(fragAlpha);
+  // `alpha` seam takes the base alpha; the soft window/filter ramps multiply
+  // AFTER it, so a hook can only ever subtract visibility.
+  let opacityNode = hooks.alpha(vColor.a.mul(column.opacity)).mul(fragAlpha);
   if (filter && filterValue) {
     // Soft column-filter fade (vary the raw value; the alpha node is a
     // mix()/step() graph, never a select(), so it is varying-safe).
@@ -229,7 +267,7 @@ export function createColumnMaterial(
   material.side = DoubleSide;
   if (transparent) material.alphaTest = opts.alphaCutoff ?? 0.01;
 
-  return {
+  const bundle: ColumnMaterialBundle = {
     material,
     time,
     column,
@@ -238,6 +276,8 @@ export function createColumnMaterial(
     timeHeight: height,
     palette: paletteU,
   };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }
 
 export interface ColumnUniformValues {
@@ -293,6 +333,11 @@ export function createColumnIdMaterial(
 ): ColumnMaterialBundle {
   const time = new TimeFilterUniforms();
   const column = new ColumnUniforms();
+  // SAME extension seams as the colour material (position / size / alpha), so a
+  // hook that moves or rescales a prism picks exactly where it draws. The
+  // `color` seam is inert in the id pass — the index must decode bit-exact.
+  const ext = resolveExtensions('column', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'column', pass: 'id', time });
   const timeFiltered = opts.timeFiltered ?? true;
   const dataFilter = opts.dataFilter ?? false;
   const filter = dataFilter ? new DataFilterUniforms() : undefined;
@@ -309,7 +354,10 @@ export function createColumnIdMaterial(
   const filterValue = dataFilter ? attribute('sttFilterValue', 'float') : null;
 
   const op = positionGeometry; // unit-prism object position
-  const offset = bx.mul(op.x).add(by.mul(op.y)).add(bz.mul(op.z));
+  const offset = scaledPrismOffset(
+    hooks,
+    bx.mul(op.x).add(by.mul(op.y)).add(bz.mul(op.z)),
+  );
   // SAME hard vertex-stage collapse as the colour material: out-of-window /
   // out-of-range prisms shrink to a zero-volume degenerate at the (lifted) foot,
   // so they never rasterise → are never pickable, exactly matching the eye.
@@ -325,7 +373,7 @@ export function createColumnIdMaterial(
     const heightMeters = start.sub(height.heightOrigin).mul(height.heightScale);
     foot = base.add(lift.mul(heightMeters));
   }
-  const local = foot.add(offset.mul(visible));
+  const local = hooks.offsetPosition(foot, offset, visible);
 
   const material = new MeshBasicNodeMaterial();
   material.positionNode = vec3(local);
@@ -352,6 +400,13 @@ export function createColumnIdMaterial(
     );
     onGate = onGate ? onGate.and(fg) : fg;
   }
+  if (hooks.has('alpha')) {
+    // The id is opaque, so the alpha seam is fed `1` and its result thresholded
+    // into the pick gate: an extension that MASKS a prism to zero makes it
+    // unpickable (matching the eye); one that merely dims it does not.
+    const ug = hooks.alpha(float(1)).greaterThan(float(cutoff));
+    onGate = onGate ? onGate.and(ug) : ug;
+  }
   material.opacityNode = onGate ? select(onGate, float(1), float(0)) : float(1);
 
   material.transparent = false;
@@ -360,5 +415,14 @@ export function createColumnIdMaterial(
   material.side = DoubleSide;
   material.alphaTest = 0.5;
 
-  return { material, time, column, timeFiltered, filter, timeHeight: height };
+  const bundle: ColumnMaterialBundle = {
+    material,
+    time,
+    column,
+    timeFiltered,
+    filter,
+    timeHeight: height,
+  };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }

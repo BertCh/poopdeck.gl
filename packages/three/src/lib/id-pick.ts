@@ -49,7 +49,14 @@ export type STTIdPickKind =
   | 'polygon'
   | 'path'
   | 'icon'
-  | 'iso';
+  | 'iso'
+  // Added by the non-deck parity campaign. `'pointCloud'` is the phong-lit 3D
+  // cloud and is deliberately distinct from `'point'` (flat billboards) — a
+  // consumer narrowing on `'point'` must not silently also match it.
+  | 'text'
+  | 'mesh'
+  | 'pointCloud'
+  | 'hexbin';
 
 /**
  * A hit on a GPU-instanced feature (id-buffer readback → provenance resolve),

@@ -84,11 +84,7 @@ the loop, and the package gives you the two halves: `createSTTRenderer()`
 
 ```ts
 import { Scene, PerspectiveCamera, Group } from 'three';
-import {
-  STTScene,
-  STTPointCloudLayer,
-  createSTTRenderer,
-} from '@poopdeck.gl/three';
+import { STTScene, STTPointLayer, createSTTRenderer } from '@poopdeck.gl/three';
 
 const { renderer } = await createSTTRenderer({
   canvas: document.getElementById('viewport') as HTMLCanvasElement,
@@ -99,7 +95,7 @@ const stt = new STTScene({
   timeOrigin: Date.now(),
 });
 stt.addLayer(
-  new STTPointCloudLayer({ id: 'points', colorProperty: 'category' }),
+  new STTPointLayer({ id: 'points', colorProperty: 'category' }),
   '/data/points/manifest.json',
 );
 await stt.load();
@@ -188,7 +184,7 @@ the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appe
 
 | Class                    | Geometry                         | Deck equivalent                                                  | Notes                                                                                                                                                                                                                                                                                                      |
 | ------------------------ | -------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STTPointCloudLayer`     | Point                            | `AnimatedPointLayer`                                             | window/wake/cumulative modes, soft-Gaussian `splat`, categorical/RGB-column/continuous-ramp colour, metre or pixel sizing, GPU id-colour picking (opt-in, browser-verify).                                                                                                                                 |
+| `STTPointLayer`          | Point                            | `AnimatedPointLayer`                                             | window/wake/cumulative modes, soft-Gaussian `splat`, categorical/RGB-column/continuous-ramp colour, metre or pixel sizing, GPU id-colour picking (opt-in, browser-verify).                                                                                                                                 |
 | `STTSurfelLayer`         | Point (oriented surfel)          | `SplatLayer` / `SplatPrimitiveLayer`                             | Oriented anisotropic Gaussian surfels (surface splatting) — the AV LIDAR hero mode. Reads `--surfel`-baked quaternion/scale/rgba columns. ENU-only; no globe port.                                                                                                                                         |
 | `STTWideLineLayer`       | LineString                       | `AnimatedPathLayer` / `AnimatedLineLayer` / `AnimatedTripsLayer` | Screen-pixel-width instanced ribbon over `createWideLineMaterial`; `mode: 'window' \| 'trail' \| 'none'`. `STTPathGeoLayer` subclasses it directly; `STTOdLineLayer`/`STTTripsLayer`/`STTFlowCorridorLayer` are siblings reusing the same material + segment-quad geometry with their own buffer builders. |
 | `STTPathGeoLayer`        | LineString                       | `AnimatedPathLayer`                                              | `STTWideLineLayer` subclass pinned to `mode: 'window'` with path-shaped option names.                                                                                                                                                                                                                      |
@@ -261,7 +257,7 @@ Suspense (each layer suspends on its archive load via `useSTTTiles`, with a
 bounded LRU across mount/unmount cycles).
 
 ```tsx
-import { STTCanvas, STTPointCloudLayer } from '@poopdeck.gl/three/r3f';
+import { STTCanvas, STTPointLayer } from '@poopdeck.gl/three/r3f';
 
 function Viewport({ getTime }: { getTime: () => number }) {
   return (
@@ -270,7 +266,7 @@ function Viewport({ getTime }: { getTime: () => number }) {
       timeOrigin={Date.now()}
       getTime={getTime}
     >
-      <STTPointCloudLayer
+      <STTPointLayer
         url="/data/points/manifest.json"
         colorProperty="category"
       />
@@ -279,7 +275,7 @@ function Viewport({ getTime }: { getTime: () => number }) {
 }
 ```
 
-Every `Stt*Layer` component (`STTSurfelLayer`, `STTPointCloudLayer`,
+Every `Stt*Layer` component (`STTSurfelLayer`, `STTPointLayer`,
 `STTBoundingBoxLayer`, `STTMapPolygonLayer`/`STTPolygonLayer`,
 `STTMapLineLayer`/`STTPathLayer`, `STTOdLineLayer`, `STTArcLayer`,
 `STTIconLayer`, `STTColumnLayer`, `STTTripsLayer`, `STTTripHeadsLayer`,
@@ -328,7 +324,7 @@ Two independent mechanisms exist:
   pickable layer's boxes (objects + ego). This is the mechanism the backend
   descriptor reports (`pickMechanism: 'cpu-ray'`).
 - **GPU id-colour picking** (`GpuPicker`, `encodeId`/`decodeId`/`buildIdColors`,
-  and `STTPointCloudLayer.pick()`) — an opt-in off-screen id-buffer render pass +
+  and `STTPointLayer.pick()`) — an opt-in off-screen id-buffer render pass +
   readback for merged-instance point clouds, resolved back to a feature via
   the `InstanceProvenance` merged-buffer identity contract
   (`resolvePointPick`). Exists and is unit-tested on the resolve half; the

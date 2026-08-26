@@ -19,7 +19,7 @@ import {
 } from '../src/tsl/point-material';
 import { createIconMaterial } from '../src/tsl/icon-material';
 import { GlideUniforms } from '../src/tsl/motion-glide';
-import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTPointLayer } from '../src/layers/point-layer';
 import { STTIconLayer } from '../src/layers/icon-layer';
 import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makePointTile } from './_support/features';
@@ -95,9 +95,9 @@ describe('icon material — glide node graph builds', () => {
   });
 });
 
-describe('STTPointCloudLayer — glide render path', () => {
+describe('STTPointLayer — glide render path', () => {
   it('builds one glided instance per entity with the row locators', () => {
-    const layer = new STTPointCloudLayer({
+    const layer = new STTPointLayer({
       interpolate: true,
       idProperty: 'ac',
     });
@@ -121,7 +121,7 @@ describe('STTPointCloudLayer — glide render path', () => {
   });
 
   it('stays on the static per-sample path when interpolate is off', () => {
-    const layer = new STTPointCloudLayer({ idProperty: 'ac' }); // interpolate defaults off
+    const layer = new STTPointLayer({ idProperty: 'ac' }); // interpolate defaults off
     layer.setTiles([movingTile('ac', 'points')], ctx);
     const geom = layer.object.geometry as InstancedBufferGeometry;
     expect(geom.instanceCount).toBe(4); // one instance per sample
@@ -131,7 +131,7 @@ describe('STTPointCloudLayer — glide render path', () => {
   });
 
   it('degrades to the static path under reduced motion', () => {
-    const layer = new STTPointCloudLayer({
+    const layer = new STTPointLayer({
       interpolate: true,
       idProperty: 'ac',
       reducedMotion: true,

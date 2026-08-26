@@ -31,6 +31,28 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  bundleEdges,
+  BUNDLING_WORK_SIZE,
+} from '@poopdeck.gl/core/edge-bundling';
+import { composeExtensionChunks } from '../src/shaders/extensions.glsl';
+import {
+  pointProgramKey,
+  buildPointIdVertexSource,
+} from '../src/layers/point-layer';
+import {
+  buildFlowBundle,
+  resampleFlowEdges,
+  toWorkBox,
+  DEFAULT_BUNDLE_KERNEL_RADIUS,
+  DEFAULT_BUNDLE_DENSITY_RES,
+} from '../src/lib/edge-bundler';
+import {
+  applyViewState,
+  readViewState,
+  supportsRoll,
+  type ViewStateHost,
+} from '../src/lib/view-state';
+import {
   LAYER_KINDS,
   CAPABILITIES,
   assertDescriptorConsistent,
@@ -48,6 +70,13 @@ import {
 import * as maplibre from '../src/index';
 import { buildPointVertexSource } from '../src/layers/point-layer';
 import { buildLineVertexSource } from '../src/layers/line-layer';
+import { buildIsoVertexSource } from '../src/layers/iso-layer';
+import { buildPointCloudVertexSource } from '../src/layers/point-cloud-layer';
+import { buildTextVertexSource } from '../src/layers/text-layer';
+import { buildBoundingBoxVertexSource } from '../src/layers/bounding-box-layer';
+import { buildMeshVertexSource } from '../src/layers/mesh-layer';
+import { buildEgoVertexSource } from '../src/layers/ego-layer';
+import { buildSurfelVertexSource } from '../src/layers/surfel-layer';
 import { buildFillVertexSource } from '../src/layers/polygon-layer';
 import { buildTripsVertexSource } from '../src/layers/trips-layer';
 import { buildHeatmapAccumVertexSource } from '../src/layers/heatmap-layer';
@@ -100,6 +129,14 @@ const REQUIRED_EXTRA: Partial<Record<LayerKind, Record<string, unknown>>> = {
 const CLASS_FOR_KIND: Partial<Record<LayerKind, string>> = {
   point: 'STTPointLayer',
   line: 'STTLineLayer',
+  path: 'STTPathLayer',
+  isoLines: 'STTIsoLayer',
+  pointCloud: 'STTPointCloudLayer',
+  text: 'STTTextLayer',
+  boundingBox: 'STTBoundingBoxLayer',
+  mesh: 'STTMeshLayer',
+  ego: 'STTEgoLayer',
+  surfel: 'STTSurfelLayer',
   polygon: 'STTPolygonLayer',
   trips: 'STTTripsLayer',
   heatmap: 'STTHeatmapLayer',
@@ -375,6 +412,27 @@ const PRELUDE_SHADER = {
 const PRELUDE_SOURCES = (): string[] => [
   buildPointVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
   buildLineVertexSource(PRELUDE_SHADER, { mode: 'window' }),
+  // The `path` kind compiles through the SAME builder — that sharing is the
+  // point of STTPathLayer being a subclass rather than a fork — but it is a
+  // distinct supported kind, so it owes this gate its own entry (the assertion
+  // below counts sources against the supported-kind count). `reveal` is the
+  // mode that is path-specific, so that is the one to prove reaches the prelude.
+  buildLineVertexSource(PRELUDE_SHADER, { mode: 'reveal' }),
+  // The 2026-08-26 completion pass — one entry per newly-native kind, so the
+  // count assertion below stays a real completeness check.
+  buildIsoVertexSource(PRELUDE_SHADER, { mode: 'window' }),
+  buildPointCloudVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+  }),
+  buildTextVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+  buildBoundingBoxVertexSource(PRELUDE_SHADER, {
+    mode: 'window',
+    filter: false,
+  }),
+  buildMeshVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+  buildEgoVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
+  buildSurfelVertexSource(PRELUDE_SHADER, { mode: 'window', filter: false }),
   buildFillVertexSource({ ...PRELUDE_SHADER, mode: 'window' }),
   buildTripsVertexSource(PRELUDE_SHADER, 'trail'),
   buildHeatmapAccumVertexSource(PRELUDE_SHADER, { timeFilterMode: 'window' }),
@@ -529,6 +587,193 @@ const CAPABILITY_EVIDENCE: Readonly<
     provesProp('column', 'timeHeightScale', 1234.5) &&
     provesProp('column', 'timeHeightOrigin', 1_700_000_111_000) &&
     timeHeightLiftMeters(5_000, 1_000, 2) === 8_000,
+  // Camera roll is a claim about the SEAM, not about the shaders: roll is
+  // already inside the view matrix (and inside the v5+ projection prelude), so
+  // no layer had to change. What the flag claims is that `ViewState.roll`
+  // survives a round trip through the host camera instead of being dropped —
+  // and, because the peer range spans a major that has no roll at all, that a
+  // host without it degrades HONESTLY rather than silently.
+  //
+  // Both halves are asserted, so flipping either behaviour un-proves the claim:
+  // a v5+ host must round-trip the value, and a <=v4 host must both REPORT the
+  // drop and omit the key (reporting a fabricated `roll: 0` would make "no roll
+  // DOF" indistinguishable from "level", which is the whole failure this
+  // degradation exists to avoid).
+  // Live bundling is a claim that the KDEEB schedule really RUNS and really
+  // bends the drawn edges — not that a bundler module exists. So the predicate
+  // builds a real bundle from parallel OD pairs and demands two things: the
+  // control points moved off the straight chord at all, and they moved to
+  // exactly where core's shared `bundleEdges` puts them. The second half is
+  // what stops a hand-rolled lookalike from passing: this backend, three and
+  // cesium all run the SAME core function, and disagreeing with it is the
+  // drift this whole conformance idiom exists to prevent.
+  liveBundling: () => {
+    // A claim that the KDEEB schedule really RUNS and really bends the drawn
+    // edges — not that a bundler module exists. Two halves:
+    //   (a) interior control points left the straight chord at all, and
+    //   (b) they landed exactly where core's shared `bundleEdges` puts them.
+    // (b) is what stops a hand-rolled lookalike from passing: this backend,
+    // three and cesium all run the SAME core function, and disagreeing with it
+    // is precisely the drift this conformance idiom exists to prevent. The
+    // re-derivation goes through the module's OWN `resampleFlowEdges` +
+    // `toWorkBox`, so it compares the BUNDLING, not the parametrization.
+    const E = 6;
+    const sourceM: number[] = [];
+    const targetM: number[] = [];
+    for (let e = 0; e < E; e++) {
+      const y = 0.5 + (e - (E - 1) / 2) * 0.0008;
+      sourceM.push(0.4, y);
+      targetM.push(0.6, y);
+    }
+    const input = {
+      dims: 2,
+      sourceM,
+      targetM,
+      edgeCount: E,
+      unwrapX: (_ref: number, x: number) => x,
+    };
+    const bundle = buildFlowBundle(input, { bundlingIterations: 10 });
+    if (!bundle) return false;
+    const { texels, pointsPerEdge: P, edgeCount } = bundle;
+    if (edgeCount !== E || P < 3) return false;
+
+    let moved = false;
+    for (let e = 0; e < E && !moved; e++) {
+      const y0 = texels[e * P * 4 + 1];
+      for (let i = 1; i < P - 1; i++) {
+        if (Math.abs(texels[(e * P + i) * 4 + 1] - y0) > 1e-12) {
+          moved = true;
+          break;
+        }
+      }
+    }
+    if (!moved) return false;
+
+    const raw = resampleFlowEdges(input, P);
+    const box = toWorkBox(raw, E * P);
+    if (!box) return false;
+    const ref = bundleEdges(raw, E, P, {
+      iterations: 10,
+      kernelRadius: DEFAULT_BUNDLE_KERNEL_RADIUS * BUNDLING_WORK_SIZE,
+      lambda: 0.85,
+      smoothing: 0.5,
+      densityResolution: DEFAULT_BUNDLE_DENSITY_RES,
+    });
+    const inv = 1 / box.scale;
+    for (let e = 0; e < E; e++) {
+      // Endpoints are restored verbatim from the inputs by the bundler, so
+      // compare only the interior — the endpoint pin has its own test.
+      for (let i = 1; i < P - 1; i++) {
+        const p = e * P + i;
+        const wantX = ref[p * 2] * inv + box.originX;
+        const wantY = ref[p * 2 + 1] * inv + box.originY;
+        if (Math.abs(texels[p * 4] - wantX) > 1e-6) return false;
+        if (Math.abs(texels[p * 4 + 1] - wantY) > 1e-6) return false;
+      }
+    }
+    return true;
+  },
+  // A claim that a USER's plain object really reaches the compiled shader and
+  // really changes what is drawn — not that an extensions module exists. Three
+  // halves, matching the three ways this could be decorative:
+  //   (a) the snippet lands in the compiled VERTEX source;
+  //   (b) it lands in the ID/pick source too, or a geometry-moving extension
+  //       would desync the hit box from the drawn shape;
+  //   (c) its identity enters the PROGRAM-CACHE KEY, or two layers with
+  //       different extensions silently share one linked program — the single
+  //       most dangerous failure mode for a chunk-injection surface.
+  // And the empty case must be byte-identical, or every existing layer changed.
+  userExtensions: () => {
+    // A claim that a USER's plain object really reaches the compiled shader and
+    // really changes what is drawn — not that an extensions module exists.
+    // Three halves, matching the three ways this could be decorative:
+    //   (a) the snippet lands in the compiled VERTEX source;
+    //   (b) it lands in the ID/pick source too, or a geometry-moving extension
+    //       would desync the hit box from the drawn shape;
+    //   (c) its identity enters the PROGRAM-CACHE KEY, or two layers with
+    //       different extensions silently share one linked program — the single
+    //       most dangerous failure mode for a chunk-injection surface.
+    // And the empty case must be byte-identical, or every existing layer moved.
+    const marker = 'sttExtProbeMarker';
+    const chunks = composeExtensionChunks([
+      {
+        name: 'conformance-probe',
+        uniforms: `uniform float ${marker};`,
+        vertex: { size: `radiusPx *= max(${marker}, 1.0);` },
+      },
+    ]);
+    const base = { mode: 'window' as const, filter: false };
+
+    const vs = buildPointVertexSource(PRELUDE_SHADER, {
+      ...base,
+      extensions: chunks,
+    });
+    const ids = buildPointIdVertexSource(PRELUDE_SHADER, {
+      ...base,
+      extensions: chunks,
+    });
+    if (!vs.includes(marker) || !ids.includes(marker)) return false;
+
+    // (c) the digest reaches BOTH cache keys.
+    const keyed = pointProgramKey('main', { ...base, extensions: chunks });
+    const bareKey = pointProgramKey('main', base);
+    const keyedPick = pointProgramKey('pick', { ...base, extensions: chunks });
+    const barePick = pointProgramKey('pick', base);
+    if (keyed === bareKey || keyedPick === barePick) return false;
+
+    // Empty ⇒ byte-identical source AND an unchanged cache key.
+    const empty = composeExtensionChunks([]);
+    if (
+      buildPointVertexSource(PRELUDE_SHADER, { ...base, extensions: empty }) !==
+      buildPointVertexSource(PRELUDE_SHADER, base)
+    ) {
+      return false;
+    }
+    return pointProgramKey('main', { ...base, extensions: empty }) === bareKey;
+  },
+  cameraRoll: () => {
+    const state = { roll: 0 };
+    const base = {
+      getCenter: () => ({ lng: 1, lat: 2 }),
+      getZoom: () => 3,
+      getPitch: () => 4,
+      getBearing: () => 5,
+      jumpTo: (o: Record<string, unknown>) => {
+        if (typeof o.roll === 'number') state.roll = o.roll;
+      },
+    };
+    const v5: ViewStateHost = {
+      ...base,
+      getRoll: () => state.roll,
+      setRoll: (r: number) => {
+        state.roll = r;
+      },
+    };
+    const v4: ViewStateHost = { ...base };
+
+    const want = 33;
+    const applied = applyViewState(v5, {
+      longitude: 1,
+      latitude: 2,
+      zoom: 3,
+      roll: want,
+    });
+    const rolls =
+      supportsRoll(v5) &&
+      !supportsRoll(v4) &&
+      applied.dropped.length === 0 &&
+      readViewState(v5).roll === want;
+
+    const degrades =
+      applyViewState(v4, {
+        longitude: 1,
+        latitude: 2,
+        zoom: 3,
+        roll: want,
+      }).dropped.includes('roll') && readViewState(v4).roll === undefined;
+
+    return rolls && degrades;
+  },
 };
 
 describe('maplibreBackend descriptor', () => {
@@ -563,27 +808,18 @@ describe('maplibreBackend descriptor', () => {
     }
   });
 
-  it('supports exactly the fifteen shipped kinds and nothing else', () => {
-    const supported = LAYER_KINDS.filter(
-      (k) => maplibreBackend.layerKinds[k].supported,
-    ).sort();
-    expect(supported).toEqual([
-      'arc',
-      'column',
-      'flowCorridor',
-      'flowStroke',
-      'flowmap',
-      'h3Summary',
-      'heatmap',
-      'hexbin',
-      'icon',
-      'line',
-      'point',
-      'polygon',
-      'quadbinSummary',
-      'tripHeads',
-      'trips',
-    ]);
+  it('supports every frozen LayerKind — the parity claim, stated once', () => {
+    // This case used to enumerate the fifteen (then sixteen) shipped kinds by
+    // name. The 2026-08-26 completion pass made every kind native, so the
+    // enumeration became a list of all 23 that says nothing a completeness
+    // check does not say better — and that would go stale the moment core adds
+    // a kind, which is precisely when this gate should FAIL rather than be
+    // edited.
+    const unsupported = LAYER_KINDS.filter(
+      (k) => !maplibreBackend.layerKinds[k].supported,
+    );
+    expect(unsupported).toEqual([]);
+    expect(LAYER_KINDS.length).toBe(23);
   });
 
   it('renders arc NATIVELY — the arc→line fallback is retired, not re-pointed', () => {
@@ -597,21 +833,19 @@ describe('maplibreBackend descriptor', () => {
     expect(isExportedClass('STTArcLayer')).toBe(true);
   });
 
-  it('text now degrades to a REAL icon layer instead of dangling', () => {
-    // Before Wave M3 this fallback was deliberately absent: `text → icon` was
-    // inherited from the three descriptor, whose icon kind is supported, and
-    // naming it here would have handed the caller a second unrenderable kind.
-    // STTIconLayer exists now, so the fallback is honest — the marker renders,
-    // the glyphs do not.
-    const text = maplibreBackend.layerKinds.text;
-    expect(text.supported).toBe(false);
-    if (!text.supported) {
-      expect(text.fallbackKind).toBe('icon');
-      expect(maplibreBackend.layerKinds.icon.supported).toBe(true);
-      // A degrading kind's reason must say what is LOST, not just refer to
-      // deck — otherwise the caller cannot judge whether the substitute works.
-      expect(text.reason).toMatch(/lost:/);
-      expect(text.reason).toMatch(/GLYPHS/i);
+  it('declares NO fallbacks at all, because no kind needs one', () => {
+    // Two cases used to live here: "text now degrades to a REAL icon layer
+    // instead of dangling" and the gate-(c) skip rule. Both described a backend
+    // with unsupported kinds — text degraded to icon, and kinds with no
+    // in-backend approximation had to skip rather than name a dead fallback.
+    // Every kind is native now, so FALLBACK_KINDS is empty and the whole class
+    // of bug (a fallback naming a kind this backend does not render, handing the
+    // caller a second unrenderable answer) is structurally impossible. Asserting
+    // emptiness is the stronger statement, and it fails loudly the moment
+    // someone reintroduces a degradation without thinking it through.
+    for (const kind of LAYER_KINDS) {
+      const support = maplibreBackend.layerKinds[kind];
+      expect(support.supported, `${kind} must be native`).toBe(true);
     }
   });
 
@@ -631,20 +865,16 @@ describe('maplibreBackend descriptor', () => {
     }
   });
 
-  it('(c) a kind with no in-backend approximation SKIPS rather than naming a dead fallback', () => {
-    // The regression this guards: text/mesh/hexbin were copied from the three
-    // descriptor with icon/boundingBox/h3Summary fallbacks that three supports
-    // and this backend did not. `text` was re-adopted in Wave M3 once the icon
-    // layer shipped; `hexbin` became a REAL native kind in Wave M4 (so it is no
-    // longer a fallback candidate at all — the dead `hexbin → h3Summary`
-    // referral is gone). `mesh` still has no target here, so it must SKIP.
-    for (const kind of ['mesh'] as const) {
+  it('(c) every kind is native, so degradeRequest never hands back a second unrenderable kind', () => {
+    // The regression this guarded: a fallback pointing at a kind the backend
+    // does not itself render. With nothing unsupported there is no fallback to
+    // get wrong — but keep the shape of the check so a future unsupported kind
+    // re-arms it rather than slipping through.
+    for (const kind of LAYER_KINDS) {
       const support = maplibreBackend.layerKinds[kind];
-      expect(support.supported).toBe(false);
-      if (!support.supported) expect(support.fallbackKind).toBeUndefined();
+      if (support.supported) continue;
+      expect(support.fallbackKind).toBeUndefined();
     }
-    // hexbin is now native, not a skip — assert that transition explicitly.
-    expect(maplibreBackend.layerKinds.hexbin.supported).toBe(true);
   });
 
   it('(a) every supported kind maps to a class that is a real export', () => {
@@ -740,22 +970,12 @@ describe('maplibreBackend — Wave M2 flips are earned, not declared', () => {
     // splats with no single feature behind them. The M4 summary/hexbin/flow
     // kinds each ship a `drawPickTile` (a cell / a corridor / an OD arrow is the
     // pick unit), so they join the set.
-    expect(pickableKinds().sort()).toEqual([
-      'arc',
-      'column',
-      'flowCorridor',
-      'flowStroke',
-      'flowmap',
-      'h3Summary',
-      'hexbin',
-      'icon',
-      'line',
-      'point',
-      'polygon',
-      'quadbinSummary',
-      'tripHeads',
-      'trips',
-    ]);
+    expect(pickableKinds().sort()).toEqual(
+      // Every kind EXCEPT heatmap, whose pixels are a sum of unbounded splats
+      // with no single feature behind them. Derived rather than enumerated so
+      // this cannot drift from LAYER_KINDS again.
+      LAYER_KINDS.filter((k) => k !== 'heatmap').sort(),
+    );
     expect(
       (
         construct('heatmap', {}) as { supportsPicking(): boolean }
@@ -781,8 +1001,14 @@ describe('maplibreBackend — Wave M2 flips are earned, not declared', () => {
     expect(CAPABILITY_EVIDENCE.extrude3d!()).toBe(true);
     expect(CAPABILITY_EVIDENCE.gpuHeatmap!()).toBe(true);
     expect(CAPABILITY_EVIDENCE.interleavedBasemap!()).toBe(true);
-    expect(maplibreBackend.capabilities.liveBundling).toBe(false);
-    expect(maplibreBackend.capabilities.userExtensions).toBe(false);
+    // liveBundling was a deliberate non-claim until the 2026-08-26 pass gave
+    // this backend a real KDEEB path; it is now asserted through its own
+    // behavioural predicate above, like globe and gpuHeatmap.
+    expect(CAPABILITY_EVIDENCE.liveBundling!()).toBe(true);
+    // userExtensions was a deliberate non-claim until the 2026-08-26 pass gave
+    // this backend a real GLSL chunk-injection surface; it is now asserted
+    // through its own behavioural predicate above.
+    expect(CAPABILITY_EVIDENCE.userExtensions!()).toBe(true);
     // Default ownership stays per-layer; SharedTilesetSource is opt-in.
     expect(maplibreBackend.tilesetOwnership).toBe('per-layer');
     expect(maplibreBackend.basemapProjection).toBe('mercator');
@@ -884,12 +1110,23 @@ describe('maplibreBackend — Wave M3 flips are earned, not declared', () => {
     expect(provesProp('icon', 'idProperty', '__stt_id__')).toBe(true);
   });
 
-  it('pathReveal names `line`, never the unsupported `path` kind', () => {
+  it('pathReveal names BOTH the line and path kinds, now that path is real', () => {
+    // This case used to read "names `line`, never the UNSUPPORTED `path` kind"
+    // and asserted `path.supported === false`. That was the honest statement
+    // while the reveal surface had no class of its own to sit on — the
+    // descriptor was simultaneously claiming pathReveal and denying the path
+    // kind. STTPathLayer resolves the contradiction from the other side, so the
+    // feature now names both kinds and the denial is gone.
     const support = maplibreLayerFeatures.pathReveal;
     expect(support.supported).toBe(true);
     if (!support.supported) return;
-    expect(support.kinds).toEqual(['line']);
-    expect(maplibreBackend.layerKinds.path.supported).toBe(false);
+    expect([...support.kinds].sort()).toEqual(['line', 'path']);
+    expect(maplibreBackend.layerKinds.path.supported).toBe(true);
+    // The path kind really compiles the reveal mode too, not just the line kind.
+    const revealed = construct('path', { revealTrail: true }) as {
+      mainProgramKey: string;
+    };
+    expect(revealed.mainProgramKey).toContain('reveal');
     // Reveal is OFF by default and supersedes the time mode only when asked.
     const off = construct('line', {}) as { mainProgramKey: string };
     expect(off.mainProgramKey).not.toContain('reveal');

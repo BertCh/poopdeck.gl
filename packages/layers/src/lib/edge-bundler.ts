@@ -57,160 +57,27 @@ import { Model, Geometry } from '@luma.gl/engine';
 import { warnOnce } from './log.js';
 
 // ───────────────────────── pure (CPU-testable) math ─────────────────────────
-// The GLSL kernel mirrors these; they exist so the bundling logic is unit-tested
-// on the CPU the way the rest of the package tests layer logic.
-
-/** A 2-D point/vector. */
-export type Vec2 = readonly [number, number];
-
-const sub = (a: Vec2, b: Vec2): [number, number] => [a[0] - b[0], a[1] - b[1]];
-const len = (a: Vec2): number => Math.hypot(a[0], a[1]);
-const EPS = 1e-9;
-
-/**
- * Radial **Epanechnikov** kernel weight (KDEEB's density kernel): `1 − (d/h)²`
- * inside the bandwidth `h`, `0` outside. Smooth, finite-support, cheap.
- */
-export function epanechnikovWeight(dist: number, radius: number): number {
-  if (radius <= EPS) return 0;
-  const x = dist / radius;
-  return x >= 1 ? 0 : 1 - x * x;
-}
-
-/**
- * One 1D Laplacian smoothing step on a control point toward the midpoint of its
- * same-edge neighbours, by strength `f` (CUBu uses `f≈0.5`): `cur + f·(½(prev+
- * next) − cur)`. Evenly-spaced collinear points are unchanged; kinks relax.
- */
-export function laplacianStep(
-  prev: Vec2,
-  cur: Vec2,
-  next: Vec2,
-  f: number,
-): [number, number] {
-  const mx = 0.5 * (prev[0] + next[0]) - cur[0];
-  const my = 0.5 * (prev[1] + next[1]) - cur[1];
-  return [cur[0] + f * mx, cur[1] + f * my];
-}
-
-/**
- * Allocation-free arc-length resample of ONE polyline straight out of a binary
- * `positions` buffer and straight into a caller-owned control-point buffer —
- * the streaming form of {@link subdivide}, used on the per-tile-set bundle
- * rebuild path where the boxed `Vec2[]`/`cum[]` of `subdivide` dominated (one
- * rebuild at E=4000, P=48 allocated ~200k short-lived arrays).
- *
- * Reads vertices `[v0, v1)` of `positions` (stride `dims`) and writes `count`
- * evenly spaced points (endpoints preserved) at `out[(outPoint0 + i) * dims]`.
- * A single-vertex input degenerates to `count` copies of it; an empty input
- * writes zeros. Numerically identical to `subdivide` — the two are cross-checked
- * in edge-bundler.test.ts.
- */
-export function resampleInto(
-  positions: ArrayLike<number>,
-  dims: number,
-  v0: number,
-  v1: number,
-  count: number,
-  out: Float64Array,
-  outPoint0: number,
-): void {
-  const n = v1 - v0;
-  const write = (i: number, x: number, y: number): void => {
-    const o = (outPoint0 + i) * dims;
-    out[o] = x;
-    out[o + 1] = y;
-  };
-  if (n <= 0) {
-    for (let i = 0; i < count; i++) write(i, 0, 0);
-    return;
-  }
-  if (n === 1 || count < 2) {
-    const x = positions[v0 * dims];
-    const y = positions[v0 * dims + 1];
-    for (let i = 0; i < count; i++) write(i, x, y);
-    return;
-  }
-
-  // Total arc length (one pass, no cumulative array — the walk below re-derives
-  // segment lengths in order, which is O(n + count) overall since `target` is
-  // monotonically increasing).
-  let total = 0;
-  for (let v = v0 + 1; v < v1; v++) {
-    const dx = positions[v * dims] - positions[(v - 1) * dims];
-    const dy = positions[v * dims + 1] - positions[(v - 1) * dims + 1];
-    total += Math.hypot(dx, dy);
-  }
-
-  let seg = v0 + 1; // walking segment [seg-1, seg]
-  let acc = 0; // arc length consumed before `seg`
-  let segLen = Math.hypot(
-    positions[seg * dims] - positions[(seg - 1) * dims],
-    positions[seg * dims + 1] - positions[(seg - 1) * dims + 1],
-  );
-  for (let i = 0; i < count; i++) {
-    const target = (total * i) / (count - 1);
-    while (seg < v1 - 1 && acc + segLen < target) {
-      acc += segLen;
-      seg++;
-      segLen = Math.hypot(
-        positions[seg * dims] - positions[(seg - 1) * dims],
-        positions[seg * dims + 1] - positions[(seg - 1) * dims + 1],
-      );
-    }
-    const f = segLen < EPS ? 0 : (target - acc) / segLen;
-    const ax = positions[(seg - 1) * dims];
-    const ay = positions[(seg - 1) * dims + 1];
-    write(
-      i,
-      ax + f * (positions[seg * dims] - ax),
-      ay + f * (positions[seg * dims + 1] - ay),
-    );
-  }
-}
-
-/**
- * Resample a polyline `points` into `newCount` evenly arc-length-spaced points,
- * preserving the endpoints — the readable reference form of the resampling the
- * GPU pass and {@link resampleInto} both implement, kept as the oracle the
- * streaming version is cross-checked against (see edge-bundler.test.ts). Use
- * {@link resampleInto} on any hot path: this one boxes every vertex.
- */
-export function subdivide(
-  points: Vec2[],
-  newCount: number,
-): [number, number][] {
-  if (newCount < 2 || points.length < 2) return points.map((p) => [p[0], p[1]]);
-  const cum: number[] = [0];
-  for (let i = 1; i < points.length; i++)
-    cum.push(cum[i - 1] + len(sub(points[i], points[i - 1])));
-  const total = cum[cum.length - 1];
-  const out: [number, number][] = [];
-  for (let k = 0; k < newCount; k++) {
-    const target = (total * k) / (newCount - 1);
-    let i = 1;
-    while (i < cum.length - 1 && cum[i] < target) i++;
-    const segLen = cum[i] - cum[i - 1];
-    const f = segLen < EPS ? 0 : (target - cum[i - 1]) / segLen;
-    out.push([
-      points[i - 1][0] + f * (points[i][0] - points[i - 1][0]),
-      points[i - 1][1] + f * (points[i][1] - points[i - 1][1]),
-    ]);
-  }
-  return out;
-}
+// These live in `@poopdeck.gl/core/edge-bundling` so all four backends share ONE
+// definition of the KDEEB kernel math (the renderer-architecture record's whole
+// point: hand-copied scalar math is what drifted in shipped pixels). The GLSL
+// kernel below mirrors them, and edge-bundler.test.ts pins it to them on the CPU.
+// Re-exported here so this module's public surface is unchanged.
+export {
+  epanechnikovWeight,
+  laplacianStep,
+  resampleInto,
+  subdivide,
+  type Vec2,
+} from '@poopdeck.gl/core/edge-bundling';
+import { BUNDLING_WORK_SIZE } from '@poopdeck.gl/core/edge-bundling';
 
 // ───────────────────────────── GPU engine ───────────────────────────────────
 
 /** Position texture format, preferred first. RG is enough (we store `u.xy`). */
 const POSITION_FORMATS = ['rg32float', 'rgba32float'] as const;
 
-/**
- * Side length of the normalized simulation box. KDEEB's kernel/step constants
- * are scale-relative, so we map every dataset's cosLat-corrected endpoints into
- * a fixed box; the renderer reconstructs lon/lat from it on the GPU.
- */
-const WORK_SIZE = 1000;
+/** Side length of the normalized simulation box — shared with every other backend. */
+const WORK_SIZE = BUNDLING_WORK_SIZE;
 /** Density-map resolution (CUBu uses 512²; 1024² for high quality). */
 const DENSITY_RES = 512;
 

@@ -46,6 +46,27 @@ describe('cesiumBackend descriptor', () => {
       arc: ['cesium-arc-layer.ts', 'STTArcLayer'],
       trips: ['cesium-trips-layer.ts', 'STTTripsLayer'],
       tripHeads: ['cesium-trip-heads-layer.ts', 'STTTripHeadsLayer'],
+      // Added by the non-deck parity campaign.
+      boundingBox: ['cesium-bounding-box-layer.ts', 'STTBoundingBoxLayer'],
+      column: ['cesium-column-layer.ts', 'STTColumnLayer'],
+      pointCloud: ['cesium-point-cloud-layer.ts', 'STTPointCloudLayer'],
+      surfel: ['cesium-surfel-layer.ts', 'STTSurfelLayer'],
+      text: ['cesium-text-layer.ts', 'STTTextLayer'],
+      ego: ['cesium-ego-layer.ts', 'STTEgoLayer'],
+      h3Summary: ['cesium-h3-summary-layer.ts', 'STTH3SummaryLayer'],
+      polygon: ['cesium-polygon-layer.ts', 'STTPolygonLayer'],
+      icon: ['cesium-icon-layer.ts', 'STTIconLayer'],
+      mesh: ['cesium-mesh-layer.ts', 'STTMeshLayer'],
+      isoLines: ['cesium-iso-layer.ts', 'STTIsoLayer'],
+      quadbinSummary: [
+        'cesium-quadbin-summary-layer.ts',
+        'STTQuadbinSummaryLayer',
+      ],
+      hexbin: ['cesium-hexbin-layer.ts', 'STTHexbinLayer'],
+      heatmap: ['cesium-heatmap-layer.ts', 'STTHeatmapLayer'],
+      flowCorridor: ['cesium-flow-corridor-layer.ts', 'STTFlowCorridorLayer'],
+      flowStroke: ['cesium-flow-stroke-layer.ts', 'STTFlowStrokeLayer'],
+      flowmap: ['cesium-flowmap-layer.ts', 'STTFlowmapLayer'],
     };
     const supported = LAYER_KINDS.filter(
       (k) => cesiumBackend.layerKinds[k].supported,
@@ -63,27 +84,17 @@ describe('cesiumBackend descriptor', () => {
     }
   });
 
-  it('declares typed fallbacks for the flow family, iso-lines, and surfels', () => {
-    expect(cesiumBackend.layerKinds.surfel).toMatchObject({
-      supported: false,
-      fallbackKind: 'point',
-    });
-    expect(cesiumBackend.layerKinds.flowmap).toMatchObject({
-      supported: false,
-      fallbackKind: 'line',
-    });
-    expect(cesiumBackend.layerKinds.flowCorridor).toMatchObject({
-      supported: false,
-      fallbackKind: 'line',
-    });
-    expect(cesiumBackend.layerKinds.flowStroke).toMatchObject({
-      supported: false,
-      fallbackKind: 'line',
-    });
-    expect(cesiumBackend.layerKinds.isoLines).toMatchObject({
-      supported: false,
-      fallbackKind: 'path',
-    });
+  it('renders every frozen LayerKind natively — the parity claim, stated once', () => {
+    // This case REPLACES "declares typed fallbacks for the flow family,
+    // iso-lines, and surfels". Those fallbacks were the honest description of a
+    // backend that rendered six kinds; the 2026-08-26 completion pass made every
+    // one of them native, so asserting the fallbacks now would be asserting a
+    // degradation that no longer exists.
+    const unsupported = LAYER_KINDS.filter(
+      (k) => !cesiumBackend.layerKinds[k].supported,
+    );
+    expect(unsupported).toEqual([]);
+    expect(LAYER_KINDS.length).toBe(23);
   });
 
   it('(c) every declared fallbackKind is itself a kind this backend renders', () => {
@@ -105,15 +116,17 @@ describe('cesiumBackend descriptor', () => {
     }
   });
 
-  it('(c) a kind with no in-backend approximation SKIPS rather than naming a dead fallback', () => {
-    // The exact regression this guards: text/mesh/hexbin were copied from the
-    // three descriptor with icon/boundingBox/h3Summary fallbacks that three
-    // supports and this backend does not. None of the three targets is in
-    // Cesium's catalog, so all three must skip.
-    for (const kind of ['text', 'mesh', 'hexbin'] as const) {
+  it('(c) no kind names a fallback at all, because none needs one', () => {
+    // The regression this originally guarded: text/mesh/hexbin were copied from
+    // the three descriptor with icon/boundingBox/h3Summary fallbacks that three
+    // supports and this backend did not, so `degradeRequest` handed the caller a
+    // second unrenderable kind instead of the honest skip its `reason` intends.
+    // With every kind native there is nothing left to degrade — which is a
+    // STRONGER statement than the old one, and it still fails loudly the moment
+    // a future kind is added to LAYER_KINDS without an implementation here.
+    for (const kind of LAYER_KINDS) {
       const support = cesiumBackend.layerKinds[kind];
-      expect(support.supported).toBe(false);
-      if (!support.supported) expect(support.fallbackKind).toBeUndefined();
+      expect(support.supported, `${kind} must be native`).toBe(true);
     }
   });
 

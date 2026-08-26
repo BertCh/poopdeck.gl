@@ -35,10 +35,27 @@ export interface ViewStateCameraOptions {
   viewportHeight?: number;
 }
 
-/** The fully-resolved 2.5D view state `cameraToViewState` reports (no roll/altitude —
- *  a Three MapControls camera has no roll DOF). */
+/**
+ * The fully-resolved view state `cameraToViewState` reports.
+ *
+ * `roll` is included because a Three `PerspectiveCamera` genuinely has the DOF —
+ * it is `camera.up` rotated about the view axis. (The 0.5.x note here said "a
+ * Three MapControls camera has no roll DOF", which conflated the CONTROLS with
+ * the camera: orbit controls never produce roll, but nothing stops a caller
+ * driving one, and the shared `ViewState.roll` a Cesium host round-trips through
+ * was being silently dropped on the way back.) `altitude` stays out: it is an
+ * alternative encoding of `zoom`, not an extra DOF.
+ *
+ * DEGENERACY: at `pitch === 0` the camera looks straight down, and a rotation
+ * about the view axis is indistinguishable from a bearing change. The recovery
+ * attributes all of it to `bearing` and reports `roll: 0` — the same choice
+ * maplibre and deck make.
+ */
 export type ResolvedViewState = Required<
-  Pick<ViewState, 'longitude' | 'latitude' | 'zoom' | 'pitch' | 'bearing'>
+  Pick<
+    ViewState,
+    'longitude' | 'latitude' | 'zoom' | 'pitch' | 'bearing' | 'roll'
+  >
 >;
 
 const RAD2DEG = 180 / Math.PI;
@@ -63,8 +80,13 @@ function distanceForScale(
 }
 
 /** Place `camera` at `distance` from `target`, tilted by deck `pitch`/`bearing`
- *  within the local E/N/U frame. Camera "up" is the screen-up tangent
- *  (`fwdH·cos + up·sin`), matching maplibre/deck. */
+ *  within the local E/N/U frame, then rolled by `rollDeg` about the view axis.
+ *  Camera "up" is the screen-up tangent (`fwdH·cos + up·sin`) before the roll,
+ *  matching maplibre/deck.
+ *
+ *  The roll is applied to `camera.up` BEFORE `lookAt`, because `lookAt` builds
+ *  the camera basis from `camera.up` — rolling afterwards would be overwritten
+ *  on the next `lookAt` and silently lost. */
 function orientCamera(
   camera: PerspectiveCamera,
   target: Vector3,
@@ -74,6 +96,7 @@ function orientCamera(
   distance: number,
   pitchDeg: number,
   bearingDeg: number,
+  rollDeg: number,
 ): void {
   const pitch = MathUtils.degToRad(pitchDeg);
   const bearing = MathUtils.degToRad(bearingDeg);
@@ -88,6 +111,13 @@ function orientCamera(
     .set(0, 0, 0)
     .addScaledVector(fwdH, Math.cos(pitch))
     .addScaledVector(up, Math.sin(pitch));
+  if (rollDeg !== 0) {
+    // View axis, target-ward. `offset` points target -> camera, so the forward
+    // direction is its negation; rolling about it keeps the camera pointing at
+    // the same target and only spins the horizon.
+    const viewDir = offset.clone().negate().normalize();
+    camera.up.applyAxisAngle(viewDir, MathUtils.degToRad(rollDeg));
+  }
   camera.lookAt(target);
 }
 
@@ -120,6 +150,7 @@ export function viewStateToCamera(
   const { longitude, latitude, zoom } = viewState;
   const pitch = viewState.pitch ?? 0;
   const bearing = viewState.bearing ?? 0;
+  const roll = viewState.roll ?? 0;
   const viewportHeight = opts.viewportHeight ?? 800;
 
   const target = v3(proj.project(longitude, latitude, 0));
@@ -136,6 +167,7 @@ export function viewStateToCamera(
     distance,
     pitch,
     bearing,
+    roll,
   );
   setClip(proj, camera, distance);
   return target;
@@ -255,18 +287,53 @@ export function cameraToViewState(
   const offsetDir = camera.position.clone().sub(target).normalize();
   const pitch = Math.acos(clamp(offsetDir.dot(up), -1, 1)) * RAD2DEG;
 
+  // Bearing comes from the camera's POSITION, not from `camera.up`, because the
+  // position is roll-independent: `offset = up·cos(pitch) − fwdH·sin(pitch)`, so
+  // the horizontal part of `offsetDir` is `−sin(pitch)·fwdH` whatever the roll.
+  // Reading it off `camera.up` (as this did before roll existed) folds the roll
+  // into the bearing and loses both. With `roll === 0` the two agree exactly, so
+  // this is not a behaviour change for an unrolled camera.
+  const horizOffset = offsetDir.clone().addScaledVector(up, -offsetDir.dot(up));
   const camUp = camera.up;
   const horizUp = camUp.clone().addScaledVector(up, -camUp.dot(up));
+
   let bearing = 0;
-  if (horizUp.lengthSq() > 1e-12) {
-    const fwdH = horizUp.normalize();
+  let fwdH: Vector3 | null = null;
+  if (horizOffset.lengthSq() > 1e-12) {
+    fwdH = horizOffset.normalize().negate();
+  } else if (horizUp.lengthSq() > 1e-12) {
+    // pitch ≈ 0: the camera looks straight down and its position carries no
+    // horizontal information. A spin about the view axis is then indivisibly a
+    // bearing change and a roll; attribute all of it to bearing (roll stays 0),
+    // matching maplibre and deck.
+    fwdH = horizUp.clone().normalize();
+  }
+  if (fwdH) {
     bearing = Math.atan2(fwdH.dot(east), fwdH.dot(north)) * RAD2DEG;
     if (bearing < 0) bearing += 360;
+  }
+
+  // Roll = the signed angle from the unrolled screen-up tangent to the camera's
+  // actual up, measured about the view axis. Only meaningful once the pitch has
+  // given us a roll-independent bearing.
+  let roll = 0;
+  if (horizOffset.lengthSq() > 1e-12 && fwdH) {
+    const pitchRad = MathUtils.degToRad(pitch);
+    const refUp = new Vector3()
+      .addScaledVector(fwdH, Math.cos(pitchRad))
+      .addScaledVector(up, Math.sin(pitchRad));
+    const viewDir = offsetDir.clone().negate();
+    // Normalize ONCE: atan2's two arguments must be scaled identically, and a
+    // caller-supplied `camera.up` is not guaranteed to be unit length.
+    const camUpN = camUp.clone().normalize();
+    const cross = new Vector3().crossVectors(refUp, camUpN);
+    roll = Math.atan2(cross.dot(viewDir), refUp.dot(camUpN)) * RAD2DEG;
+    if (Math.abs(roll) < 1e-9) roll = 0;
   }
 
   const halfFov = MathUtils.degToRad(camera.fov) / 2;
   const wupp = (distance * 2 * Math.tan(halfFov)) / viewportHeight;
   const zoom = zoomForWorldUnitsPerPixel(proj, wupp, latitude);
 
-  return { longitude, latitude, zoom, pitch, bearing };
+  return { longitude, latitude, zoom, pitch, bearing, roll };
 }

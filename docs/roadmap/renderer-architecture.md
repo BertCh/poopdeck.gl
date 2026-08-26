@@ -31,17 +31,71 @@ them is a product.
 | Tier                   | Backend                 | What it is for                                                                                                                                                                                                 | Verified state                                                                                                                         |
 | ---------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Supported**          | `@poopdeck.gl/layers`   | The product. Every layer kind has an answer; the reference semantics every other backend is measured against.                                                                                                  | 21 of the 23 frozen `LayerKind`s implemented natively; `isoLines` declared → `path`, `ego` composed at the app layer. All 23 answered. |
-| **Research**           | `@poopdeck.gl/three`    | WebGPU/TSL. Exists to do something deck cannot, not to duplicate it.                                                                                                                                           | 17/23 native. **Time-correct GPU id-picking on WebGPU across nine pick kinds / ten layer classes** (§0.1).                             |
-| **Independence proof** | `@poopdeck.gl/maplibre` | Proves the format is not deck-shaped: a native `CustomLayerInterface` backend with **zero** deck/luma dependency, for the large population of apps that already have a maplibre map and will never adopt deck. | 15 native kinds. **Feature-complete as-is** — see the routing rule below.                                                              |
-| **Cost proof**         | `@poopdeck.gl/cesium`   | Measures what a green-field backend costs once the kernel exists (§2.8).                                                                                                                                       | 6 native kinds, **~2,000 lines of `src`** total.                                                                                       |
+| **Research**           | `@poopdeck.gl/three`    | WebGPU/TSL. Exists to do something deck cannot, not to duplicate it.                                                                                                                                           | **23/23 native.** **Time-correct GPU id-picking on WebGPU across nine pick kinds / ten layer classes** (§0.1).                         |
+| **Independence proof** | `@poopdeck.gl/maplibre` | Proves the format is not deck-shaped: a native `CustomLayerInterface` backend with **zero** deck/luma dependency, for the large population of apps that already have a maplibre map and will never adopt deck. | **23/23 native.** The fifteen-kind freeze was a scope decision and has been re-made — see the superseded routing rule above.           |
+| **Cost proof**         | `@poopdeck.gl/cesium`   | Measures what a green-field backend costs once the kernel exists (§2.8).                                                                                                                                       | **23/23 native**, from 6 at the campaign's start.                                                                                      |
 
-**Routing rule for new layer kinds: deck first, three second, maplibre not at
-all.** maplibre is declared done at fifteen kinds. Its value is thinness, and
-each additional hand-written GLSL family taxes that without proving anything new
-— the independence claim is already proven at fifteen. A new kind lands in deck
-(where it is the product) and optionally in three (where it exercises TSL). This
-is a scope decision, not a capability judgement: the maplibre backend can absorb
-more kinds and deliberately will not.
+#### Routing rule — SUPERSEDED 2026-08-25
+
+> **The rule below is history. It read: "deck first, three second, maplibre not
+> at all", on the grounds that maplibre was _declared done_ at fifteen kinds and
+> that each further hand-written GLSL family taxed its thinness without proving
+> anything new.** That was always framed — correctly — as _a scope decision, not
+> a capability judgement_ (§1.2 makes the same distinction about the same
+> backend). A scope decision is exactly the kind of thing a later campaign can
+> re-make, and the 2026-08-25 parity campaign re-made it: the goal became full
+> `LayerKind` and capability parity for every non-deck backend, so the routing
+> rule's premise — that the extra kinds are not wanted — no longer holds.
+>
+> **The current rule is: a new `LayerKind` lands in deck first (where it is the
+> product), and then in every other backend that can render it.** What has NOT
+> changed is the reason the old rule was defensible: the shader source still
+> cannot be shared, so each kind really is hand-written per backend, and that
+> cost is now being paid deliberately rather than avoided. The thinness argument
+> survives as a caution, not as a gate.
+>
+> The one thing that is still routed away is genuinely structural, not scope:
+> three's `interleavedBasemap` (§2.1). See the counted-out register.
+
+> **Parity status, 2026-08-26.** All three non-deck backends now render **every
+> one of the 23 frozen `LayerKind`s natively** — a state `docs/spec/backend-capabilities.md`
+> shows as four complete columns. Two consequences worth stating plainly, because
+> they invert assumptions elsewhere in this document:
+>
+> - **The non-deck backends now exceed deck's own native coverage.** deck is
+>   21/23: it declares `isoLines` as a fallback to `path` and composes `ego` at
+>   the app layer. It remains the reference for SEMANTICS — every other backend is
+>   still measured against it — but it is no longer the widest catalog.
+> - **`cameraRoll` is true on three, maplibre and cesium, and false only on deck.**
+>
+> - **`liveBundling` is true on all four backends**, and all four run the SAME
+>   implementation: `bundleEdges` in `@poopdeck.gl/core/edge-bundling`. The
+>   KDEEB schedule (splat → advect → resample → smooth → anneal) was previously
+>   locked inside the deck package behind a luma `Device`; hoisting it is what
+>   let maplibre (which may not import luma at all) and cesium (which has no
+>   compute path) claim the capability without a second copy of the kernel — the
+>   drift this record's §1 was written about.
+>
+> - **`userExtensions` is true on all four backends**, and the three new hooks
+>   are deliberately NOT the same shape, because the rendering models are not:
+>   three composes TSL node hooks at a declared seam matrix, maplibre splices
+>   user GLSL at named seams with the extension's content-addressed digest in
+>   the program-cache key, and cesium — which animates on the CPU — transforms
+>   the RESOLVED alpha and colour per frame. Each is gated the same way, and
+>   those gates are what make the claim safe rather than decorative: the shipped
+>   time/DataFilter gates compose AFTER the user hook (an extension can only
+>   narrow visibility, never widen it), the id/pick pass gets the same
+>   vertex-stage seams (a geometry-moving extension cannot desync the hit box
+>   from the drawn shape), and an empty extension list is byte-identical to no
+>   extension at all. cesium's hook takes `base × timeFilterAlpha(...)` as its
+>   ARGUMENT rather than replacing it, so that package's "the oracle is the only
+>   alpha definition" gate still holds with extensions installed.
+>
+> What is still genuinely open: cesium's `gpuHeatmap` — its heatmap is a real
+> per-pixel density KIND, but the accumulation runs on the CPU, so the GPU flag
+> stays false rather than being stretched to cover it. three's
+> `interleavedBasemap` remains the one PERMANENT structural exclusion (§2.1).
+> Those two are the entire remaining gap in the matrix.
 
 ### 0.1 What the three backend does that deck does not
 
@@ -726,7 +780,9 @@ Three separate auditors hand-counted the cesium backend's coverage and reported
 descriptor shape admits several defensible readings, and nothing in the rendered
 table forces the reader to pick one. The tree-verified breakdown for cesium is:
 
-- **6 native** (`point`, `path`, `line`, `arc`, `trips`, `tripHeads`),
+- **13 native** — the movement family (`point`, `path`, `line`, `arc`, `trips`,
+  `tripHeads`) plus the seven the 2026-08-25 parity campaign added
+  (`boundingBox`, `column`, `pointCloud`, `surfel`, `text`, `h3Summary`, `ego`),
 - **9 declared with a `fallbackKind`** (`surfel`→point, `flowmap`/`flowCorridor`/
   `flowStroke`→line, `isoLines`→path, `text`→icon, `mesh`→boundingBox,
   `pointCloud`→point, `hexbin`→h3Summary),

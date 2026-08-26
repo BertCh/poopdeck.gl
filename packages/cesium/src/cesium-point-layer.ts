@@ -41,6 +41,11 @@ import type { BinaryFeatures } from '@poopdeck.gl/core';
 import type { SttRenderNode } from '@poopdeck.gl/core/capabilities';
 import type { SttPickResult } from '@poopdeck.gl/core/picking';
 import { buildPointEntries } from './lib/points.js';
+import {
+  compileExtensions,
+  type CesiumLayerExtension,
+  type CompiledExtensions,
+} from './lib/extensions.js';
 
 export interface STTPointLayerOptions {
   id?: string;
@@ -55,6 +60,14 @@ export interface STTPointLayerOptions {
   colorMappingDefault?: RGBA255;
   /** Point size in pixels. @default 6 */
   pixelSize?: number;
+  /**
+   * User extensions — per-feature hooks composed ON TOP of the resolved alpha
+   * and colour, the `userExtensions` capability for a backend with no shader of
+   * its own. See `lib/extensions.ts` for the contract and why it is a value
+   * hook rather than three's node hook or maplibre's GLSL splice. An empty or
+   * absent list compiles to `null` and the frame loop below is untouched.
+   */
+  extensions?: readonly CesiumLayerExtension[];
 }
 
 interface PointEntry {
@@ -87,6 +100,8 @@ export class STTPointLayer implements SttRenderNode {
   private readonly mode: TimeFilterMode;
   private readonly params: TimeFilterParams;
   private readonly opts: STTPointLayerOptions;
+  /** Folded user extensions, or `null` — the zero-cost case. */
+  private readonly ext: CompiledExtensions | null;
   private timeOrigin = 0;
   private entries: PointEntry[] = [];
 
@@ -96,6 +111,9 @@ export class STTPointLayer implements SttRenderNode {
     this.opts = options;
     this.mode = options.mode ?? 'window';
     this.params = options.timeFilter ?? {};
+    // Compile once, at construction: a bad list (blank/duplicate name) throws
+    // here rather than on the first drawn frame.
+    this.ext = compileExtensions(options.extensions, this.id);
     this.collection = new PointPrimitiveCollection();
     scene.primitives.add(this.collection);
   }
@@ -158,18 +176,49 @@ export class STTPointLayer implements SttRenderNode {
    * Color allocation + GPU dirty. (The end-state fix would be a GPU
    * custom-Appearance path — `shaders.ts` holds the GLSL snippet for it, but
    * nothing wires it, so this CPU loop is what runs.)
+   *
+   * User extensions (`lib/extensions.ts`) compose ON TOP of the oracle's value,
+   * never in place of it: the hook's argument IS `e.a * timeFilterAlpha(...)`.
+   * They run BEFORE the skip compare, and the compare tests the COMPOSED alpha
+   * — reversing that order would silently drop any change a hook makes for a
+   * reason other than the playhead moving. `skipUnchanged` is false whenever an
+   * extension also transforms colour, because the cache is keyed on alpha alone
+   * and would otherwise freeze a colour that is still moving. With no
+   * extensions `ext` is `null` and this is the loop it always was.
    */
   setTime(absoluteMs: number): void {
     const cur = absoluteMs - this.timeOrigin;
     const c = SCRATCH_COLOR;
+    const ext = this.ext;
+    if (ext !== null) ext.beginFrame(cur);
+    const skipUnchanged = ext === null || ext.skipUnchanged;
     for (const e of this.entries) {
-      const alpha =
+      let alpha =
         e.a * timeFilterAlpha(this.mode, cur, e.start, e.end, this.params);
-      if (alpha === e.lastAlpha) continue; // colour identical to last write — nothing to dirty
+      let r = e.r;
+      let g = e.g;
+      let b = e.b;
+      if (ext !== null) {
+        const out = ext.apply(
+          alpha,
+          e.start,
+          e.end,
+          e.binary,
+          e.featureIndex,
+          e.r,
+          e.g,
+          e.b,
+        );
+        alpha = out.alpha;
+        r = out.r;
+        g = out.g;
+        b = out.b;
+      }
+      if (skipUnchanged && alpha === e.lastAlpha) continue; // colour identical to last write — nothing to dirty
       e.lastAlpha = alpha;
-      c.red = e.r;
-      c.green = e.g;
-      c.blue = e.b;
+      c.red = r;
+      c.green = g;
+      c.blue = b;
       c.alpha = alpha;
       e.pp.color = c; // setter clones the scratch into the primitive's own _color
     }

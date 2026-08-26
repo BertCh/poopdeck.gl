@@ -15,10 +15,19 @@
  *  - `radiusUnits: 'meters'` — metric sizing via `lib/projection.ts`. Purely a
  *    CPU-side scale folded into `uRadiusScale`; the shader is unchanged, so
  *    metric sizing costs no extra program variant.
+ *  - `extensions` — USER GLSL spliced at the named seams in
+ *    `shaders/extensions.glsl.ts` (this is the layer that carries the hook, and
+ *    the reference for any other kind adopting it). Structural like the other
+ *    two: the composed chunks are part of `shaderConfig`, their content-
+ *    addressed key is part of the program-cache key, and an empty list compiles
+ *    the shipped source byte for byte.
  *
  * Every gate lands in the id-pick program too (same snippets, same uniforms):
  * a feature that is time-filtered, hard-filtered or shrunk to nothing must not
- * be pickable.
+ * be pickable. The extension seams follow the same rule in both directions —
+ * the VERTEX seams are compiled into the id program (so a moved point is
+ * picked where it is drawn) and the shipped time/DataFilter gates are composed
+ * AFTER the user's alpha, so no extension can make a hidden feature pickable.
  */
 
 import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
@@ -55,6 +64,15 @@ import {
   buildBillboardIdFragmentSource,
 } from '../shaders/billboard.glsl.js';
 import { POSITION_DEQUANT_GLSL } from '../shaders/position-quantization.glsl.js';
+import {
+  EMPTY_EXTENSION_CHUNKS,
+  spliceExtensionAlpha,
+  spliceExtensionColor,
+  spliceExtensionPosition,
+  spliceExtensionSize,
+  type ExtensionChunks,
+  type STTShaderExtension,
+} from '../shaders/extensions.glsl.js';
 import {
   DATA_FILTER_ATTRIBUTE_GLSL,
   DATA_FILTER_CALL_GLSL,
@@ -208,6 +226,14 @@ export interface PointShaderConfig {
   mode: PointTimeFilterMode;
   /** Compile the DataFilter attribute, uniforms and branch. */
   filter: boolean;
+  /**
+   * User shader extensions, already composed
+   * (`shaders/extensions.glsl.ts`). OPTIONAL, and absent means
+   * {@link EMPTY_EXTENSION_CHUNKS}: every pre-existing `{mode, filter}` config
+   * literal still typechecks, still builds byte-identical source and still
+   * keys the identical program.
+   */
+  extensions?: ExtensionChunks;
 }
 
 /** The OFF shape: window mode, no column filter. */
@@ -291,6 +317,7 @@ function buildPointVs(
   cfg: PointShaderConfig,
   kind: 'main' | 'id',
 ): string {
+  const ext = cfg.extensions ?? EMPTY_EXTENSION_CHUNKS;
   const usesPrelude = shader.prelude.length > 0;
   const head = usesPrelude ? `${shader.prelude}\n${shader.define}\n` : '';
   const isMain = kind === 'main';
@@ -318,25 +345,33 @@ function buildPointVs(
   const payloadAssign = isMain
     ? '    vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;\n'
     : '    vIdColor = aIdColor;\n';
+  // User-extension seams. Every one of these is '' for the empty list, and
+  // `spliceExtensionAlpha` then emits the exact `vAlpha = <mode alpha>;` line
+  // this builder always emitted — see the byte-identity gate in
+  // test/extensions.test.ts. BOTH kinds get the vertex seams: an extension
+  // that moves geometry must move the pickable shape with it.
+  const extPosition = spliceExtensionPosition(ext, 'mercator');
+  const extAlpha = spliceExtensionAlpha(ext, 'vAlpha', MODE_ALPHA[cfg.mode]);
+  // Before the DataFilter body, so a filter-shrunk point cannot be re-inflated.
+  const extSize = spliceExtensionSize(ext, 'radiusPx');
 
   return `${head}
   precision highp float;
   attribute vec3 aMercator;    // per-tile-local UNSIGNED_SHORT, normalized [0,1] — see sttDecodeMercatorPos
   attribute vec2 aTime;
 ${payloadAttribute}  attribute float aRadius;     // per-feature radius in radiusUnits (when uUseFeatureRadius=1)
-${cfg.filter ? FILTER_ATTRIBUTE : ''}${legacyUniforms}  uniform vec3 uPosScale;
+${cfg.filter ? FILTER_ATTRIBUTE : ''}${ext.attributes}${legacyUniforms}  uniform vec3 uPosScale;
   uniform vec3 uPosOffset;
   uniform float uRadius;
   uniform float uRadiusScale;
   uniform float uUseFeatureRadius;
-${colorUniforms}${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
-${payloadVarying}${MODE_GLSL[cfg.mode]}${POSITION_DEQUANT_GLSL}${cfg.filter ? DATA_FILTER_GLSL : ''}
+${colorUniforms}${MODE_UNIFORMS[cfg.mode]}${cfg.filter ? FILTER_UNIFORMS : ''}${ext.uniforms}  varying float vAlpha;
+${payloadVarying}${ext.varyings}${MODE_GLSL[cfg.mode]}${POSITION_DEQUANT_GLSL}${cfg.filter ? DATA_FILTER_GLSL : ''}${ext.vertexDeclarations}
   void main() {
     vec3 mercator = sttDecodeMercatorPos(aMercator, uPosScale, uPosOffset);
-${projection}
-    vAlpha = ${MODE_ALPHA[cfg.mode]};
-    float radiusPx = (uUseFeatureRadius > 0.5 ? aRadius : uRadius) * uRadiusScale;
-${wakeSize}${cfg.filter ? FILTER_BODY : ''}    gl_PointSize = radiusPx * 2.0;
+${extPosition}${projection}
+${extAlpha}    float radiusPx = (uUseFeatureRadius > 0.5 ? aRadius : uRadius) * uRadiusScale;
+${wakeSize}${extSize}${cfg.filter ? FILTER_BODY : ''}    gl_PointSize = radiusPx * 2.0;
 ${payloadAssign}  }
 `;
 }
@@ -366,7 +401,13 @@ export function pointProgramKey(
   pass: 'main' | 'pick',
   cfg: PointShaderConfig,
 ): string {
-  return `point:${pass}:${cfg.mode}${cfg.filter ? ':filter' : ''}`;
+  // `extensions.key` is '' for the empty list (so the key is byte-identical to
+  // the pre-extension one) and content-addressed otherwise — two extensions
+  // that only share a NAME still key two programs. Leaving it out would let a
+  // layer draw with another layer's linked program: same key, different source.
+  return `point:${pass}:${cfg.mode}${cfg.filter ? ':filter' : ''}${
+    cfg.extensions?.key ?? ''
+  }`;
 }
 
 /**
@@ -390,17 +431,34 @@ export function resolvePointTimeFilterMode(
   return 'window';
 }
 
-const FS_SOURCE = `
+/**
+ * The visual fragment stage.
+ *
+ * A builder rather than a constant only because of the `color` seam: with no
+ * extensions it returns the exact source this file has always shipped (the
+ * byte-identity gate compares it against a golden), and with one, the snippet
+ * gets `sttExtColor` and the layer's own `vAlpha * edge` gate multiplies into
+ * the alpha channel AFTER it — an extension may recolour, never un-hide.
+ *
+ * The extension's uniform and varying declarations are spliced here too, so a
+ * `color` seam can read a uniform its `onBeforeDraw` set and a varying a vertex
+ * seam wrote. (Declaring the same uniform in both stages is legal GLSL ES 1.00
+ * and resolves to one program-level location.)
+ */
+export function buildPointFragmentSource(
+  ext: ExtensionChunks = EMPTY_EXTENSION_CHUNKS,
+): string {
+  return `
   precision highp float;
   varying float vAlpha;
   varying vec4 vColor;
-  void main() {
+${ext.varyings}${ext.uniforms}${ext.fragmentDeclarations}  void main() {
     if (vAlpha <= 0.0) discard;
 ${discMaskGLSL()}    // Antialiased disc: soften the last ~10% of the radius.
     float edge = ${DISC_EDGE_EXPR};
-    gl_FragColor = vec4(vColor.rgb, vColor.a * vAlpha * edge);
-  }
+${spliceExtensionColor(ext, 'vColor', 'vAlpha * edge')}  }
 `;
+}
 
 // ── id-buffer picking variant (browser-verify-only) ─────────────────────────
 // The id vertex source is the same builder with `kind: 'id'`: same projection,
@@ -542,9 +600,22 @@ export class STTPointLayer extends STTFilterableLayer {
       // bake the column resolves `enabled: 0` and renders unfiltered, so one
       // program serves every tile of the layer.
       filter: Boolean(opts.filterProperty),
+      // Composed by the base from `opts.extensions`; the singleton
+      // EMPTY_EXTENSION_CHUNKS when there are none, which splices nothing and
+      // contributes '' to the cache key.
+      extensions: this.extensionChunks,
     };
     this.mainKey = pointProgramKey('main', this.shaderConfig);
     this.pickKey = pointProgramKey('pick', this.shaderConfig);
+  }
+
+  /**
+   * This layer splices the extension seams (the base warns for kinds that do
+   * not). A getter, per the base's note: the base constructor reads it before
+   * any subclass field initializer has run.
+   */
+  protected override get splicesExtensions(): boolean {
+    return true;
   }
 
   private resolveMode(): PointTimeFilterMode {
@@ -578,6 +649,25 @@ export class STTPointLayer extends STTFilterableLayer {
     this.applyShaderConfig();
   }
 
+  /**
+   * Replace the layer's user shader extensions at runtime.
+   *
+   * Extensions are COMPILED IN, so this is the same cost shape as
+   * {@link setTimeFilterMode}: the next frame links a program for the new key
+   * (cached from then on) and every tile VAO re-records against it, because the
+   * relinked program may hand out different attribute slots. Fine for a UI
+   * toggle, not for a per-frame animation — animate through an extension
+   * UNIFORM (`onBeforeDraw`) instead, which changes no source and links nothing.
+   *
+   * Passing a list whose GLSL is unchanged is cheap in the way that matters:
+   * the program-cache key is content-addressed, so the previously linked
+   * program comes straight back out of the cache.
+   */
+  setExtensions(extensions: readonly STTShaderExtension[] | undefined): void {
+    this.setExtensionList(extensions);
+    this.applyShaderConfig();
+  }
+
   /** Update the wake length (ms) — selects wake mode when it goes positive. */
   setWakeLength(wakeLength: number): void {
     this.pointOpts.wakeLength = wakeLength;
@@ -598,11 +688,19 @@ export class STTPointLayer extends STTFilterableLayer {
    */
   private applyShaderConfig(): void {
     const mode = this.resolveMode();
-    if (mode === this.shaderConfig.mode) {
+    // Identity, not content: `setExtensionList` composes a fresh chunk object
+    // (or returns the EMPTY singleton), so this is "did anything move?" and
+    // never a deep compare on the hot path. A re-composition of the SAME GLSL
+    // still resolves to the same cached program via the content-addressed key.
+    const extensions = this.extensionChunks;
+    if (
+      mode === this.shaderConfig.mode &&
+      extensions === this.shaderConfig.extensions
+    ) {
       this.map?.triggerRepaint();
       return;
     }
-    this.shaderConfig = { ...this.shaderConfig, mode };
+    this.shaderConfig = { ...this.shaderConfig, mode, extensions };
     this.mainKey = pointProgramKey('main', this.shaderConfig);
     this.pickKey = pointProgramKey('pick', this.shaderConfig);
     this.handles = undefined;
@@ -653,7 +751,7 @@ export class STTPointLayer extends STTFilterableLayer {
     const program = this.linkProgram(
       gl,
       buildPointVertexSource(shader, this.shaderConfig),
-      FS_SOURCE,
+      buildPointFragmentSource(this.shaderConfig.extensions),
     );
     return {
       ...this.resolveSharedHandles(gl, program, shader),
@@ -943,6 +1041,10 @@ export class STTPointLayer extends STTFilterableLayer {
     });
     c.vaoVariant = vaoKey;
 
+    // Extension hook LAST: uniforms may be set any time after `useProgram`,
+    // but an extension binding its own attribute buffer has to land inside the
+    // vertex-array state this draw will use — which is the tile VAO just bound.
+    this.applyExtensionDrawHooks(gl, h.program, 'draw', tile, c, ctx);
     gl.drawArrays(gl.POINTS, 0, cache.vertexCount);
   }
 
@@ -995,6 +1097,10 @@ export class STTPointLayer extends STTFilterableLayer {
     gl.enableVertexAttribArray(h.aIdColor);
     gl.vertexAttribPointer(h.aIdColor, 3, gl.UNSIGNED_BYTE, true, 0, 0);
 
+    // Same hook, same seams: the id program compiled the extension's VERTEX
+    // stage, so it needs the extension's uniforms too or a geometry-moving
+    // extension would leave the hit box behind at the undisplaced position.
+    this.applyExtensionDrawHooks(gl, h.program, 'pick', tile, c, ctx);
     gl.drawArrays(gl.POINTS, 0, count);
 
     // Leave the default-VAO attribute slate clean so the next visual frame's
@@ -1008,6 +1114,9 @@ export class STTPointLayer extends STTFilterableLayer {
     if (c.filterBuffer && h.aFilterValue >= 0) {
       gl.disableVertexAttribArray(h.aFilterValue);
     }
+    // These binds went to the DEFAULT vertex array (picking runs outside the
+    // host's render pass), so anything an extension enabled is ours to undo.
+    this.releaseExtensionAttributes(gl);
     gl.deleteBuffer(idBuffer);
   }
 }

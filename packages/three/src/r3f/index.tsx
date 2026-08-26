@@ -7,7 +7,7 @@
  *
  * A DECLARATIVE layer API: `<STTCanvas>` owns the `WebGPURenderer`, a Z-up camera,
  * `OrbitControls`, the ground, and a follow-ego rig; inside it you compose layer
- * components (`<STTSurfelLayer>`, `<STTPointCloudLayer>`, `<STTBoundingBoxLayer>`,
+ * components (`<STTSurfelLayer>`, `<STTPointLayer>`, `<STTBoundingBoxLayer>`,
  * `<STTMapPolygonLayer>`, `<STTMapLineLayer>`, `<STTEgoLayer>`). r3f's reconciler
  * does the lifecycle: mounting a layer adds its object to the scene, unmounting
  * removes + disposes it, and React Strict Mode's double-invoke is handled
@@ -100,9 +100,34 @@ import {
   type STTSurfelLayerOptions,
 } from '../layers/surfel-layer.js';
 import {
+  STTPointLayer as PointLayerEngine,
+  type STTPointLayerOptions,
+} from '../layers/point-layer.js';
+// ─── Kinds closed by the non-deck parity campaign ─────────────────────────────
+import {
+  STTHeatmapLayer as HeatmapLayerEngine,
+  type STTHeatmapLayerOptions,
+} from '../layers/heatmap-layer.js';
+import {
+  STTHexbinLayer as HexbinLayerEngine,
+  type STTHexbinLayerOptions,
+} from '../layers/hexbin-layer.js';
+import {
+  STTTextLayer as TextLayerEngine,
+  type STTTextLayerOptions,
+} from '../layers/text-layer.js';
+import {
+  STTMeshLayer as MeshLayerEngine,
+  type STTMeshLayerOptions,
+} from '../layers/mesh-layer.js';
+import {
   STTPointCloudLayer as PointCloudLayerEngine,
   type STTPointCloudLayerOptions,
 } from '../layers/point-cloud-layer.js';
+import {
+  STTFlowStrokeLayer as FlowStrokeLayerEngine,
+  type STTFlowStrokeLayerOptions,
+} from '../layers/flow-stroke-layer.js';
 import {
   STTBoundingBoxLayer as BoundingBoxLayerEngine,
   type STTBoundingBoxLayerOptions,
@@ -772,16 +797,186 @@ export function STTSurfelLayer(
   );
 }
 
+export function STTPointLayer(
+  props: STTPointLayerOptions & UrlProp,
+): React.ReactElement {
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): PointLayerEngine => new PointLayerEngine(opts);
+  // GPU id-buffer picking is auto-registered by the shared layer mount for ANY
+  // STTIdPickable layer (see useEngineLayer / useStreamingEngineLayer) — no
+  // per-kind `extra` here. The controller runs the GPU pass only when a box pick
+  // misses and an `onPick`/`onHover` consumer is present.
+  return resolved ? (
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  ) : (
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  );
+}
+
+// ─── Kinds closed by the non-deck parity campaign ─────────────────────────────
+// All six ride the SAME generic mounts as every other kind: the mount drives
+// setTiles / setTime / setViewport and auto-registers any `isIdPickable` layer,
+// so none of them needs a per-kind `extra` hook. STTHeatmapLayer in particular
+// looks like it should need one (it runs an off-screen density pass), but that
+// pass is driven from its resolve mesh's `onBeforeRender`, which the renderer
+// calls for free — see that layer's header.
+
+export function STTHeatmapLayer(
+  props: STTHeatmapLayerOptions & UrlProp,
+): React.ReactElement {
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): HeatmapLayerEngine => new HeatmapLayerEngine(opts);
+  return resolved ? (
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  ) : (
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  );
+}
+
+export function STTHexbinLayer(
+  props: STTHexbinLayerOptions & UrlProp,
+): React.ReactElement {
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): HexbinLayerEngine => new HexbinLayerEngine(opts);
+  return resolved ? (
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  ) : (
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  );
+}
+
+export function STTTextLayer(
+  props: STTTextLayerOptions & UrlProp,
+): React.ReactElement {
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): TextLayerEngine => new TextLayerEngine(opts);
+  return resolved ? (
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  ) : (
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  );
+}
+
+export function STTMeshLayer(
+  props: STTMeshLayerOptions & UrlProp,
+): React.ReactElement {
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): MeshLayerEngine => new MeshLayerEngine(opts);
+  return resolved ? (
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  ) : (
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  );
+}
+
 export function STTPointCloudLayer(
   props: STTPointCloudLayerOptions & UrlProp,
 ): React.ReactElement {
   const { url, lodMode, sourceRequired, streaming, ...opts } = props;
   const resolved = useResolvedStreaming(streaming);
   const make = (): PointCloudLayerEngine => new PointCloudLayerEngine(opts);
-  // GPU id-buffer picking is auto-registered by the shared layer mount for ANY
-  // STTIdPickable layer (see useEngineLayer / useStreamingEngineLayer) — no
-  // per-kind `extra` here. The controller runs the GPU pass only when a box pick
-  // misses and an `onPick`/`onHover` consumer is present.
+  return resolved ? (
+    <StreamingLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      opts={resolved.opts}
+      renderTimeWindowMs={renderWindowFromOpts(opts)}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  ) : (
+    <EagerLayerMount
+      make={make}
+      url={url}
+      lodMode={lodMode}
+      sourceId={opts.id}
+      sourceRequired={sourceRequired}
+    />
+  );
+}
+
+export function STTFlowStrokeLayer(
+  props: STTFlowStrokeLayerOptions & UrlProp,
+): React.ReactElement {
+  const { url, lodMode, sourceRequired, streaming, ...opts } = props;
+  const resolved = useResolvedStreaming(streaming);
+  const make = (): FlowStrokeLayerEngine => new FlowStrokeLayerEngine(opts);
   return resolved ? (
     <StreamingLayerMount
       make={make}
@@ -2444,8 +2639,10 @@ export {
   type STTTiles3DProps as SttTiles3DProps,
   /** @deprecated Use {@link STTSurfelLayer}. */
   STTSurfelLayer as SttSurfelLayer,
-  /** @deprecated Use {@link STTPointCloudLayer}. */
-  STTPointCloudLayer as SttPointCloudLayer,
+  /** @deprecated Use {@link STTPointLayer}. Note: the 0.5.x `SttPointCloudLayer`
+   *  spelling named THIS billboard point layer, not the phong-lit `pointCloud`
+   *  kind that now owns the `STTPointCloudLayer` name. */
+  STTPointLayer as SttPointCloudLayer,
   /** @deprecated Use {@link STTBoundingBoxLayer}. */
   STTBoundingBoxLayer as SttBoundingBoxLayer,
   /** @deprecated Use {@link STTMapPolygonLayer}. */

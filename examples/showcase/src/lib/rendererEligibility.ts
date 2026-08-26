@@ -6,10 +6,15 @@ import type { Dataset, DatasetType } from '../types';
  * the package barrels also imports MapLibre/Three and defeats code splitting.
  *
  * `test/renderer-eligibility.test.ts` recomputes both sets from the canonical
- * descriptors, so these cheap literals cannot silently drift.
+ * descriptors, so these cheap literals cannot silently drift. Both are now the
+ * FULL cross-backend vocabulary plus each adapter's own composites — the
+ * non-deck parity campaign closed every remaining kind in both backends.
+ * `test/dataset-types.test.ts` pins which of these types a demo page actually
+ * offers, which is the smaller, more interesting list.
  */
 export const MAPLIBRE_RENDERABLE_TYPES: ReadonlySet<DatasetType> = new Set([
   'point',
+  'path',
   'polygon',
   'arc',
   'line',
@@ -17,12 +22,19 @@ export const MAPLIBRE_RENDERABLE_TYPES: ReadonlySet<DatasetType> = new Set([
   'column',
   'trips',
   'tripHeads',
+  'boundingBox',
+  'surfel',
   'heatmap',
   'h3Summary',
   'quadbinSummary',
   'flowmap',
   'flowCorridor',
   'flowStroke',
+  'isoLines',
+  'ego',
+  'text',
+  'mesh',
+  'pointCloud',
   'hexbin',
   'lightning',
   'radar',
@@ -41,12 +53,18 @@ export const THREE_GEO_RENDERABLE_TYPES: ReadonlySet<DatasetType> = new Set([
   'tripHeads',
   'boundingBox',
   'surfel',
+  'heatmap',
   'h3Summary',
   'quadbinSummary',
   'flowmap',
   'flowCorridor',
+  'flowStroke',
   'isoLines',
   'ego',
+  'text',
+  'mesh',
+  'pointCloud',
+  'hexbin',
   'flowmap-bundled',
 ]);
 

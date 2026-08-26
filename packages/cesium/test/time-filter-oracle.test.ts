@@ -334,6 +334,42 @@ describe('the oracle is the only alpha definition in the package', () => {
       'delegates setTime to STTBatchedPolylineLayer (covered by the sweep above)',
     'cesium-arc-layer.ts':
       'delegates setTime to STTBatchedPolylineLayer (covered by the sweep above)',
+    // Added by the non-deck parity campaign.
+    'cesium-bounding-box-layer.ts':
+      'animates POSE: emits one interpolated instance per ACTIVE track, so visibility is implicit (an inactive track is simply not emitted) and there is no alpha to derive',
+    'cesium-ego-layer.ts':
+      'animates POSE: one marker at the interpolated ego pose, shown only while the play head lies inside the track span — implicit visibility, no alpha',
+    'cesium-mesh-layer.ts':
+      'animates POSE: one interpolated glTF Model per ACTIVE track, so visibility is implicit (an inactive track is not emitted) and there is no alpha to derive',
+    'cesium-iso-layer.ts':
+      'delegates setTime to its composed STTBatchedPolylineLayer buckets (covered by the sweep above)',
+  };
+
+  /**
+   * Alpha-computing layers whose oracle agreement is proven in their OWN test
+   * file rather than by a sweep in this one.
+   *
+   * The `checked` assertion below is the real gate — it fails the moment a new
+   * animated layer appears. Bumping that number without recording WHERE the new
+   * layer is proven would turn the gate into a rubber stamp, so every non-swept
+   * entry names its proof. A file listed here with no such test is a lie this
+   * map makes visible instead of hiding.
+   */
+  const PROVEN_IN_OWN_SUITE: Readonly<Record<string, string>> = {
+    'cesium-column-layer.ts': 'test/cesium-column-layer.test.ts',
+    'cesium-flow-corridor-layer.ts': 'test/cesium-flow-corridor-layer.test.ts',
+    'cesium-flow-stroke-layer.ts': 'test/cesium-flow-stroke-layer.test.ts',
+    'cesium-flowmap-layer.ts': 'test/cesium-flowmap-layer.test.ts',
+    'cesium-h3-summary-layer.ts': 'test/cesium-h3-summary-layer.test.ts',
+    'cesium-heatmap-layer.ts': 'test/cesium-heatmap-layer.test.ts',
+    'cesium-hexbin-layer.ts': 'test/cesium-hexbin-layer.test.ts',
+    'cesium-icon-layer.ts': 'test/cesium-icon-layer.test.ts',
+    'cesium-point-cloud-layer.ts': 'test/cesium-point-cloud-layer.test.ts',
+    'cesium-polygon-layer.ts': 'test/cesium-polygon-layer.test.ts',
+    'cesium-quadbin-summary-layer.ts':
+      'test/cesium-quadbin-summary-layer.test.ts',
+    'cesium-surfel-layer.ts': 'test/cesium-surfel-layer.test.ts',
+    'cesium-text-layer.ts': 'test/cesium-text-layer.test.ts',
   };
 
   it('every layer with a per-frame setTime routes alpha through core/time-filter', () => {
@@ -370,9 +406,36 @@ describe('the oracle is the only alpha definition in the package', () => {
     }
     expect(offenders).toEqual([]);
     expect(notDelegating).toEqual([]);
-    // The point layer and the batched polyline layer — exactly the two the
-    // sweeps above drive. A third would mean an untested animated layer.
-    expect(checked).toBe(2);
+    // Two swept in THIS file (the point layer and the batched polyline layer)
+    // plus the three the parity campaign added, each proven in its own suite —
+    // see PROVEN_IN_OWN_SUITE. A sixth would mean an untested animated layer.
+    expect(checked).toBe(2 + Object.keys(PROVEN_IN_OWN_SUITE).length);
+  });
+
+  it('every layer claiming proof elsewhere really has that proof', () => {
+    // The companion to the count above: PROVEN_IN_OWN_SUITE is only worth
+    // anything if the files it names exist AND actually pin the layer to the
+    // oracle. Without this, adding a line to that map would be enough to make
+    // the count pass — which is exactly the rubber stamp the map exists to
+    // prevent.
+    const suites = import.meta.glob('./*.test.ts', {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>;
+    for (const [layer, suitePath] of Object.entries(PROVEN_IN_OWN_SUITE)) {
+      const key = './' + suitePath.replace(/^test\//, '');
+      const src = suites[key];
+      expect(
+        src,
+        `${layer} claims proof in ${suitePath}, which does not exist`,
+      ).toBeDefined();
+      expect(
+        /from\s+'@poopdeck\.gl\/core\/time-filter'/.test(src ?? '') &&
+          /\btimeFilterAlpha\b/.test(src ?? ''),
+        `${suitePath} must actually assert against timeFilterAlpha to back ${layer}`,
+      ).toBe(true);
+    }
   });
 });
 

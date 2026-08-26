@@ -24,7 +24,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { LineSegments, type Mesh, type Material } from 'three';
 import { GeometryType } from '@poopdeck.gl/core';
 import type { BinaryFeatures, Tile } from '@poopdeck.gl/core';
-import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTPointLayer } from '../src/layers/point-layer';
 import { STTColumnLayer } from '../src/layers/column-layer';
 import { STTWideLineLayer } from '../src/layers/wide-line-layer';
 import { STTArcLayer } from '../src/layers/arc-layer';
@@ -90,7 +90,7 @@ type MeshLayer = STTLayer & { object: Mesh };
 const CONSTANT = { type: 'constant', color: [200, 120, 40, 255] } as const;
 
 const cases: Array<[string, () => MeshLayer, (x: number) => Tile]> = [
-  ['point-cloud', () => new STTPointCloudLayer({ id: 'p' }), pointTile],
+  ['point-cloud', () => new STTPointLayer({ id: 'p' }), pointTile],
   [
     'column',
     () =>
@@ -148,7 +148,7 @@ describe('E5 — material identity is stable across setTiles', () => {
   }
 
   it('E5: geometry still churns per setTiles — the previous buffer is released', () => {
-    const layer = new STTPointCloudLayer({ id: 'p' });
+    const layer = new STTPointLayer({ id: 'p' });
     layer.setTiles([pointTile(0), pointTile(1)], ctx);
     const g1 = layer.object.geometry;
     expect(g1.instanceCount).toBe(6);

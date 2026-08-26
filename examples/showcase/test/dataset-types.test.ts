@@ -12,7 +12,11 @@
  * still read from the published descriptors rather than a hand list.
  */
 import { describe, it, expect } from 'vitest';
-import { LAYER_KINDS, type LayerKind } from '@poopdeck.gl/core/capabilities';
+import {
+  LAYER_KINDS,
+  type BackendDescriptor,
+  type LayerKind,
+} from '@poopdeck.gl/core/capabilities';
 import { deckBackend } from '@poopdeck.gl/layers';
 import { maplibreBackend } from '@poopdeck.gl/maplibre';
 import { threeBackend } from '@poopdeck.gl/three';
@@ -91,23 +95,55 @@ describe('backend gates read the published descriptors', () => {
   });
 
   it('an unsupported kind is NOT rescued by a declared fallback', () => {
-    // three degrades heatmap → point. Following that would advertise the
-    // heatmap demos on a viewer with no heatmap branch, which is the silent
-    // blank-canvas failure this gate exists to prevent.
-    expect(threeBackend.layerKinds.heatmap.supported).toBe(false);
-    expect(backendRendersType(threeBackend, 'heatmap')).toBe(false);
-    expect(backendRendersType(threeBackend, 'lightning')).toBe(false);
+    // deck degrades isoLines → path. Following that would advertise an
+    // iso-band demo on a viewer that would draw bare contour polylines, which
+    // is the silent wrong-render failure this gate exists to prevent.
+    // Degradation is a decision for a caller that asked to render ONE layer,
+    // not for a gate deciding whether to offer a whole backend.
+    //
+    // This used to read `three` + `heatmap`; the non-deck parity campaign gave
+    // three a real heatmap layer, so deck's isoLines is now the only
+    // fallback-bearing unsupported kind left in any shipped descriptor. If that
+    // one closes too, assert against a synthetic descriptor rather than
+    // deleting the rule.
+    expect(deckBackend.layerKinds.isoLines.supported).toBe(false);
+    expect(deckBackend.layerKinds.isoLines.fallbackKind).toBe('path');
+    expect(backendRendersType(deckBackend, 'isoLines')).toBe(false);
   });
 
   it('a composite is dropped when the backend lacks any kind in its stack', () => {
-    // cesium ships the movement family only, so every multi-archive composite
-    // falls out no matter what a caller passes as a local.
-    const cesium = renderableDatasetTypes(cesiumBackend, SHOWCASE_LOCAL_TYPES);
+    // Written against a SYNTHETIC descriptor on purpose. This used to read
+    // `cesium ships the movement family only`, and the non-deck parity campaign
+    // took cesium to all 23 kinds — at which point a test phrased as "this
+    // backend cannot" quietly stops exercising the narrowing at all instead of
+    // failing. The rule under test belongs to `renderableDatasetTypes`, not to
+    // whichever backend happens to be behind this month, so knock ONE kind out
+    // of a real descriptor and check the composites that mount it fall out.
+    const noTrips: BackendDescriptor = {
+      ...cesiumBackend,
+      layerKinds: {
+        ...cesiumBackend.layerKinds,
+        trips: { ...cesiumBackend.layerKinds.trips, supported: false },
+      },
+    };
+    const offered = renderableDatasetTypes(noTrips, SHOWCASE_LOCAL_TYPES);
+    // Every composite whose stack includes `trips`: radar, av, weather, …
     for (const local of SHOWCASE_LOCAL_TYPES) {
-      expect(cesium.has(local), `cesium should not claim ${local}`).toBe(false);
+      const mountsTrips = COMPOSITE_LAYER_KINDS[local].includes('trips');
+      expect(
+        offered.has(local),
+        `${local} (mounts trips: ${mountsTrips})`,
+      ).toBe(!mountsTrips);
     }
-    expect(cesium.has('point')).toBe(true);
-    expect(cesium.has('trips')).toBe(true);
+    expect(offered.has('trips')).toBe(false);
+    expect(offered.has('point')).toBe(true);
+
+    // And the real cesium descriptor, for the record: it now carries every
+    // composite the showcase declares.
+    const real = renderableDatasetTypes(cesiumBackend, SHOWCASE_LOCAL_TYPES);
+    for (const local of SHOWCASE_LOCAL_TYPES) {
+      expect(real.has(local), `cesium should claim ${local}`).toBe(true);
+    }
   });
 
   it('maplibre renders the summary + flow families it declares', () => {
@@ -138,10 +174,14 @@ describe('backend gates read the published descriptors', () => {
     // A pin, not a preference: these sets are now derived, so a descriptor edit
     // in @poopdeck.gl/{maplibre,three,cesium} silently adds or removes a
     // renderer toggle from live demo pages. Failing here is the intended way to
-    // notice. `path` is absent from maplibre because `maplibreBackend` declares
-    // the kind unsupported with no fallback even though `STTLineLayer` renders
-    // polylines and MaplibreRenderer's `case 'path'` mounts it — a
-    // capability-matrix bug upstream; fixing it should flip this line.
+    // notice — and it is the way the non-deck parity campaign's six new Cesium
+    // toggles and three's heatmap were noticed before a browser saw them.
+    //
+    // Every type listed here has a dispatch branch in the adapter that offers
+    // it (`buildCesiumLayer`, `MaplibreRenderer`, `SttThreeGeoViewer`); adding
+    // a line without adding that branch ships a toggle onto a blank canvas.
+    // `test/cesium-dispatch.test.ts` proves it for the Cesium route, whose
+    // eligibility set is derived and so widens on its own.
     const shipped = [...new Set(datasets.map((d) => d.type))].sort();
     // Same `locals` each adapter passes (MaplibreRenderer / SttThreeGeoViewer /
     // buildCesiumLayer), so this pins what a demo page actually offers.
@@ -152,6 +192,10 @@ describe('backend gates read the published descriptors', () => {
       return shipped.filter((t) => set.has(t));
     };
 
+    // `path` joined maplibre when the parity campaign fixed the capability-matrix
+    // bug this pin used to record: `STTLineLayer` always rendered polylines and
+    // `MaplibreRenderer`'s `case 'path'` always mounted it, while the descriptor
+    // declared the kind unsupported.
     expect(
       offered(maplibreBackend, ['lightning', 'radar', 'flowmap-bundled']),
     ).toEqual([
@@ -162,6 +206,7 @@ describe('backend gates read the published descriptors', () => {
       'h3Summary',
       'heatmap',
       'lightning',
+      'path',
       'point',
       'polygon',
       'quadbinSummary',
@@ -169,12 +214,15 @@ describe('backend gates read the published descriptors', () => {
       'tripHeads',
       'trips',
     ]);
+    // `heatmap` joined three with a real screen-space splat layer (it used to
+    // declare the kind unsupported with a fallback → point).
     expect(offered(threeBackend, ['flowmap-bundled'])).toEqual([
       'arc',
       'column',
       'flowmap',
       'flowmap-bundled',
       'h3Summary',
+      'heatmap',
       'path',
       'point',
       'polygon',
@@ -182,10 +230,19 @@ describe('backend gates read the published descriptors', () => {
       'tripHeads',
       'trips',
     ]);
+    // Cesium went from the movement family (arc/path/point/tripHeads/trips) to
+    // every kind in the vocabulary. No composite appears because the Cesium
+    // route mounts exactly one archive and so passes no `locals`.
     expect(offered(cesiumBackend)).toEqual([
       'arc',
+      'column',
+      'flowmap',
+      'h3Summary',
+      'heatmap',
       'path',
       'point',
+      'polygon',
+      'quadbinSummary',
       'tripHeads',
       'trips',
     ]);

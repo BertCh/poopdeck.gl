@@ -28,7 +28,7 @@ import type { RGBA, STTPickInfo, STTSourceRegistry } from '@poopdeck.gl/three';
 import {
   STTCanvas,
   STTSurfelLayer,
-  STTPointCloudLayer,
+  STTPointLayer,
   STTBoundingBoxLayer,
   STTMapPolygonLayer,
   STTMapLineLayer,
@@ -180,7 +180,7 @@ function renderLidar(dataset: AvDataset, perfMode: boolean): React.ReactNode {
   const timeWindow = dataset.timeWindow ?? 1000;
   if (dataset.lidarScan) {
     return (
-      <STTPointCloudLayer
+      <STTPointLayer
         url={url}
         id={dataset.id}
         mode="wake"
@@ -194,7 +194,7 @@ function renderLidar(dataset: AvDataset, perfMode: boolean): React.ReactNode {
     );
   }
   return (
-    <STTPointCloudLayer
+    <STTPointLayer
       url={url}
       id={dataset.id}
       // Additive-octree zoom LOD: load the UNION of all zoom levels (each return

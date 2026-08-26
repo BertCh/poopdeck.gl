@@ -60,6 +60,38 @@ import {
 } from '../src/layers/trip-heads-layer';
 import { pointProgramKey, STTPointLayer } from '../src/layers/point-layer';
 import { STTLineLayer } from '../src/layers/line-layer';
+import { STTPathLayer } from '../src/layers/path-layer';
+import { STTIsoLayer, buildIsoVertexSource } from '../src/layers/iso-layer';
+import {
+  buildPointCloudVertexSource,
+  buildPointCloudIdVertexSource,
+} from '../src/layers/point-cloud-layer';
+import {
+  buildTextVertexSource,
+  buildTextIdVertexSource,
+} from '../src/layers/text-layer';
+import {
+  buildBoundingBoxVertexSource,
+  buildBoundingBoxIdVertexSource,
+} from '../src/layers/bounding-box-layer';
+import {
+  buildMeshVertexSource,
+  buildMeshIdVertexSource,
+} from '../src/layers/mesh-layer';
+import {
+  buildEgoVertexSource,
+  buildEgoIdVertexSource,
+} from '../src/layers/ego-layer';
+import {
+  buildSurfelVertexSource,
+  buildSurfelIdVertexSource,
+} from '../src/layers/surfel-layer';
+import { STTPointCloudLayer } from '../src/layers/point-cloud-layer';
+import { STTTextLayer } from '../src/layers/text-layer';
+import { STTBoundingBoxLayer } from '../src/layers/bounding-box-layer';
+import { STTMeshLayer } from '../src/layers/mesh-layer';
+import { STTEgoLayer } from '../src/layers/ego-layer';
+import { STTSurfelLayer } from '../src/layers/surfel-layer';
 import { STTPolygonLayer } from '../src/layers/polygon-layer';
 import { STTTripsLayer } from '../src/layers/trips-layer';
 import { STTHeatmapLayer } from '../src/layers/heatmap-layer';
@@ -203,6 +235,85 @@ function allSources(): Emitted[] {
           'line-layer.ts',
           `line-id:${tag}`,
           buildLineVertexSource(shader, { mode, filter, pick: true }),
+        );
+        // path-layer.ts ships NO shader source of its own — it inherits the
+        // line builder wholesale, which is the entire point of it being a
+        // subclass. It still owes this gate an entry (the coverage assertion
+        // enumerates FILES), so it is enumerated against the mode that is
+        // actually path-specific: reveal.
+        push(
+          'path-layer.ts',
+          `path-reveal:${tag}`,
+          buildLineVertexSource(shader, { mode: 'reveal', filter }),
+        );
+        // The 2026-08-26 completion pass. Each of these ships its OWN shader
+        // (unlike path/iso, which ride the line builder), so each owes this
+        // gate both of its passes — the collision scan is the only place the
+        // spliced chunks of every layer are compared against each other.
+        push(
+          'iso-layer.ts',
+          `iso:${tag}`,
+          buildIsoVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'point-cloud-layer.ts',
+          `point-cloud:${tag}`,
+          buildPointCloudVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'point-cloud-layer.ts',
+          `point-cloud-id:${tag}`,
+          buildPointCloudIdVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'text-layer.ts',
+          `text:${tag}`,
+          buildTextVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'text-layer.ts',
+          `text-id:${tag}`,
+          buildTextIdVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'bounding-box-layer.ts',
+          `bbox:${tag}`,
+          buildBoundingBoxVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'bounding-box-layer.ts',
+          `bbox-id:${tag}`,
+          buildBoundingBoxIdVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'mesh-layer.ts',
+          `mesh:${tag}`,
+          buildMeshVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'mesh-layer.ts',
+          `mesh-id:${tag}`,
+          buildMeshIdVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'ego-layer.ts',
+          `ego:${tag}`,
+          buildEgoVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'ego-layer.ts',
+          `ego-id:${tag}`,
+          buildEgoIdVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'surfel-layer.ts',
+          `surfel:${tag}`,
+          buildSurfelVertexSource(shader, { mode, filter }),
+        );
+        push(
+          'surfel-layer.ts',
+          `surfel-id:${tag}`,
+          buildSurfelIdVertexSource(shader, { mode, filter }),
         );
         push(
           'polygon-layer.ts',
@@ -529,7 +640,16 @@ function declaredNames(source: string): string[] {
 /** Function DEFINITIONS (`float sttFoo(` at a statement start). */
 function definedFunctions(source: string): string[] {
   const names: string[] = [];
-  const re = /^\s*(?:float|vec2|vec3|vec4|void)\s+(\w+)\s*\(/gm;
+  // Every GLSL return type a kernel in this package actually uses. The matrix
+  // and integer types were MISSING until the surfel layer shipped
+  // `mat3 sttSurfelBasis(vec4)` — the first matrix-returning helper here — and
+  // their absence made the "defines every stt* helper it calls" case below
+  // report a correctly-spliced function as unspliced. A gate that cannot see a
+  // definition is worse than no gate, because it fails on good code and trains
+  // you to edit the assertion; widen the type list rather than special-casing
+  // the helper.
+  const re =
+    /^\s*(?:float|int|bool|vec2|vec3|vec4|mat2|mat3|mat4|void)\s+(\w+)\s*\(/gm;
   for (const m of source.matchAll(re)) names.push(m[1]!);
   return names;
 }
@@ -659,6 +779,18 @@ describe('cross-layer runtime control surface', () => {
   const LAYER_CLASSES = {
     point: STTPointLayer,
     line: STTLineLayer,
+    // `path` is a concrete exported class of its own (a subclass of the line
+    // renderer, not a fork), so the "nothing ships unclassed" scan below needs
+    // it registered even though it compiles the line kind's shader.
+    path: STTPathLayer,
+    // The 2026-08-26 completion pass — maplibre now renders every frozen kind.
+    isoLines: STTIsoLayer,
+    pointCloud: STTPointCloudLayer,
+    text: STTTextLayer,
+    boundingBox: STTBoundingBoxLayer,
+    mesh: STTMeshLayer,
+    ego: STTEgoLayer,
+    surfel: STTSurfelLayer,
     polygon: STTPolygonLayer,
     trips: STTTripsLayer,
     heatmap: STTHeatmapLayer,
@@ -1157,11 +1289,18 @@ describe('cross-layer prop conventions', () => {
   });
 
   it('the interpolation-gap guard is spelled `maxInterpolationGap` everywhere', async () => {
-    // Both layers that drive the core track kernel expose its `maxGapMs`
+    // EVERY layer that drives the core track kernel exposes its `maxGapMs`
     // guard. Icon named it after deck (`maxInterpolationGap`) and tripHeads
     // after the kernel (`maxGapMs`) — the same knob under two names on two
-    // layers of one package. deck's spelling wins; `maxGapMs` must not
-    // reappear as an OPTION (it stays the core `TrackSampleConfig` field name).
+    // layers of one package. deck's spelling won; `maxGapMs` must not reappear
+    // as an OPTION (it stays the core `TrackSampleConfig` field name).
+    //
+    // The count grew from 2 to 5 when the parity campaign added the three
+    // remaining track-driven kinds (boundingBox, mesh, ego), which pool
+    // keyframes by track_id exactly as icon and tripHeads do and therefore owe
+    // the same guard. That is the convention holding, not slipping — the
+    // load-bearing half of this case is the `maxGapMs` prohibition above, which
+    // applies to every layer file whether or not it declares the knob.
     const fs = await import('node:fs/promises');
     const dir = await layersDir();
     let declared = 0;
@@ -1175,7 +1314,7 @@ describe('cross-layer prop conventions', () => {
       );
       if (/^\s{2}maxInterpolationGap\?:/m.test(body)) declared += 1;
     }
-    expect(declared).toBe(2); // icon + tripHeads
+    expect(declared).toBe(5); // icon + tripHeads + boundingBox + mesh + ego
   });
 
   it('the reduced-motion escape hatch is spelled `reducedMotion` everywhere', async () => {

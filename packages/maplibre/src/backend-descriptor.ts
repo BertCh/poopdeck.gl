@@ -61,6 +61,14 @@ import {
 const SUPPORTED_KINDS: readonly LayerKind[] = [
   'point',
   'line',
+  // `path` was never a capability gap here, only a NAMING one: STTLineLayer
+  // already walked startIndices per feature, emitted one quad per vertex PAIR
+  // and carried deck AnimatedPathLayer's whole reveal surface — the descriptor
+  // simultaneously said `path: unsupported` and claimed `pathReveal` on `line`.
+  // STTPathLayer gives the kind its name and its deck-parity defaults, and
+  // closes the one real gap (sizing tile SELECTION against the reveal history,
+  // not against timeWindow alone).
+  'path',
   'polygon',
   'trips',
   'heatmap',
@@ -75,6 +83,14 @@ const SUPPORTED_KINDS: readonly LayerKind[] = [
   'flowCorridor',
   'flowStroke',
   'flowmap',
+  // The 2026-08-26 completion pass — maplibre now renders every frozen kind.
+  'isoLines',
+  'pointCloud',
+  'text',
+  'boundingBox',
+  'mesh',
+  'ego',
+  'surfel',
 ];
 
 /** Why an unsupported kind degrades — a single, honest referral to the deck backend. */
@@ -99,22 +115,7 @@ const DECK_REFERRAL =
  */
 const FALLBACK_KINDS: Readonly<
   Partial<Record<LayerKind, { kind: LayerKind; lost: string }>>
-> = {
-  pointCloud: {
-    kind: 'point',
-    lost: 'per-point elevation — the cloud renders as flat billboards on the ground plane',
-  },
-  text: {
-    kind: 'icon',
-    // Same target the three backend names. The atlas caveat is part of the
-    // `lost` string on purpose: STTIconLayer draws NOTHING without a caller-
-    // supplied `iconAtlas` + `iconMapping` (it warns and bails), so promising
-    // "the positions render" unconditionally would understate what the caller
-    // has to bring — deck's IconLayer and @poopdeck.gl/three's icon layer carry
-    // the same requirement.
-    lost: 'the GLYPHS — a label renders as its marker sprite, and ONLY if the caller supplies iconAtlas + iconMapping (STTIconLayer draws nothing without them)',
-  },
-};
+> = {};
 
 /**
  * Build the exhaustive `LayerKind → support` record from the frozen `LAYER_KINDS`
@@ -169,7 +170,12 @@ export const maplibreBackend: BackendDescriptor = {
     // (a quadratic control point per OD pair) but carries no GPU KDEEB path;
     // the bundler cannot be ported off luma transform-feedback without a real
     // compute pass here. Never flip this without one.
-    liveBundling: false,
+    // KDEEB edge bundling, real and at runtime, through core's shared
+    // `bundleEdges` — the same function three and cesium run, so the three
+    // backends cannot drift. ZERO luma: the packing and the ribbon draw are raw
+    // WebGL2 like every other layer here. Device-gated with a per-tile fallback
+    // to straight arrows.
+    liveBundling: true,
     // `STTColumnLayer.timeHeightScale` lifts every vertex of a feature by
     // `(startTime - timeHeightOrigin) * scale` METRES through the same
     // latitude-correct elevation path the prisms use — a real space-time cube,
@@ -178,8 +184,29 @@ export const maplibreBackend: BackendDescriptor = {
     // claims are the same claim.
     timeAsHeight: true,
     interleavedBasemap: true,
-    userExtensions: false,
-    cameraRoll: false,
+    // A real GLSL chunk-injection surface (`shaders/extensions.glsl.ts`): user
+    // snippets spliced at named vertex/fragment seams, per-draw uniforms and an
+    // extension-owned attribute buffer, carried by `STTPointLayer`. Three things
+    // make the claim safe rather than decorative, and all three are pinned by
+    // mutation-verified tests: the extension's CONTENT-ADDRESSED digest is in the
+    // program-cache key (so two layers with different extensions cannot silently
+    // share one linked program), the id/pick program gets the SAME vertex seams
+    // (so a geometry-moving extension cannot desync the hit box from the drawn
+    // shape), and the shipped time/DataFilter gates compose AFTER the user's
+    // alpha (so an extension can only narrow visibility, never widen it). An
+    // empty list produces byte-identical source.
+    userExtensions: true,
+    // `lib/view-state.ts` round-trips the shared `ViewState.roll` through the
+    // HOST camera rather than dropping it. Roll reaches the shaders for free (it
+    // is inside the view matrix, and inside the injected projection prelude on a
+    // v5+ host), so no layer had to change — what was missing was the SEAM, and
+    // that is what this flag claims. `maplibre-gl` gained roll in v5 and the
+    // peer range is `^3 || ^4 || ^5 || ^6`, so support is detected
+    // STRUCTURALLY (`typeof map.getRoll === 'function'`), never by naming a
+    // v5-only surface in a type position; a ≤v4 host degrades honestly —
+    // `applyViewState` REPORTS the dropped roll and `readViewState` omits the
+    // key rather than reporting a fabricated 0.
+    cameraRoll: true,
   } satisfies Record<Capability, boolean>,
   // All four modes ship as independent kernel snippets, selected at
   // program-build time. point/line/polygon/heatmap/icon/column/arc and the
@@ -301,6 +328,7 @@ export const maplibreLayerFeatures: Readonly<
     kinds: [
       'point',
       'line',
+      'path',
       'polygon',
       'trips',
       'heatmap',
@@ -314,6 +342,13 @@ export const maplibreLayerFeatures: Readonly<
       'flowCorridor',
       'flowStroke',
       'flowmap',
+      'isoLines',
+      'pointCloud',
+      'text',
+      'boundingBox',
+      'mesh',
+      'ego',
+      'surfel',
     ],
     prop: 'filterProperty',
     summary:
@@ -354,11 +389,14 @@ export const maplibreLayerFeatures: Readonly<
   },
   pathReveal: {
     supported: true,
-    // deck spells this on its `path` kind; this backend has no separate path
-    // kind, so the reveal lives on the LINE layer and the claim names `line`.
-    // A feature may only cover kinds the backend renders — naming 'path' here
-    // would fail gate (d).
-    kinds: ['line'],
+    // deck spells this on its `path` kind. This backend now has one too
+    // (STTPathLayer), and because that class is a subclass of the line renderer
+    // rather than a fork, the reveal really is available on BOTH kinds — so the
+    // claim names both. (The 0.5.x note here read "this backend has no separate
+    // path kind, so the reveal lives on the LINE layer"; that was the honest
+    // description of a descriptor that claimed pathReveal while denying the
+    // path kind, and the parity campaign resolved it by adding the kind.)
+    kinds: ['line', 'path'],
     prop: 'revealTrail',
     summary:
       "progressive path reveal with a partially-drawn frontier segment (revealTrail/revealDuration/fadeTrail/reducedMotion): per-VERTEX times come from the tile's vertexTimestamps or the shared cumulative-distance kernel, the frontier endpoint is INTERPOLATED rather than popped, and unrevealed geometry is unpickable",

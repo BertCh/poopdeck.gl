@@ -56,7 +56,7 @@ import {
 import {
   STTCanvas,
   STTGlobeBasemap,
-  STTPointCloudLayer,
+  STTPointLayer,
   STTTripsLayer,
   STTTripHeadsLayer,
   STTPathLayer,
@@ -67,6 +67,7 @@ import {
   STTFlowmapLayer,
   STTFlowCorridorLayer,
   STTPolygonLayer,
+  STTHeatmapLayer,
 } from '@poopdeck.gl/three/r3f';
 import type { Dataset } from '../../types';
 import { useReducedMotion } from '../../lib/reducedMotion';
@@ -165,7 +166,7 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
       const sizeUnits = ds.radiusUnits === 'pixels' ? 'pixels' : 'meters';
       const hasCat = !!(ds.colorProperty && ds.colorMapping);
       return (
-        <STTPointCloudLayer
+        <STTPointLayer
           id={ds.id}
           url={ds.url}
           mode={
@@ -383,6 +384,29 @@ function renderGeoLayers(ds: Dataset, perfMode: boolean): React.ReactNode {
           opacity={ds.opacity ?? 0.8}
         />
       );
+    case 'heatmap': {
+      // Screen-space density splat + ramp, the same shape deck and maplibre
+      // draw — so `radiusPixels` really is device pixels here and the demo's
+      // number transfers unchanged (unlike the Cesium backend's geodetic
+      // field). A demo may stack channels; the splat pass runs once, so only
+      // the first channel's radius and palette are honoured, matching
+      // MaplibreRenderer.
+      const channel = ds.heatmapLayers?.[0];
+      return (
+        <STTHeatmapLayer
+          id={ds.id}
+          url={ds.url}
+          mode="window"
+          timeWindow={ds.timeWindow}
+          weightProperty={channel?.weightProperty ?? ds.weightProperty ?? null}
+          radiusPixels={channel?.radiusPixels ?? 30}
+          intensity={channel?.intensity ?? 1}
+          colorRange={(channel?.colorRange ?? undefined) as RGBA[] | undefined}
+          {...(channel?.colorDomain && { colorDomain: channel.colorDomain })}
+          opacity={ds.opacity ?? 1}
+        />
+      );
+    }
     default:
       return null;
   }

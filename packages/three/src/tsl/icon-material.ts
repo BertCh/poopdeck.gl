@@ -70,6 +70,12 @@ import {
   updateDataFilterUniforms,
   type DataFilterOptions,
 } from './data-filter.js';
+import {
+  resolveExtensions,
+  extensionHooks,
+  type ResolvedExtensions,
+  type STTExtensionOptions,
+} from './extensions.js';
 
 // Extra TSL builders not yet surfaced on the ./nodes seam (texture sampling +
 // the per-instance rotation trig). Loosely typed like the ./nodes re-exports.
@@ -98,7 +104,7 @@ export class IconUniforms {
   readonly viewport: UniformNode = uniform(vec2(1280, 720));
 }
 
-export interface IconMaterialOptions {
+export interface IconMaterialOptions extends STTExtensionOptions {
   /** Time-filter mode: window (raw), cumulative (markers persist), none. */
   mode: IconMode;
   /** The icon-atlas texture (host provides the loaded atlas image). */
@@ -155,6 +161,12 @@ export interface IconMaterialBundle {
   filter: DataFilterUniforms | null;
   /** Palette uniforms (`invWidth`) when the material was built with `colorPalette`. */
   palette: PaletteUniforms | null;
+  /**
+   * Present ONLY when at least one user extension was composed (see
+   * `./extensions.ts`); carries their uniform nodes and the attributes the host
+   * must bind onto the live geometry.
+   */
+  extensions?: ResolvedExtensions;
 }
 
 export function createIconMaterial(
@@ -162,6 +174,10 @@ export function createIconMaterial(
 ): IconMaterialBundle {
   const time = new TimeFilterUniforms();
   const icon = new IconUniforms();
+  // User extensions (`./extensions.ts`). Empty ⇒ the shared identity hooks, so
+  // every expression below is byte-identical to the un-extended material.
+  const ext = resolveExtensions('icon', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'icon', pass: 'color', time });
 
   // ── per-instance attributes (set by the layer) ──────────────────────────────
   // Glide (motionInterpolation): centre + heading both glide from the keyframe
@@ -170,7 +186,12 @@ export function createIconMaterial(
   const glideSample = glideU
     ? glideSampleNode(opts.glide!.texture, time.currentTime, glideU)
     : null;
-  const center = glideSample ? glideSample.xyz : attribute('sttCenter', 'vec3');
+  // `position` seam: the instance CENTRE, before the billboard expansion. The
+  // time/filter collapse rides on `half` below, so a moved marker is still
+  // collapsed when the gates say so.
+  const center = hooks.position(
+    glideSample ? glideSample.xyz : attribute('sttCenter', 'vec3'),
+  );
   // Tint: GPU stable-palette sample (per-instance `sttCategoryIndex` slot) when a
   // palette texture is installed; otherwise the per-instance `sttColor` attr.
   const paletteU = opts.colorPalette ? new PaletteUniforms() : null;
@@ -212,7 +233,9 @@ export function createIconMaterial(
   if (filterU && filterValue) {
     visible = visible.mul(dataFilterVisibleNode(filterU, filterValue));
   }
-  let half = sizePx.mul(0.5).mul(visible);
+  // `size` seam takes the UNGATED pixel half-size; the hard gate multiplies
+  // AFTER, so an extension can never un-collapse an out-of-window marker.
+  let half = hooks.size(sizePx.mul(0.5)).mul(visible);
   // Wake tail SIZE taper (mirrors createPointMaterial): in wake mode the
   // vertex-stage time alpha — a `select()`, used DIRECTLY here, never wrapped in a
   // `varying()` (the recurring WGSL crash) — drives `wakeSizeScaleNode`, shrinking
@@ -260,7 +283,9 @@ export function createIconMaterial(
   // mask: tint supplies colour, atlas alpha gates it. opaque: atlas RGB × tint.
   const rgb = opts.mask ? vColor.xyz : tex.xyz.mul(vColor.xyz);
   const baseA = opts.mask ? tex.a.mul(vColor.a) : tex.a.mul(vColor.a);
-  let a = baseA.mul(icon.opacity).mul(fragAlpha);
+  // `alpha` seam takes the base alpha; the soft time / filter ramps multiply
+  // AFTER it, so a hook can only ever subtract visibility.
+  let a = hooks.alpha(baseA.mul(icon.opacity)).mul(fragAlpha);
   // Soft column-filter fade (vary the raw value; the alpha node is a mix()/step()
   // graph, never a select(), so it is varying-safe — like the time fade above).
   if (filterU && filterValue) {
@@ -270,7 +295,8 @@ export function createIconMaterial(
   // sRGB→working LAST, on the atlas × tint product (see ./color-space.ts): both
   // the sprite texture and the tint are authored sRGB, and deck multiplies them
   // in that space too, so converting the product is the parity-exact order.
-  material.colorNode = srgbToWorking(rgb);
+  // `color` seam sits INSIDE srgbToWorking, on the atlas × tint product.
+  material.colorNode = srgbToWorking(hooks.color(rgb));
   material.opacityNode = a;
   material.transparent = true;
   material.depthWrite = false;
@@ -279,7 +305,7 @@ export function createIconMaterial(
   material.blending = NormalBlending;
   material.alphaTest = opts.alphaCutoff ?? 0.05;
 
-  return {
+  const bundle: IconMaterialBundle = {
     material,
     time,
     icon,
@@ -288,6 +314,8 @@ export function createIconMaterial(
     filter: filterU,
     palette: paletteU,
   };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }
 
 export interface IconUniformValues {
@@ -339,7 +367,7 @@ export function updateIconUniforms(
 // {@link updateIconUniforms} to sync its time / size / filter uniforms before the
 // pass. The returned bundle is shape-compatible with {@link IconMaterialBundle}.
 
-export interface IconIdMaterialOptions {
+export interface IconIdMaterialOptions extends STTExtensionOptions {
   /**
    * Time-filter mode — MUST match the colour material (after the reduced-motion
    * wake→window collapse) so the id quads size + collapse identically. */
@@ -366,6 +394,11 @@ export function createIconIdMaterial(
 ): IconMaterialBundle {
   const time = new TimeFilterUniforms();
   const icon = new IconUniforms();
+  // SAME extension seams as the colour material (position / size / alpha), so a
+  // hook that moves or resizes a marker picks exactly where it draws. The
+  // `color` seam is inert in the id pass — the index must decode bit-exact.
+  const ext = resolveExtensions('icon', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'icon', pass: 'id', time });
   const mode = opts.mode;
   const filterU = opts.dataFilter ? new DataFilterUniforms() : null;
 
@@ -373,7 +406,7 @@ export function createIconIdMaterial(
   // material (STATIC path — centre + heading are attributes, not the glide
   // texture), plus the flat per-instance id colour. No `sttUvRect` (the id never
   // samples the atlas — the whole marker quad is pickable).
-  const center = attribute('sttCenter', 'vec3');
+  const center = hooks.position(attribute('sttCenter', 'vec3'));
   const angle = attribute('sttAngle', 'float'); // radians, CCW from up
   const size = attribute('sttSize', 'float'); // on-screen pixels
   const anchor = attribute('sttAnchor', 'vec2'); // [-1,1] quad-space offset
@@ -402,7 +435,7 @@ export function createIconIdMaterial(
   if (filterU && filterValue) {
     visible = visible.mul(dataFilterVisibleNode(filterU, filterValue));
   }
-  let half = sizePx.mul(0.5).mul(visible);
+  let half = hooks.size(sizePx.mul(0.5)).mul(visible);
   // Wake tail SIZE taper (same as the colour material): the vertex-stage time alpha
   // — a `select()`, used DIRECTLY here, never wrapped in a `varying()` — drives the
   // taper so the id quad matches the tapered marker. Only wake touches this node.
@@ -443,6 +476,12 @@ export function createIconIdMaterial(
       ),
     );
   }
+  if (hooks.has('alpha')) {
+    // The id is opaque, so the alpha seam is fed `1` and its result thresholded
+    // into the pick gate: an extension that MASKS a marker to zero makes it
+    // unpickable (matching the eye); one that merely dims it does not.
+    onGate = onGate.and(hooks.alpha(float(1)).greaterThan(float(cutoff)));
+  }
   material.opacityNode = select(onGate, float(1), float(0));
 
   material.transparent = false;
@@ -451,7 +490,7 @@ export function createIconIdMaterial(
   material.side = DoubleSide;
   material.alphaTest = 0.5;
 
-  return {
+  const bundle: IconMaterialBundle = {
     material,
     time,
     icon,
@@ -460,4 +499,6 @@ export function createIconIdMaterial(
     filter: filterU,
     palette: null,
   };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }

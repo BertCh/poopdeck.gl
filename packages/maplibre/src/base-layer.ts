@@ -95,6 +95,14 @@ import {
   type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from './shaders/data-filter.glsl.js';
+import {
+  composeExtensionChunks,
+  EMPTY_EXTENSION_CHUNKS,
+  ExtensionUniformScope,
+  type ExtensionChunks,
+  type ExtensionDrawContext,
+  type STTShaderExtension,
+} from './shaders/extensions.glsl.js';
 
 /** RGBA tuple in the 0–1 range used by all STT shader uniforms. */
 export type RGBA = [number, number, number, number];
@@ -249,6 +257,13 @@ export function widenLoadWindowForTimeMode(
   return widened;
 }
 
+/**
+ * The default extension list. Frozen and shared, so the (overwhelmingly
+ * common) no-extension layer allocates nothing and every such layer composes
+ * to the same {@link EMPTY_EXTENSION_CHUNKS} singleton.
+ */
+const EMPTY_EXTENSIONS: readonly STTShaderExtension[] = Object.freeze([]);
+
 export interface STTBaseLayerOptions {
   /** Unique layer id passed to MapLibre. */
   id: string;
@@ -355,6 +370,22 @@ export interface STTBaseLayerOptions {
    * PlaybackGovernor or a buffered-bar UI.
    */
   onBufferChange?: (runway: BufferedRunway) => void;
+  /**
+   * User shader extensions spliced into this layer's compiled GLSL — the
+   * backend's analogue of deck's `LayerExtension`
+   * (`shaders/extensions.glsl.ts`, which documents the seams, the "cannot
+   * widen visibility" composition rule and the limits).
+   *
+   * The option is declared HERE, on every layer, because the base owns the
+   * program cache the extension identity has to reach; whether a given kind
+   * SPLICES them is per-layer (`STTPointLayer` does — see its
+   * `buildPointVertexSource`). A layer that has not adopted the seams stores
+   * the list and compiles exactly what it always did.
+   *
+   * Unset or `[]` ⇒ {@link EMPTY_EXTENSION_CHUNKS}: the shipped shader source,
+   * byte for byte, and an unchanged program-cache key.
+   */
+  extensions?: readonly STTShaderExtension[];
 }
 
 /** Per-tile cached GPU buffers. Created lazily on first draw. */
@@ -568,6 +599,47 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
   private visibleRefreshScheduled = false;
   protected tileGpuCache = new Map<string, TileGpuCache | null>();
   protected opts: STTBaseLayerOptions & { autoRepaint: boolean };
+  /**
+   * The user shader extensions this layer was given, in splice order.
+   *
+   * Held as its own resolved field (not read off {@link opts}) for the same
+   * reason every other option is: this is the list the layer actually
+   * compiles, and it is what a runtime `setExtensions` replaces. Held BY
+   * REFERENCE, like every other array-valued option here (`colorPalette`,
+   * `colorRange`): mutating the array in place after construction is not
+   * observed — the chunks are composed once — so change the list through
+   * `setExtensions` instead.
+   */
+  protected extensions: readonly STTShaderExtension[] = EMPTY_EXTENSIONS;
+  /**
+   * {@link extensions} composed into spliceable GLSL + the program-cache-key
+   * fragment. `EMPTY_EXTENSION_CHUNKS` (a singleton) whenever the list is
+   * empty, which is what keeps the shipped shaders byte-identical.
+   */
+  protected extensionChunks: ExtensionChunks = EMPTY_EXTENSION_CHUNKS;
+  /** One warning per layer for extensions handed to a kind that ignores them. */
+  private warnedIgnoredExtensions = false;
+  /**
+   * The narrow uniform writer handed to `onBeforeDraw`. One per layer,
+   * re-pointed per (program, extension); allocated only for a layer that
+   * actually has extensions.
+   */
+  private extensionScope?: ExtensionUniformScope;
+  /**
+   * Scratch {@link ExtensionDrawContext}, refilled per (tile, pass) so the
+   * per-tile hot path allocates nothing. Documented to callbacks as
+   * non-retainable.
+   */
+  private readonly extensionCtx: ExtensionDrawContext = {
+    pass: 'draw',
+    tileId: { z: 0, x: 0, y: 0, t: 0 },
+    currentTime: 0,
+    windowStart: 0,
+    windowEnd: 0,
+    timeOffset: 0,
+    zoom: 0,
+    vertexCount: 0,
+  };
   protected supports32BitIndices = false;
   /**
    * VAO support detection. WebGL2 has VAOs in core; WebGL1 exposes them via
@@ -724,6 +796,9 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     // shadow the default with undefined, silently killing every
     // setCurrentTime repaint.
     this.opts = { ...opts, autoRepaint: opts.autoRepaint ?? true };
+    // Compose once here rather than per program build: the chunks are pure
+    // strings derived from the list, and the cache key is derived from them.
+    this.setExtensionList(opts.extensions);
     if (opts.source && opts.url) {
       throw new Error(
         `[${opts.id}] pass either url (per-layer archive) or source (shared tileset), not both`,
@@ -2041,6 +2116,119 @@ export abstract class STTBaseLayer implements CustomLayerInterface {
     const handles = factory(gl, frame.shader);
     this.programCache.set(key, handles);
     return handles;
+  }
+
+  /**
+   * Install (or replace) the layer's user shader extensions and recompose the
+   * spliceable chunks.
+   *
+   * The base does NOT invalidate anything here: an extension changes the
+   * COMPILED SOURCE, so the subclass that splices the chunks owns the
+   * consequences — rebuild its `*ProgramKey`s (which must carry
+   * `extensionChunks.key`), drop its memoized handles, and let its per-tile
+   * VAOs re-record against the relinked program. `STTPointLayer.setExtensions`
+   * is the reference implementation. Called once from the constructor, so a
+   * layer that never adopts the seams still holds the list (and still reports
+   * it, which is what the descriptor conformance probe reads).
+   */
+  /**
+   * Does this layer SPLICE {@link extensions} into its compiled shaders?
+   *
+   * A prototype GETTER, not a field: {@link setExtensionList} runs from the
+   * BASE constructor, and a subclass field initializer has not run at that
+   * point — a `splicesExtensions = true` field would still read `false` there
+   * and warn at the one kind that does adopt the seams. Override it in a kind
+   * that splices the chunks (see `STTPointLayer`); leaving it false is the
+   * declaration that this kind ignores them, and is what makes the "your
+   * extension does nothing here" warning honest.
+   */
+  protected get splicesExtensions(): boolean {
+    return false;
+  }
+
+  protected setExtensionList(
+    extensions: readonly STTShaderExtension[] | undefined,
+  ): void {
+    // `Array.isArray`, not a truthiness check: a stray non-array value (a
+    // conformance probe, a JSON-round-tripped prop) must compose to NOTHING
+    // rather than be spread into a per-character list.
+    this.extensions =
+      Array.isArray(extensions) && extensions.length > 0
+        ? extensions
+        : EMPTY_EXTENSIONS;
+    this.extensionChunks = composeExtensionChunks(this.extensions);
+    // A silent no-op is the wrong failure here: the caller wrote GLSL and
+    // handed it to a layer that will never compile it. Say so, once.
+    if (
+      this.extensions.length > 0 &&
+      !this.splicesExtensions &&
+      !this.warnedIgnoredExtensions
+    ) {
+      this.warnedIgnoredExtensions = true;
+      console.warn(
+        `[${this.id}] ${this.extensions.length} shader extension(s) ignored: ` +
+          `this layer kind does not splice the seams in ` +
+          `shaders/extensions.glsl.ts. STTPointLayer does; the option is ` +
+          `declared on every layer because the base owns the program cache.`,
+      );
+    }
+  }
+
+  /**
+   * Run every extension's `onBeforeDraw` for one (tile, pass).
+   *
+   * Call it from `drawTile` / `drawPickTile` AFTER `useProgram`, after the
+   * layer's own uniforms and after the geometry is bound — i.e. immediately
+   * before the draw call. That ordering is deliberate: uniforms may be set at
+   * any point after `useProgram`, but an extension binding its own attribute
+   * buffer must land inside whatever vertex-array state the draw will use (the
+   * tile's VAO on the visual pass, the default VAO on the pick pass).
+   *
+   * The writer refuses names the extension did not declare, so this cannot
+   * overwrite the layer's own uniforms — see `shaders/extensions.glsl.ts`. A
+   * layer with no extensions pays one length check.
+   */
+  protected applyExtensionDrawHooks(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    program: WebGLProgram,
+    pass: 'draw' | 'pick',
+    tile: Tile,
+    cache: TileGpuCache,
+    ctx: DrawContext,
+  ): void {
+    const list = this.extensionChunks.list;
+    if (list.length === 0) return;
+    const scope = (this.extensionScope ??= new ExtensionUniformScope());
+    const c = this.extensionCtx;
+    c.pass = pass;
+    c.tileId = tile.id;
+    c.currentTime = ctx.currentTime;
+    c.windowStart = ctx.windowStart;
+    c.windowEnd = ctx.windowEnd;
+    c.timeOffset = cache.timeOffset;
+    c.zoom = ctx.zoom;
+    c.vertexCount = cache.vertexCount;
+    for (const composed of list) {
+      if (!composed.ext.onBeforeDraw) continue;
+      composed.ext.onBeforeDraw(scope.bind(gl, program, composed), c);
+    }
+    // Drop the GL references: a writer a callback stashed must not be able to
+    // write into a later frame's program.
+    scope.release();
+  }
+
+  /**
+   * Disable any attribute an extension enabled during a PICK pass.
+   *
+   * The pick path binds raw attributes on the default vertex array (picking
+   * runs outside the host's render pass), and the authoring rule for that path
+   * is "leave the attribute slate exactly as you found it". The visual path
+   * needs no counterpart: its binds are recorded in the tile's own VAO.
+   */
+  protected releaseExtensionAttributes(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): void {
+    this.extensionScope?.disableAttributes(gl);
   }
 
   /**

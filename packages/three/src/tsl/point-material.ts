@@ -48,6 +48,12 @@ import {
 } from './time-filter.js';
 import type { TimeFilterMode, TimeFilterParams } from './time-filter-math.js';
 import { glidePositionNode, GlideUniforms } from './motion-glide.js';
+import {
+  resolveExtensions,
+  extensionHooks,
+  type ResolvedExtensions,
+  type STTExtensionOptions,
+} from './extensions.js';
 
 /**
  * Live point uniforms. `pointSize` is the billboard HALF-size: in world metres
@@ -66,7 +72,7 @@ export class PointUniforms {
 /** How {@link PointUniforms.pointSize} is interpreted. @default 'meters' */
 export type PointSizeUnits = 'meters' | 'pixels';
 
-export interface PointMaterialOptions {
+export interface PointMaterialOptions extends STTExtensionOptions {
   /** Time-filter mode: window (raw), wake (scan sweep), cumulative (worldbuild). */
   mode: TimeFilterMode;
   /** Soft Gaussian point splat (deck's `splat: true`). @default false */
@@ -101,6 +107,12 @@ export interface PointMaterialBundle {
   mode: TimeFilterMode;
   /** Glide uniforms (`invTexWidth`) when the material was built with `glide`. */
   glide: GlideUniforms | null;
+  /**
+   * Present ONLY when at least one user extension was composed (see
+   * `./extensions.ts`); carries their uniform nodes and the attributes the host
+   * must bind onto the live geometry.
+   */
+  extensions?: ResolvedExtensions;
 }
 
 /**
@@ -144,13 +156,22 @@ export function createPointMaterial(
 ): PointMaterialBundle {
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
+  // User extensions (`./extensions.ts`). Empty ⇒ the shared identity hooks, so
+  // every expression below is byte-identical to the un-extended material.
+  const ext = resolveExtensions('point', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'point', pass: 'color', time });
 
   // Glide (motionInterpolation): the centre glides from the keyframe texture in
   // the vertex stage; otherwise it's the static per-instance `sttCenter`.
   const glideU = opts.glide ? new GlideUniforms() : null;
-  const center = glideU
-    ? glidePositionNode(opts.glide!.texture, time.currentTime, glideU)
-    : attribute('sttCenter', 'vec3');
+  // `position` seam: the instance CENTRE, before the billboard expansion. The
+  // time/filter collapse rides on `half` below, so a moved centre is still
+  // collapsed when the gates say so.
+  const center = hooks.position(
+    glideU
+      ? glidePositionNode(opts.glide!.texture, time.currentTime, glideU)
+      : attribute('sttCenter', 'vec3'),
+  );
   const color = attribute('sttColor', 'vec4');
   const start = attribute('sttStart', 'float');
   const end = attribute('sttEnd', 'float');
@@ -167,7 +188,9 @@ export function createPointMaterial(
   // billboard corners coincide at the centre (zero area → dies at assembly, no
   // fragment cost). The complementary soft-band fade stays in the fragment alpha.
   const visible = timeFilterVisibleNode(opts.mode, time, start, end);
-  const half = point.pointSize.mul(sizeFactor).mul(visible);
+  // `size` seam takes the UNGATED half-size; the hard gate multiplies AFTER, so
+  // an extension can never un-collapse an out-of-window instance.
+  const half = hooks.size(point.pointSize.mul(sizeFactor)).mul(visible);
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
@@ -193,13 +216,17 @@ export function createPointMaterial(
 
   const r2 = vUv.dot(vUv);
   const soft = opts.splat ? exp(r2.mul(point.splatFalloff).negate()) : float(1);
+  // `alpha` seam takes the base alpha; the time gate (`fragAlpha`) and the disc
+  // mask multiply AFTER it, so a hook can only ever subtract visibility.
   const a = select(
     r2.greaterThan(1),
     float(0),
-    vColor.a.mul(point.opacity).mul(fragAlpha).mul(soft),
+    hooks.alpha(vColor.a.mul(point.opacity)).mul(fragAlpha).mul(soft),
   );
 
-  material.colorNode = srgbToWorking(vColor.xyz);
+  // `color` seam sits INSIDE srgbToWorking — an extension shades in the same
+  // sRGB space every authored colour byte lives in (see ./color-space.ts).
+  material.colorNode = srgbToWorking(hooks.color(vColor.xyz));
   material.opacityNode = a;
   material.transparent = true;
   material.depthWrite = true;
@@ -208,7 +235,15 @@ export function createPointMaterial(
   material.blending = NormalBlending;
   material.alphaTest = opts.alphaCutoff ?? 0.01;
 
-  return { material, time, point, mode: opts.mode, glide: glideU };
+  const bundle: PointMaterialBundle = {
+    material,
+    time,
+    point,
+    mode: opts.mode,
+    glide: glideU,
+  };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }
 
 export interface PointUniformValues {
@@ -254,13 +289,20 @@ export function createPointIdMaterial(
 ): PointMaterialBundle {
   const time = new TimeFilterUniforms();
   const point = new PointUniforms();
+  // SAME extension seams as the colour material (position / size / alpha), so a
+  // hook that moves or resizes a point picks exactly where it draws. The `color`
+  // seam is inert in the id pass — the 24-bit index must decode bit-exact.
+  const ext = resolveExtensions('point', opts.extensions);
+  const hooks = extensionHooks(ext, { kind: 'point', pass: 'id', time });
 
   // Glide the id quad identically to the colour quad so a pick lands on the same
   // pixels the point drew this frame (time-correct picking under motion glide).
   const glideU = opts.glide ? new GlideUniforms() : null;
-  const center = glideU
-    ? glidePositionNode(opts.glide!.texture, time.currentTime, glideU)
-    : attribute('sttCenter', 'vec3');
+  const center = hooks.position(
+    glideU
+      ? glidePositionNode(opts.glide!.texture, time.currentTime, glideU)
+      : attribute('sttCenter', 'vec3'),
+  );
   const idColor = attribute('sttIdColor', 'vec3');
   const start = attribute('sttStart', 'float');
   const end = attribute('sttEnd', 'float');
@@ -273,7 +315,7 @@ export function createPointIdMaterial(
   // rasterises the SAME quads (a collapsed instance is unpickable, matching what
   // the eye sees) — the id is still written at full intensity in the fragment.
   const sizeVisible = timeFilterVisibleNode(opts.mode, time, start, end);
-  const half = point.pointSize.mul(sizeFactor).mul(sizeVisible);
+  const half = hooks.size(point.pointSize.mul(sizeFactor)).mul(sizeVisible);
 
   const material = new MeshBasicNodeMaterial();
   const sizeUnits: PointSizeUnits = opts.sizeUnits ?? 'meters';
@@ -297,7 +339,13 @@ export function createPointIdMaterial(
   const cutoff = opts.alphaCutoff ?? 0.01;
   // Visible iff inside the disc AND on-time; the id is opaque, everything else
   // is discarded (alphaTest) so background / off-time points never win a pick.
-  const visible = r2.lessThanEqual(1).and(fragAlpha.greaterThan(float(cutoff)));
+  let visible = r2.lessThanEqual(1).and(fragAlpha.greaterThan(float(cutoff)));
+  if (hooks.has('alpha')) {
+    // The id is opaque, so the alpha seam is fed `1` and its result thresholded
+    // into the pick gate: an extension that MASKS a point to zero makes it
+    // unpickable (matching the eye); one that merely dims it does not.
+    visible = visible.and(hooks.alpha(float(1)).greaterThan(float(cutoff)));
+  }
   const a = select(visible, float(1), float(0));
 
   material.colorNode = vId;
@@ -309,5 +357,13 @@ export function createPointIdMaterial(
   material.blending = NormalBlending;
   material.alphaTest = 0.5;
 
-  return { material, time, point, mode: opts.mode, glide: glideU };
+  const bundle: PointMaterialBundle = {
+    material,
+    time,
+    point,
+    mode: opts.mode,
+    glide: glideU,
+  };
+  if (ext.active) bundle.extensions = ext;
+  return bundle;
 }

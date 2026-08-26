@@ -51,16 +51,29 @@
  * a tile rebuild — which is what lets globe frames refine the tessellation in
  * place ({@link STTFlowmapLayer.segmentsFor}, the arc layer's rule).
  *
- * ── Pre-baked bundles ───────────────────────────────────────────────────────
- * `liveBundling` (GPU KDEEB edge bundling) is a **permanent declared fallback**
- * for this backend: it depends on luma transform feedback, which this
- * dependency-free adapter has no access to. What this layer DOES honour is
- * bundle geometry
- * an archive already baked: an OD feature with interior vertices contributes a
- * quadratic Bézier control point ({@link bundleControlPoint}) so the arrow
- * follows the bundle's own bulge. A plain 2-vertex feature gets the chord
- * MIDPOINT as its control, which reduces the Bézier exactly to
- * `mix(source, target, t)` — one code path, no per-tile shader.
+ * ── Bundles: baked and live ─────────────────────────────────────────────────
+ * TWO independent paths, and they compose.
+ *
+ * `bundleGeometry` (default ON) honours bundle geometry an archive ALREADY
+ * baked: an OD feature with interior vertices contributes a quadratic Bézier
+ * control point ({@link bundleControlPoint}) so the arrow follows the bundle's
+ * own bulge. A plain 2-vertex feature gets the chord MIDPOINT as its control,
+ * which reduces the Bézier exactly to `mix(source, target, t)` — one code path,
+ * no per-tile shader.
+ *
+ * {@link STTFlowmapLayerOptions.bundling} (default OFF) is the `liveBundling`
+ * capability: KDEEB edge bundling computed per tile at upload time, drawn as a
+ * real polyline sampled from a control-point texture
+ * (`shaders/bundle.glsl.ts`). The KDEEB iteration is not in this package — it
+ * is the shared `bundleEdges()` in `@poopdeck.gl/core/edge-bundling`, which
+ * every backend calls, because a bundle is STATIC GEOMETRY and there is nothing
+ * per-frame about it to put on a device. `lib/edge-bundler.ts` holds the
+ * reasoning, the cost, and the limits (per-tile bundling, a 512-edge default
+ * cap, no animation of the bundle itself).
+ *
+ * A host that cannot sample a float texture in the vertex stage draws straight
+ * (or baked-Bézier) arrows and warns once; a tile the bundler declines does the
+ * same, through the per-tile `uUseBundle` uniform rather than a second program.
  *
  * ── Magnitude: GPU by default, CPU where the host cannot ────────────────────
  * `sttFlowMagnitude` samples the packed value matrix in the VERTEX stage, which
@@ -96,7 +109,11 @@
  *     exists to avoid, so it is deferred rather than ported;
  *     `sourceInsetPixels` / `targetInsetPixels` are the hook a node overlay
  *     would drive.
- *   - **liveBundling.** Permanent fallback (above).
+ *   - **Cross-tile bundles.** Each tile bundles its own edges, so a corridor
+ *     split across a tile seam bundles independently on each side. Bundling is
+ *     an overview idiom (the deck sibling drives it off a single summary tile),
+ *     so in practice the bundled view is one tile — but the limit is real and
+ *     is not papered over.
  */
 
 import type { Tile, STTTileLayer as STTLayer } from '@poopdeck.gl/core';
@@ -144,6 +161,22 @@ import {
   flowSamplerCacheKey,
   type FlowMatrixFormat,
 } from '../shaders/flow.glsl.js';
+import {
+  BUNDLE_ATTRIBUTE_GLSL,
+  BUNDLE_NAMES,
+  BUNDLE_PATH_CALL_GLSL,
+  BUNDLE_PATH_GLSL,
+  BUNDLE_TEXTURE_RECIPE,
+  BUNDLE_UNIFORMS_GLSL,
+  resolveBundleUniformLocations,
+  type BundleUniformLocations,
+} from '../shaders/bundle.glsl.js';
+import {
+  buildFlowBundle,
+  isBundlingSupported,
+  type FlowBundle,
+  type FlowBundleOptions,
+} from '../lib/edge-bundler.js';
 import {
   TIME_WINDOW_GLSL,
   TIME_WAKE_GLSL,
@@ -314,6 +347,25 @@ export interface STTFlowmapLayerOptions extends STTFilterableLayerOptions {
    * @default true
    */
   bundleGeometry?: boolean;
+  /**
+   * Run **live KDEEB edge bundling** over each tile's OD pairs and draw the
+   * bundled river instead of the straight chord. Opt-in: `true` for the
+   * defaults, or an options object to tune them
+   * ({@link FlowBundleOptions} — `subdivisionPoints`, `kernelRadius`,
+   * `bundlingIterations`, `smoothingStrength`, `maxBundledEdges`).
+   *
+   * The bundle is STATIC GEOMETRY: it is computed once per tile, on the upload
+   * path, by the shared `bundleEdges()` in `@poopdeck.gl/core/edge-bundling`,
+   * and never recomputed for a playhead, camera or style change. It is NOT
+   * free — see the cost note in `lib/edge-bundler.ts` before raising
+   * `maxBundledEdges`, and note that each tile bundles independently.
+   *
+   * Requires vertex texture fetch and sampleable float textures; a host with
+   * neither draws straight (or {@link bundleGeometry}-curved) arrows and says
+   * so once.
+   * @default false
+   */
+  bundling?: boolean | FlowBundleOptions;
   /**
    * Inset the arrow's TAIL along the corridor by this many device pixels — the
    * hook for leaving a gap at a hub marker. Clamped to 40% of the corridor's
@@ -645,6 +697,16 @@ export interface FlowmapShaderConfig {
   /** Compile the baked-bundle control point (a quadratic path instead of a chord). */
   bundle: boolean;
   /**
+   * Compile the LIVE KDEEB bundle sampler (`shaders/bundle.glsl.ts`). Optional
+   * so a config literal written before the bundling campaign still typechecks;
+   * absent reads as off, and the program key is then unchanged.
+   *
+   * Whether a given TILE actually draws its bundle is a separate, per-tile
+   * question answered by the `uUseBundle` uniform — this axis only decides
+   * whether the sampler exists in the program at all.
+   */
+  bundlePath?: boolean;
+  /**
    * Where the live magnitude comes from: the value-matrix TEXTURE (the real
    * path) or a CPU-expanded per-instance ATTRIBUTE (hosts without vertex
    * texture fetch).
@@ -662,6 +724,7 @@ const DEFAULT_SHADER_CONFIG: FlowmapShaderConfig = Object.freeze({
   filter: false,
   colorMode: 'direction',
   bundle: true,
+  bundlePath: false,
   magnitude: 'texture',
   format: 'float32',
   pick: false,
@@ -698,6 +761,8 @@ const MODE_ALPHA: Readonly<Record<FlowmapTimeFilterMode, string>> =
 const FILTER_ATTRIBUTE = DATA_FILTER_ATTRIBUTE_GLSL.replace(/^\n/, '');
 const FILTER_UNIFORMS = DATA_FILTER_UNIFORMS_GLSL.replace(/^\n/, '');
 const FLOW_UNIFORMS = FLOW_MATRIX_UNIFORMS_GLSL.replace(/^\n/, '');
+const BUNDLE_ATTRIBUTE = BUNDLE_ATTRIBUTE_GLSL.replace(/^\n/, '');
+const BUNDLE_UNIFORMS = BUNDLE_UNIFORMS_GLSL.replace(/^\n/, '');
 
 /** Gradient endpoints — declared by `direction` AND `category` (its fallback). */
 const GRADIENT_UNIFORMS = `  uniform vec4 uSourceColor;
@@ -758,7 +823,19 @@ export function buildFlowmapVertexSource(
   shader: ShaderInjection,
   cfg: FlowmapShaderConfig = DEFAULT_SHADER_CONFIG,
 ): string {
-  const { mode, filter, colorMode, bundle, magnitude, format, pick } = cfg;
+  const {
+    mode,
+    filter,
+    colorMode,
+    bundle,
+    bundlePath = false,
+    magnitude,
+    format,
+    pick,
+  } = cfg;
+  // Either curved path finite-differences its own tangent; a chord reuses the
+  // one it already projected.
+  const curved = bundle || bundlePath;
   const usesPrelude = shader.prelude.length > 0;
   const header = usesPrelude ? `${shader.prelude}\n${shader.define}\n` : '';
   const matrixUniform = usesPrelude ? '' : '  uniform mat4 uMatrix;\n';
@@ -817,24 +894,34 @@ export function buildFlowmapVertexSource(
 `
     : '    vAlpha = timeAlpha * activeMask;\n';
 
-  const pathFn = bundle
-    ? `  // Pre-baked bundle geometry: a quadratic Bézier through the archive's own
-  // bundle apex. A plain 2-vertex OD feature gets control = chord midpoint, for
-  // which this reduces ALGEBRAICALLY to mix(aSource, aTarget, t).
-  vec2 sttFlowPathAt(float t) {
+  // The path a tile draws when it has NO live bundle — which is every tile when
+  // `bundlePath` is off, and a declined tile when it is on.
+  const fallbackPath = bundle
+    ? `    // Pre-baked bundle geometry: a quadratic Bézier through the archive's own
+    // bundle apex. A plain 2-vertex OD feature gets control = chord midpoint,
+    // for which this reduces ALGEBRAICALLY to mix(aSource, aTarget, t).
     float mt = 1.0 - t;
     return mt * mt * aSource + 2.0 * mt * t * aControl + t * t * aTarget;
-  }
+`
+    : `    return mix(aSource, aTarget, t);
+`;
+  // `uUseBundle` is a per-TILE data property (did THIS tile get bundled?), not
+  // a layer mode, so it is a uniform branch rather than a compiled axis —
+  // exactly the shape `uUseFeatureColor` takes for a tile missing its colour
+  // column. One program serves a bundled tile and a declined one alike.
+  const pathFn = bundlePath
+    ? `  vec2 sttFlowPathAt(float t) {
+    if (uUseBundle > 0.5) return ${BUNDLE_PATH_CALL_GLSL};
+${fallbackPath}  }
 `
     : `  vec2 sttFlowPathAt(float t) {
-    return mix(aSource, aTarget, t);
-  }
+${fallbackPath}  }
 `;
   // Direction drives the perpendicular the ribbon extrudes along AND the
   // arrowhead's aim. A straight arrow reuses the chord it already projected; a
   // bundled one finite-differences its own curve, looking BACKWARD at the tip
   // (and negating) so the head still points at the destination.
-  const dirBlock = bundle
+  const dirBlock = curved
     ? `    float ahead = step(t, 1.0 - STT_TANGENT_DT);
     vec4 thereClip = ${project('sttFlowPathAt(mix(t - STT_TANGENT_DT, t + STT_TANGENT_DT, ahead))')};
     vec2 dirPx = (thereClip.xy / thereClip.w - hereClip.xy / hereClip.w)
@@ -846,7 +933,7 @@ export function buildFlowmapVertexSource(
   attribute vec3 aVertex;      // (regionT, side ∈ {-1,+1}, region: 0 shaft / 1 head), per-vertex
   attribute vec2 aSource;      // mercator origin, per-instance
   attribute vec2 aTarget;      // mercator destination (antimeridian-unwrapped), per-instance
-${bundle ? '  attribute vec2 aControl;     // baked-bundle quadratic control point, mercator\n' : ''}  attribute vec2 aTime;        // [startTime, endTime], per-instance, tile-relative
+${bundle ? '  attribute vec2 aControl;     // baked-bundle quadratic control point, mercator\n' : ''}${bundlePath ? BUNDLE_ATTRIBUTE : ''}  attribute vec2 aTime;        // [startTime, endTime], per-instance, tile-relative
 ${magnitudeAttribute}${colorDecls}${filter ? FILTER_ATTRIBUTE : ''}${matrixUniform}  uniform vec2 uViewport;
   uniform float uMinFlow;
   uniform float uWidthScale;
@@ -859,8 +946,8 @@ ${magnitudeAttribute}${colorDecls}${filter ? FILTER_ATTRIBUTE : ''}${matrixUnifo
   uniform float uHeadMaxFraction;
   uniform float uTailScale;
   uniform vec2 uEndpointInset;
-${usesTexture ? FLOW_UNIFORMS : ''}${TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE[mode]}${filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
-${bundle ? '\n  const float STT_TANGENT_DT = 0.01;\n' : ''}${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}${sampler}${FLOW_WIDTH_GLSL}
+${usesTexture ? FLOW_UNIFORMS : ''}${bundlePath ? BUNDLE_UNIFORMS : ''}${TIME_MODE_UNIFORM_DECLS_WITH_WAKE_TAIL_SCALE[mode]}${filter ? FILTER_UNIFORMS : ''}  varying float vAlpha;
+${curved ? '\n  const float STT_TANGENT_DT = 0.01;\n' : ''}${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}${sampler}${FLOW_WIDTH_GLSL}${bundlePath ? BUNDLE_PATH_GLSL : ''}
 ${pathFn}
   void main() {
     float magnitude = ${magnitudeExpr};
@@ -927,7 +1014,9 @@ export function flowmapProgramKey(cfg: FlowmapShaderConfig): string {
     cfg.magnitude === 'texture' ? flowSamplerCacheKey(cfg.format) : 'flow-attr';
   return `flowmap:${cfg.pick ? 'pick:' : ''}${cfg.mode}${
     cfg.filter ? ':filter' : ''
-  }:${cfg.colorMode}${cfg.bundle ? ':bundle' : ''}:${magnitude}`;
+  }:${cfg.colorMode}${cfg.bundle ? ':bundle' : ''}${
+    cfg.bundlePath ? ':kdeeb' : ''
+  }:${magnitude}`;
 }
 
 const FS_SOURCE = `
@@ -959,7 +1048,8 @@ interface FlowmapProgramHandles
     TimeUniformLocations,
     WakeTailScaleUniformLocation,
     DataFilterUniformLocations,
-    FilterTransformSizeUniformLocation {
+    FilterTransformSizeUniformLocation,
+    BundleUniformLocations {
   program: WebGLProgram;
   /** True when the source was built with the host prelude (v5+ variants). */
   usesPrelude: boolean;
@@ -968,6 +1058,8 @@ interface FlowmapProgramHandles
   aTarget: number;
   /** -1 unless the baked-bundle path compiled the control point in. */
   aControl: number;
+  /** -1 unless the live-bundle sampler compiled in. */
+  aBundleRow: number;
   aTime: number;
   /** -1 on the CPU-fallback path. */
   aFlowRow: number;
@@ -1034,6 +1126,22 @@ interface FlowmapGpuCache extends TileGpuCache {
   rows: Float32Array;
   /** GPU texture holding {@link packed}; absent on the CPU-fallback path. */
   matrixTexture?: WebGLTexture;
+  /**
+   * `bundlePoints × instanceCount` control-point texture — present only when
+   * the live bundler produced geometry for THIS tile AND the upload succeeded.
+   * Its absence is what sets `uUseBundle` to 0, so a declined tile falls back
+   * to the straight / baked-Bézier arrow instead of sampling a null sampler.
+   */
+  bundleTexture?: WebGLTexture;
+  /** Control points per edge in {@link bundleTexture}; 0 when there is none. */
+  bundlePoints: number;
+  /**
+   * Per-instance row into {@link bundleTexture} — the instance index, since the
+   * bundler emits one row per OD pair in instance order. Distinct from
+   * {@link rowBuffer}, which indexes the VALUE matrix and is a global vertex
+   * index on the matrix path.
+   */
+  bundleRowBuffer?: WebGLBuffer;
   /** This tile's timestep axis, or null when it carries only a static column. */
   axis: FlowBucketAxis | null;
   /** Observed magnitude range — the per-tile default `colorDomain`. */
@@ -1126,6 +1234,16 @@ export class STTFlowmapLayer extends STTFilterableLayer {
   private readonly endpointInset = new Float32Array(2);
   /** Allocated once — the resolved `[lo, hi]` magnitude colour domain. */
   private readonly colorDomain = new Float32Array(2);
+  /** Allocated once — `[pointsPerEdge, 1/pointsPerEdge, 1/edgeCount]`. */
+  private readonly bundleShape = new Float32Array(3);
+  /**
+   * Live-bundling knobs, or null when the feature is off. Null is the whole
+   * feature switch: no bundle is built, no texture is allocated, and
+   * `shaderConfig.bundlePath` stays false so the sampler never compiles.
+   */
+  private readonly bundleOpts: FlowBundleOptions | null;
+  /** One warning per layer when the host cannot run the bundle sampler. */
+  private warnedNoBundling = false;
   /** Compiled configuration; drives both program-cache keys. */
   private shaderConfig: FlowmapShaderConfig;
   private mainKey: string;
@@ -1199,6 +1317,7 @@ export class STTFlowmapLayer extends STTFilterableLayer {
       trailLength: opts.trailLength ?? halfWindow,
       fadeTrail: resolveTrailFade(opts.fadeTrail),
     };
+    this.bundleOpts = resolveBundlingOptions(opts.bundling);
     this.shaderConfig = {
       // Placeholder — `resolveTimeConfig()` below owns the compiled mode.
       mode: 'window',
@@ -1209,7 +1328,11 @@ export class STTFlowmapLayer extends STTFilterableLayer {
       colorMode:
         opts.colorMode ?? (opts.colorProperty ? 'category' : 'direction'),
       bundle: opts.bundleGeometry !== false,
-      // Both resolved against the live context in `onContextReady`.
+      // Optimistic, exactly like `magnitude` below: `onContextReady` re-resolves
+      // it against the live context before any frame is drawn, and turns it off
+      // (with one warning) on a host that cannot sample the bundle.
+      bundlePath: resolveBundlingOptions(opts.bundling) !== null,
+      // All three resolved against the live context in `onContextReady`.
       magnitude: 'texture',
       format: 'float32',
       pick: false,
@@ -1337,18 +1460,43 @@ export class STTFlowmapLayer extends STTFilterableLayer {
           `${CPU_FALLBACK_SUB_STEP} timestep sub-step, not per frame).`,
       );
     }
+    // Sampleable float textures: WebGL2 always, WebGL1 only with the extension.
+    // Both the value matrix and the bundle need this, so it is probed once.
+    const floatTextures =
+      isWebGL2(gl) || Boolean(gl.getExtension('OES_texture_float'));
     const format = chooseFlowMatrixFormat({
       webgl2: isWebGL2(gl),
-      floatTextures: Boolean(gl.getExtension('OES_texture_float')),
+      floatTextures,
     });
+    // The live bundler needs to SAMPLE float control points in the vertex
+    // stage. It deliberately does NOT need float-renderable attachments or
+    // `EXT_float_blend` — the density splat runs on the CPU here, so requiring
+    // deck's stricter gate would switch the feature off on hardware that runs
+    // it perfectly (`isBundlingSupported` spells this out).
+    const bundlePath =
+      this.bundleOpts !== null &&
+      isBundlingSupported({
+        vertexTextureFetch: magnitude === 'texture',
+        floatTextures,
+        maxTextureSize: maxTextureSizeOf(gl),
+      });
+    if (this.bundleOpts !== null && !bundlePath && !this.warnedNoBundling) {
+      this.warnedNoBundling = true;
+      console.warn(
+        `[${this.id}] host cannot sample a float texture in the vertex stage; ` +
+          `STTFlowmapLayer draws STRAIGHT arrows instead of KDEEB bundles.`,
+      );
+    }
     if (
       magnitude === this.shaderConfig.magnitude &&
-      format === this.shaderConfig.format
+      format === this.shaderConfig.format &&
+      bundlePath === this.shaderConfig.bundlePath
     ) {
       return;
     }
     this.shaderConfig.magnitude = magnitude;
     this.shaderConfig.format = format;
+    this.shaderConfig.bundlePath = bundlePath;
     this.rebuildProgramKeys();
     // A format/path flip changes the PACKING, not just the shader — the tiles
     // that were packed for the old one must be rebuilt. `rebuildTileCaches`
@@ -1357,10 +1505,7 @@ export class STTFlowmapLayer extends STTFilterableLayer {
     // reachable at the initial `onAdd` (caches empty) or after a context
     // restore (`onContextLost` already cleared both), so the loop is a no-op —
     // it is here so the invariant holds if a future path calls it live.
-    for (const cache of this.liveCaches) {
-      if (cache.matrixTexture) gl.deleteTexture(cache.matrixTexture);
-      cache.matrixTexture = undefined;
-    }
+    for (const cache of this.liveCaches) this.freeCacheTextures(gl, cache);
     this.liveCaches.clear();
     this.rebuildTileCaches();
   }
@@ -1374,10 +1519,7 @@ export class STTFlowmapLayer extends STTFilterableLayer {
     // drop the references either way (deletes on a lost context are ignored).
     for (const buf of this.templateBuffers.values()) gl.deleteBuffer(buf);
     this.templateBuffers.clear();
-    for (const cache of this.liveCaches) {
-      if (cache.matrixTexture) gl.deleteTexture(cache.matrixTexture);
-      cache.matrixTexture = undefined;
-    }
+    for (const cache of this.liveCaches) this.freeCacheTextures(gl, cache);
     this.liveCaches.clear();
     this.handles = undefined;
     this.handlesVariant = undefined;
@@ -1407,16 +1549,32 @@ export class STTFlowmapLayer extends STTFilterableLayer {
     if (this.drewThisFrame) this.reapEvictedTextures(gl);
   }
 
-  /** Delete the matrix textures of caches that were not drawn this frame. */
+  /** Delete the textures of caches that were not drawn this frame. */
   private reapEvictedTextures(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
   ): void {
     for (const cache of this.liveCaches) {
       if (cache.frameStamp === this.frameStamp) continue;
-      if (cache.matrixTexture) gl.deleteTexture(cache.matrixTexture);
-      cache.matrixTexture = undefined;
+      this.freeCacheTextures(gl, cache);
       this.liveCaches.delete(cache);
     }
+  }
+
+  /**
+   * Free every texture ONE cache owns. The base class frees BUFFERS on
+   * eviction and knows nothing about textures, so both of this layer's live in
+   * here — and both must be dropped together, or a context restore would leave
+   * a cache half-populated with handles from a dead context.
+   */
+  private freeCacheTextures(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    cache: FlowmapGpuCache,
+  ): void {
+    if (cache.matrixTexture) gl.deleteTexture(cache.matrixTexture);
+    cache.matrixTexture = undefined;
+    if (cache.bundleTexture) gl.deleteTexture(cache.bundleTexture);
+    cache.bundleTexture = undefined;
+    cache.bundlePoints = 0;
   }
 
   /**
@@ -1439,18 +1597,31 @@ export class STTFlowmapLayer extends STTFilterableLayer {
   }
 
   /**
-   * Shaft segments to draw this tile with. Off globe it is the configured count.
-   * On globe the arrow's own tessellation IS the subdivision that keeps chords
-   * from being horizon-clipped, so the count is raised (never lowered) until
-   * each piece is shorter than the host's granularity — a different shared
-   * template buffer, never a tile rebuild.
+   * Shaft segments to draw this tile with. Off globe it is the configured count,
+   * FLOORED at the bundle's own resolution. On globe the arrow's own
+   * tessellation IS the subdivision that keeps chords from being
+   * horizon-clipped, so the count is raised (never lowered) until each piece is
+   * shorter than the host's granularity — a different shared template buffer,
+   * never a tile rebuild.
+   *
+   * The bundle floor matters: a river of `P` control points drawn with 8 shaft
+   * segments samples 9 of them and cuts every corner in between, which throws
+   * away most of what the bundler computed. `P` points need `P - 1` segments to
+   * be visited exactly. Raised, never lowered — a caller asking for MORE still
+   * gets more — and it costs vertices only.
    */
   private segmentsFor(
     frame: HostFrame,
     tile: Tile,
     cache: FlowmapGpuCache,
   ): number {
-    const base = this.flowOpts.shaftSegments;
+    const base = Math.min(
+      MAX_FLOWMAP_SEGMENTS,
+      Math.max(
+        this.flowOpts.shaftSegments,
+        cache.bundleTexture ? cache.bundlePoints - 1 : 0,
+      ),
+    );
     if (!frame.isGlobe) return base;
     const granularity = this.tileSubdivisionGranularity(tile.id.z);
     const needed = Math.ceil(cache.maxSpan * granularity);
@@ -1613,6 +1784,44 @@ export class STTFlowmapLayer extends STTFilterableLayer {
       extras.push(filterBuffer);
     }
 
+    // ── the live bundle ────────────────────────────────────────────────────
+    // STATIC GEOMETRY, computed exactly here: once per tile upload, never per
+    // frame, never on a style or playhead change. The KDEEB iteration itself is
+    // `bundleEdges()` in @poopdeck.gl/core — this backend does not own a second
+    // copy of it (see lib/edge-bundler.ts for why, and for the cost).
+    let bundleTexture: WebGLTexture | undefined;
+    let bundleRowBuffer: WebGLBuffer | undefined;
+    let bundlePoints = 0;
+    if (this.shaderConfig.bundlePath && this.bundleOpts) {
+      // A null here is the ORDINARY "this tile is not bundled" answer — one
+      // edge, over the cap, over the host's texture ceiling, or spatially
+      // degenerate. Nothing is allocated and `uUseBundle` stays 0, so the tile
+      // draws the straight / baked-Bézier arrow it drew before the campaign.
+      const bundle = buildFlowBundle(
+        {
+          positions: f.positions,
+          startIndices: f.startIndices,
+          dims: posDims,
+          sourceM: srcM,
+          targetM: tgtM,
+          edgeCount: count,
+          unwrapX: unwrapFlowMercatorX,
+        },
+        this.bundleOpts,
+        packOpts.maxTextureSize,
+      );
+      if (bundle) {
+        bundleTexture = this.uploadBundleTexture(gl, bundle) ?? undefined;
+        if (bundleTexture) {
+          bundlePoints = bundle.pointsPerEdge;
+          const bundleRows = new Float32Array(count);
+          for (let i = 0; i < count; i++) bundleRows[i] = i;
+          bundleRowBuffer = this.uploadArrayBuffer(gl, bundleRows);
+          extras.push(bundleRowBuffer);
+        }
+      }
+    }
+
     const cache: FlowmapGpuCache = {
       // The base cleanup walk deletes `positionBuffer`/`timeBuffer`/`extraBuffers`,
       // so the origins ride in the "primary" slot.
@@ -1634,6 +1843,9 @@ export class STTFlowmapLayer extends STTFilterableLayer {
         this.shaderConfig.magnitude === 'texture'
           ? (this.uploadMatrixTexture(gl, packed) ?? undefined)
           : undefined,
+      bundleTexture,
+      bundleRowBuffer,
+      bundlePoints,
       axis: deriveFlowAxis(f),
       magnitudeMin,
       magnitudeMax,
@@ -1771,6 +1983,65 @@ export class STTFlowmapLayer extends STTFilterableLayer {
   }
 
   /**
+   * Upload one tile's bundled control points as a `P × E` RGBA-float texture.
+   * NEAREST + CLAMP_TO_EDGE — the interpolation BETWEEN control points happens
+   * in the shader, so no `OES_texture_float_linear` is needed — with the same
+   * unpack-flag dance {@link uploadMatrixTexture} documents: those flags apply
+   * to ArrayBufferView uploads too, maplibre mirrors both in cached
+   * `BaseValue`s, and a flipped bundle would mirror every river about the
+   * tile's centre latitude.
+   *
+   * A failed upload returns null and the tile simply is not bundled — there is
+   * always a straight arrow to fall back to, so this is never fatal.
+   */
+  private uploadBundleTexture(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    bundle: FlowBundle,
+  ): WebGLTexture | null {
+    const recipe = BUNDLE_TEXTURE_RECIPE[isWebGL2(gl) ? 'webgl2' : 'webgl1'];
+    const enums = gl as unknown as Record<string, number>;
+    const texture = gl.createTexture();
+    if (!texture) return null;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    const canSetUnpack =
+      typeof (gl as { pixelStorei?: unknown }).pixelStorei === 'function';
+    const premultiplied =
+      canSetUnpack && Boolean(gl.getParameter(UNPACK_PREMULTIPLY_ALPHA_WEBGL));
+    const flipped =
+      canSetUnpack && Boolean(gl.getParameter(UNPACK_FLIP_Y_WEBGL));
+    if (premultiplied) gl.pixelStorei(UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    if (flipped) gl.pixelStorei(UNPACK_FLIP_Y_WEBGL, false);
+    try {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        enums[recipe.internalFormat],
+        bundle.pointsPerEdge,
+        bundle.edgeCount,
+        0,
+        enums[recipe.format],
+        enums[recipe.type],
+        bundle.texels as unknown as ArrayBufferView,
+      );
+    } catch (err) {
+      console.warn(
+        `[${this.id}] bundle texture upload failed (${String(err)}); ` +
+          `this tile draws straight arrows.`,
+      );
+      gl.deleteTexture(texture);
+      return null;
+    } finally {
+      if (premultiplied) gl.pixelStorei(UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      if (flipped) gl.pixelStorei(UNPACK_FLIP_Y_WEBGL, true);
+    }
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return texture;
+  }
+
+  /**
    * Fetch (or link) the program for this frame's host variant, the active
    * compiled configuration and this pass. The base cache appends the host
    * variant name, so the mode / filter / colour / bundle / magnitude axes must
@@ -1805,6 +2076,7 @@ export class STTFlowmapLayer extends STTFilterableLayer {
           aSource: glc.getAttribLocation(program, 'aSource'),
           aTarget: glc.getAttribLocation(program, 'aTarget'),
           aControl: attrib('aControl', cfg.bundle),
+          aBundleRow: attrib(BUNDLE_NAMES.row, cfg.bundlePath === true),
           aTime: glc.getAttribLocation(program, 'aTime'),
           aFlowRow: attrib(FLOW_NAMES.row, cfg.magnitude === 'texture'),
           aFlowMagnitude: attrib(
@@ -1848,6 +2120,7 @@ export class STTFlowmapLayer extends STTFilterableLayer {
             FLOW_NAMES.valueScale,
           ),
           uFlowBucket: glc.getUniformLocation(program, FLOW_NAMES.bucket),
+          ...resolveBundleUniformLocations(glc, program),
           ...resolveTimeUniformLocations(glc, program),
           ...resolveWakeTailScaleUniformLocation(glc, program),
           ...resolveDataFilterUniformLocations(glc, program),
@@ -1965,6 +2238,39 @@ export class STTFlowmapLayer extends STTFilterableLayer {
     cache.magnitudeStep = stepped;
   }
 
+  /**
+   * Bind this tile's bundle, if it has one.
+   *
+   * `uUseBundle` is the per-TILE switch: a tile the bundler declined (over the
+   * edge cap, spatially degenerate, a failed upload) uploads 0 and the shader
+   * takes its straight / baked-Bézier branch instead of sampling a texture that
+   * is not there.
+   *
+   * The active texture unit is put BACK on TEXTURE0 unconditionally. maplibre
+   * caches the active unit and skips redundant `activeTexture` calls, so a unit
+   * left on 1 is not self-healing — it silently redirects the host's next
+   * texture bind, and on the CPU-magnitude path nothing else would reset it.
+   */
+  private setBundleUniforms(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    h: FlowmapProgramHandles,
+    cache: FlowmapGpuCache,
+  ): void {
+    if (this.shaderConfig.bundlePath !== true) return;
+    const has = Boolean(cache.bundleTexture) && cache.bundlePoints > 0;
+    gl.uniform1f(h.uUseBundle, has ? 1 : 0);
+    if (!has) return;
+    this.bundleShape[0] = cache.bundlePoints;
+    this.bundleShape[1] = 1 / cache.bundlePoints;
+    this.bundleShape[2] = 1 / cache.instanceCount;
+    gl.uniform3fv(h.uBundleShape, this.bundleShape);
+    // TEXTUREi is spec-guaranteed to be TEXTURE0 + i.
+    gl.activeTexture(gl.TEXTURE0 + 1);
+    gl.bindTexture(gl.TEXTURE_2D, cache.bundleTexture ?? null);
+    gl.uniform1i(h.uBundlePositions, 1);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
   /** Colour uniforms for the compiled mode. */
   private setColorUniforms(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -2043,6 +2349,7 @@ export class STTFlowmapLayer extends STTFilterableLayer {
     this.endpointInset[0] = o.sourceInsetPixels;
     this.endpointInset[1] = o.targetInsetPixels;
     gl.uniform2fv(h.uEndpointInset, this.endpointInset);
+    this.setBundleUniforms(gl, h, cache);
     this.setMagnitudeUniforms(gl, h, cache, ctx);
     this.setTimeUniforms(gl, h, cache, ctx);
     if (this.shaderConfig.filter) {
@@ -2091,6 +2398,12 @@ export class STTFlowmapLayer extends STTFilterableLayer {
       gl.enableVertexAttribArray(h.aControl);
       gl.vertexAttribPointer(h.aControl, 2, gl.FLOAT, false, 0, 0);
       this.instSupport.vertexAttribDivisor(h.aControl, 1);
+    }
+    if (c.bundleRowBuffer && h.aBundleRow >= 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, c.bundleRowBuffer);
+      gl.enableVertexAttribArray(h.aBundleRow);
+      gl.vertexAttribPointer(h.aBundleRow, 1, gl.FLOAT, false, 0, 0);
+      this.instSupport.vertexAttribDivisor(h.aBundleRow, 1);
     }
     if (c.rowBuffer && h.aFlowRow >= 0) {
       gl.bindBuffer(gl.ARRAY_BUFFER, c.rowBuffer);
@@ -2226,6 +2539,10 @@ export class STTFlowmapLayer extends STTFilterableLayer {
       h.aTarget,
       h.aTime,
       h.aControl,
+      // Mirrors bindSharedAttributes' condition: a tile that was not bundled
+      // never enabled this slot, so disabling it would leave the two out of
+      // step (the same reason `aColor` is guarded below).
+      c.bundleRowBuffer ? h.aBundleRow : -1,
       h.aFlowRow,
       h.aFlowMagnitude,
       h.aFilterValue,
@@ -2240,6 +2557,19 @@ export class STTFlowmapLayer extends STTFilterableLayer {
     }
     gl.deleteBuffer(idBuffer);
   }
+}
+
+/**
+ * Normalize the `bundling` option to knobs-or-off. `true` means "the defaults";
+ * an object is taken as given; `false` and `undefined` are both off, which is
+ * the pre-campaign behaviour and stays the default — bundling is opt-in because
+ * it costs a real, measurable hitch on the tile-upload path.
+ */
+function resolveBundlingOptions(
+  bundling: boolean | FlowBundleOptions | undefined,
+): FlowBundleOptions | null {
+  if (bundling === undefined || bundling === false) return null;
+  return bundling === true ? {} : bundling;
 }
 
 /** `numSegments` sanitized to `[1, MAX_FLOWMAP_SEGMENTS]` integers. */

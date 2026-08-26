@@ -60,7 +60,7 @@ flowCorridor · flowStroke · isoLines · ego
 
 Each concrete layer class documented elsewhere in `docs/api/` backs exactly
 one of these kinds (e.g. deck's `AnimatedPointLayer`, three's
-`STTPointCloudLayer` and maplibre's / cesium's `STTPointLayer` all back `point` in their respective
+`STTPointLayer` and maplibre's / cesium's `STTPointLayer` all back `point` in their respective
 backends).
 
 ### `Capability` — cross-cutting engine traits
@@ -207,7 +207,7 @@ reality:
 
 - **Layer-kind evidence is structural**: for every `LayerKind` the descriptor
   claims `supported: true`, the test maps it to the concrete class expected to
-  back it (e.g. `point` → `AnimatedPointLayer` for deck.gl, `STTPointCloudLayer`
+  back it (e.g. `point` → `AnimatedPointLayer` for deck.gl, `STTPointLayer`
   for three) and checks that class is a real, live export from the package's
   `src/index.ts`. A renamed or deleted export drops that kind out of the
   proven set and trips the gate — this is the mechanism that stops the

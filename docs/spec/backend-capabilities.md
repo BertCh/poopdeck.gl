@@ -22,12 +22,12 @@
 | picking | ✅ | ✅ | ✅ | ✅ |
 | extrude3d | ✅ | ✅ | ✅ | ✅ |
 | metricSizing | ✅ | ✅ | ✅ | ✅ |
-| gpuHeatmap | ✅ | — | ✅ | — |
-| liveBundling | ✅ | — | — | — |
-| timeAsHeight | ✅ | ✅ | ✅ | — |
+| gpuHeatmap | ✅ | ✅ | ✅ | — |
+| liveBundling | ✅ | ✅ | ✅ | ✅ |
+| timeAsHeight | ✅ | ✅ | ✅ | ✅ |
 | interleavedBasemap | ✅ | — | ✅ | ✅ |
-| userExtensions | ✅ | — | — | — |
-| cameraRoll | — | — | — | ✅ |
+| userExtensions | ✅ | ✅ | ✅ | ✅ |
+| cameraRoll | — | ✅ | ✅ | ✅ |
 
 ## Time-filter modes
 | Mode | deck | three | maplibre | cesium |
@@ -42,26 +42,26 @@
 | Layer kind | deck | three | maplibre | cesium |
 | --- | --- | --- | --- | --- |
 | point | ✅ | ✅ | ✅ | ✅ |
-| path | ✅ | ✅ | — | ✅ |
-| polygon | ✅ | ✅ | ✅ | — |
+| path | ✅ | ✅ | ✅ | ✅ |
+| polygon | ✅ | ✅ | ✅ | ✅ |
 | arc | ✅ | ✅ | ✅ | ✅ |
 | line | ✅ | ✅ | ✅ | ✅ |
-| icon | ✅ | ✅ | ✅ | — |
-| column | ✅ | ✅ | ✅ | — |
+| icon | ✅ | ✅ | ✅ | ✅ |
+| column | ✅ | ✅ | ✅ | ✅ |
 | trips | ✅ | ✅ | ✅ | ✅ |
 | tripHeads | ✅ | ✅ | ✅ | ✅ |
-| boundingBox | ✅ | ✅ | — | — |
-| surfel | ✅ | ✅ | — | ↳ point |
-| heatmap | ✅ | ↳ point | ✅ | — |
-| h3Summary | ✅ | ✅ | ✅ | — |
-| quadbinSummary | ✅ | ✅ | ✅ | — |
-| flowmap | ✅ | ✅ | ✅ | ↳ line |
-| flowCorridor | ✅ | ✅ | ✅ | ↳ line |
-| flowStroke | ✅ | ↳ flowCorridor | ✅ | ↳ line |
-| isoLines | ↳ path | ✅ | — | ↳ path |
-| ego | — | ✅ | — | — |
-| text | ✅ | ↳ icon | ↳ icon | — |
-| mesh | ✅ | ↳ boundingBox | — | — |
-| pointCloud | ✅ | ↳ point | ↳ point | ↳ point |
-| hexbin | ✅ | ↳ h3Summary | ✅ | — |
+| boundingBox | ✅ | ✅ | ✅ | ✅ |
+| surfel | ✅ | ✅ | ✅ | ✅ |
+| heatmap | ✅ | ✅ | ✅ | ✅ |
+| h3Summary | ✅ | ✅ | ✅ | ✅ |
+| quadbinSummary | ✅ | ✅ | ✅ | ✅ |
+| flowmap | ✅ | ✅ | ✅ | ✅ |
+| flowCorridor | ✅ | ✅ | ✅ | ✅ |
+| flowStroke | ✅ | ✅ | ✅ | ✅ |
+| isoLines | ↳ path | ✅ | ✅ | ✅ |
+| ego | — | ✅ | ✅ | ✅ |
+| text | ✅ | ✅ | ✅ | ✅ |
+| mesh | ✅ | ✅ | ✅ | ✅ |
+| pointCloud | ✅ | ✅ | ✅ | ✅ |
+| hexbin | ✅ | ✅ | ✅ | ✅ |
 

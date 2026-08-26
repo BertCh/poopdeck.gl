@@ -99,6 +99,12 @@ import {
   type FilterTransformSizeUniformLocation,
   type STTDataFilterOptions,
 } from '../shaders/data-filter.glsl.js';
+// Spliced ONLY behind `LineVertexVariant.iso` (the `isoLines` kind, see
+// `./iso-layer.ts`). Every `iso`-off source below is byte-identical without it.
+import {
+  ISO_RAMP_GLSL,
+  ISO_RAMP_UNIFORMS_GLSL,
+} from '../shaders/iso-ramp.glsl.js';
 
 // Shared with @poopdeck.gl/layers AnimatedPathLayer (single source of truth in
 // @poopdeck.gl/core).
@@ -449,6 +455,14 @@ export interface LineVertexVariant {
   filter?: boolean;
   /** Emit the flat id-colour pick pass instead of the visual one. */
   pick?: boolean;
+  /**
+   * Compile the iso-LEVEL styling branch in: a per-instance `aLevel`
+   * attribute, the `shaders/iso-ramp.glsl.ts` kernel, and a colour / width /
+   * major-emphasis pass driven from the `uLevelDomain` uniform. Owned by the
+   * `isoLines` kind ({@link STTIsoLayer}); absent or `false` emits the exact
+   * source this builder emitted before the flag existed.
+   */
+  iso?: boolean;
 }
 
 /**
@@ -473,6 +487,7 @@ export function buildLineVertexSource(
   const mode = variant.mode ?? 'window';
   const pick = variant.pick === true;
   const filter = variant.filter === true;
+  const iso = variant.iso === true;
   const v5 = shader.prelude.length > 0;
   const header = v5 ? `${shader.prelude}\n${shader.define}` : '';
   const matrixDecl = v5 ? '' : 'uniform mat4 uMatrix;\n  ';
@@ -491,7 +506,13 @@ export function buildLineVertexSource(
   varying vec4 vColor;`;
   const colorAssign = pick
     ? 'vIdColor = aIdColor;'
-    : 'vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;';
+    : iso
+      ? // The level ramp IS the colour — but only where the tile actually
+        // carried the level column. `uUseLevel` is 0 for a tile without it, and
+        // that tile falls back to the flat / categorical line colour instead of
+        // rendering every contour as the ramp's first stop.
+        'vColor = mix((uUseFeatureColor > 0.5) ? aColor : uColor, isoColor, uUseLevel);'
+      : 'vColor = (uUseFeatureColor > 0.5) ? aColor : uColor;';
   // Wake shrinks the tail with the SAME alpha the kernel returned, so the
   // narrowing and the fade cannot drift apart.
   const wakeSize =
@@ -528,6 +549,35 @@ export function buildLineVertexSource(
   // unstable exactly at the frontier. Clipping runs along the same chord, so
   // the direction is unchanged — and whenever the segment is visible at all
   // (`head > tail`) the clipped point can never coincide with the far end.
+  // ── iso-level splices — all empty strings unless `variant.iso` ──────────
+  const isoAttribute = iso
+    ? '\n  attribute float aLevel;      // per-feature contour level, per-instance'
+    : '';
+  const isoUniforms = iso ? `\n${ISO_RAMP_UNIFORMS_GLSL.trimEnd()}` : '';
+  const isoKernel = iso ? ISO_RAMP_GLSL : '';
+  // Evaluated from a UNIFORM domain, never from a baked per-feature colour:
+  // the domain widens as tiles stream in, and a baked colour would strand
+  // every already-resident tile on the stale one.
+  const isoPrologue = iso
+    ? `    float isoT = sttIsoLevelT(aLevel, uLevelDomain);
+    vec4 isoColor = sttIsoRampColor(isoT);
+    float isoMajor = sttIsoMajor(aLevel, uMajorInterval) * uUseLevel;
+    float isoEmphasized = (uMajorInterval > 0.0) ? uUseLevel : 0.0;
+    float isoMinorFade = mix(1.0, mix(uMinorOpacity, 1.0, isoMajor), isoEmphasized);
+    float isoWidthPx = sttIsoWidth(
+      isoT,
+      (uUseFeatureWidth > 0.5 ? aWidth : uWidth),
+      uWidthByLevel * uUseLevel,
+      uWidthRange
+    ) * mix(1.0, uMajorWidthScale, isoMajor);
+`
+    : '';
+  const widthBase = iso
+    ? 'isoWidthPx'
+    : '(uUseFeatureWidth > 0.5 ? aWidth : uWidth)';
+  // Applied to BOTH passes, so a contour dimmed to nothing by `minorOpacity`
+  // or `opacity` is unpickable as well as invisible.
+  const isoAlpha = iso ? '    vAlpha *= uOpacity * isoMinorFade;\n' : '';
   const revealCollapse = reveal
     ? '    if (revealVisible <= 0.0) gl_Position = vec4(0.0);\n'
     : '';
@@ -537,17 +587,17 @@ export function buildLineVertexSource(
   attribute vec2 aPosA;        // segment start, per-instance
   attribute vec2 aPosB;        // segment end, per-instance
 ${MODE_TIME_ATTRIBUTE[mode]}
-  attribute float aWidth;      // per-feature width (when uUseFeatureWidth=1)
+  attribute float aWidth;      // per-feature width (when uUseFeatureWidth=1)${isoAttribute}
 ${colorDecls}
 ${filter ? DATA_FILTER_ATTRIBUTE_GLSL.trimEnd() : ''}
   ${matrixDecl}uniform vec2 uViewport;
   uniform float uWidth;
   uniform float uWidthScale;
-  uniform float uUseFeatureWidth;
+  uniform float uUseFeatureWidth;${isoUniforms}
 ${MODE_UNIFORMS[mode].trimEnd()}
 ${filter ? DATA_FILTER_UNIFORMS_GLSL.trimEnd() : ''}
   varying float vAlpha;
-${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}
+${MODE_KERNEL[mode]}${filter ? DATA_FILTER_GLSL : ''}${isoKernel}
   void main() {
 ${revealPrologue}${posLine}
     vec2 neighborM = mix(aPosB, aPosA, aCorner.y); // and its neighbour
@@ -565,7 +615,7 @@ ${revealPrologue}${posLine}
     float sideSign = (aCorner.y > 0.5) ? -1.0 : 1.0;
     vec2 perp = vec2(-dirN.y, dirN.x) * sideSign;
     float timeAlpha = ${MODE_ALPHA[mode]};
-${filter ? `    float filterAlpha = ${DATA_FILTER_CALL_GLSL};\n` : ''}    float widthPx = (uUseFeatureWidth > 0.5 ? aWidth : uWidth) * uWidthScale${wakeSize};
+${filter ? `    float filterAlpha = ${DATA_FILTER_CALL_GLSL};\n` : ''}${isoPrologue}    float widthPx = ${widthBase} * uWidthScale${wakeSize};
 ${filter ? '    if (uFilterTransformSize > 0.5) widthPx *= filterAlpha;\n' : ''}    vec2 offsetPx = perp * aCorner.x * widthPx * 0.5;
     vec2 offsetNdc = offsetPx / (0.5 * uViewport);
     vec4 outClip = here;
@@ -584,7 +634,7 @@ ${revealCollapse}${
     vAlpha = timeAlpha * filterMask;
 `
       : '    vAlpha = timeAlpha;\n'
-  }    ${colorAssign}
+  }${isoAlpha}    ${colorAssign}
   }
 `;
 }

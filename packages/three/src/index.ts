@@ -230,9 +230,9 @@ export {
   type PointUniformValues,
 } from './tsl/point-material.js';
 export {
-  STTPointCloudLayer,
-  type STTPointCloudLayerOptions,
-} from './layers/point-cloud-layer.js';
+  STTPointLayer,
+  type STTPointLayerOptions,
+} from './layers/point-layer.js';
 export {
   buildPointBuffers,
   pointTileKey,
@@ -527,6 +527,185 @@ export {
   type FlowCorridorBufferOptions,
   type FlowCorridorBuffers,
 } from './lib/flow-corridor-buffers.js';
+
+export {
+  STTFlowStrokeLayer,
+  type STTFlowStrokeLayerOptions,
+} from './layers/flow-stroke-layer.js';
+export {
+  buildFlowStrokePaths,
+  bucketBlendAt,
+  pathPeakAt,
+  strokeWidthFromPeak,
+  computePathWidths,
+  expandPathWidths,
+  flowStrokeSubStep,
+  steppedBucketPos,
+  FLOW_STROKE_SUB_STEP,
+  DEFAULT_WIDTH_EXPONENT,
+  type BucketBlend,
+  type FlowStrokePaths,
+  type FlowStrokeWidthOptions,
+} from './lib/flow-stroke-widths.js';
+
+// ─── Heatmap (per-pixel density: additive splat → ramp resolve) ─────────────────
+export {
+  createHeatmapMaterial,
+  createHeatmapSplatMaterial,
+  createHeatmapRampMaterial,
+  updateHeatmapUniforms,
+  updateHeatmapSplatUniforms,
+  updateHeatmapRampUniforms,
+  HeatmapSplatUniforms,
+  HeatmapRampUniforms,
+  HEATMAP_ATTR,
+  DEFAULT_SPLAT_FALLOFF,
+  type HeatmapKernel,
+  type HeatmapMaterialOptions,
+  type HeatmapSplatMaterialOptions,
+  type HeatmapRampMaterialOptions,
+  type HeatmapMaterialBundle,
+  type HeatmapSplatBundle,
+  type HeatmapRampBundle,
+  type HeatmapUniformValues,
+} from './tsl/heatmap-material.js';
+export {
+  STTHeatmapLayer,
+  type STTHeatmapLayerOptions,
+} from './layers/heatmap-layer.js';
+export {
+  buildHeatmapBuffers,
+  type HeatmapBufferOptions,
+  type HeatmapBuffers,
+} from './lib/heatmap-buffers.js';
+
+// ─── Hexbin (RUNTIME binning of the raw point tier) ─────────────────────────────
+export {
+  createHexbinMaterial,
+  createHexbinIdMaterial,
+  updateHexbinUniforms,
+  HexbinUniforms,
+  type HexbinMaterialOptions,
+  type HexbinMaterialBundle,
+  type HexbinUniformValues,
+} from './tsl/hexbin-material.js';
+export {
+  STTHexbinLayer,
+  type STTHexbinLayerOptions,
+  type STTHexbinPickInfo,
+  type HexbinStats,
+} from './layers/hexbin-layer.js';
+export {
+  buildHexbinBuffers,
+  aggregateHexbins,
+  hexbinValueDomain,
+  hexbinCellValue,
+  hexbinWindowBucket,
+  hexbinBucketTime,
+  hexbinRadiusFromMeters,
+  pointToHexbinAxial,
+  hexbinKey,
+  hexbinKeyI,
+  hexbinKeyJ,
+  hexbinKeyForPoint,
+  hexbinCentroidMercator,
+  resolveHexbinWeightProperty,
+  resolveHexbinLatitude,
+  DEFAULT_HEXBIN_RADIUS_METERS,
+  DEFAULT_HEXBIN_ELEVATION_RANGE,
+  DEFAULT_HEXBIN_COLOR_RANGE,
+  type HexbinAggregation,
+  type HexbinScaleType,
+  type HexbinWeightAccessor,
+  type HexbinWeightOptions,
+  type HexbinBufferOptions,
+  type HexbinBuffers,
+  type HexbinAggregateParams,
+  type HexbinAggregate,
+} from './lib/hexbin-buffers.js';
+
+// ─── Text (time-filtered map labels over an SDF/bitmap glyph atlas) ─────────────
+export {
+  createTextMaterial,
+  createTextIdMaterial,
+  updateTextUniforms,
+  TextUniforms,
+  type TextMode,
+  type TextMaterialOptions,
+  type TextMaterialBundle,
+  type TextUniformValues,
+  type TextIdMaterialOptions,
+} from './tsl/text-material.js';
+export { STTTextLayer, type STTTextLayerOptions } from './layers/text-layer.js';
+export {
+  buildTextBuffers,
+  type TextGlyphMappingEntry,
+  type TextColorMode,
+  type TextAnchor,
+  type TextAlignmentBaseline,
+  type TextBufferOptions,
+  type TextBuffers,
+} from './lib/text-buffers.js';
+
+// ─── Mesh (instanced 3D models on the shared track kernel) ──────────────────────
+export {
+  createMeshMaterial,
+  createMeshIdMaterial,
+  updateMeshUniforms,
+  MeshUniforms,
+  type MeshMaterialOptions,
+  type MeshMaterialBundle,
+  type MeshUniformValues,
+} from './tsl/mesh-material.js';
+export { STTMeshLayer, type STTMeshLayerOptions } from './layers/mesh-layer.js';
+export {
+  buildMeshTrackIndex,
+  sampleMeshFrame,
+  bakeMeshGroup,
+  sampleMeshAttitude,
+  quatToMeshEuler,
+  slerpQuat,
+  makeMeshPoseBuffers,
+  ensureMeshPoseCapacity,
+  meshPointTiles,
+  meshRtcOrigin,
+  meshTrackBbox,
+  findMeshSample,
+  MESH_SINGLE_GROUP,
+  MESH_SINGLETON_HOLD_MS,
+  type MeshTrackOptions,
+  type MeshAttitudeTrack,
+  type MeshTrackIndex,
+  type MeshPoseBuffers,
+  type MeshGroup,
+  type MeshPoseOptions,
+} from './lib/mesh-instances.js';
+
+// ─── Point cloud (phong-LIT 3D points; distinct from the billboard `point`) ─────
+export {
+  createPointCloudMaterial,
+  createPointCloudIdMaterial,
+  updatePointCloudUniforms,
+  PointCloudUniforms,
+  POINT_CLOUD_LIGHT_DIRECTION,
+  POINT_CLOUD_AMBIENT,
+  POINT_CLOUD_DIFFUSE,
+  POINT_CLOUD_SIZE,
+  type PointCloudSizeUnits,
+  type PointCloudMaterialOptions,
+  type PointCloudMaterialBundle,
+  type PointCloudUniformValues,
+} from './tsl/point-cloud-material.js';
+export {
+  STTPointCloudLayer,
+  type STTPointCloudLayerOptions,
+} from './layers/point-cloud-layer.js';
+export {
+  buildPointCloudBuffers,
+  type PointCloudColorMode,
+  type PointCloudBufferOptions,
+  type PointCloudBuffers,
+} from './lib/point-cloud-buffers.js';
 
 // ─── Streaming tile source + real governor BufferSource ────────────────────────
 export {

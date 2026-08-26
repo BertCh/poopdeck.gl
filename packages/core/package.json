@@ -47,6 +47,10 @@
       "types": "./dist/render/tileset-adapter.d.ts",
       "default": "./dist/render/tileset-adapter.js"
     },
+    "./edge-bundling": {
+      "types": "./dist/render/edge-bundling.d.ts",
+      "default": "./dist/render/edge-bundling.js"
+    },
     "./capabilities": {
       "types": "./dist/render/capabilities.d.ts",
       "default": "./dist/render/capabilities.js"
