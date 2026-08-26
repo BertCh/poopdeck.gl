@@ -4,7 +4,7 @@
 not state its cold-start cost. This is that number, measured, with the method
 and the caveats attached so it can be re-run and disputed.
 
-[`stt-packed-format-decisions.md`](./stt-packed-format-decisions.md) names
+[`stt-packed-format-decisions.md`](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/stt-packed-format-decisions.md) names
 COPC's benchmark as the bar to clear — _"4 reads / ~110 KB on a 5.7 GB,
 1.2-billion-point file"_ — and the paged directory exists specifically to make
 the STT equivalent good. Until now nobody had run it.

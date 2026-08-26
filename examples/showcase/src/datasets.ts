@@ -889,7 +889,7 @@ function waymoScene(opts: {
 // ─── storm-4d-greenfield (type: 'storm4d') volume render modes ────────────
 // Categorical color maps for the NEXRAD gate VOLUME's two render modes. The
 // band labels are the BINDING §9.1 contract labels emitted by
-// nexrad_volume.py (docs/roadmap/storm-4d-greenfield-2026-07.md) — FE keys and
+// nexrad_volume.py (stt:docs/roadmap/storm-4d-greenfield-2026-07.md) — FE keys and
 // generator labels must match byte-for-byte or the volume renders the
 // colorMappingDefault fallback.
 //
@@ -1837,7 +1837,7 @@ const rawDatasets: Dataset[] = [
       'Every scheduled public-transport vehicle in Switzerland for one Monday — 205,962 train, bus, tram, boat, gondola and funicular journeys expanded from the national GTFS timetable and map-matched onto the real rail/road network, riding 3D Alpine terrain. The same service day as SRF’s “Wenn der Schweizer ÖV erwacht” visualization. Source: opentransportdata.swiss (Open Data Platform Mobility Switzerland).',
     // Rebuild (3 steps — the Swiss feed publishes no shapes.txt, so trips are
     // map-matched onto OSM with pfaedle first):
-    //   1. python3 scripts/data-generation/gtfs_filter_day.py \
+    //   1. python3 stt:scripts/data-generation/gtfs_filter_day.py \
     //        data/gtfs-ch/feed data/gtfs-ch/feed-day-20260302 20260302
     //      (drops transfers.txt/frequencies.txt — transfers reference trips
     //      outside the day and pfaedle validates referential integrity)
@@ -1999,8 +1999,8 @@ const rawDatasets: Dataset[] = [
     // FlowCorridorLayer), reusing the Year-of-Flow archive verbatim. Rain runs
     // at 2-hourly resolution, the rivers at daily (each archive carries its own
     // baked bucket) — they share the timeRange and this timeWindow.
-    // Rebuild rain: scripts/data-generation/venv/bin/python \
-    //   scripts/data-generation/cmorph_isobands.py \
+    // Rebuild rain: stt:scripts/data-generation/venv/bin/python \
+    //   stt:scripts/data-generation/cmorph_isobands.py \
     //   --year 2019 --out data/cmorph/rainfall-2019-2h.parquet \
     //   --window-hours 2 --thresholds 0.5 1 2 5 10 20 --skip-fetch
     //   (CMORPH hourly netCDF, anon: ncei.noaa.gov/data/cmorph-high-resolution-
@@ -3343,7 +3343,7 @@ const rawDatasets: Dataset[] = [
       'One supercell rendered as a true four-dimensional object: the Greenfield, Iowa EF4 of 21 May 2024. NEXRAD Level II radar gates from KDMX stacked by beam altitude into a time-animated 3D volume — toggle between NWS reflectivity and dealiased radial velocity to read the mesocyclone couplet — with VTEC warning polygons rising as translucent prisms, the GOES cloud-top anvil canopy lifted to its brightness-temperature height, multi-level HRRR winds threading the volume, county power outages growing behind the storm, surface stations gusting, storm reports, GLM lightning, and the 18Z Omaha radiosonde climbing through the scene. Sources: NOAA NEXRAD / GOES / HRRR, NWS via IEM, SPC, DOE EAGLE-I.',
     // Primary `url` = the radar gate VOLUME (REQUIRED governor, heaviest
     // stream). All nine context overlays ride the same playhead; §9.2 of
-    // docs/roadmap/storm-4d-greenfield-2026-07.md is the binding layer map.
+    // stt:docs/roadmap/storm-4d-greenfield-2026-07.md is the binding layer map.
     url: '/data/storm4d-volume/manifest.json',
     coupletUrl: '/data/storm4d-couplet/manifest.json',
     warningsUrl: '/data/storm4d-warnings/manifest.json',
@@ -3595,7 +3595,7 @@ const rawDatasets: Dataset[] = [
     // reflectivity-only (national dealiased velocity would need a ~160-site
     // Level-II mosaic), so there is NO velocity toggle / couplet here — the
     // story is the continental echo cloud you dive into. Built by
-    // scripts/data-generation/mrms_volume.py; the SAME stratified min-zoom LOD
+    // stt:scripts/data-generation/mrms_volume.py; the SAME stratified min-zoom LOD
     // as the Greenfield volume keeps the continental framing cheap while every
     // gate survives at the deepest zoom (lossless base tier).
     id: 'storm-3d-conus',
@@ -4969,9 +4969,9 @@ const rawDatasets: Dataset[] = [
   },
   {
     // ── ECCO "Perpetual Ocean" — generate with:
-    //   scripts/data-generation/ecco_advect.py --input <ecco-vel-dir> \
+    //   stt:scripts/data-generation/ecco_advect.py --input <ecco-vel-dir> \
     //     --output examples/showcase/public/data/ecco-currents.stt
-    // See scripts/data-generation/ECCO.md. The .stt is kept local (synced to
+    // See stt:scripts/data-generation/ECCO.md. The .stt is kept local (synced to
     // R2, not committed) like the other large archives. timeRange below tracks
     // the ECCO year you advected (default 2017); update both if you change it.
     id: 'ecco-currents',
@@ -5428,7 +5428,7 @@ const DATA_IS_REMOTE = DATA_BASE_URL !== '';
 //
 // (2026-07-22) storm-4d-greenfield: wired ahead of its archives (the Storm-4D
 // campaign builds all nine storm4d-* stems next; see
-// docs/roadmap/storm-4d-greenfield-2026-07.md §9). Un-gate ONLY after r2-sync
+// stt:docs/roadmap/storm-4d-greenfield-2026-07.md §9). Un-gate ONLY after r2-sync
 // verifies every storm4d-* manifest 200 — a partial sync 404-stalls the
 // composite (all overlays gate playback by default).
 //

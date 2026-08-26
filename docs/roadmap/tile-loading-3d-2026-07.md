@@ -134,7 +134,7 @@ Per-zoom feature counts decoded from the shipped paged directories:
   features.)
 - Corroborating: `--min-zoom-field` is passed **only** by `nexrad_volume.py` and
   `mrms_volume.py`; none of the eight overlay generators nor `nexrad_isolines.py` pass it.
-  `feature_out_of_band` (`crates/stt-build/src/tiler.rs`) confirms the cumulative-floor
+  `feature_out_of_band` (`stt:crates/stt-build/src/tiler.rs`) confirms the cumulative-floor
   semantics (`if zoom < mz { skip }`).
 - Why the stale comment existed: the LOD build and the "full-duplication pyramid / 4 fps /
   2.7 s stalls" comment landed in the **same** commit (`9f52804`). The measurement was

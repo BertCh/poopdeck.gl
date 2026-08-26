@@ -6,9 +6,6 @@
  * package.json (they are a `fixed` group), but this script verifies that
  * assumption too. Everything else in the lockstep is a hand edit:
  *
- *   - the cargo workspace version in `Cargo.toml` — the bug this file exists
- *     to prevent. npm shipped 0.5.0 while crates.io sat at 0.4.0 because the
- *     bump was manual and nothing compared the two numbers.
  *   - the Claude Code plugin surface —
  *     `poopdeck-ai/.claude-plugin/plugin.json`, the marketplace entry, and the
  *     `metadata.version` in each skill's frontmatter — which rots silently,
@@ -19,6 +16,13 @@
  * Private packages are deliberately excluded: for example, the frozen Cesium
  * backend remains at its last published version while workspace development
  * continues.
+ *
+ * The cargo half of this gate moved out with the repository split. It existed
+ * because npm once shipped 0.5.0 while crates.io sat at 0.4.0 — two registries,
+ * one manual bump, nothing comparing them. That failure mode is now
+ * structurally impossible rather than merely gated: the two stacks release
+ * independently and are related by the archive's `formatVersion`, not by a
+ * shared version number (docs/roadmap/repo-split-2026-08.md §2.3).
  *
  * Usage:
  *   node scripts/sync-versions.mjs            # rewrite the stragglers in place
@@ -96,93 +100,6 @@ function skillVersionTarget(file) {
   };
 }
 
-/**
- * The `[workspace.package]` table of a cargo manifest, as `{ start, text }`
- * (null if absent). Scoping to the table matters: `[workspace.dependencies]`
- * below it is full of `version = "…"` lines for third-party crates, and a
- * file-wide match would rewrite arrow or serde to our version number.
- */
-function cargoWorkspacePackageTable(text) {
-  const start = text.search(/^\[workspace\.package\][ \t]*$/m);
-  if (start === -1) return null;
-  const body = text.slice(start);
-  // Search past the table header's own `[` for the next table header.
-  const next = body.slice(1).search(/^\[/m);
-  return { start, text: next === -1 ? body : body.slice(0, next + 1) };
-}
-
-const CARGO_VERSION_RE = /^(version[ \t]*=[ \t]*")([^"]*)(")/m;
-
-/** `version = "x.y.z"` under `[workspace.package]` in a cargo manifest. */
-function cargoWorkspaceVersionTarget(file) {
-  return {
-    file,
-    read() {
-      const table = existsSync(file)
-        ? cargoWorkspacePackageTable(read(file))
-        : null;
-      const m = table && CARGO_VERSION_RE.exec(table.text);
-      return [
-        { label: 'workspace.package.version', value: m ? m[2] : undefined },
-      ];
-    },
-    write(text, want) {
-      const table = cargoWorkspacePackageTable(text);
-      if (!table) return text;
-      const next = table.text.replace(
-        CARGO_VERSION_RE,
-        (_m, head, _old, tail) => `${head}${want}${tail}`,
-      );
-      return (
-        text.slice(0, table.start) +
-        next +
-        text.slice(table.start + table.text.length)
-      );
-    },
-  };
-}
-
-/**
- * The `version = "x.y.z"` inside every internal path-dependency of a member
- * manifest — `stt-core = { path = "../stt-core", version = "0.6.0" }`.
- *
- * These are separate from `workspace.package.version` and are NOT optional
- * decoration: cargo requires a version alongside `path` for a dependency that
- * is published, and it is the version REQUIREMENT consumers resolve. Left at
- * the previous release they do not merely go stale — `cargo update -w` fails
- * outright ("failed to select a version for the requirement `stt-core =
- * ^0.5.0`, candidate versions found which didn't match: 0.6.0"), which is how
- * this gap surfaced during the 0.6.0 cut. Matching on the `path = "../…"` shape
- * keeps this to first-party crates; third-party pins are never touched.
- */
-const CARGO_PATH_DEP_RE =
-  /^([ \t]*[\w-]+[ \t]*=[ \t]*\{[^}\n]*\bpath[ \t]*=[ \t]*"\.\.[^"]*"[^}\n]*\bversion[ \t]*=[ \t]*")([^"]*)(")/gm;
-
-function cargoPathDepTarget(file) {
-  const names = (text) =>
-    [...text.matchAll(CARGO_PATH_DEP_RE)].map(
-      (m) => m[1].trim().split(/[ \t]*=/)[0],
-    );
-  return {
-    file,
-    read() {
-      if (!existsSync(file)) return [];
-      const text = read(file);
-      const found = [...text.matchAll(CARGO_PATH_DEP_RE)];
-      return found.map((m, i) => ({
-        label: `dependencies.${names(text)[i]}.version`,
-        value: m[2],
-      }));
-    },
-    write(text, want) {
-      return text.replace(
-        CARGO_PATH_DEP_RE,
-        (_m, head, _old, tail) => `${head}${want}${tail}`,
-      );
-    },
-  };
-}
-
 /** The text between the leading `---` fence and its closer (empty if absent). */
 function frontmatter(text) {
   if (!text.startsWith('---\n')) return '';
@@ -192,7 +109,6 @@ function frontmatter(text) {
 
 function collectTargets() {
   const targets = [
-    cargoWorkspaceVersionTarget(join(ROOT, 'Cargo.toml')),
     jsonVersionTarget(join(ROOT, 'poopdeck-ai/.claude-plugin/plugin.json'), [
       ['version'],
     ]),
@@ -218,16 +134,6 @@ function collectTargets() {
         continue;
       }
       targets.push(jsonVersionTarget(manifest, [['version']]));
-    }
-  }
-  // Every workspace member's internal path-deps, in a stable order.
-  const cratesDir = join(ROOT, 'crates');
-  if (existsSync(cratesDir)) {
-    for (const entry of readdirSync(cratesDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .sort((a, b) => a.name.localeCompare(b.name))) {
-      const manifest = join(cratesDir, entry.name, 'Cargo.toml');
-      if (existsSync(manifest)) targets.push(cargoPathDepTarget(manifest));
     }
   }
   const skillsDir = join(ROOT, 'poopdeck-ai/skills');

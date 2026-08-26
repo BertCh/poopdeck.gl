@@ -25,7 +25,7 @@ export const LLMS_SITE_ORIGIN = 'https://poopdeck.gl';
 
 /** GitHub blob base for repo files that are NOT in the published web corpus. */
 export const LLMS_GITHUB_BLOB_BASE =
-  'https://github.com/BertCh/spatiotemporal-tiles/blob/main/';
+  'https://github.com/BertCh/poopdeck.gl/blob/main/';
 
 /**
  * Published doc dirs (direct `*.md` children only). Mirrors the glob in

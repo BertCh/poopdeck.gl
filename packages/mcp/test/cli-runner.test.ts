@@ -124,7 +124,7 @@ describe('resolveBinary', () => {
 
   it('finds an internal tool that carries its own workspace under tools/<name>/', async () => {
     // `stt-generate` lives outside the published Cargo workspace, so its build
-    // output is `tools/stt-generate/target/release/`, not the root `target/`.
+    // output is `stt:tools/stt-generate/target/release/`, not the root `target/`.
     const tmp = await mkdtemp(path.join(tmpdir(), 'stt-mcp-cli-'));
     try {
       const nested = path.join(tmp, 'examples', 'showcase', 'public', 'data');

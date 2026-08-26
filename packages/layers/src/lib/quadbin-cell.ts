@@ -7,7 +7,7 @@
  * `splitLongToH3Index`, used by {@link QuadbinSummaryLayer}.
  *
  * BACKGROUND: the STT summary tier can index cells by either Uber H3 or CARTO
- * Quadbin (see `SummaryScheme` in crates/stt-core/src/metadata.rs, documented
+ * Quadbin (see `SummaryScheme` in stt:crates/stt-core/src/metadata.rs, documented
  * there as *"CARTO Quadbin (Z/X/Y quad-key encoded as u64)"*). The Arrow `id`
  * UInt64 column carries the cell index verbatim for BOTH schemes; the TS
  * decoder preserves it on `BinaryFeatures.featureIds64` (tile.ts: *"the ID IS

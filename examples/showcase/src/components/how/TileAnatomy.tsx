@@ -9,7 +9,7 @@ import FigureSvg from '../FigureSvg.tsx';
  *
  * Evidence: docs/spec/stt-packed-format.md §5.2 (frame layout, section tag
  * registry, reserved CORE column order, TILE_META keys);
- * crates/stt-core/src/arrow_tile/{encode,frame}.rs.
+ * stt:crates/stt-core/src/arrow_tile/{encode,frame}.rs.
  */
 
 interface Col {

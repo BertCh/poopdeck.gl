@@ -396,7 +396,7 @@ result.
 
 Implementation note: pure-Rust USD readers exist ([mxpv/openusd](https://github.com/mxpv/openusd)
 covers `usda`/`usdc`/`usdz` with no C++ dependency; [openusd-rs](https://github.com/FloatyMonkey/openusd-rs)
-is earlier), and `scripts/data-generation/` is already Python, where `pxr` is
+is earlier), and `stt:scripts/data-generation/` is already Python, where `pxr` is
 first-party. A third option arrived 2026-07: **`nanousdapi` over Rust FFI**
 (§8.6) — a C11 ABI is ordinary FFI where OpenUSD's C++ is not, and it puts a real
 USD implementation in-process in `stt-build`.
@@ -481,7 +481,7 @@ bbox and would squash an asset that already carries real metres via
 (`ScenegraphLayer` multiplies `getColor` into the material — `vColor *
 pbr_filterColor(...)` — where `SimpleMeshLayer` lets a `texture` defeat it).
 
-**Remaining for this track:** a `scripts/data-generation/` USD → glb converter
+**Remaining for this track:** a `stt:scripts/data-generation/` USD → glb converter
 driving `omni.kit.asset_converter` headlessly; wiring one demo (see below); and,
 if wanted, playhead-locked asset animation, which needs a `draw()` override to
 substitute the timeline and is counted out of this pass.

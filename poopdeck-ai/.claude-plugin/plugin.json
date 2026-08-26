@@ -5,10 +5,10 @@
   "description": "AI-assisted suite for poopdeck.gl / SpatioTemporal Tiles. Bundles the @poopdeck.gl/mcp server (auto-registered via .mcp.json) and ten Agent Skills covering the full toolchain: install the CLIs and scaffold a project, build a .stt from GeoParquet or a DB, generate the bundled reference datasets, tune/lint tiles for publishing, choose a renderer backend (deck.gl / Three.js / MapLibre / Cesium), wire a deck.gl SpatioTemporalLayer, add playback controls, serve or publish the archive, and debug blank renders.",
   "author": {
     "name": "Robert Christie",
-    "url": "https://github.com/BertCh/spatiotemporal-tiles"
+    "url": "https://github.com/BertCh/poopdeck.gl"
   },
   "homepage": "https://poopdeck.gl",
-  "repository": "https://github.com/BertCh/spatiotemporal-tiles",
+  "repository": "https://github.com/BertCh/poopdeck.gl",
   "license": "MIT",
   "keywords": [
     "mcp",

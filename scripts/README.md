@@ -1,38 +1,40 @@
 # Scripts
 
-Utility scripts for the SpatioTemporal Tiles project.
+Repository tooling for poopdeck.gl. Everything here runs under plain `node` —
+there is no build step and nothing is published.
 
-## Data Generation
+| Script                         | What it does                                                                                                |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `sync-stt.mjs`                 | Vendors the docs, conformance vectors and status block this repo consumes from STT; `--check` gates it      |
+| `check-project-status.mjs`     | Proves every claim in `project-status.json` against the manifest that decides it                            |
+| `sync-versions.mjs`            | Keeps the Claude Code plugin surface in lockstep with `packages/core`'s version                             |
+| `check-doc-links.mjs`          | Every relative link in every Markdown file resolves                                                         |
+| `check-doc-snippets.mjs`       | Typechecks the code samples in the docs (needs a `turbo run build` first)                                   |
+| `gen-capabilities-doc.mjs`     | Regenerates `docs/spec/backend-capabilities.md` from each backend's `BackendDescriptor`; `--check` gates it |
+| `smoke-pack.mjs`               | Pre-publish gate: real tarballs, real peers, every `exports` subpath                                        |
+| `estimate-3d-tiles-ground.mjs` | Probes Google's Photorealistic 3D Tiles for each AV scene's ground height                                   |
 
-Located in [`data-generation/`](./data-generation/), with helper scripts for generating showcase datasets.
+## Datasets are not built here
 
-### Quick Start
+Dataset generation moved to the STT repository with the toolchain that does it
+(`stt-generate`, `stt-build`, and the Python extractors under
+`stt:scripts/data-generation/`) — see
+[repo-split-2026-08.md](../docs/roadmap/repo-split-2026-08.md). To build the
+showcase's data locally:
 
 ```bash
-# Install the unified stt-generate tool
-cargo install --path ../tools/stt-generate
-
-# Generate all datasets
-stt-generate all --output-dir ../examples/showcase/public/data
-
-# Or generate individually
+cargo install --git https://github.com/BertCh/spatiotemporal-tiles \
+  --locked spatiotemporal-tiles --features cli
+# then, from a checkout of that repository:
+cargo install --path stt:tools/stt-generate
 stt-generate earthquakes --output earthquakes.stt
-stt-generate hurricanes --output hurricanes.stt
-stt-generate wildfires --output wildfires.stt
-stt-generate ais --input ais.csv --output ais.stt
 ```
 
-### Available Datasets
-
-`stt-generate <subcommand>` covers earthquakes, AIS ship traffic, flights,
-hurricanes, wildfires, NYC rideshare (+ taxi points/paths/trips/flows),
-BIXI flowmaps, satellites, ocean drifters, animal migration, OSM edits, and
-NEXRAD storm radar. Run `stt-generate --help` for the full registered list.
-
-See [data-generation/README.md](./data-generation/README.md) and the
-[Data Generation Guide](../docs/guides/data-generation.md) for per-dataset
-recipes and flags.
+Point the showcase at the result with `VITE_DATA_BASE`, or drop the archive
+under `examples/showcase/public/data/`. In production the showcase reads the
+published fleet over HTTPS and builds nothing.
 
 ---
 
-**See also**: [Main Documentation](../README.md) | [Data Generation Guide](../docs/guides/data-generation.md)
+**See also**: [Repository README](../README.md) ·
+[Data generation guide](../docs/guides/data-generation.md) (vendored from STT)

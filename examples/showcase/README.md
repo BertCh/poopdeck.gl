@@ -32,7 +32,7 @@ are chrome-free and never prerendered.
 
 Datasets are built by `stt-generate`, which fetches the source,
 normalises it into GeoParquet, and shells out to `stt-build`. The
-generators share `tools/stt-generate/src/common.rs` for coordinate
+generators share `stt:tools/stt-generate/src/common.rs` for coordinate
 transforms, chrono-based temporal bucketing, and latitude-adjusted
 distance math. CSV sources are ingested directly; HTTP sources are
 cached under `data/`.
@@ -86,8 +86,8 @@ does not build the generator.
 ```bash
 # From the repository root, install the published CLIs (including stt-build)
 # and the repo-only showcase generator.
-cargo install --path crates/spatiotemporal-tiles
-cargo install --path tools/stt-generate
+cargo install --path stt:crates/spatiotemporal-tiles
+cargo install --path stt:tools/stt-generate
 
 # Each dataset is generated explicitly; there is no `all` subcommand.
 stt-generate earthquakes \

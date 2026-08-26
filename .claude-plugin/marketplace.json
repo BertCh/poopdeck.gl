@@ -3,7 +3,7 @@
   "name": "poopdeck-gl",
   "owner": {
     "name": "Robert Christie",
-    "url": "https://github.com/BertCh/spatiotemporal-tiles"
+    "url": "https://github.com/BertCh/poopdeck.gl"
   },
   "metadata": {
     "description": "AI-assisted suite for poopdeck.gl / SpatioTemporal Tiles — an MCP server plus Agent Skills for building, tuning, serving, debugging, and rendering time-aware vector tiles.",

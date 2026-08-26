@@ -8,27 +8,40 @@ Read this first, then follow the routing table to the canonical docs.
 
 ## What this repo is
 
-**poopdeck.gl / SpatioTemporal Tiles (STT)** is a toolkit for **time-aware
-vector tiles**. A dataset is a tiny `manifest.json` plus many immutable,
+**poopdeck.gl** — the TypeScript **renderer** for **SpatioTemporal Tiles (STT)**
+time-aware vector tiles. A dataset is a tiny `manifest.json` plus many immutable,
 content-addressed **pack** objects (`.stt` archive) that combine a spatial tile
 pyramid with a temporal axis — each tile is addressed by `(zoom, x, y,
-time-bucket)`. Five Rust CLIs (`stt-build`, `stt-optimize`, `stt-serve`,
-`stt-validate`, `stt-bundle`) build / analyze / serve those archives, and the
-repo-only `stt-generate` rebuilds this repo's showcase datasets. TypeScript
-packages (`@poopdeck.gl/*`) read and render them into deck.gl (plus
-Three.js/WebGPU, MapLibre, and Cesium backends), with a playback clock for
-animation. A showcase site (`examples/showcase`) carries dozens of
-real-dataset demos. Scope is **vector** spatiotemporal data (points, paths,
-polygons, trips, flows, events); time-varying rasters/datacubes are out of scope.
+time-bucket)`. The packages here (`@poopdeck.gl/*`) read and render those
+archives into deck.gl (plus Three.js/WebGPU, MapLibre, and Cesium backends),
+with a playback clock for animation. A showcase site (`examples/showcase`)
+carries dozens of real-dataset demos. Scope is **vector** spatiotemporal data
+(points, paths, polygons, trips, flows, events); time-varying rasters/datacubes
+are out of scope.
+
+> **⚠️ The Rust toolchain is NOT in this repository.** `stt-build`,
+> `stt-optimize`, `stt-serve`, `stt-validate`, `stt-bundle` and `stt-generate`
+> live in [BertCh/spatiotemporal-tiles][stt-repo] and install with
+> `cargo install spatiotemporal-tiles`. Do not look for `crates/` or `Cargo.toml`
+> here, and do not propose editing encoder behaviour from this checkout — the
+> change belongs upstream. The two repositories meet at the archive on disk;
+> `docs/roadmap/repo-split-2026-08.md` is the contract.
+>
+> **Some `docs/` pages are vendored, not authored here.** `.stt-sync.json` lists
+> them (the whole `docs/spec/` normative set, `cli-reference.md`, the format
+> architecture pages, and several guides). Editing one locally makes
+> `pnpm stt:check` red. Land the change upstream and re-sync.
+
+[stt-repo]: https://github.com/BertCh/spatiotemporal-tiles
 
 ## Mental model (the pipeline)
 
 ```
-GeoParquet / PostGIS / DuckDB
+GeoParquet / PostGIS / DuckDB          ─── upstream: BertCh/spatiotemporal-tiles
         │  stt-build      → packed STT archive (manifest.json + index/*.sttd + packs/*.sttp)
         │  stt-optimize   → analyze / recommend / inspect / doctor / diff / lint the archive
         │  stt-serve      → dynamic per-request tile server (or publish the static dir to R2/CDN)
-        ▼
+        ▼                                  ─── this repository ───────────────
   @poopdeck.gl/core       → STTArchive reader (HTTP Range) + decoder pool + tileset + render kernel
   @poopdeck.gl/layers     → SpatioTemporalLayer (deck.gl)   ← the primary renderer
   @poopdeck.gl/{three,maplibre,cesium}                       ← alternate backends
@@ -66,7 +79,7 @@ Arrow IPC with GeoArrow-encoded geometry.
 | Get build knobs recommended from a source file                            | `stt-optimize` (powers `stt-build --auto`)                      | `docs/api/cli-reference.md`, `docs/guides/tuning-tiles.md`                    |
 | Shrink / lint / diff / audit a **built** archive                          | `stt-optimize inspect`/`doctor`/`diff`/`order-audit`            | `docs/guides/tuning-tiles.md`                                                 |
 | Serve tiles dynamically off a live DB                                     | `stt-serve` (PostGIS/DuckDB, axum)                              | `docs/api/cli-reference.md`, `docs/spec/stt-serve-protocol.md`                |
-| Publish a static archive to a CDN/R2                                      | sync the dir tree; `scripts/r2-sync.sh` sets cache headers      | `docs/guides/deploying.md`                                                    |
+| Publish a static archive to a CDN/R2                                      | upstream `scripts/r2-sync.sh` sets the cache headers            | `docs/guides/deploying.md`                                                    |
 | Check integrity / decode / schema / temporal consistency                  | `stt-validate` (CI-suitable)                                    | `docs/api/cli-reference.md`                                                   |
 | Pack/unpack a single-file `.sttb` interchange bundle                      | `stt-bundle`                                                    | `docs/api/cli-reference.md`                                                   |
 | Generate a **bundled reference** dataset (earthquakes, drifters, GTFS, …) | `stt-generate`                                                  | `docs/guides/data-generation.md`                                              |
@@ -76,25 +89,16 @@ Arrow IPC with GeoArrow-encoded geometry.
 | Add a shader extension (TimeFilter, DataFilter, CategoryColor, …)         | `@poopdeck.gl/layers` extensions                                | `docs/api/extensions.md`                                                      |
 | Wire the play/scrub clock + React UI                                      | `@poopdeck.gl/playback` + `@poopdeck.gl/react`                  | `docs/api/stt-player.md`, `docs/api/stt-react.md`                             |
 
-The `stt-*` CLIs are the workhorses (think `wrangler`); their canonical flag
-surface is **`docs/api/cli-reference.md`**. This table intentionally mirrors the
-routing in `poopdeck-ai/skills/poopdeck-overview/SKILL.md` and `llms.txt` — keep
-them consistent.
+The `stt-*` CLIs are the workhorses (think `wrangler`), and they are a
+**separate install from a separate repository** — `cargo install
+spatiotemporal-tiles`. Their canonical flag surface is
+**`docs/api/cli-reference.md`**, vendored here. This table intentionally mirrors
+the routing in `poopdeck-ai/skills/poopdeck-overview/SKILL.md` and `llms.txt` —
+keep them consistent.
 
 ## Where the code lives
 
 ```
-crates/                 # Rust workspace (5 members)
-  stt-core/             # archive + Arrow tile format library (every CLI links it)
-  stt-build/            # GeoParquet / PostGIS / DuckDB → packed .stt (library)
-  stt-optimize/         # input analysis + archive inspect/doctor/diff (powers --auto)
-  stt-wasm/             # stt-core → WebAssembly decoder; publish = false (docs/guides/wasm.md)
-  spatiotemporal-tiles/ # umbrella crate: re-exports the libs + ships the published CLIs
-    src/bin/            #   stt-build, stt-optimize, stt-validate, stt-bundle, stt-serve
-tools/stt-generate/     # bundled showcase-dataset generators. NOT a root-workspace
-                        #   member: its own [workspace] + lockfile keep its higher
-                        #   MSRV off the published crates, so `-p stt-generate` from
-                        #   the root does not resolve — `cargo install --path` it
 packages/               # TypeScript (@poopdeck.gl/*)
   core/                 # STTArchive reader, decoder pool, OPFS cache, render kernel
   layers/               # deck.gl backend (primary)
@@ -102,9 +106,17 @@ packages/               # TypeScript (@poopdeck.gl/*)
   playback/ react/      # clock + governor + React UI
   mcp/                  # MCP server (@poopdeck.gl/mcp)
 examples/showcase/      # interactive demo app (deck.gl + MapLibre + Three)
-docs/                   # spec, API reference, guides, architecture
+examples/minimal/       # the published packages, installed from npm — the smoke test
+tools/                  # bench (frame cost, policy replay), perf, render-test (pixels)
+docs/                   # API reference + guides + the VENDORED spec (see .stt-sync.json)
 poopdeck-ai/            # Claude Code plugin (Agent Skills + MCP server wiring)
+scripts/sync-stt.mjs    # vendors docs + conformance vectors + status from upstream
 ```
+
+Not here, and upstream instead: `crates/` (stt-core, stt-build, stt-optimize,
+stt-wasm, the `spatiotemporal-tiles` facade), `stt:tools/stt-generate/`,
+`stt:scripts/data-generation/` (the Python extractors), and the R2 publishing
+scripts.
 
 ## Where the docs live — key entry points
 
@@ -123,26 +135,26 @@ poopdeck-ai/            # Claude Code plugin (Agent Skills + MCP server wiring)
 
 ## Build / test basics
 
-TypeScript is a **pnpm** workspace; Rust is a **cargo** workspace. Infer exact
-flags from `package.json` / `Cargo.toml`; the verified commands are:
+One **pnpm** workspace, no Rust toolchain needed. Infer exact flags from
+`package.json`; the verified commands are:
 
 ```bash
-# Rust
-cargo build --release          # CLI binaries → target/release/{stt-build,stt-optimize,...}
-cargo test --workspace
-
-# TypeScript
 pnpm install
 pnpm --filter @poopdeck.gl/core build
-pnpm --filter @poopdeck.gl/core test        # reader tests against a real archive
+pnpm --filter @poopdeck.gl/core test        # reader tests against real archives
 pnpm --filter @poopdeck.gl/layers build
 
 # Showcase (runs locally)
 pnpm --filter @poopdeck.gl/showcase dev
+
+# Repo gates
+pnpm project:check      # project-status.json vs the manifests
+pnpm stt:check          # vendored artifacts vs upstream
+pnpm docs:links
 ```
 
-The published CLIs also install via `cargo install spatiotemporal-tiles`. Only
-run commands you can verify from the manifests — do not invent scripts.
+The CLIs install separately via `cargo install spatiotemporal-tiles`. Only run
+commands you can verify from the manifests — do not invent scripts.
 
 ## How agents get help
 
@@ -169,3 +181,10 @@ run commands you can verify from the manifests — do not invent scripts.
   preferences.
 - The showcase honors `prefers-reduced-motion`; any new animated surface must gate
   on it.
+- **`stt:` prefixes a path in the OTHER repository.** A comment citing an
+  upstream file writes `stt:crates/stt-core/src/directory.rs` or
+  `stt:docs/roadmap/av-cockpit.md §2`; a bare path would look local and resolve
+  to nothing. `.github/scripts/check-roadmap-citations.mjs` counts the prefixed
+  doc citations, so a cross-repo pointer stays a declared thing rather than a
+  silent skip. Do not add the prefix inside a **vendored** file — there the
+  bare path is correct, because that file is read upstream too.

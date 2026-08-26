@@ -88,8 +88,8 @@ export interface InferredLayer {
  * Maps a build-time `style_hints.layer_hint` to an STT `@@type`.
  *
  * This is the COMPLETE set of hint strings the build side can emit: the Rust
- * `layer_hint()` (crates/stt-build/src/style_hints.rs) derives the kind from
- * geometry and `profile_properties` (crates/stt-optimize/src/analysis/properties.rs)
+ * `layer_hint()` (stt:crates/stt-build/src/style_hints.rs) derives the kind from
+ * geometry and `profile_properties` (stt:crates/stt-optimize/src/analysis/properties.rs)
  * passes only the pinned `LAYER_HINTS` vocabulary
  * (`"points" | "paths" | "trips" | "polygons"`) through to the manifest — every
  * one is mapped here, so a hinted archive is NEVER guessed.

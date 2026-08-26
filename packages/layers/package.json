@@ -63,12 +63,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/BertCh/spatiotemporal-tiles.git",
+    "url": "git+https://github.com/BertCh/poopdeck.gl.git",
     "directory": "packages/layers"
   },
-  "homepage": "https://github.com/BertCh/spatiotemporal-tiles/tree/main/packages/layers#readme",
+  "homepage": "https://github.com/BertCh/poopdeck.gl/tree/main/packages/layers#readme",
   "bugs": {
-    "url": "https://github.com/BertCh/spatiotemporal-tiles/issues"
+    "url": "https://github.com/BertCh/poopdeck.gl/issues"
   },
   "keywords": [
     "deck.gl",

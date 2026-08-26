@@ -4,7 +4,7 @@
 
 /**
  * Multi-source fair-share WEIGHT policy (BH-3, §11.3 of
- * docs/roadmap/optimization-implementation-plan-2026-08.md).
+ * stt:docs/roadmap/optimization-implementation-plan-2026-08.md).
  *
  * The governor's fairness pass has two levers: a run-ahead CAP (Shaka-style,
  * unchanged — see `PlaybackGovernor.sendRunAheadCap`) and the fair-share WEIGHT

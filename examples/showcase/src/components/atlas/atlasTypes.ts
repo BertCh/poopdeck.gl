@@ -1,7 +1,7 @@
 /**
  * Neural-State Atlas — the framing contract, as types.
  *
- * `docs/roadmap/neural-atlas-2026-07.md` §3 says the four-way distinction between
+ * `stt:docs/roadmap/neural-atlas-2026-07.md` §3 says the four-way distinction between
  * what a colour on this map can MEAN is "a typed enum, not a disclaimer", and
  * that the legend renders FROM that union. This module is that enum. Everything
  * downstream — the ramp, the legend, the units line, the panel copy — is derived

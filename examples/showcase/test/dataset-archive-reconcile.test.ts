@@ -11,7 +11,7 @@
  *
  * Fixture sources (in priority order), both read from disk, never the network:
  *   1. The build-time density sidecar `public/density/<stem>.json`
- *      (emitted by crates/stt-core/examples/density-profile.rs; carries
+ *      (emitted by stt:crates/stt-core/examples/density-profile.rs; carries
  *      `timeRange`, `bucketMs`, `featureCount`). These are git-TRACKED, so they
  *      run in CI. `<stem>` is the archive segment of the dataset url, resolved
  *      by the same `profileIdFromUrl` the UnderTheHood panel uses.
@@ -547,8 +547,8 @@ const PRESENT_FLOOR = 25;
  * ships. Argoverse and Waymo bundles do carry `tracks/`; only these do not.
  *
  * Closing it is NOT a rebuild: no nuScenes dataroot survives under
- * `scripts/data-generation/`, and re-fetching one needs a nuscenes.org account
- * (see the licence register in docs/roadmap/demos-and-datasets.md). So this is
+ * `stt:scripts/data-generation/`, and re-fetching one needs a nuscenes.org account
+ * (see the licence register in stt:docs/roadmap/demos-and-datasets.md). So this is
  * blocked on source data, not on effort — which is exactly the kind of thing
  * that should be written down rather than rediscovered.
  */

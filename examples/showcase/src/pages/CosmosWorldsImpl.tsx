@@ -203,7 +203,7 @@ const CosmosWorlds: React.FC = () => {
           <p className="mt-2 text-xs leading-relaxed">
             Generate it with{' '}
             <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[11px]">
-              python scripts/data-generation/cosmos_drive_dreams.py
+              python stt:scripts/data-generation/cosmos_drive_dreams.py
             </code>
             , which downloads the Cosmos-Drive-Dreams labels and writes{' '}
             <code className="font-mono text-[11px]">

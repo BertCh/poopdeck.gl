@@ -9,7 +9,9 @@
  *   2. the `--help` text `config.ts` prints      ⇄  the fenced block that doc
  *      reproduces under "## The `stt-mcp` command",
  *   3. the `STT_GENERATE_DATASETS` enum in `server.ts` (a HAND-COPY)  ⇄  the
- *      real clap subcommand enum in `stt-generate`'s `main.rs`,
+ *      real subcommand set of `stt-generate`, which since the repository split
+ *      arrives as the vendored `docs/spec/stt-generate-datasets.json` rather
+ *      than being parsed out of a `main.rs` this repo no longer has,
  *   4. the corpus allow-list in `src/docs.ts` (what the server will SERVE)  ⇄
  *      the copy allow-list in `scripts/copy-docs.mjs` (what a published install
  *      actually SHIPS).
@@ -47,14 +49,22 @@ const MCP_DOC = path.join(REPO_ROOT, 'docs', 'api', 'stt-mcp.md');
 const COPY_DOCS_SCRIPT = path.join(PKG_ROOT, 'scripts', 'copy-docs.mjs');
 const execFileAsync = promisify(execFile);
 /**
- * `stt-generate`'s clap enum. The repo-only generator lives in
- * `tools/stt-generate`, which carries its own `[workspace]`; a missing source is
- * a hard failure rather than a silent skip because `generate_dataset`'s enum
- * would otherwise have nothing to verify against.
+ * `stt-generate`'s subcommand set, as the upstream toolchain declares it.
+ *
+ * The repository-only generator lives in `stt:tools/stt-generate`; before the
+ * split this test parsed its clap `enum Commands` out of `main.rs` directly.
+ * The parser moved upstream with the Rust (`stt:scripts/gen-generate-datasets.mjs`,
+ * gated there by `--check`) and its output is vendored here — see
+ * `.stt-sync.json`. A missing artifact is a hard failure rather than a silent
+ * skip, because `generate_dataset`'s enum would otherwise have nothing to
+ * verify against.
  */
-const GENERATE_MAIN_RS = (() => {
-  return path.join(REPO_ROOT, 'tools', 'stt-generate', 'src', 'main.rs');
-})();
+const GENERATE_DATASETS_JSON = path.join(
+  REPO_ROOT,
+  'docs',
+  'spec',
+  'stt-generate-datasets.json',
+);
 
 // --------------------------------------------------------------------------
 // Shared helpers
@@ -310,89 +320,6 @@ describe('contract: config.ts USAGE ⇄ the doc help block', () => {
 // 3. GENERATE-DATASET ENUM PARITY
 // --------------------------------------------------------------------------
 
-/**
- * heck's `to_kebab_case`, which is what clap's derive uses to turn a
- * `Subcommand` variant name into its CLI subcommand name.
- * `NycTaxiPoints` -> `nyc-taxi-points`, `DriftersHourly` -> `drifters-hourly`,
- * `Ais` -> `ais`, `OsmEdits` -> `osm-edits`.
- */
-function variantToSubcommand(variant: string): string {
-  return variant
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
-    .toLowerCase();
-}
-
-/**
- * Extracts the top-level variant names of `enum Commands { … }` from
- * `tools/stt-generate/src/main.rs`.
- *
- * Scans characters rather than matching line shapes: variants come in both
- * tuple (`Earthquakes(datasets::earthquakes::Args)`) and struct
- * (`All { output_dir: PathBuf, … }`) form, and the `///` doc comments contain
- * parentheses and quotes. Comments and string literals are skipped, and only
- * text at brace-depth 1 is kept, so nested field lists and `#[arg(…)]`
- * attributes fall out.
- */
-function parseRustSubcommandVariants(src: string): string[] {
-  const enumIdx = src.indexOf('enum Commands {');
-  if (enumIdx < 0)
-    throw new Error('could not find `enum Commands {` in main.rs');
-  let i = src.indexOf('{', enumIdx) + 1;
-
-  let depth = 1;
-  let out = '';
-  let inString = false;
-  let inLineComment = false;
-  for (; i < src.length && depth > 0; i++) {
-    const ch = src[i];
-    if (inLineComment) {
-      if (ch === '\n') inLineComment = false;
-      continue;
-    }
-    if (inString) {
-      if (ch === '\\') i++;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === '/' && src[i + 1] === '/') {
-      inLineComment = true;
-      i++;
-      continue;
-    }
-    if (ch === '{' || ch === '(' || ch === '[') {
-      depth++;
-      continue;
-    }
-    if (ch === '}' || ch === ')' || ch === ']') {
-      depth--;
-      if (depth === 0) break;
-      continue;
-    }
-    if (depth === 1) out += ch;
-  }
-  if (depth !== 0) throw new Error('unbalanced braces parsing `enum Commands`');
-
-  const variants: string[] = [];
-  for (const raw of out.split(',')) {
-    // Attribute bodies were dropped as nested `[…]`; a bare `#` may remain.
-    const segment = raw.replace(/#/g, '').trim();
-    if (segment === '') continue;
-    // A segment we cannot read is a PARSER failure, not an empty result — fail
-    // loudly rather than silently under-reporting the variant set.
-    expect(
-      /^[A-Z][A-Za-z0-9_]*$/.test(segment),
-      `unparsed segment in enum Commands: ${JSON.stringify(segment)}`,
-    ).toBe(true);
-    variants.push(segment);
-  }
-  return variants;
-}
-
 describe('contract: STT_GENERATE_DATASETS ⇄ stt-generate subcommands', () => {
   /**
    * DRIFT PREVENTED: `STT_GENERATE_DATASETS` in `server.ts` is a HAND-COPY of
@@ -404,10 +331,14 @@ describe('contract: STT_GENERATE_DATASETS ⇄ stt-generate subcommands', () => {
    * removed from the generator), so the two sets compare with plain equality.
    */
   it('the generate_dataset dataset enum equals the clap subcommand set', async () => {
-    const rust = await readFile(GENERATE_MAIN_RS, 'utf8');
-    const expected = parseRustSubcommandVariants(rust)
-      .map(variantToSubcommand)
-      .sort();
+    const declared = JSON.parse(
+      await readFile(GENERATE_DATASETS_JSON, 'utf8'),
+    ) as { version: number; datasets: string[] };
+    // Pin the artifact's shape: a silently reshaped upstream file must fail
+    // here rather than degrade into comparing `undefined` with `undefined`.
+    expect(declared.version).toBe(1);
+    expect(Array.isArray(declared.datasets)).toBe(true);
+    const expected = [...declared.datasets].sort();
 
     // Read the enum off the LIVE tool schema (what an MCP client actually
     // sees), not off a regex over the TS array literal.
@@ -434,27 +365,12 @@ describe('contract: STT_GENERATE_DATASETS ⇄ stt-generate subcommands', () => {
     expect(expected).toHaveLength(16);
   });
 
-  /**
-   * DRIFT PREVENTED: someone adds `#[command(name = "…")]` or
-   * `#[command(rename_all = "…")]` to a variant, at which point clap stops
-   * deriving the subcommand name from the variant and the kebab-case
-   * conversion above silently produces the WRONG expected set — turning the
-   * test green on a real divergence.
-   */
-  it('no clap name/rename_all override invalidates the kebab-case derivation', async () => {
-    const rust = await readFile(GENERATE_MAIN_RS, 'utf8');
-    const start = rust.indexOf('#[derive(Subcommand)]');
-    expect(
-      start,
-      'expected #[derive(Subcommand)] in main.rs',
-    ).toBeGreaterThanOrEqual(0);
-    const end = rust.indexOf('\n}', rust.indexOf('enum Commands {'));
-    const block = rust.slice(start, end);
-    expect(
-      /#\[\s*(?:command|clap)\s*\([^\]]*\b(?:name|rename_all)\s*=/.test(block),
-      'a clap name/rename_all override was added — variantToSubcommand() must be updated to match',
-    ).toBe(false);
-  });
+  // The companion guard — that no `#[command(name = …)]` / `rename_all`
+  // override has taken the subcommand naming away from clap's derive, which
+  // would make the kebab-case conversion confidently wrong — moved upstream
+  // with the parser. `stt:scripts/gen-generate-datasets.mjs` throws rather than
+  // emitting a bad list, so a broken derivation can no longer reach this
+  // repository as a plausible-looking artifact.
 });
 
 // --------------------------------------------------------------------------

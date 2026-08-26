@@ -30,7 +30,7 @@ describe('llms.txt link rewriting', () => {
 
   it('maps a roadmap (unpublished) doc link to a GitHub blob URL', () => {
     expect(llmsTxt).toContain(
-      'https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/ai-suite.md',
+      'https://github.com/BertCh/poopdeck.gl/blob/main/docs/roadmap/ai-suite.md',
     );
   });
 });

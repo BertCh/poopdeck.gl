@@ -16,8 +16,8 @@
  * MUST NOT add `@poopdeck.gl/core` as a dependency).
  *
  * Field mapping mirrors the Rust `stt_core::metadata::Metadata` /
- * `stt_core::pack::Manifest` structs (`crates/stt-core/src/metadata.rs`,
- * `crates/stt-core/src/pack.rs`) and `packages/core/src/archive.ts`'s
+ * `stt_core::pack::Manifest` structs (`stt:crates/stt-core/src/metadata.rs`,
+ * `stt:crates/stt-core/src/pack.rs`) and `packages/core/src/archive.ts`'s
  * `getMetadata()` — snake_case on the wire, camelCase in the returned
  * summaries here.
  */

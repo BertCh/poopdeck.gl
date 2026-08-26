@@ -13,7 +13,7 @@ import { LocalEnuProjection } from '../src/projection/local-enu';
 import { makeVectorTile as summaryTile } from './_support/features';
 import { onScreen } from './_support/color-space';
 
-// ── Reference Quadbin encoder (1:1 port of crates/stt-build/src/quadbin.rs) ──
+// ── Reference Quadbin encoder (1:1 port of stt:crates/stt-build/src/quadbin.rs) ──
 // so the test generates valid u64 cell ids the decoder must invert.
 const QUADBIN_HEADER = 0x4800_0000_0000_0000n;
 

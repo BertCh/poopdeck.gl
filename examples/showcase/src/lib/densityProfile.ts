@@ -2,7 +2,7 @@
  * Loader + types for the build-time density-profile sidecars that feed the
  * demo-page "cube laid down in a line" utility (CubeInLine).
  *
- * Each `/density/<id>.json` is emitted by `crates/stt-core/examples/density-profile.rs`
+ * Each `/density/<id>.json` is emitted by `stt:crates/stt-core/examples/density-profile.rs`
  * from a real archive's directory: the native tier downsampled into a sparse
  * `(sx, sy, tb)` occupancy+bytes cube, plus the true archive's blob-ordering
  * anchors (`autoChoice`, per-ordering adjacency breaks). Regenerate with

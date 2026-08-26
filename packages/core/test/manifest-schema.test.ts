@@ -301,7 +301,7 @@ describe('packed-format manifest contract', () => {
     // The TS reader's implemented set is pinned against the schema's
     // machine-readable registry — the SINGLE source of truth both reference
     // implementations assert against (the Rust side pins in
-    // crates/stt-core/tests/capability_registry.rs), so a registry addition
+    // stt:crates/stt-core/tests/capability_registry.rs), so a registry addition
     // on either side fails CI until the schema and both readers agree.
     const registry = (schema as Record<string, unknown>)[
       'x-stt-capability-registry'

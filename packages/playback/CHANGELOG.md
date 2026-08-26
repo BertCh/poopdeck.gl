@@ -103,7 +103,7 @@
 
   The optimizer treated each tile as its own universe and the client guessed at
   what it could afford. Both are now answered from evidence. Full record:
-  `docs/roadmap/optimization-conformance-2026-08.md`.
+  `stt:docs/roadmap/optimization-conformance-2026-08.md`.
 
   **`stt-build --target-size <SIZE>`.** Ask for an archive size and the builder
   solves for the knobs that reach it — zoom clamp, temporal bucket, quantization

@@ -1,6 +1,6 @@
 /**
  * The `worlds.json` contract — the scenario index for the World Model Scenario
- * Explorer (`/worlds`), written by `scripts/data-generation/cosmos_drive_dreams.py`.
+ * Explorer (`/worlds`), written by `stt:scripts/data-generation/cosmos_drive_dreams.py`.
  *
  * One file describes the whole gallery: the synthetic grid the scenarios are
  * laid out on, the shared looping clock every clip was rebased onto, and one

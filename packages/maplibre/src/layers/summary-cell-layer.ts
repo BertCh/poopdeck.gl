@@ -13,7 +13,7 @@
  *
  * ── What a summary tile is ──────────────────────────────────────────────────
  * One row per spatial CELL, geometry = the cell CENTROID as a Point (see
- * `crates/stt-build/src/summary.rs`), the cell id in the Arrow `id` column
+ * `stt:crates/stt-build/src/summary.rs`), the cell id in the Arrow `id` column
  * (`BinaryFeatures.featureIds64` — the 32-bit `featureIds` mirror TRUNCATES the
  * mode/resolution/base-cell bits and must never be used), plus `count` and one
  * numeric column per aggregated attribute. The renderable polygon does not

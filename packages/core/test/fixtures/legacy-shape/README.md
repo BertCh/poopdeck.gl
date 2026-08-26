@@ -3,8 +3,8 @@
 **Do not regenerate these. No script produces them, and none should.**
 
 Every other fixture directory here is rebuilt by a generator
-(`crates/stt-core/examples/make-golden-fixture.rs`,
-`packages/core/scripts/make-v2-golden.sh`), so it always reflects *today's*
+(`stt:crates/stt-core/examples/make-golden-fixture.rs`,
+the STT repo's `conformance/make-vectors.sh`), so it always reflects *today's*
 encoder. This one is the opposite: it is a snapshot of what the writer emitted
 **before** the 2026-07 payload work added
 

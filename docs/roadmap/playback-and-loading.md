@@ -296,7 +296,7 @@ lands, because "disappearing detail is worse than late-arriving detail."
 
 **The negative result that keeps it off (G5).** The temporal axis has no
 guaranteed payoff, because the coarse-time aggregator only re-buckets — it does
-**not** reduce feature count. `crates/stt-build/src/tiler.rs`, still true today:
+**not** reduce feature count. `stt:crates/stt-build/src/tiler.rs`, still true today:
 "The scaffold _re-bucketes only_ — feature-level simplification (collapse 1000
 points per cell into 50 means) is left as a follow-up." A coarse-time tile can
 therefore hold every feature in the cell: coarser in time, **not guaranteed

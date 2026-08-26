@@ -31,7 +31,7 @@ upstream of those bytes is STT. Everything downstream is poopdeck.gl. The
 format spec (`docs/spec/`) is the written form of the seam, and STT owns it
 because STT's writer is the reference implementation that defines it.
 
-This is why `@poopdeck.gl/core` — which contains a *reader* for the format —
+This is why `@poopdeck.gl/core` — which contains a _reader_ for the format —
 goes to poopdeck whole, and is not split in half. A reader is a consumer of
 the contract, not a co-author of it. Splitting the package would put a
 published-npm-package hop between `packages/core/src/archive.ts` and
@@ -44,35 +44,35 @@ than enforced with a dependency edge.
 
 ### 2.1 `spatiotemporal-tiles` (this repository) — the format and the tiler
 
-| Keeps                          | What it is                                                           |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `crates/stt-core`              | Format reader/writer, packs, directory codec, Arrow tile encode       |
-| `crates/stt-build`             | The tiler; GeoParquet / PostGIS / DuckDB inputs                       |
-| `crates/stt-optimize`          | `inspect` / `doctor` / `diff` / `order-audit` / `recommend`           |
-| `crates/spatiotemporal-tiles`  | The published facade + five CLIs, incl. `stt-serve`                   |
-| `crates/stt-wasm`              | The Rust reader compiled to WASM (`publish = false`)                  |
-| `tools/stt-generate`           | Reference-dataset generator (own cargo workspace)                     |
-| `conformance/`                 | **New.** The vectors and generator behind `docs/spec/conformance.md`  |
-| `docs/spec/`, format docs      | The normative contract (§3.1 for the exact list)                      |
-| `scripts/data-generation/`     | The dataset production pipeline (Python/bash → `stt-build`)           |
-| `scripts/{postgis,duckdb}/`    | DB-source benchmarks and fixtures                                     |
-| `scripts/r2-sync.sh` + friends | Publishing built archives to object storage                           |
-| `.github/workflows/release.yml`| cargo-dist                                                            |
+| Keeps                           | What it is                                                           |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `crates/stt-core`               | Format reader/writer, packs, directory codec, Arrow tile encode      |
+| `crates/stt-build`              | The tiler; GeoParquet / PostGIS / DuckDB inputs                      |
+| `crates/stt-optimize`           | `inspect` / `doctor` / `diff` / `order-audit` / `recommend`          |
+| `crates/spatiotemporal-tiles`   | The published facade + five CLIs, incl. `stt-serve`                  |
+| `crates/stt-wasm`               | The Rust reader compiled to WASM (`publish = false`)                 |
+| `tools/stt-generate`            | Reference-dataset generator (own cargo workspace)                    |
+| `conformance/`                  | **New.** The vectors and generator behind `docs/spec/conformance.md` |
+| `docs/spec/`, format docs       | The normative contract (§3.1 for the exact list)                     |
+| `scripts/data-generation/`      | The dataset production pipeline (Python/bash → `stt-build`)          |
+| `scripts/{postgis,duckdb}/`     | DB-source benchmarks and fixtures                                    |
+| `scripts/r2-sync.sh` + friends  | Publishing built archives to object storage                          |
+| `.github/workflows/release.yml` | cargo-dist                                                           |
 
 ### 2.2 `poopdeck` (new repository) — the renderer
 
-| Gets                                     | What it is                                          |
-| ---------------------------------------- | --------------------------------------------------- |
-| `packages/core`                          | TS reader + tileset runtime + render kernel          |
-| `packages/{layers,three,maplibre,cesium}`| The four renderer backends                           |
-| `packages/{playback,react}`              | Clock, governor, React bindings                      |
-| `packages/mcp`                           | The MCP server (drives the `stt-*` CLIs off `PATH`)  |
-| `examples/{showcase,minimal}`            | poopdeck.gl and the published-packages smoke example |
-| `tools/{bench,perf,render-test}`         | Frame cost, policy replay, pixel baselines           |
-| `poopdeck-ai/`                           | The Claude Code plugin: skills + `.mcp.json`         |
-| `docs/api/`, renderer docs               | §3.2 for the exact list                              |
-| `.changeset/`, `patches/`, `wrangler.jsonc` | npm release + the load-bearing luma patch         |
-| `.github/workflows/release-npm.yml`      | changesets                                           |
+| Gets                                        | What it is                                           |
+| ------------------------------------------- | ---------------------------------------------------- |
+| `packages/core`                             | TS reader + tileset runtime + render kernel          |
+| `packages/{layers,three,maplibre,cesium}`   | The four renderer backends                           |
+| `packages/{playback,react}`                 | Clock, governor, React bindings                      |
+| `packages/mcp`                              | The MCP server (drives the `stt-*` CLIs off `PATH`)  |
+| `examples/{showcase,minimal}`               | poopdeck.gl and the published-packages smoke example |
+| `tools/{bench,perf,render-test}`            | Frame cost, policy replay, pixel baselines           |
+| `poopdeck-ai/`                              | The Claude Code plugin: skills + `.mcp.json`         |
+| `docs/api/`, renderer docs                  | §3.2 for the exact list                              |
+| `.changeset/`, `patches/`, `wrangler.jsonc` | npm release + the load-bearing luma patch            |
+| `.github/workflows/release-npm.yml`         | changesets                                           |
 
 `data/` is untracked and stays here: it is generator input, and it is large.
 
@@ -113,7 +113,7 @@ docs/spec/av-palettes.json  (new)     docs/guides/csv-quickstart.md
 ```
 
 `system-overview.md` is STT-owned because it describes the two-stack
-architecture *from the archive outward*; poopdeck vendors it rather than
+architecture _from the archive outward_; poopdeck vendors it rather than
 forking it, so there is one drawing of the system rather than two that drift.
 
 ### 3.2 poopdeck owns
@@ -165,9 +165,9 @@ Today the format has two golden-fixture trees and one gate spanning them:
 
 - `crates/stt-core/tests/fixtures/v2-golden/` — the **writer** oracle.
 - `packages/core/test/fixtures/{legacy-shape,packed-golden,paged-golden,
-  paged-golden-single,v2-golden,v2-golden-tracks}` — the **reader** oracle,
+paged-golden-single,v2-golden,v2-golden-tracks}` — the **reader** oracle,
   ~110 objects, produced by `packages/core/scripts/make-v2-golden.sh` driving
-  the *Rust writer*.
+  the _Rust writer_.
 
 The reader oracle is therefore an STT artifact that happened to live in the
 reader's test directory. After the split it becomes one:

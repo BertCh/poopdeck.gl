@@ -35,7 +35,7 @@ _drags the timeline_, it is [`scrub-cost`](#scrub-cost-the-scrublod-keep-vs-dele
 > $ node src/index.mjs tools/bench/baselines/earthquakes-ci.stt
 > Error: STT manifest: invalid JSON (Unexpected token 'S', "STTqZ*"... is not valid JSON)
 >
-> $ node src/index.mjs crates/stt-core/tests/fixtures/v2-golden/single/manifest.json
+> $ node src/index.mjs stt:crates/stt-core/tests/fixtures/v2-golden/single/manifest.json
 > Error: STT directory truncated: got 5024 bytes, expected 156
 > ```
 >

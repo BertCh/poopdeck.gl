@@ -15,7 +15,7 @@
  *   and this wave's concerns — so the fixture doubles as the injected
  *   `cellToBoundary` the kernel takes.)
  * - **Quadbin** ids are built by an INDEPENDENT encoder (the mirror of the
- *   decoder under test, ported from `crates/stt-build/src/quadbin.rs`) and
+ *   decoder under test, ported from `stt:crates/stt-build/src/quadbin.rs`) and
  *   anchored on CARTO's published `(0,0,0) → 0x480fffffffffffff`.
  * - **hexbin** bins are cross-checked against `@deck.gl/aggregation-layers`'
  *   `pointToHexbin` / `getHexbinCentroid`, copied VERBATIM from
@@ -382,7 +382,7 @@ describe('h3CellToMercatorRing: poles', () => {
 // ── Quadbin ─────────────────────────────────────────────────────────────────
 
 /**
- * Independent CARTO Quadbin ENCODER (1:1 port of `crates/stt-build/src/quadbin.rs`,
+ * Independent CARTO Quadbin ENCODER (1:1 port of `stt:crates/stt-build/src/quadbin.rs`,
  * the mirror of the decoder under test), anchored on CARTO's published
  * `(0,0,0) → 0x480fffffffffffff`.
  */

@@ -1,7 +1,7 @@
 /**
  * Layer tree for the Neural-State Atlas (`/atlas`).
  *
- * Per `docs/roadmap/neural-atlas-2026-07.md` §5.1 — ZERO new layer classes.
+ * Per `stt:docs/roadmap/neural-atlas-2026-07.md` §5.1 — ZERO new layer classes.
  * Every surface here is an existing `@poopdeck.gl/layers` layer with props.
  *
  *   1. atlas anatomy → `AnimatedPointLayer`. 294,912 latents at their position

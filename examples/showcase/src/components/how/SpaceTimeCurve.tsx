@@ -6,7 +6,7 @@ import FigureSvg from '../FigureSvg.tsx';
  * The space-time cube figure: a tile blob's address has three axes — (x, y)
  * on the map plus a time bucket — but a pack is one flat byte string.
  * `--blob-ordering` picks the space-filling walk that linearizes that cube
- * (see `crates/stt-core/src/curve.rs`); this draws the three real orderings
+ * (see `stt:crates/stt-core/src/curve.rs`); this draws the three real orderings
  * threading a toy 4×4×4 cube, then plays real map+time *gestures* over it —
  * play, pan, pan-while-playing, zoom-while-playing, click-to-preload — and
  * lights up which bytes each gesture touches so you can watch a scattered

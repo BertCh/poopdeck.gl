@@ -6,9 +6,9 @@ body:
     attributes:
       value: |
         Start with the user problem. For usage help, read
-        [SUPPORT.md](https://github.com/BertCh/spatiotemporal-tiles/blob/main/SUPPORT.md).
+        [SUPPORT.md](https://github.com/BertCh/poopdeck.gl/blob/main/SUPPORT.md).
         Report vulnerabilities privately through
-        [SECURITY.md](https://github.com/BertCh/spatiotemporal-tiles/blob/main/SECURITY.md).
+        [SECURITY.md](https://github.com/BertCh/poopdeck.gl/blob/main/SECURITY.md).
   - type: dropdown
     id: surface
     attributes:

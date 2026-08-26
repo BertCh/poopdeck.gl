@@ -3,7 +3,7 @@
 //
 // Decoder for the STT directory — the compact columnar run-length tile index
 // for the packed format. Mirrors the Rust codec in
-// `crates/stt-core/src/directory.rs`. The client is packed-only: it writes v6
+// `stt:crates/stt-core/src/directory.rs`. The client is packed-only: it writes v6
 // and reads v5/v6. v5 introduced per-run `pack_id` + pack-relative offsets; v6
 // adds per-entry `variant_id`. The retired single-file v4 layout (one implicit
 // pack, no `pack_id`) is never handed to the client and is no longer decoded.
@@ -53,7 +53,7 @@ const COVER_SECTION_TMIN = 1;
 
 // ----------------------------------------------------------------------------
 // Paged directory — root page. Mirrors the Rust
-// `crates/stt-core/src/directory_page.rs` container: a `.sttd` is
+// `stt:crates/stt-core/src/directory_page.rs` container: a `.sttd` is
 // `[root frame][leaf 0 frame]...`, each an independent (zstd) frame. The root is
 // a fixed-width table of page descriptors carrying each leaf's byte range plus
 // its pruning bounds (geographic bbox, zoom range, temporal [t_min, t_max]).

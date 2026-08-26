@@ -1,5 +1,18 @@
 #!/usr/bin/env node
-
+/**
+ * `project-status.json` is the repository's published claim about what it
+ * ships. This gate proves every claim against the file that actually decides
+ * it, so the status page can never quietly describe a previous release.
+ *
+ * Scope is deliberately HALF the old check. Before the repository split this
+ * file also verified the Rust release, the MSRV, the packed-format/directory
+ * version windows read out of `stt:crates/stt-core`, and the CLI inventory read
+ * out of the facade's Cargo.toml. None of those sources are in this
+ * repository any more. They are verified by the identical gate upstream, and
+ * their conclusions arrive here as the vendored `stt` block — checked for
+ * byte-equality with upstream by `scripts/sync-stt.mjs --check`, not
+ * re-derived here from sources we do not have.
+ */
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,12 +29,6 @@ function json(relativePath) {
   return JSON.parse(read(relativePath));
 }
 
-function capture(text, pattern, label) {
-  const value = pattern.exec(text)?.[1];
-  if (value === undefined) throw new Error(`could not read ${label}`);
-  return value;
-}
-
 function assertEqual(actual, expected, label) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
@@ -29,16 +36,6 @@ function assertEqual(actual, expected, label) {
     );
   }
 }
-
-const cargo = read('Cargo.toml');
-const rustVersion = capture(
-  cargo,
-  /^version = "([^"]+)"$/m,
-  'Cargo workspace version',
-);
-const rustMsrv = capture(cargo, /^rust-version = "([^"]+)"$/m, 'Rust MSRV');
-assertEqual(status.release.rust, rustVersion, 'Rust release');
-assertEqual(status.toolchain.rust, rustMsrv, 'Rust MSRV');
 
 const [pnpmName, pnpmVersion] = rootPackage.packageManager.split('@');
 assertEqual(pnpmName, 'pnpm', 'package manager name');
@@ -57,72 +54,6 @@ assertEqual(
   status.toolchain.nodeMajor,
   Number(read('.nvmrc').trim()),
   '.nvmrc',
-);
-
-const packSource = read('crates/stt-core/src/pack/mod.rs');
-const directorySource = read('crates/stt-core/src/directory.rs');
-const writeFormat = Number(
-  capture(
-    packSource,
-    /pub const PACKED_FORMAT_VERSION: u32 = ([0-9]+);/,
-    'packed format version',
-  ),
-);
-const minFormat = Number(
-  capture(
-    packSource,
-    /pub const MIN_PACKED_FORMAT_VERSION: u32 = ([0-9]+);/,
-    'minimum packed format version',
-  ),
-);
-const writeDirectory = Number(
-  capture(
-    directorySource,
-    /pub const DIRECTORY_VERSION: u8 = ([0-9]+);/,
-    'directory version',
-  ),
-);
-const minDirectory = Number(
-  capture(
-    directorySource,
-    /pub const MIN_DIRECTORY_VERSION: u8 = ([0-9]+);/,
-    'minimum directory version',
-  ),
-);
-assertEqual(status.archive.writes.formatVersion, writeFormat, 'writer format');
-assertEqual(
-  status.archive.writes.directoryVersion,
-  writeDirectory,
-  'writer directory',
-);
-assertEqual(
-  status.archive.reads.formatVersions,
-  range(minFormat, writeFormat),
-  'reader format window',
-);
-assertEqual(
-  status.archive.reads.directoryVersions,
-  range(minDirectory, writeDirectory),
-  'reader directory window',
-);
-
-function range(start, end) {
-  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
-}
-
-const facadeCargo = read('crates/spatiotemporal-tiles/Cargo.toml');
-const facadeCommands = [
-  ...facadeCargo.matchAll(/^name = "(stt-[^"]+)"$/gm),
-].map((match) => match[1]);
-assertEqual(
-  status.commands.map(({ name }) => name).sort(),
-  facadeCommands.sort(),
-  'published command inventory',
-);
-assertEqual(
-  status.repositoryOnlyCommands.map(({ name }) => name),
-  ['stt-generate'],
-  'repository-only command inventory',
 );
 
 const packageDirs = readdirSync(join(ROOT, 'packages'), { withFileTypes: true })
@@ -168,12 +99,31 @@ for (const actual of actualPackages) {
   );
 }
 
+// The public release number is the fixed changeset group's number, and
+// `packages/core` is its root (scripts/sync-versions.mjs relies on the same
+// fact). Naming it here means a half-applied `changeset version` fails the
+// gate rather than shipping a status page one release behind.
+assertEqual(
+  status.release.javascript,
+  json('packages/core/package.json').version,
+  'JavaScript release',
+);
+
 const schemaPath = status.$schema;
 if (basename(schemaPath) !== 'project-status.schema.json') {
   throw new Error(`unexpected project-status schema: ${schemaPath}`);
 }
 json(schemaPath.replace(/^\.\//, ''));
 
+// The vendored half is not re-derived here — it is byte-compared with upstream
+// by `pnpm stt:check`. What this gate owes it is a reminder that it exists and
+// has never been filled in.
+if (status.stt === null) {
+  console.warn(
+    'project status: `stt` block is unsynced — run `pnpm stt:sync` (see .stt-sync.json)',
+  );
+}
+
 console.log(
-  `project status: ${actualPackages.length} packages, ${facadeCommands.length} CLIs, format ${writeFormat}/directory ${writeDirectory}; all in sync`,
+  `project status: ${actualPackages.length} packages at ${status.release.javascript}; all in sync`,
 );

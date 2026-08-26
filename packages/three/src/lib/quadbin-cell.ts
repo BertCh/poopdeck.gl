@@ -23,7 +23,7 @@
  *               cells stay distinct as fixed-width integers).
  * ```
  *
- * Note on `QUADBIN_RES_OFFSET`: the Rust builder (`crates/stt-build/src/summary.rs`)
+ * Note on `QUADBIN_RES_OFFSET`: the Rust builder (`stt:crates/stt-build/src/summary.rs`)
  * bakes summary cells at `build_zoom + QUADBIN_RES_OFFSET` (=3, clamped ≤26) so a
  * cell is finer than the tile that carries it — a 1:1 zoom map otherwise produces
  * camera-engulfing giant cells. That offset is baked into the u64 itself (its zoom

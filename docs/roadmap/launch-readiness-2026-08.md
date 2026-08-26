@@ -18,8 +18,8 @@ that drift.
 | Cesium backend         | frozen npm release `0.5.0`; workspace package is private/experimental  | `packages/cesium/package.json` and README               |
 | Packed archive writer  | `formatVersion: 3`, directory codec v6                                 | `stt-core` pack/directory constants and `docs/spec/`    |
 | Compatibility window   | readers also open packed v2 / directory v5 read-only                   | packed-format spec and conformance fixtures             |
-| Installed CLIs         | `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` | `crates/spatiotemporal-tiles/src/bin/`                  |
-| Dataset generator      | repo-only workspace at `tools/stt-generate`                            | `tools/stt-generate/Cargo.toml`                         |
+| Installed CLIs         | `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` | `stt:crates/spatiotemporal-tiles/src/bin/`              |
+| Dataset generator      | repo-only workspace at `stt:tools/stt-generate`                        | `stt:tools/stt-generate/Cargo.toml`                     |
 | JavaScript runtime     | Node 24+ and pnpm 11.23.0                                              | `.node-version`, package engines, root `packageManager` |
 
 `STT` is the neutral format and toolchain name. `poopdeck.gl` is the rendering

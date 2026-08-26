@@ -6,7 +6,7 @@
  * but a pack is one flat byte string. `--blob-ordering` picks the space-filling
  * walk that linearizes that cube; the walk decides how many HTTP range reads a
  * query costs. These are direct ports of the production ordering math in
- * `crates/stt-core/src/curve.rs` (2D Hilbert for the spatial key, Skilling's
+ * `stt:crates/stt-core/src/curve.rs` (2D Hilbert for the spatial key, Skilling's
  * transpose for the 3D Hilbert, bit-interleave for Morton), so a walk here
  * behaves exactly as the writer would order bytes — just over a downsampled
  * SB×SB×TB density grid instead of the archive's native tiles.

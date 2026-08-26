@@ -20,11 +20,11 @@ import FigureSvg from '../FigureSvg.tsx';
  * line across the whole globe.
  *
  * Evidence:
- *   crates/stt-build/src/clip.rs:359-367  interpolate_timestamp (linear time lerp at t)
+ *   stt:crates/stt-build/src/clip.rs:359-367  interpolate_timestamp (linear time lerp at t)
  *                              :505-541   border vertex = interpolated position + time + value
  *                              :21-43     ClippedSegment carries per-vertex `timestamps`
  *                              :806-821   antimeridian split where |Δlon| > 180°
- *   crates/stt-build/src/tiler.rs:443-466 clip_trajectory during per-tile placement
+ *   stt:crates/stt-build/src/tiler.rs:443-466 clip_trajectory during per-tile placement
  *   OSRM per-segment vertex-time pipeline supplies the per-vertex clocks.
  *
  * STATIC figure — no animation, no state. All clock values are illustrative;

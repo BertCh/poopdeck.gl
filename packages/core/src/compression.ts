@@ -31,7 +31,7 @@
  *
  * The codec number `1` stays unassigned: reusing it would let a byte salvaged
  * from a single-file archive decode as a live codec. Mirrors the Rust account
- * in `crates/stt-core/src/compression.rs`.
+ * in `stt:crates/stt-core/src/compression.rs`.
  */
 
 import { Decompress as ZstdDecompress } from 'fzstd';

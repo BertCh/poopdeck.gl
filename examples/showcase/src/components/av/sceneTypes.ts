@@ -1,6 +1,6 @@
 /**
  * Shared types + tiny client-side readers for the AV "scene bundle" sidecars
- * the cockpit consumes by path (docs/roadmap/av-cockpit.md §2). Everything the
+ * the cockpit consumes by path (stt:docs/roadmap/av-cockpit.md §2). Everything the
  * deck layers need rides the STT archives; these are the small JSON sidecars the
  * cockpit chrome reads directly — the scene manifest, the CAN-bus gauge series,
  * and the camera keyframes.

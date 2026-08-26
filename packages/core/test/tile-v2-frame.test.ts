@@ -6,7 +6,7 @@
  * sourcing (t0/qa/sorted + fallbacks), inline vs hash-referencing schema
  * refs and their registry failure modes, the §5.2 authority rule, and the
  * empty-bucket tile (0 rows with a dictionary column — the shape the Rust
- * writer emits per `crates/stt-core/tests/v1_golden.rs`; stt-build's tiler
+ * writer emits per `stt:crates/stt-core/tests/v1_golden.rs`; stt-build's tiler
  * never emits empty tiles, so this path is synthesized here).
  *
  * Cross-impl truth for REAL writer bytes lives in packed-v2-golden.test.ts.

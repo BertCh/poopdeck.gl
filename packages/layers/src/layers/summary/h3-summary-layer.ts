@@ -31,7 +31,7 @@
  * bucket, so residency alone gives a map that jumps at bucket boundaries and
  * does nothing while the play head scrubs INSIDE one. `stt-build --summary-tier
  * … --summary-sub-buckets N` therefore bakes `bucket_0..bucket_<N-1>` count
- * columns per cell (`crates/stt-build/src/summary.rs`), and
+ * columns per cell (`stt:crates/stt-build/src/summary.rs`), and
  * `SummaryTier.subBuckets` declares N. When N > 1 this layer selects the column
  * the play head is inside — `floor((t − tile.id.t) / (temporalBucketMs / N))`,
  * the exact inverse of the builder's binning — drives the ramp from it, and
@@ -352,7 +352,7 @@ function prepareKey(
 }
 
 /**
- * TS port of `SummaryTier::resolution_for_zoom` (crates/stt-core/src/
+ * TS port of `SummaryTier::resolution_for_zoom` (stt:crates/stt-core/src/
  * metadata.rs): the table is indexed by `zoom - minZoom` and clamped to the
  * tier's band. Returns null when the archive baked no table.
  */

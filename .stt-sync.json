@@ -1,0 +1,46 @@
+{
+  "$comment": "Vendored-from-STT manifest. These paths are AUTHORED in the SpatioTemporal Tiles repository and copied here so this repo builds, tests and deploys offline. Do not edit them here \u2014 land the change upstream and re-run `pnpm stt:sync --ref <sha>`. Enforced by `pnpm stt:check` in CI. Rationale: docs/roadmap/repo-split-2026-08.md \u00a74.",
+  "repo": "BertCh/spatiotemporal-tiles",
+  "ref": "UNPINNED",
+  "docs": [
+    "docs/spec/stt-packed-format.md",
+    "docs/spec/time-model.md",
+    "docs/spec/conformance.md",
+    "docs/spec/manifest.schema.json",
+    "docs/spec/tile-matrix-set.json",
+    "docs/spec/stt-serve-protocol.md",
+    "docs/spec/sidecar-assets.md",
+    "docs/spec/scene.schema.json",
+    "docs/spec/av-palettes.json",
+    "docs/spec/stt-generate-datasets.json",
+    "docs/architecture/data-format.md",
+    "docs/architecture/archive-format-performance.md",
+    "docs/architecture/system-overview.md",
+    "docs/api/cli-reference.md",
+    "docs/guides/tuning-tiles.md",
+    "docs/guides/data-generation.md",
+    "docs/guides/python.md",
+    "docs/guides/export.md",
+    "docs/guides/csv-quickstart.md",
+    "docs/guides/deploying.md",
+    "docs/guides/wasm.md",
+    "docs/intro/concepts.md",
+    "docs/intro/glossary.md",
+    "docs/intro/choosing.md"
+  ],
+  "vectors": {
+    "from": "conformance/vectors",
+    "to": "packages/core/test/fixtures"
+  },
+  "status": {
+    "from": "project-status.json",
+    "to": "project-status.json",
+    "keys": [
+      "release",
+      "toolchain",
+      "archive",
+      "commands",
+      "repositoryOnlyCommands"
+    ]
+  }
+}

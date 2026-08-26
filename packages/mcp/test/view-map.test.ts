@@ -48,7 +48,7 @@ describe('inferLayerType', () => {
   });
 
   // The COMPLETE set of layer_hint strings the build side can emit
-  // (crates/stt-optimize/src/analysis/properties.rs `LAYER_HINTS`): every one
+  // (stt:crates/stt-optimize/src/analysis/properties.rs `LAYER_HINTS`): every one
   // must map to its correct @@type — none may fall through to the point default.
   it.each([
     ['points', 'AnimatedPointLayer'],

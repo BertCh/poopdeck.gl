@@ -169,7 +169,7 @@ describe('docs link rewriting', () => {
     );
     expect(r.kind).toBe('external');
     expect((r as { href: string }).href).toBe(
-      'https://github.com/BertCh/spatiotemporal-tiles/blob/main/packages/layers/src/animated-point-layer.ts',
+      'https://github.com/BertCh/poopdeck.gl/blob/main/packages/layers/src/animated-point-layer.ts',
     );
   });
 

@@ -195,7 +195,7 @@ to name as a trusted publisher.
 > repo (zero bot commits), so the release automation is unproven end-to-end
 > (**T2**). They are not untested, though: running every job by hand on
 > 2026-07-31 found four red and fixed them, which is how the feature lanes below
-> earned their keep — see [db-input-adaptors.md §5](./db-input-adaptors.md).
+> earned their keep — see [db-input-adaptors.md §5](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/db-input-adaptors.md).
 
 - `smoke-pack` (a step in the `typescript` CI job, and the `release-npm`
   pre-publish gate — `scripts/smoke-pack.mjs`): packs every package tarball,
@@ -213,7 +213,7 @@ to name as a trusted publisher.
 - **DB extensions** (pgrx Postgres extension, DuckDB community extension):
   the DB story is input adaptors + the `stt-serve` binary (the `ST_AsMVT`
   analog, per `db-input-adaptors.md`). Nothing runs _inside_ a database.
-- **Python packaging**: `scripts/data-generation/*` stay internal scripts
+- **Python packaging**: `stt:scripts/data-generation/*` stay internal scripts
   (dataset-specific licenses, per-dataset venvs).
 - **Docker image / Homebrew tap**: cargo-dist's installers + `cargo install`
   cover it. Revive with a ghcr.io image for `stt-serve` if someone actually

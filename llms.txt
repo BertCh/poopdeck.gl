@@ -6,12 +6,18 @@
 > build / optimize / serve the archives; TypeScript packages read and render them.
 > An MCP server + Agent Skills (the `poopdeck-ai` plugin) provide the AI surface.
 
+> **Two repositories.** The format and the Rust toolchain live in
+> <https://github.com/BertCh/spatiotemporal-tiles>; the renderers, the playback
+> engine and this site live in <https://github.com/BertCh/poopdeck.gl>. The
+> documentation below is one corpus regardless — the format pages are authored
+> upstream and vendored into the site.
+
 > **For AI agents:** the entire published documentation corpus is available as a
 > single plain-text document at https://poopdeck.gl/llms-full.txt, and each doc
 > below is mirrored under https://poopdeck.gl/llms/.
 
 ## Start here
-- [Agent guide (AGENTS.md)](https://github.com/BertCh/spatiotemporal-tiles/blob/main/AGENTS.md): how coding agents should work in this repo.
+- [Agent guide (AGENTS.md)](https://github.com/BertCh/poopdeck.gl/blob/main/AGENTS.md): how coding agents should work in this repo.
 - [Quickstart](docs/intro/quickstart.md): install, render a hosted dataset, add playback — React or vanilla JS.
 - [Concepts](docs/intro/concepts.md): the space×time tile model, packed archives, playback.
 - [Choosing an approach](docs/intro/choosing.md): static vs served; which renderer.
@@ -44,4 +50,4 @@
 - [Skills + MCP design record](docs/roadmap/ai-suite.md): the MCP-vs-Skills complementarity verdict, the security model, and the as-built tool/skill inventory.
 
 ## Optional
-- [Data generation](docs/guides/data-generation.md): the reference `stt-generate` datasets.
+- [Data generation](docs/guides/data-generation.md): the reference `stt-generate` datasets (upstream repository).

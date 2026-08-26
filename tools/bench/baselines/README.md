@@ -82,7 +82,7 @@ is why this file cannot fix it on its own.
 
 2. **Mint the fixture AFTER the v2→v3 format break settles.** Anything built
    from this tree today lands at `formatVersion: 3`
-   (`crates/stt-core/src/pack/mod.rs`, `packages/core/src/archive.ts`), which a
+   (`stt:crates/stt-core/src/pack/mod.rs`, `packages/core/src/archive.ts`), which a
    HEAD checkout's reader rejects with
    `unsupported formatVersion 2 (expected 3)` in reverse. A fixture minted
    mid-break breaks again the moment someone checks out HEAD. The rebuild
@@ -92,7 +92,7 @@ Then the fixture must be **deterministic** — byte-identical on re-run — or t
 tolerance comparison is measuring the generator's noise rather than the
 reader's performance. Build it the way the reader-side goldens are built, from
 a generator committed next to it and synthetic SQL rather than a network fetch:
-see [`packages/core/scripts/make-v2-golden.sh`](../../../packages/core/scripts/make-v2-golden.sh),
+see the STT repo's `conformance/make-vectors.sh`,
 which drives `stt-build` off DuckDB `:memory:` `VALUES` and re-runs to a no-op
 diff. Prove the determinism by building twice into different directories and
 diffing, and say so in the commit.

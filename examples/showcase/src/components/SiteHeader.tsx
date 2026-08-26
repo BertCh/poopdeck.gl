@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, NavLink } from 'react-router';
 import { ATLAS_AVAILABLE } from '../datasets';
 
-export const GITHUB_URL = 'https://github.com/BertCh/spatiotemporal-tiles';
+export const GITHUB_URL = 'https://github.com/BertCh/poopdeck.gl';
 
 /**
  * Site-wide top bar shared by the landing page, demo catalog, per-demo pages

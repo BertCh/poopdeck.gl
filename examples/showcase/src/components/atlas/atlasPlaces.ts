@@ -1,7 +1,7 @@
 /**
  * Named density peaks — what the atlas has instead of cluster hulls.
  *
- * §15.7 of `docs/roadmap/neural-atlas-2026-07.md` measured that this dataset
+ * §15.7 of `stt:docs/roadmap/neural-atlas-2026-07.md` measured that this dataset
  * has no cluster structure to outline. Leiden communities have an 80%-radius of
  * ~3° on a 32° plane; a clumpier embedding made that worse because UMAP's
  * islands cut across the partition; HDBSCAN on the embedding itself finds two

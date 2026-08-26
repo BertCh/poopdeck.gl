@@ -5,6 +5,16 @@ features by map viewport and time window. The Rust tools build, inspect,
 validate, bundle, and serve STT data. The `@poopdeck.gl/*` packages read,
 render, and work with it in web applications and AI tools.
 
+The two live in separate repositories — [spatiotemporal-tiles][stt-repo] for the
+format and the toolchain, [poopdeck.gl][pd-repo] for the renderers and this
+site — and meet at the archive on disk. This index covers both, because a reader
+needs both; the pages under **Build data** and **Normative specification** are
+authored upstream and vendored here so there is exactly one copy to read and one
+to edit.
+
+[stt-repo]: https://github.com/BertCh/spatiotemporal-tiles
+[pd-repo]: https://github.com/BertCh/poopdeck.gl
+
 New to the project? Follow these in order:
 
 1. Get an animated map running in five minutes with the
@@ -29,7 +39,7 @@ The [glossary](./intro/glossary.md) defines project names and format terms.
 - [Python guide](./guides/python.md) — GeoPandas, DuckDB, and pyarrow input
   workflows.
 - [Data generation](./guides/data-generation.md) — rebuild the bundled showcase
-  datasets with `tools/stt-generate`.
+  datasets with `stt-generate`, in the [STT repository][stt-repo].
 - [Tile tuning](./guides/tuning-tiles.md) — analyze and improve archive layout
   without silently dropping data.
 
@@ -83,8 +93,9 @@ The deck.gl packages target the repository-pinned 9.3.x line.
 - [Time model](./spec/time-model.md) and
   [tile matrix set](./spec/tile-matrix-set.json)
 - [Tile payload](./architecture/data-format.md)
-- [Sidecar assets](./spec/sidecar-assets.md) and
-  [scene schema](./spec/scene.schema.json)
+- [Sidecar assets](./spec/sidecar-assets.md), the
+  [scene schema](./spec/scene.schema.json), and the
+  [AV palette contract](./spec/av-palettes.json)
 - [Conformance](./spec/conformance.md)
 
 The specification is authoritative for wire behavior. Current writers emit

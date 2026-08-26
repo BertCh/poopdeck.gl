@@ -356,9 +356,9 @@ Captured per run:
 ## 8. The Phase 0 instrument inventory (P0-1)
 
 **What this section is.** Everything in the optimization program
-([problems](./optimization-problems-2026-08.md) →
-[informed design](./optimization-informed-design-2026-08.md) →
-[implementation plan](./optimization-implementation-plan-2026-08.md)) is
+([problems](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/optimization-problems-2026-08.md) →
+[informed design](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/optimization-informed-design-2026-08.md) →
+[implementation plan](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/optimization-implementation-plan-2026-08.md)) is
 accepted or rejected against a number, so before any controller or encoder
 changes, the instruments themselves get audited. This is that audit: per
 harness, does it exist, how is it invoked, what does it emit, and which phase
@@ -386,7 +386,7 @@ in-flight work, so locate symbols by name if a number has drifted.
 | Trace recorder                         | YES (new, P0-3)                                       | `node tools/bench/src/policy-record.mjs <demo-id> [seconds] [port] [--out <path>]`; `ROUTE=/drive …`                                                                                                                             | JSON-lines trace, default `tools/bench/out/traces/<route>-<date>.jsonl`                                           | Phase 1 (O1)                               |
 | Trace replayer                         | YES (new, P0-3)                                       | `node tools/bench/src/policy-replay.mjs <trace.jsonl> [--archive …] [--variant …] [--all] [--json]`; `--list-variants`                                                                                                           | deterministic JSON report: blended cost, refetch cycles, eviction by tier, decode-queue waits, invariant checks   | Phase 1 (O1)                               |
 | Scrub cost                             | YES (new, P0-5) — see §8.4 R4                         | `node tools/bench/src/scrub-cost.mjs <demo-id> [port] [--variants a,b] [--velocities a,b] [--zoom-drop N] [--repeat N] [--settle-ms N] [--quiesce-ms N] [--keep-playing] [--out p] [--json]`; `ROUTE=`, `WARMUP_MS=`, `OUT_DIR=` | JSON + per-variant PNG in `OUT_DIR`: the five §11.6 metrics per (variant, velocity); exit 4 on a G7 violation     | P0-5 / §11.6 keep-vs-delete                |
-| Ordering simulator                     | YES                                                   | library only: `crates/stt-core/src/ordering_sim.rs`, reached via `stt-build --blob-ordering measured` and `stt-optimize order-audit`                                                                                             | simulated blended range-read cost per candidate ordering                                                          | M4 (Phase 2)                               |
+| Ordering simulator                     | YES                                                   | library only: `stt:crates/stt-core/src/ordering_sim.rs`, reached via `stt-build --blob-ordering measured` and `stt-optimize order-audit`                                                                                         | simulated blended range-read cost per candidate ordering                                                          | M4 (Phase 2)                               |
 | `stt-optimize inspect`                 | YES                                                   | `stt-optimize inspect --archive <dir\|manifest.json> [--sample N] [--format text\|json] [-o out]`                                                                                                                                | per-zoom directory stats, dedup + compression ratios, per-column compressed cost                                  | M1 (Phase 2)                               |
 | `stt-optimize diff`                    | YES                                                   | `stt-optimize diff --before <A> --after <B> [--sample N] [--format …] [--fail-on-growth PCT]`                                                                                                                                    | totals / per-zoom / per-column deltas; non-zero exit past the growth gate                                         | M1 (Phase 2), R1 (Phase 4)                 |
 | `stt-optimize order-audit`             | YES                                                   | `stt-optimize order-audit --archive <dir> [--format …] [--strict]`                                                                                                                                                               | per-ordering measured cost + recommended `--blob-ordering`; `--strict` is the CI gate shape                       | M4 (Phase 2) — O2                          |
@@ -502,7 +502,7 @@ golden-pin pair, P0-6) and the backlog's green definition
 
 **Golden-pin gate scope, stated precisely.** `PINNED_ROOTS`
 ([check-golden-pins.mjs](../../.github/scripts/check-golden-pins.mjs)) watches
-`crates/stt-core/tests/fixtures/v2-golden/**` plus any file named
+`stt:crates/stt-core/tests/fixtures/v2-golden/**` plus any file named
 `expected-hashes.json` anywhere. As first read it did **not** watch
 `packages/core/test/fixtures/**` (six TS-side read fixtures:
 `legacy-shape`, `packed-golden`, `paged-golden`, `paged-golden-single`,
@@ -654,13 +654,13 @@ output-affecting path; stable sorts with total tiebreaks.
 The lane it plugs into already has five members and all five were run green on
 2026-08-10:
 
-| Member                                                   | Where                                                                                                      | Covers                                                                 |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `same_tile_encodes_byte_identically`                     | [reproducible_build.rs:180](../../crates/stt-core/tests/reproducible_build.rs)                             | per-tile encode, 200 repetitions                                       |
-| `v2_dataset_rebuild_is_byte_identical_including_schemas` | reproducible_build.rs:202                                                                                  | whole dataset, order-independent (two add-orders)                      |
-| `full_pipeline_is_byte_reproducible`                     | [reproducible_pipeline.rs:124](../../crates/stt-build/tests/reproducible_pipeline.rs)                      | parse → clip → bucket → encode → pack, twice                           |
-| `stt_build_cli_double_build_is_byte_identical`           | [build_cli_reproducible.rs](../../crates/spatiotemporal-tiles/tests/build_cli_reproducible.rs) (new, P0-7) | the **CLI seam**: arg parsing → readers → parallel parse → output tree |
-| `v2_build_is_byte_identical_to_golden`                   | [v2_golden.rs:325](../../crates/stt-core/tests/v2_golden.rs)                                               | the byte pin itself                                                    |
+| Member                                                   | Where                                                                                                                                                         | Covers                                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `same_tile_encodes_byte_identically`                     | [reproducible_build.rs:180](https://github.com/BertCh/spatiotemporal-tiles/blob/main/crates/stt-core/tests/reproducible_build.rs)                             | per-tile encode, 200 repetitions                                       |
+| `v2_dataset_rebuild_is_byte_identical_including_schemas` | reproducible_build.rs:202                                                                                                                                     | whole dataset, order-independent (two add-orders)                      |
+| `full_pipeline_is_byte_reproducible`                     | [reproducible_pipeline.rs:124](https://github.com/BertCh/spatiotemporal-tiles/blob/main/crates/stt-build/tests/reproducible_pipeline.rs)                      | parse → clip → bucket → encode → pack, twice                           |
+| `stt_build_cli_double_build_is_byte_identical`           | [build_cli_reproducible.rs](https://github.com/BertCh/spatiotemporal-tiles/blob/main/crates/spatiotemporal-tiles/tests/build_cli_reproducible.rs) (new, P0-7) | the **CLI seam**: arg parsing → readers → parallel parse → output tree |
+| `v2_build_is_byte_identical_to_golden`                   | [v2_golden.rs:325](https://github.com/BertCh/spatiotemporal-tiles/blob/main/crates/stt-core/tests/v2_golden.rs)                                               | the byte pin itself                                                    |
 
 Two of these carry a negative guard so the comparator cannot rot into a
 tautology — `byte_comparison_reports_a_single_flipped_pack_byte`
@@ -728,7 +728,7 @@ fatal — which is why "re-cut the fixture" was never going to be the repair:
 1. **The fixture was the retired container.** First bytes `53 54 54 04` —
    `STT` + version 4, single-file. Confirmed that no reader path survives:
    `ArchiveWriter` / `ArchiveReader` appear in this tree only inside comments
-   (`crates/stt-core/src/pack/mod.rs`, `packages/core/src/index.ts`), there is
+   (`stt:crates/stt-core/src/pack/mod.rs`, `packages/core/src/index.ts`), there is
    no `struct`/`class` definition for either, and the Rust CLI agrees —
    `stt-optimize inspect --archive …/earthquakes-ci.stt` answers
    `Invalid archive format: manifest JSON decode failed`. This is **not** the
@@ -741,7 +741,7 @@ fatal — which is why "re-cut the fixture" was never going to be the repair:
    proves it:
 
    ```
-   $ node tools/bench/src/index.mjs crates/stt-core/tests/fixtures/v2-golden/single/manifest.json
+   $ node tools/bench/src/index.mjs stt:crates/stt-core/tests/fixtures/v2-golden/single/manifest.json
      Archive size                 4.91 KB
    Benchmark failed:
    Error: STT directory truncated: got 5024 bytes, expected 156
@@ -763,7 +763,7 @@ and was rejected on three grounds, in order of weight:
   which this item does not own. A packed fixture committed today would still be
   unreadable by `pnpm bench`.
 - **Anything minted now is `formatVersion: 3`.** Both writers in this tree are
-  at 3 (`crates/stt-core/src/pack/mod.rs`, `packages/core/src/archive.ts`);
+  at 3 (`stt:crates/stt-core/src/pack/mod.rs`, `packages/core/src/archive.ts`);
   HEAD `5bc30e3`'s reader is at 2 and gates on strict equality. A fixture minted
   mid-break is openable only from the working tree and breaks the moment
   someone checks out HEAD — the failure this defect _is_, re-committed.
@@ -818,14 +818,14 @@ tests replay the committed micro-trace). 27 pass, 0 fail.
 #### The golden-pin gate now watches the reader-side fixtures
 
 **What was believed.** §8.3 above records the scope as deliberate: the gate
-watches `crates/stt-core/tests/fixtures/v2-golden/**` plus any
+watches `stt:crates/stt-core/tests/fixtures/v2-golden/**` plus any
 `expected-hashes.json`, and _not_ `packages/core/test/fixtures/**`, "because
 the Rust tree is the encoder's oracle and the TS fixtures are read-side."
 
 **What is true.** That distinction does not survive contact with the numbers.
 `packages/core/test/fixtures/` holds six datasets and **121 objects currently
 churning** — manifests, `.sttp` packs and `.sttd` directory pages produced by
-the _same_ Rust writer (`packages/core/scripts/make-v2-golden.sh` drives
+the _same_ Rust writer (the STT repo's `conformance/make-vectors.sh` drives
 `stt-build`), pinned byte-for-byte by `packed-v2-golden.test.ts`,
 `packed-golden.test.ts`, `paged-directory.test.ts` and
 `legacy-shape-backcompat.test.ts`. That is the same regression-oracle role, on
@@ -1306,7 +1306,7 @@ checked before their figure is quoted at all (§7 caveat 3).
 ### 10.4 Coverage check against design §7
 
 Each of O1–O5 from
-[optimization-informed-design-2026-08.md §7](./optimization-informed-design-2026-08.md)
+[optimization-informed-design-2026-08.md §7](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/optimization-informed-design-2026-08.md)
 appears in §10.1, and no criterion appears twice:
 
 - **O1** — five rows (horizon feasibility, byte-metered budgets, cadence
@@ -1462,7 +1462,7 @@ are owned by other items — and both are worked around, not papered over:
 and the browser were all fine. The only real obstacle was the in-flight v2→v3
 reader break, and it is walkable in about a minute per dataset — the Rust
 builder already emits v3 (`PACKED_FORMAT_VERSION = 3`,
-`crates/stt-core/src/pack/mod.rs`), so any dataset with a local `.parquet`
+`stt:crates/stt-core/src/pack/mod.rs`), so any dataset with a local `.parquet`
 source can be rebuilt into a reader-compatible archive today. Anyone reproducing
 this should expect to do that first, and should say so in their report.
 

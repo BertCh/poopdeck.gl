@@ -36,7 +36,7 @@ export interface DocSection {
 }
 
 export const GITHUB_BLOB_BASE =
-  'https://github.com/BertCh/spatiotemporal-tiles/blob/main/';
+  'https://github.com/BertCh/poopdeck.gl/blob/main/';
 
 export const docSections: DocSection[] = [
   {

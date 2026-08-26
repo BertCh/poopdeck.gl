@@ -1,8 +1,33 @@
 # Changelog
 
-This file summarizes changes that affect the STT format and project as a whole.
-Package-level details remain in each `packages/*/CHANGELOG.md`; release tags and
-published release notes are the historical record for individual artifacts.
+This file summarizes changes that affect poopdeck.gl as a whole. Package-level
+details remain in each `packages/*/CHANGELOG.md`; release tags and published
+release notes are the historical record for individual artifacts. Changes to the
+**archive format itself** are recorded upstream, in the
+[SpatioTemporal Tiles changelog](https://github.com/BertCh/poopdeck.gl/blob/main/CHANGELOG.md).
+
+## Unreleased
+
+### Repository split
+
+- poopdeck.gl moved out of the `spatiotemporal-tiles` monorepo into its own
+  repository. Nothing about the published packages changed: same names, same
+  entry points, same peer ranges, and the full commit history for every package
+  came along.
+- **npm and crates.io versions are no longer in lockstep.** They read 0.7.0 on
+  both sides by history, not by promise; from here each stack releases on its
+  own cadence. What relates them is the archive's `formatVersion`, declared in
+  `project-status.json` on both sides. The `sync-versions` gate that used to
+  police the two registries now covers only the Claude Code plugin surface.
+- The Rust CLIs (`stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`,
+  `stt-serve`) are unchanged and install exactly as before with
+  `cargo install spatiotemporal-tiles`. `@poopdeck.gl/mcp` still drives them off
+  `PATH`, which is how it always resolved them.
+- Twenty-three documentation pages, the six conformance golden-fixture trees,
+  and the AV palette contract are now **vendored** from the STT repository and
+  byte-gated by `pnpm stt:check`. Published doc URLs are unchanged.
+- Rationale, the full inventory, and the costs accepted:
+  [repo-split-2026-08.md](docs/roadmap/repo-split-2026-08.md).
 
 ## 0.6.0 — 2026-08-13
 

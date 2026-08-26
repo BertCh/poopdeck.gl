@@ -1,7 +1,7 @@
 {
-  "name": "spatiotemporal-tiles",
+  "name": "poopdeck.gl",
   "version": "0.1.0",
-  "description": "Packed spatiotemporal vector tiles for interactive time-aware visualization",
+  "description": "Time-aware renderers for SpatioTemporal Tiles: deck.gl, Three.js, MapLibre and Cesium backends, playback, and the poopdeck.gl showcase",
   "private": true,
   "packageManager": "pnpm@11.23.0",
   "workspaces": [
@@ -21,6 +21,8 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "project:check": "node scripts/check-project-status.mjs",
+    "stt:sync": "node scripts/sync-stt.mjs",
+    "stt:check": "node scripts/sync-stt.mjs --check",
     "typecheck": "turbo run typecheck",
     "changeset": "changeset",
     "version-packages": "changeset version",
@@ -42,16 +44,19 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/BertCh/spatiotemporal-tiles.git"
+    "url": "https://github.com/BertCh/poopdeck.gl.git"
   },
   "keywords": [
-    "tiles",
-    "spatiotemporal",
-    "geospatial",
     "deck.gl",
+    "three.js",
+    "maplibre",
+    "cesium",
     "visualization",
     "time-series",
-    "animation"
+    "animation",
+    "spatiotemporal",
+    "tiles",
+    "geospatial"
   ],
   "author": "Robert Christie",
   "license": "MIT"

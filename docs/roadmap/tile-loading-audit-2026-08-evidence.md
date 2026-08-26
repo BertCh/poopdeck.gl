@@ -85,7 +85,7 @@ experience must be seamless." Judge every finding against those three axes:
   `DemoViewer.tsx`, `src/datasets.ts` (per-demo config incl. `tileLoadTimeWindow`,
   `headsOverlayTimeWindow`, `overlayGatesPlayback`, `tier`, `zRange`).
 - Docs that describe intent: `docs/roadmap/playback-and-loading.md`,
-  `docs/roadmap/tile-loading-3d-2026-07.md`, `docs/roadmap/optimization-conformance-2026-08.md`
+  `docs/roadmap/tile-loading-3d-2026-07.md`, `stt:docs/roadmap/optimization-conformance-2026-08.md`
   (§5-6 open defects), `docs/roadmap/measurements-2026-08.md`, `docs/roadmap/README.md`
   "The backlog". Treat docs as CLAIMS; the code is the truth. Report doc↔code drift.
 - Tests: `packages/core/test/*` (prefetch-_, eviction-_, buffered-runway, cost-oracle,
@@ -346,7 +346,7 @@ with z < primary whose block has zero pending cells (a one-line probe counter in
 **Where** `tileset.ts:1952` `pickTierForZoom` is per-zoom; `:3037` dispatches each parent
 level independently (`zoomLevels.map(z => fetchSelectionTilesForZoom(bounds, z, …))`); the
 summary ids carry `variantId: tier.variantId` so they key separately (`tile-key.ts`). Summary
-tiles carry cell-centroid Point geometry (`crates/stt-build/src/summary.rs:360`) and raw
+tiles carry cell-centroid Point geometry (`stt:crates/stt-build/src/summary.rs:360`) and raw
 point sublayers iterate `tile.layers` with no variant filter
 (`packages/layers/src/layers/core/animated-point-layer.ts:1500,1527`). Only the dedicated
 summary layers force `tier: 'summary'` + `no-overlap` (`h3-summary-layer.ts:645-655`,
@@ -449,7 +449,7 @@ counting `getAvailableTiles` calls (300 today; ≤ 50 after).
   and `parent-fallback-clamp.test.ts:308,338` are `it.fails`; companion tests RECORD the
   defect's size ("142 of 432 cameras drop a loaded cut member, worst 14"; "worst 985
   ancestor/descendant pairs, 2.0× overdraw"; both shipped pitched cameras double-cover).
-- Docs: `docs/roadmap/optimization-conformance-2026-08.md:28` "§8 frustum selection FS-1 … FS-3
+- Docs: `stt:docs/roadmap/optimization-conformance-2026-08.md:28` "§8 frustum selection FS-1 … FS-3
   **3 / 3**"; `docs/roadmap/tile-loading-3d-2026-07.md:290,347` "Wave 3 has not [landed] …
   NOT built" (stale the other way — FS-1/FS-2 landed 2026-08-11).
 
@@ -1311,7 +1311,7 @@ Vacuous/misleading: BH-4 "does not mask a genuine laggard" (:2805) and the BH-4 
 1. `docs/roadmap/playback-and-loading.md` §6.1 "Dynamic weights — `base × clamp((slack + laggard)/(slack + runway_i), 0.25, 4)`": the shipped default is the BH-3 progressive fill by byte need (`fairness.ts:117-160`, `USE_PROGRESSIVE_FILL_WEIGHTS = true` at governor :625); the 1/x shed is the retained fallback.
 2. `playback-and-loading.md` §5 and `docs/api/playback-governor.md` ("Constructor" table row and "Cadence tolerance band"): "`runwayToleranceMs` default 200 (the tick-probe interval)". Unauthored, the band is the per-source BH-4 derivation `τ_i = max(Δ_i, Δ_L) + 200 ms × |speed|` (governor :2116-2131); 200 ms is only the residue. Both docs also claim the band absorbs jitter "without lowering genuine stall protection" — false for bucket-coarse composites (G2).
 3. Governor `scrubTo` docstring (:1326-1329, "no tileset update storm, no fetches") and `docs/api/stt-player.md` ("previews are free"): the layer's tick path updates the tileset at ≤10 Hz during previews and issues priority fetches (`spatiotemporal-layer.ts:1410-1442`; measured 0.3–2.2 MiB per drag, `measurements-2026-08.md §10.6`). What is true: no PREFETCH flush per preview.
-4. `docs/roadmap/optimization-conformance-2026-08.md` §1 "M5 CO-1…CO-7 **7/7** landed" and `optimization-implementation-plan-2026-08.md:247-287`: CO-3's fluid check + dispersion re-fit and CO-4's ladder are unreachable from every shipped consumer (G5). Governor :365-386 says `baseSpeed` "i.e. `SttPlayer.baseRate`" — `SttPlayer` does not pass it (`stt-player.ts:150-153`).
+4. `stt:docs/roadmap/optimization-conformance-2026-08.md` §1 "M5 CO-1…CO-7 **7/7** landed" and `optimization-implementation-plan-2026-08.md:247-287`: CO-3's fluid check + dispersion re-fit and CO-4's ladder are unreachable from every shipped consumer (G5). Governor :365-386 says `baseSpeed` "i.e. `SttPlayer.baseRate`" — `SttPlayer` does not pass it (`stt-player.ts:150-153`).
 5. Governor header (:9-16) and `playback-governor.md` "Gates and hysteresis": "resume hysteresis so stall/resume never oscillates" — the clamp path can oscillate 1-frame stalls (G3); "Low watermark … tick-driven (every ~200 ms)" — it is also event-driven, unthrottled, on every buffer change (G6).
 6. `playback-governor.md` "Loop wraps": "A wrap into fully-cached time passes the gate synchronously, so seamless loops stay seamless" — true of the governor, never true of the loader on large archives (G4); the doc should say every lap on a large archive gates.
 7. `BufferSource.setPrefetchRunAheadLimit` docstring (governor :128-142) says the loader "may enforce its own internal safety floor" — the floor `max(Δ, timeWindow, 5 s × speed)` (`prefetch-policy.ts:96-101`) exceeds the cap `laggard + 3 s × speed` whenever the laggard is < 2 s × speed ahead, i.e. the cap is inert in exactly the starved case it targets. (Documented behaviour, but the doc's "Shaka caps ~1 segment past the neediest" framing overstates what ships.)
@@ -1757,7 +1757,7 @@ calls and bytes per second during playback.
 - `docs/roadmap/tile-loading-3d-2026-07.md` §8: "check `getCacheStats().pinnedCount` first — one-line
   measurement" — `TilesetCacheStats` (`spatiotemporal-tileset.ts` interface) has no `pinnedCount`;
   the counts (17,899 / 8,927) are confirmed here by directory scan and browser console.
-- `docs/roadmap/optimization-conformance-2026-08.md` §6.1: "_Still open:_ reader-side array-identity
+- `stt:docs/roadmap/optimization-conformance-2026-08.md` §6.1: "_Still open:_ reader-side array-identity
   sharing in `packages/core/src/tile.ts` (`sharedArrayIdentityHits` was 0)" — the sharing HAS landed
   (`tile.ts:196-301`, `hoisted-category-sharing.test.ts`), but only for the inline decoder; the
   browser path is still unshared (CE-3). The doc is stale in both directions.
@@ -2001,7 +2001,7 @@ Findings D2 and D5 assess that in-flight work; they are not "bugs in main".
 
 **Where**
 
-- Writer: `crates/stt-core/src/compression.rs:63-64` (`zstd::stream::encode_all(data, ZSTD_LEVEL)`) and `:134-146` (`compress_zstd_with_dict_level` → same `encode_all` when no dict). Streaming `Encoder` without `set_pledged_src_size` → frame header has `Single_Segment=0`, `Frame_Content_Size` absent, `Window_Descriptor` = the level's default window. `stt-build.rs:1325-1326` bumps publish builds to level 19 (windowLog 23 = 8 MiB).
+- Writer: `stt:crates/stt-core/src/compression.rs:63-64` (`zstd::stream::encode_all(data, ZSTD_LEVEL)`) and `:134-146` (`compress_zstd_with_dict_level` → same `encode_all` when no dict). Streaming `Encoder` without `set_pledged_src_size` → frame header has `Single_Segment=0`, `Frame_Content_Size` absent, `Window_Descriptor` = the level's default window. `stt-build.rs:1325-1326` bumps publish builds to level 19 (windowLog 23 = 8 MiB).
 - Reader: `packages/core/src/compression.ts:67-103` (`unzstdSync` drives fzstd's streaming `Decompress`); fzstd 0.1.1 `lib/index.js:95-116` (`rzfh`: `ws = window descriptor` when `!ss`; `buf = new u8(ws + 12)` for the streaming path; `m: Math.min(131072, ws)`), `:445` (`new u8(st.m)` per block), `:739` (`cpw(this.s.w, 0, blk.length)` = `copyWithin` over the whole 8 MiB window per block).
 - Both decode paths go through it: `tile-decoder.worker.ts:176-180` and `tile-decoder.ts:177-181`.
 
@@ -2229,7 +2229,7 @@ Findings D2 and D5 assess that in-flight work; they are not "bugs in main".
 - `examples/showcase/src/components/how/DecodePipeline.tsx:9-19, 307-310, 447`: "pool sized max(2, min(4, cores−1)), least-pending pick" — code: initial `min(4, cores−1)` with floor 1, adaptive `[1, cores−1]`, ONE pool-wide host queue (BH-5), no per-worker assignment.
 - Same file `:341-359` "OPFS hit → straight back to UI (skips workers)" — code: OPFS payloads go through the worker pool via `decodeDecompressed` (`archive.ts:3708-3737`); only the zstd step is skipped.
 - Same file `:416-424` and `tile-decoder.worker.ts:132-140, 187-192` "in-flight decode is cancelled mid-pool / skips the expensive half" — unreachable (D5).
-- `docs/roadmap/optimization-implementation-plan-2026-08.md:426` names **BH-7** "Loop-aware eviction rotation + byte-density scoring"; the uncommitted code uses **BH-7** for decode batching (`tile-decoder.ts:325-353`). ID collision.
+- `stt:docs/roadmap/optimization-implementation-plan-2026-08.md:426` names **BH-7** "Loop-aware eviction rotation + byte-density scoring"; the uncommitted code uses **BH-7** for decode batching (`tile-decoder.ts:325-353`). ID collision.
 - `tile-decoder.ts:325-338` attributes ~22 ms per message to "pure cross-thread latency"; the host-side per-message CPU measured here is tens of µs — the 22 ms is almost certainly main-thread event-loop occupancy (rAF work) delaying the reply's task. The conclusion (batch) still holds; the attribution should say so (see Needs measurement).
 - `compression.ts:5-10, 49-51` "fzstd ... no WASM" is true, but `compression.ts:60-65` claims driving the streaming `Decompress` is "performance-neutral for valid data" — false for this fleet's frames: streaming cannot presize and pays the 8 MiB window per block (D1).
 - `DecodeArgs.priority` doc (`tile-decoder.ts:75-98`) calls byte-cache/OPFS hits "the interactive path"; for batch prefetch they are not (D6).
@@ -3079,7 +3079,7 @@ Cross-seam note (invariant 10): NO file in `packages/layers/test` or `packages/c
 - `packages/core/src/telemetry.ts:47-50` "PROBE-OFF DISCIPLINE … the allocation itself never happens when the probe is off" — true for core's own sites, false for 13/15 layer files that import the layers shim with the same documented contract (TO-2).
 - `packages/layers/src/lib/telemetry.ts:15-26` contract block lists channels `consolidations/renderLayers/tilePrepare/decode/playback` — omits `requests/evict/scrub` and the `snapshots` keys `tileset.viewport/decodeQueue/playback.state`; harmless but the "single coherent bag" has three partially overlapping type unions.
 - `packages/core/test/opfs-cache.test.ts:104-105` example key `"https://cdn/a.stt::8/12/34/170::W/abc"` does not match the persisted shape `archive.ts:3581` (`${url}::${tileKey(id)}::${fingerprint}`, `tileKey` = `z/x/y/t#variant[@bucketMs]`).
-- `docs/roadmap/optimization-implementation-plan-2026-08.md:81` P0-2 "Guard test: probe disabled ⇒ zero allocations on the request path (assert bag untouched)" — what landed asserts "bag untouched" (`telemetry-channels.test.ts:271-292`), which does not test allocation; the comment at `:290` claims more than the assertion proves.
+- `stt:docs/roadmap/optimization-implementation-plan-2026-08.md:81` P0-2 "Guard test: probe disabled ⇒ zero allocations on the request path (assert bag untouched)" — what landed asserts "bag untouched" (`telemetry-channels.test.ts:271-292`), which does not test allocation; the comment at `:290` claims more than the assertion proves.
 - `docs/roadmap/measurements-2026-08.md:1201` "Priority inversions: NO INSTRUMENT" — still true; `policy-replay` reports no inversion counter and no stall counter.
 - `packages/core/src/archive.ts:3134` comment "enabled, legacy cursor runner otherwise" — there is no `enabled` option and no legacy runner (`:4047` always uses the singleton); nine test call sites pass the dead flag (TO-8).
 - `packages/core/test/prefetch-slicing.test.ts:62, :112` comments attribute the 4-tile/8-tile slices to `0.5 × 8 MiB`; the actual binding term is the `PREFETCH_MIN_BUDGET_BYTES` 4 MiB floor (`prefetch-policy.ts:943-952`; with cold expansion 8 the fraction would give 512 KiB).
@@ -3227,7 +3227,7 @@ Hand-set vs derived (>2× rows):
 
 ### F5 [medium] `nwm-rivers-2019` ships `blobOrdering: hilbert3` although the standing rule is time-major and the docs say the build path was fixed; the reconcile gate only rejects `spatial`
 
-**Where** `public/data/nwm-rivers-2019/manifest.json` (`blobOrdering: "hilbert3"`, 13 monthly buckets, 11 453 tiles, 180 MB); rule `docs/roadmap/demos-and-datasets.md:384`; "landed" claim `docs/roadmap/tile-loading-3d-2026-07.md:367`; gate `examples/showcase/test/dataset-archive-reconcile.test.ts` check (f) (`blobOrdering !== 'spatial'`).
+**Where** `public/data/nwm-rivers-2019/manifest.json` (`blobOrdering: "hilbert3"`, 13 monthly buckets, 11 453 tiles, 180 MB); rule `stt:docs/roadmap/demos-and-datasets.md:384`; "landed" claim `docs/roadmap/tile-loading-3d-2026-07.md:367`; gate `examples/showcase/test/dataset-archive-reconcile.test.ts` check (f) (`blobOrdering !== 'spatial'`).
 **Mechanism** The archive plays (`nwm-rivers-2019` target 120 s, and as `riversUrl` under `rain-flood-2019`); each bucket transition (every 9 s standalone, every 0.03 real-s in rain-flood... no: rivers keep their own 30-day bucket, so 13 transitions per play) re-reads the visible network's tiles for the new bucket. Under a 3-D Hilbert layout one bucket's tiles across the viewport are interleaved with the other 12 buckets' bytes, so the coalescer (2 MiB gap) either issues many ranges or over-reads. The gate cannot see it: it tests string equality with `'spatial'`.
 **Scenario** large / playback (FlowCorridor rivers; the same archive whose 13× geometry duplication is already known).
 **Consequence** more range requests / read amplification per bucket flip than a time-major layout; unquantified (NM-4).

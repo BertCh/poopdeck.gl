@@ -37,7 +37,7 @@
  *
  * A naive per-vertex projection of an H3 cell straddling ±180° puts some
  * vertices at x ≈ 0.9997 and others at x ≈ 0.0003, and the cell SMEARS across
- * the whole world. Raw geometry never hits this — `crates/stt-build/src/clip.rs`
+ * the whole world. Raw geometry never hits this — `stt:crates/stt-build/src/clip.rs`
  * splits crossing rings at build time (`split_polygon_at_antimeridian`) — but a
  * cell id is atomic, so its boundary is only ever reconstructed client-side and
  * the split cannot have happened. Handling here, mirroring the Rust

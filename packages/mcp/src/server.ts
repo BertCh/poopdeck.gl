@@ -123,7 +123,7 @@ const RESOURCE_LIST_CAP = 100;
  * them). Each writes a single `.stt`, and most take dataset-specific flags
  * (dates, ranges, `--synthetic`, …) that the `generate_dataset` tool forwards
  * via `extraArgs`. Kept in sync with `stt-generate`'s `Commands` enum
- * (`tools/stt-generate/src/main.rs`) — `test/contract.test.ts` fails if this
+ * (`stt:tools/stt-generate/src/main.rs`) — `test/contract.test.ts` fails if this
  * hand-copy drifts. There is no `all` fan-out subcommand to offer: an agent that
  * asked for one would only get clap's "unrecognized subcommand".
  */

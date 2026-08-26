@@ -129,7 +129,7 @@ const WEATHER_FRONT_COLORS: Record<string, [number, number, number, number]> = {
 const WEATHER_FRONT_FADE_MS = 2700000; // 45 sim-min
 
 // ─── storm4d composite constants ─────────────────────────────────────────
-// (docs/roadmap/storm-4d-greenfield-2026-07.md §9 — the binding contract.)
+// (stt:docs/roadmap/storm-4d-greenfield-2026-07.md §9 — the binding contract.)
 
 /**
  * The ONE shared vertical exaggeration for the storm4d scene (§9.0), applied
@@ -1947,7 +1947,7 @@ export function buildDemoLayers({
             // NO `refinementStrategy: 'no-overlap'` here, unlike every other
             // storm4d tileset. The two archives this branch renders are the only
             // ones in the family built with `--min-zoom-field` (see
-            // `lod_min_zoom` in scripts/data-generation/nexrad_volume.py and
+            // `lod_min_zoom` in stt:scripts/data-generation/nexrad_volume.py and
             // mrms_volume.py), which is a cumulative LOD FLOOR: a gate whose
             // `min_zoom` is z appears at z and at every DEEPER zoom, never
             // shallower — so a parent tile holds a strict SUBSET of what its

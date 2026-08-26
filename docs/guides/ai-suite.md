@@ -152,7 +152,7 @@ client (Claude Desktop, or a remote Streamable-HTTP host) — see the
 `description` frontmatter), so they also load in Codex, Gemini CLI, Cursor, and
 other skill-aware harnesses — not just Claude Code.
 
-**Static tier.** [`llms.txt`](https://github.com/BertCh/spatiotemporal-tiles/blob/main/llms.txt)
+**Static tier.** [`llms.txt`](https://github.com/BertCh/poopdeck.gl/blob/main/llms.txt)
 at the repo root is the cheap fallback: a curated index of the docs for any agent
 that can only be pointed at a URL.
 
@@ -181,4 +181,4 @@ Field defaults, enforced by the _server/operator_, not the model:
   composes.
 - Design record (the MCP-vs-Skills verdict, the security model, the as-built
   inventory):
-  [`ai-suite.md`](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/ai-suite.md).
+  [`ai-suite.md`](https://github.com/BertCh/poopdeck.gl/blob/main/docs/roadmap/ai-suite.md).

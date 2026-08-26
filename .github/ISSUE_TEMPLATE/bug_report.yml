@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Security issues do **not** belong here — see
-        [SECURITY.md](https://github.com/BertCh/spatiotemporal-tiles/blob/main/SECURITY.md).
+        [SECURITY.md](https://github.com/BertCh/poopdeck.gl/blob/main/SECURITY.md).
 
         For a blank or broken map, `poopdeck-ai`'s `debugging-blank-renders`
         skill (and `stt-validate` / `stt-optimize doctor`) usually names the

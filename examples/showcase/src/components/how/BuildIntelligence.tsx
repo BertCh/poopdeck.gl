@@ -11,7 +11,7 @@ import React from 'react';
  * Figures: the analyze→build→inspect→doctor loop, the sample-encode
  * measurement (with per-column cost attribution), the analysis→advice firewall,
  * the doctor's severity-ranked findings, and the baked style_hints block.
- * Every flag, verb, rule code and field name mirrors crates/stt-optimize.
+ * Every flag, verb, rule code and field name mirrors stt:crates/stt-optimize.
  */
 
 const MONO =

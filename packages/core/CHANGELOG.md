@@ -225,7 +225,7 @@
 
   The optimizer treated each tile as its own universe and the client guessed at
   what it could afford. Both are now answered from evidence. Full record:
-  `docs/roadmap/optimization-conformance-2026-08.md`.
+  `stt:docs/roadmap/optimization-conformance-2026-08.md`.
 
   **`stt-build --target-size <SIZE>`.** Ask for an archive size and the builder
   solves for the knobs that reach it — zoom clamp, temporal bucket, quantization
@@ -339,7 +339,7 @@
   `stt-serve` keeps compact times **opt-in** (`--compact-times`): a served tile
   carries no manifest, so a client cannot refuse a capability it has never been
   told about. Rationale and full measurements:
-  `docs/roadmap/stt-packed-format-decisions.md` §10.
+  `stt:docs/roadmap/stt-packed-format-decisions.md` §10.
 
 - d5163aa: Removed: `emitGLSL300` (and Cesium's `timeFilterAlphaGlsl` wrapper)
 

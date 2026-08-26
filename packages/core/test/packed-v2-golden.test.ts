@@ -2,7 +2,7 @@
  * Cross-impl contract test for packed **formatVersion 3** (spec §§3.2, 5.2).
  *
  * Reads the committed Rust-produced v2 golden fixtures (see
- * `scripts/make-v2-golden.sh`) through `STTArchive` and proves:
+ * the STT repo's `conformance/make-vectors.sh`) through `STTArchive` and proves:
  *
  *   - the v2 manifest opens: `schemas` entries are base64-decoded and
  *     blake3-128-validated into the template registry (corruption fails

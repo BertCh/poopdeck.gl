@@ -16,6 +16,7 @@
   "sortPackageJson": false,
   "ignorePatterns": [
     "docs/spec/backend-capabilities.md",
+    "docs/spec/av-palettes.json",
     "**/dist/**",
     "**/build/**",
     "**/.react-router/**",

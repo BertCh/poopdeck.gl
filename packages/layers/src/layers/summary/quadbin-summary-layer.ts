@@ -13,7 +13,7 @@
  * real time — the raw tier would push hundreds of millions of points through
  * the GPU every frame. Where H3SummaryLayer renders the `SummaryScheme::H3`
  * variant, this class renders the `SummaryScheme::Quadbin` variant declared in
- * the same format (crates/stt-core/src/metadata.rs).
+ * the same format (stt:crates/stt-core/src/metadata.rs).
  *
  * Each summary tile carries:
  * - `id`     — Quadbin cell index, encoded as a u64 (carried by Arrow's UInt64
@@ -47,7 +47,7 @@
  * bucket, so residency alone gives a map that jumps at bucket boundaries and
  * does nothing while the play head scrubs INSIDE one. `stt-build --summary-tier
  * … --summary-sub-buckets N` therefore bakes `bucket_0..bucket_<N-1>` count
- * columns per cell (`crates/stt-build/src/summary.rs`), and
+ * columns per cell (`stt:crates/stt-build/src/summary.rs`), and
  * `SummaryTier.subBuckets` declares N. When N > 1 this layer selects the column
  * the play head is inside — `floor((t − tile.id.t) / (temporalBucketMs / N))`,
  * the exact inverse of the builder's binning — drives the ramp from it, and

@@ -18,7 +18,7 @@ import FigureSvg from '../FigureSvg.tsx';
  * an earlier bucket can't possibly still be alive at T. Archives without the
  * bound fall back to `time_start` (look back to the start — correct, heavier).
  *
- * Evidence: crates/stt-core/src/directory.rs:91-96 (TileEntry.cover_t_min) and
+ * Evidence: stt:crates/stt-core/src/directory.rs:91-96 (TileEntry.cover_t_min) and
  * :114-118 (the optional trailing covering section; a missing tag leaves
  * entries unbounded).
  *

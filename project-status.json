@@ -1,38 +1,16 @@
 {
   "$schema": "./project-status.schema.json",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "updated": "2026-08-26",
   "release": {
-    "rust": "0.7.0",
     "javascript": "0.7.0"
   },
   "toolchain": {
     "node": ">=24.0.0",
     "nodeMajor": 24,
     "runtimeNode": ">=20",
-    "pnpm": "11.23.0",
-    "rust": "1.87"
+    "pnpm": "11.23.0"
   },
-  "archive": {
-    "writes": {
-      "formatVersion": 3,
-      "directoryVersion": 6
-    },
-    "reads": {
-      "formatVersions": [2, 3],
-      "directoryVersions": [5, 6]
-    }
-  },
-  "commands": [
-    { "name": "stt-build", "support": "stable" },
-    { "name": "stt-optimize", "support": "stable" },
-    { "name": "stt-validate", "support": "stable" },
-    { "name": "stt-bundle", "support": "preview" },
-    { "name": "stt-serve", "support": "preview" }
-  ],
-  "repositoryOnlyCommands": [
-    { "name": "stt-generate", "support": "experimental" }
-  ],
   "packages": [
     {
       "name": "@poopdeck.gl/core",
@@ -84,7 +62,7 @@
     }
   ],
   "otherSurfaces": [
-    { "name": "stt-wasm", "support": "experimental" },
     { "name": "specialized showcase demos", "support": "experimental" }
-  ]
+  ],
+  "stt": null
 }

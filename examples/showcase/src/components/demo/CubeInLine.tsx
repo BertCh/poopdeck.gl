@@ -28,7 +28,7 @@ import FigureSvg from '../FigureSvg.tsx';
  * skewed, so where the data mass sits — deep in time, or wide in space — decides
  * which `--blob-ordering` walk linearizes it into the fewest range reads. Switch
  * datasets and the winning walk flips. All curve math is a port of the
- * production `crates/stt-core/src/curve.rs`; the density is sampled to an
+ * production `stt:crates/stt-core/src/curve.rs`; the density is sampled to an
  * SB×SB×TB grid (labelled below), and the archive's real anchors (`auto` pick,
  * adjacency breaks) come straight from the directory.
  *

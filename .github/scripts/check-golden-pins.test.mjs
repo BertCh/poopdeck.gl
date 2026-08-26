@@ -3,14 +3,13 @@
  *
  * Two halves. The pure half exercises path matching and trailer parsing
  * directly. The end-to-end half builds throwaway git repositories shaped like
- * this one — a `crates/stt-core/tests/fixtures/v2-golden/` writer tree with a
- * hash pin in it, and a `packages/core/test/fixtures/` reader tree beside it —
- * and spawns the real script against them with `--repo`, because the only
- * thing worth asserting about a gate is its exit code on a real diff.
+ * this one — a `packages/core/test/fixtures/` reader tree — and spawns the
+ * real script against them with `--repo`, because the only thing worth
+ * asserting about a gate is its exit code on a real diff.
  *
- * Both trees are exercised, not just the writer one: the reader-side fixtures
- * joined the watched set on 2026-08-10, and a gate whose new root has no test
- * is a root nobody will notice falling out again.
+ * The writer-side tree and the `expected-hashes.json` pin left with the
+ * repository split; the identical gate upstream tests them there. What is
+ * tested here is the half this repository can actually break.
  *
  * Run: node --test .github/scripts/check-golden-pins.test.mjs
  * (Node's directory discovery skips dot-directories, so name the file.)
@@ -37,9 +36,8 @@ import {
 const SCRIPT = fileURLToPath(
   new URL('./check-golden-pins.mjs', import.meta.url),
 );
-const FIXTURE_DIR = 'crates/stt-core/tests/fixtures/v2-golden';
-/** The reader-side tree, watched since 2026-08-10. */
-const TS_FIXTURE_DIR = 'packages/core/test/fixtures';
+/** The reader-side tree, watched since 2026-08-10; vendored since the split. */
+const FIXTURE_DIR = 'packages/core/test/fixtures';
 
 const tempRepos = [];
 after(() => {
@@ -75,23 +73,19 @@ function makeRepo({ withFixtures = true } = {}) {
   git(repo, ['config', 'commit.gpgsign', 'false']);
   // Never let the developer's global hooks run inside a test repo.
   git(repo, ['config', 'core.hooksPath', join(repo, '.no-hooks')]);
-  writeFile(repo, 'crates/stt-core/src/pack/mod.rs', '// pack writer\n');
+  writeFile(repo, 'packages/core/src/tile-decoder.ts', '// pack writer\n');
   writeFile(repo, 'packages/core/src/archive.ts', '// packed reader\n');
   if (withFixtures) {
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"aaa"}\n',
     );
-    writeFile(repo, `${FIXTURE_DIR}/single/manifest.json`, '{"v":2}\n');
+    writeFile(repo, `${FIXTURE_DIR}/v2-golden/index/257a.sttd`, '{"v":2}\n');
+    writeFile(repo, `${FIXTURE_DIR}/packed-golden/manifest.json`, '{"v":2}\n');
     writeFile(
       repo,
-      `${TS_FIXTURE_DIR}/packed-golden/manifest.json`,
-      '{"v":2}\n',
-    );
-    writeFile(
-      repo,
-      `${TS_FIXTURE_DIR}/paged-golden/packs/64c8.sttp`,
+      `${FIXTURE_DIR}/paged-golden/packs/64c8.sttp`,
       'binaryish\n',
     );
   }
@@ -116,10 +110,19 @@ function runGate(repo, extra = []) {
 
 describe('isPinnedPath', () => {
   test('every file under the v2-golden tree is pinned', () => {
-    assert.equal(isPinnedPath(`${FIXTURE_DIR}/expected-hashes.json`), true);
-    assert.equal(isPinnedPath(`${FIXTURE_DIR}/single/manifest.json`), true);
-    assert.equal(isPinnedPath(`${FIXTURE_DIR}/paged/packs/07ac.sttp`), true);
-    assert.equal(isPinnedPath(`${FIXTURE_DIR}/paged/index/257a.sttd`), true);
+    assert.equal(isPinnedPath(`${FIXTURE_DIR}/v2-golden/manifest.json`), true);
+    assert.equal(
+      isPinnedPath(`${FIXTURE_DIR}/v2-golden/index/257a.sttd`),
+      true,
+    );
+    assert.equal(
+      isPinnedPath(`${FIXTURE_DIR}/v2-golden/packs/07ac.sttp`),
+      true,
+    );
+    assert.equal(
+      isPinnedPath(`${FIXTURE_DIR}/v2-golden-tracks/index/257a.sttd`),
+      true,
+    );
     assert.equal(isPinnedPath(FIXTURE_DIR), true);
   });
 
@@ -127,36 +130,36 @@ describe('isPinnedPath', () => {
     // Added 2026-08-10: ~110 golden objects with the same regression-oracle
     // role had been churning entirely outside the gate.
     assert.equal(
-      isPinnedPath(`${TS_FIXTURE_DIR}/packed-golden/manifest.json`),
+      isPinnedPath(`${FIXTURE_DIR}/packed-golden/manifest.json`),
       true,
     );
     assert.equal(
-      isPinnedPath(`${TS_FIXTURE_DIR}/paged-golden/packs/64c8.sttp`),
+      isPinnedPath(`${FIXTURE_DIR}/paged-golden/packs/64c8.sttp`),
       true,
     );
     assert.equal(
-      isPinnedPath(`${TS_FIXTURE_DIR}/paged-golden-single/index/c591.sttd`),
+      isPinnedPath(`${FIXTURE_DIR}/paged-golden-single/index/c591.sttd`),
       true,
     );
     assert.equal(
-      isPinnedPath(`${TS_FIXTURE_DIR}/legacy-shape/points/tile.arrow`),
+      isPinnedPath(`${FIXTURE_DIR}/legacy-shape/points/tile.arrow`),
       true,
     );
     assert.equal(
-      isPinnedPath(`${TS_FIXTURE_DIR}/v2-golden-tracks/manifest.json`),
+      isPinnedPath(`${FIXTURE_DIR}/v2-golden-tracks/manifest.json`),
       true,
     );
-    assert.equal(isPinnedPath(TS_FIXTURE_DIR), true);
+    assert.equal(isPinnedPath(FIXTURE_DIR), true);
   });
 
   test('a sibling directory with the same prefix is NOT pinned', () => {
     // The `/` in the prefix test is what keeps `v2-golden-archive` out.
     assert.equal(
-      isPinnedPath('crates/stt-core/tests/fixtures/v2-golden-archive/m.json'),
+      isPinnedPath('packages/core/test/fixtures-archive/m.json'),
       false,
     );
     assert.equal(
-      isPinnedPath('crates/stt-core/tests/fixtures/v1-golden/manifest.json'),
+      isPinnedPath('packages/core/test/fixtures-v1/manifest.json'),
       false,
     );
     assert.equal(
@@ -167,13 +170,14 @@ describe('isPinnedPath', () => {
   });
 
   test('ordinary source and doc paths are not pinned', () => {
-    assert.equal(isPinnedPath('crates/stt-core/src/pack/mod.rs'), false);
+    assert.equal(isPinnedPath('packages/core/src/tile-decoder.ts'), false);
     assert.equal(isPinnedPath('docs/roadmap/README.md'), false);
     assert.equal(isPinnedPath('packages/core/src/tileset.ts'), false);
     assert.equal(isPinnedPath('.github/workflows/ci.yml'), false);
     // The helper that RE-CUTS a fixture is code, not a pin — it lives in
     // test/helpers, one level up from the fixture tree, and editing it is an
-    // ordinary change.
+    // ordinary change. So is the sync manifest that says where the bytes
+    // come from.
     assert.equal(
       isPinnedPath('packages/core/test/helpers/packed-fixture.ts'),
       false,
@@ -182,19 +186,7 @@ describe('isPinnedPath', () => {
       isPinnedPath('packages/core/test/packed-v2-golden.test.ts'),
       false,
     );
-    assert.equal(
-      isPinnedPath('packages/core/scripts/make-v2-golden.sh'),
-      false,
-    );
-  });
-
-  test('the hash pin stays watched wherever it is moved', () => {
-    assert.equal(isPinnedPath('expected-hashes.json'), true);
-    assert.equal(
-      isPinnedPath('crates/stt-build/tests/expected-hashes.json'),
-      true,
-    );
-    assert.equal(isPinnedPath('tools/bench/not-expected-hashes.json'), false);
+    assert.equal(isPinnedPath('.stt-sync.json'), false);
   });
 
   test('non-string and empty input is not pinned', () => {
@@ -287,27 +279,21 @@ describe('the fixture-existence guard', () => {
     // The guard the policy turns on. If the golden fixtures are relocated,
     // this fails here rather than silently ungating the gate in CI.
     assert.deepEqual(missingPinnedRoots(REPO_ROOT), []);
-    assert.equal(PINNED_ROOTS.length, 3);
-    // Both fixture trees are watched, and each carries its OWN oracle and
-    // regenerator — a message naming the wrong regenerator sends the reader to
-    // re-bless the wrong tree.
+    assert.equal(PINNED_ROOTS.length, 1);
+    // The writer-side tree is watched by the identical gate in the STT repo;
+    // pinning the count here is what makes a silent re-narrowing of the
+    // watched set fail rather than pass quietly.
     const dirs = PINNED_ROOTS.filter((r) => r.kind === 'dir').map(
       (r) => r.path,
     );
-    assert.deepEqual(dirs, [
-      'crates/stt-core/tests/fixtures/v2-golden',
-      'packages/core/test/fixtures',
-    ]);
+    assert.deepEqual(dirs, ['packages/core/test/fixtures']);
     for (const root of PINNED_ROOTS) {
       assert.ok(root.oracle, `${root.path} must name its oracle`);
       assert.ok(root.regen, `${root.path} must name its regenerator`);
+      // These bytes are vendored: the only correct way to move them is to
+      // move them upstream first, so the message must say so.
+      assert.match(root.regen, /stt:sync/);
     }
-    assert.equal(
-      new Set(PINNED_ROOTS.filter((r) => r.kind === 'dir').map((r) => r.regen))
-        .size,
-      2,
-      'the two trees must not share a regenerator',
-    );
   });
 
   test('a tree without the fixtures reports every root as missing', () => {
@@ -328,7 +314,7 @@ describe('the fixture-existence guard', () => {
 
   test('relocated fixtures fail LOUDLY end to end', () => {
     const { repo, base } = makeRepo({ withFixtures: false });
-    writeFile(repo, 'crates/stt-core/src/pack/mod.rs', '// edited\n');
+    writeFile(repo, 'packages/core/src/tile-decoder.ts', '// edited\n');
     commit(repo, 'refactor: unrelated\n');
     const r = runGate(repo, ['--base', base]);
     assert.equal(r.status, 1);
@@ -343,7 +329,7 @@ describe('the gate, end to end', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"bbb"}\n',
     );
     commit(repo, 'chore: re-bless the golden hashes\n');
@@ -353,7 +339,7 @@ describe('the gate, end to end', () => {
       r.stderr,
       /golden pins: 1 change\(s\) moved a golden byte pin/,
     );
-    assert.match(r.stderr, /expected-hashes\.json/);
+    assert.match(r.stderr, /v2-golden\/manifest\.json/);
     // It teaches, it does not merely block.
     assert.match(r.stderr, /§13\.1/);
     assert.match(r.stderr, /encoder bug/);
@@ -372,11 +358,7 @@ describe('the gate, end to end', () => {
 
   test('touching a READER-side fixture WITHOUT the trailer fails', () => {
     const { repo, base } = makeRepo();
-    writeFile(
-      repo,
-      `${TS_FIXTURE_DIR}/packed-golden/manifest.json`,
-      '{"v":3}\n',
-    );
+    writeFile(repo, `${FIXTURE_DIR}/packed-golden/manifest.json`, '{"v":3}\n');
     commit(repo, 'chore: re-bless the TS packed golden\n');
     const r = runGate(repo, ['--base', base]);
     assert.equal(r.status, 1);
@@ -386,11 +368,7 @@ describe('the gate, end to end', () => {
 
   test('a reader-side pack counts, and the writer tree is untouched', () => {
     const { repo, base } = makeRepo();
-    writeFile(
-      repo,
-      `${TS_FIXTURE_DIR}/paged-golden/packs/64c8.sttp`,
-      'moved\n',
-    );
+    writeFile(repo, `${FIXTURE_DIR}/paged-golden/packs/64c8.sttp`, 'moved\n');
     commit(repo, 'chore: recut a reader pack\n');
     const r = runGate(repo, ['--base', base]);
     assert.equal(r.status, 1);
@@ -398,45 +376,38 @@ describe('the gate, end to end', () => {
     assert.doesNotMatch(r.stderr, /v2-golden\/single/);
   });
 
-  test('the failure message names the regenerator for BOTH trees', () => {
-    // The teaching half of the gate: whichever tree you touched, the message
-    // has to hand you the right command, not the other one.
+  test('the failure message names the regenerator and the oracle', () => {
+    // The teaching half of the gate: the message has to hand you the command,
+    // and since the split that command is an UPSTREAM one — re-blessing these
+    // bytes locally would only put the copy at odds with the writer.
     const { repo, base } = makeRepo();
-    writeFile(
-      repo,
-      `${TS_FIXTURE_DIR}/packed-golden/manifest.json`,
-      '{"v":4}\n',
-    );
+    writeFile(repo, `${FIXTURE_DIR}/packed-golden/manifest.json`, '{"v":4}\n');
     commit(repo, 'chore: bytes moved\n');
     const r = runGate(repo, ['--base', base]);
     assert.equal(r.status, 1);
-    assert.match(
-      r.stderr,
-      /cargo run -p stt-core --example make-golden-fixture/,
-    );
-    assert.match(r.stderr, /packages\/core\/scripts\/make-v2-golden\.sh/);
-    assert.match(r.stderr, /crates\/stt-core\/tests\/v2_golden\.rs/);
+    assert.match(r.stderr, /conformance\/make-vectors\.sh/);
+    assert.match(r.stderr, /pnpm stt:sync/);
     assert.match(r.stderr, /packages\/core\/test\/packed-v2-golden\.test\.ts/);
     assert.match(r.stderr, /encoder bug/);
   });
 
-  test('a change touching BOTH trees is reported once, with both paths', () => {
+  test('a change touching several fixtures is reported once, with every path', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"zzz"}\n',
     );
     writeFile(
       repo,
-      `${TS_FIXTURE_DIR}/v2-golden-tracks/manifest.json`,
+      `${FIXTURE_DIR}/v2-golden-tracks/manifest.json`,
       '{"v":3}\n',
     );
     commit(repo, 'chore: rebuild everything\n');
     const r = runGate(repo, ['--base', base]);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /golden pins: 1 change\(s\)/);
-    assert.match(r.stderr, /expected-hashes\.json/);
+    assert.match(r.stderr, /v2-golden\/manifest\.json/);
     assert.match(r.stderr, /v2-golden-tracks\/manifest\.json/);
   });
 
@@ -444,7 +415,7 @@ describe('the gate, end to end', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${TS_FIXTURE_DIR}/paged-golden-single/manifest.json`,
+      `${FIXTURE_DIR}/paged-golden-single/manifest.json`,
       '{"v":3}\n',
     );
     commit(
@@ -458,18 +429,18 @@ describe('the gate, end to end', () => {
 
   test('deleting a fixture counts too', () => {
     const { repo, base } = makeRepo();
-    rmSync(join(repo, FIXTURE_DIR, 'single/manifest.json'));
-    commit(repo, 'chore: drop a golden manifest\n');
+    rmSync(join(repo, FIXTURE_DIR, 'v2-golden/index/257a.sttd'));
+    commit(repo, 'chore: drop a golden directory page\n');
     const r = runGate(repo, ['--base', base]);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /single\/manifest\.json/);
+    assert.match(r.stderr, /v2-golden\/index\/257a\.sttd/);
   });
 
   test('touching a fixture WITH the trailer passes', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"ccc"}\n',
     );
     commit(
@@ -485,7 +456,7 @@ describe('the gate, end to end', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"ddd"}\n',
     );
     commit(repo, 'chore: move bytes\n\nRebuild-Window: R2\n');
@@ -496,7 +467,7 @@ describe('the gate, end to end', () => {
 
   test('non-fixture diffs pass', () => {
     const { repo, base } = makeRepo();
-    writeFile(repo, 'crates/stt-core/src/pack/mod.rs', '// tweaked\n');
+    writeFile(repo, 'packages/core/src/tile-decoder.ts', '// tweaked\n');
     writeFile(repo, 'docs/roadmap/README.md', '# roadmap\n');
     commit(repo, 'refactor(pack): tidy the writer\n');
     const r = runGate(repo, ['--base', base]);
@@ -514,9 +485,9 @@ describe('the gate, end to end', () => {
 
   test('only the pin-touching commit needs the flag', () => {
     const { repo, base } = makeRepo();
-    writeFile(repo, 'crates/stt-core/src/pack/mod.rs', '// step 1\n');
+    writeFile(repo, 'packages/core/src/tile-decoder.ts', '// step 1\n');
     commit(repo, 'refactor(pack): step one\n');
-    writeFile(repo, `${FIXTURE_DIR}/single/manifest.json`, '{"v":3}\n');
+    writeFile(repo, `${FIXTURE_DIR}/v2-golden/index/257a.sttd`, '{"v":3}\n');
     commit(repo, 'feat!: re-encode\n\nRebuild-Window: R1\n');
     writeFile(repo, 'docs/roadmap/README.md', '# roadmap\n');
     commit(repo, 'docs: note the rebuild\n');
@@ -529,13 +500,13 @@ describe('the gate, end to end', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"eee"}\n',
     );
     commit(repo, 'wip: try a thing\n');
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"aaa"}\n',
     );
     commit(repo, 'wip: put it back\n');
@@ -548,15 +519,6 @@ describe('the gate, end to end', () => {
     assert.equal(r.status, 1);
     assert.match(r.stderr, /2 change\(s\)/);
   });
-
-  test('the hash pin is caught even outside the fixture tree', () => {
-    const { repo, base } = makeRepo();
-    writeFile(repo, 'crates/stt-build/tests/expected-hashes.json', '{"x":1}\n');
-    commit(repo, 'test: add build-side hashes\n');
-    const r = runGate(repo, ['--base', base]);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /crates\/stt-build\/tests\/expected-hashes\.json/);
-  });
 });
 
 describe('working-tree mode', () => {
@@ -566,7 +528,7 @@ describe('working-tree mode', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"fff"}\n',
     );
     const r = runGate(repo, ['--base', base]);
@@ -577,25 +539,20 @@ describe('working-tree mode', () => {
     const { repo, base } = makeRepo();
     writeFile(
       repo,
-      `${FIXTURE_DIR}/expected-hashes.json`,
+      `${FIXTURE_DIR}/v2-golden/manifest.json`,
       '{"single":"fff"}\n',
     );
     const r = runGate(repo, ['--base', base, '--working-tree']);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /working tree/);
-    assert.match(r.stderr, /expected-hashes\.json/);
+    assert.match(r.stderr, /v2-golden\/manifest\.json/);
   });
 
-  test('--working-tree flags reader-side churn too', () => {
-    // This is the mode that, on THIS repo, now reports the in-flight v2→v3
-    // churn under packages/core/test/fixtures/. That report is correct and is
-    // not a reason to narrow the watched set.
+  test('--working-tree flags churn in any of the six datasets', () => {
+    // Every dataset under the tree is watched, not just the one the e2e
+    // fixtures happen to seed.
     const { repo, base } = makeRepo();
-    writeFile(
-      repo,
-      `${TS_FIXTURE_DIR}/packed-golden/manifest.json`,
-      '{"v":9}\n',
-    );
+    writeFile(repo, `${FIXTURE_DIR}/packed-golden/manifest.json`, '{"v":9}\n');
     const r = runGate(repo, ['--base', base, '--working-tree']);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /working tree/);

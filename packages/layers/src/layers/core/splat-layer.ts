@@ -18,7 +18,7 @@
  * — *surface splatting* (Pfister/Zwicker surfels, Zwicker "EWA Surface
  * Splatting"), the right formalism for splats derived from a surface scan.
  *
- * It consumes the columns baked by `scripts/data-generation/waymo_extract.py
+ * It consumes the columns baked by `stt:scripts/data-generation/waymo_extract.py
  * --surfel` (k-NN covariance per LIDAR sweep):
  *   • geometry `[lng, lat]` + an elevation column (`z`, metres) → the surfel
  *     centre,

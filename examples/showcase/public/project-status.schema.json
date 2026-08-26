@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://poopdeck.gl/project-status.schema.json",
-  "title": "STT project status contract",
+  "title": "poopdeck.gl project status contract",
+  "description": "What this repository ships and on what toolchain. The `stt` block is NOT authored here: it is vendored from the SpatioTemporal Tiles repository by scripts/sync-stt.mjs and describes the archive contract this renderer reads.",
   "type": "object",
   "required": [
     "$schema",
@@ -9,60 +10,30 @@
     "updated",
     "release",
     "toolchain",
-    "archive",
-    "commands",
-    "repositoryOnlyCommands",
     "packages"
   ],
   "properties": {
     "$schema": { "type": "string" },
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "updated": { "type": "string", "format": "date" },
     "release": {
       "type": "object",
-      "required": ["rust", "javascript"],
+      "required": ["javascript"],
       "properties": {
-        "rust": { "$ref": "#/$defs/version" },
         "javascript": { "$ref": "#/$defs/version" }
       },
       "additionalProperties": false
     },
     "toolchain": {
       "type": "object",
-      "required": ["node", "nodeMajor", "runtimeNode", "pnpm", "rust"],
+      "required": ["node", "nodeMajor", "runtimeNode", "pnpm"],
       "properties": {
         "node": { "type": "string" },
         "nodeMajor": { "type": "integer", "minimum": 1 },
         "runtimeNode": { "type": "string" },
-        "pnpm": { "$ref": "#/$defs/version" },
-        "rust": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+        "pnpm": { "$ref": "#/$defs/version" }
       },
       "additionalProperties": false
-    },
-    "archive": {
-      "type": "object",
-      "required": ["writes", "reads"],
-      "properties": {
-        "writes": { "$ref": "#/$defs/archiveVersions" },
-        "reads": {
-          "type": "object",
-          "required": ["formatVersions", "directoryVersions"],
-          "properties": {
-            "formatVersions": { "$ref": "#/$defs/versionList" },
-            "directoryVersions": { "$ref": "#/$defs/versionList" }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "commands": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/surface" }
-    },
-    "repositoryOnlyCommands": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/surface" }
     },
     "packages": {
       "type": "array",
@@ -83,6 +54,49 @@
     "otherSurfaces": {
       "type": "array",
       "items": { "$ref": "#/$defs/surface" }
+    },
+    "stt": {
+      "description": "Vendored from BertCh/spatiotemporal-tiles at the commit pinned in .stt-sync.json. Null only before the first sync.",
+      "type": ["object", "null"],
+      "properties": {
+        "release": {
+          "type": "object",
+          "required": ["rust"],
+          "properties": { "rust": { "$ref": "#/$defs/version" } },
+          "additionalProperties": false
+        },
+        "toolchain": {
+          "type": "object",
+          "required": ["rust"],
+          "properties": {
+            "rust": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+          },
+          "additionalProperties": false
+        },
+        "archive": {
+          "type": "object",
+          "required": ["writes", "reads"],
+          "properties": {
+            "writes": { "$ref": "#/$defs/archiveVersions" },
+            "reads": {
+              "type": "object",
+              "required": ["formatVersions", "directoryVersions"],
+              "properties": {
+                "formatVersions": { "$ref": "#/$defs/versionList" },
+                "directoryVersions": { "$ref": "#/$defs/versionList" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "commands": { "type": "array", "items": { "$ref": "#/$defs/surface" } },
+        "repositoryOnlyCommands": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/surface" }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

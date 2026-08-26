@@ -10,7 +10,7 @@
  * ## What a summary tile is
  *
  * A summary tile carries NO point/line geometry. `stt-build --summary-tier h3`
- * (`crates/stt-build/src/summary.rs`) aggregates the raw tier into one row per
+ * (`stt:crates/stt-build/src/summary.rs`) aggregates the raw tier into one row per
  * spatial CELL and stores the cell's u64 id in the Arrow `id` column, which the
  * TS decoder copies into {@link BinaryFeatures.featureIds64}. The 32-bit
  * `featureIds` mirror TRUNCATES the high bits and must never be read here —

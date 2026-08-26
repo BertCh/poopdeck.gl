@@ -325,8 +325,8 @@ export const CATALOG_EXCLUDED_IDS: string[] = [
 
 const OSRM_NOTE =
   'Trips are routed through OSRM (OpenStreetMap road network). The processed ' +
-  'OSRM graph is staged in scripts/data-generation/osrm-data/ — start it with ' +
-  '`cd scripts/data-generation && ./setup-osrm.sh run` (Docker) before building.';
+  'OSRM graph is staged in stt:scripts/data-generation/osrm-data/ — start it with ' +
+  '`cd stt:scripts/data-generation && ./setup-osrm.sh run` (Docker) before building.';
 
 export const DEMO_META: Record<string, DemoMeta> = {
   // ── Earth & ocean ────────────────────────────────────────────────────────
@@ -390,11 +390,11 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     buildCommand:
-      'python scripts/data-generation/ecco_advect.py \\\n' +
+      'python stt:scripts/data-generation/ecco_advect.py \\\n' +
       '  --input <ecco-velocity-dir> --output ecco-currents.stt',
     buildNote:
       'A Python particle-advection preprocessor, not a Rust generator — see ' +
-      'scripts/data-generation/ECCO.md for setup and the advection parameters.',
+      'stt:scripts/data-generation/ECCO.md for setup and the advection parameters.',
     techniques: [
       {
         label: 'AnimatedTripsLayer',
@@ -566,7 +566,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
     buildNote:
       'Ten archives on one clock: nexrad_volume.py builds the storm4d-volume ' +
       'gate cloud (plus the storm4d-couplet shear markers) with Py-ART ' +
-      'dealiasing; the companion storm4d generators in scripts/data-generation ' +
+      'dealiasing; the companion storm4d generators in stt:scripts/data-generation ' +
       'build storm4d-warnings, storm4d-reports, storm4d-stations, ' +
       'storm4d-outages, storm4d-cloudtop, storm4d-wind3d (multi-level ' +
       'hrrr_advect extension) and storm4d-sounding; goes-glm-lightning is the ' +
@@ -621,7 +621,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     buildCommand:
-      'python scripts/data-generation/cosmos_drive_dreams.py   # ~300 scenarios + videos',
+      'python stt:scripts/data-generation/cosmos_drive_dreams.py   # ~300 scenarios + videos',
     buildNote:
       'Phased and resumable (index → videos → select → download → transform → build → ' +
       'sidecar → cleanup). The videos phase streams one part of the generated-video ' +
@@ -668,7 +668,7 @@ export const DEMO_META: Record<string, DemoMeta> = {
       },
     ],
     buildCommand:
-      'bash scripts/data-generation/argoverse_batch.sh   # 1 scene per AV2 city (6 total)',
+      'bash stt:scripts/data-generation/argoverse_batch.sh   # 1 scene per AV2 city (6 total)',
     buildNote:
       'The batch driver selectively pulls each log (lidar + ego + annotations + map + ' +
       'one ring camera) with `aws s3 cp --no-sign-request`, extracts, and deletes the ' +
