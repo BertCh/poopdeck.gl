@@ -1,7 +1,7 @@
 {
-  "$comment": "Vendored-from-STT manifest. These paths are AUTHORED in the SpatioTemporal Tiles repository and copied here so this repo builds, tests and deploys offline. Do not edit them here \u2014 land the change upstream and re-run `pnpm stt:sync --ref <sha>`. Enforced by `pnpm stt:check` in CI. Rationale: docs/roadmap/repo-split-2026-08.md \u00a74.",
+  "$comment": "Vendored-from-STT manifest. These paths are AUTHORED in the SpatioTemporal Tiles repository and copied here so this repo builds, tests and deploys offline. Do not edit them here \u2014 land the change upstream and re-run `pnpm stt:sync --ref <sha>`. Enforced by `pnpm stt:check` in CI. `upstreamOnly` lists paths that exist only upstream; `scripts/check-doc-links.mjs` lets a VENDORED page link to one, because that link resolves wherever the corpus is whole \u2014 the published site \u2014 and rewriting it to an absolute URL would make the site link out of itself. Rationale: docs/roadmap/repo-split-2026-08.md \u00a74.",
   "repo": "BertCh/spatiotemporal-tiles",
-  "ref": "UNPINNED",
+  "ref": "71a1ef33e0f81391cc970f979971d60b9022fc6a",
   "docs": [
     "docs/spec/stt-packed-format.md",
     "docs/spec/time-model.md",
@@ -42,5 +42,28 @@
       "commands",
       "repositoryOnlyCommands"
     ]
+  },
+  "upstreamOnly": [
+    "docs/roadmap/stt-packed-format-decisions.md",
+    "docs/roadmap/db-input-adaptors.md",
+    "docs/roadmap/demos-and-datasets.md",
+    "docs/roadmap/av-cockpit.md",
+    "docs/roadmap/storm-4d-greenfield-2026-07.md",
+    "docs/roadmap/neural-atlas-2026-07.md",
+    "docs/roadmap/formal-semantics-2026-08.md",
+    "docs/roadmap/optimization-*.md",
+    "conformance/*",
+    "crates/*",
+    "tools/stt-generate*",
+    "scripts/data-generation",
+    "scripts/data-generation/*",
+    "scripts/postgis*",
+    "scripts/duckdb*"
+  ],
+  "mirrors": {
+    "$comment": "The showcase serves byte-identical copies of these as static assets; its own contract tests (public-spec-sync, project-status-sync) pin the equality. Refreshed here so a sync cannot leave the served copy a release behind.",
+    "docs/spec": "examples/showcase/public/spec",
+    "project-status.json": "examples/showcase/public/project-status.json",
+    "project-status.schema.json": "examples/showcase/public/project-status.schema.json"
   }
 }

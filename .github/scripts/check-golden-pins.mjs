@@ -102,10 +102,22 @@ export const REGEN_CMD =
 export const TRAILER_KEY = 'Rebuild-Window';
 export const TRAILER_VALUE = 'R1';
 
+/**
+ * Prose that happens to live inside a pinned tree. A fixture directory carries
+ * a README explaining what the vector exercises; it is documentation, not an
+ * oracle, and no archive object is ever named `README.md` — manifests, packs
+ * and directory pages have fixed names and content-addressed ones. Gating it
+ * would mean either never correcting the explanation or spending a rebuild
+ * declaration on a typo, so the carve-out is stated here rather than worked
+ * around. Keep it exactly this narrow, and in step with the upstream copy.
+ */
+const NOT_A_PIN = /(?:^|\/)README\.md$/;
+
 /** True when a repo-relative path is one of the golden byte pins. */
 export function isPinnedPath(path) {
   if (typeof path !== 'string' || path === '') return false;
   const p = path.replaceAll('\\', '/').replace(/^\.\//, '');
+  if (NOT_A_PIN.test(p)) return false;
   for (const root of PINNED_ROOTS) {
     if (root.kind === 'dir') {
       // The trailing slash is load-bearing: a sibling directory named

@@ -187,6 +187,15 @@ describe('isPinnedPath', () => {
       false,
     );
     assert.equal(isPinnedPath('.stt-sync.json'), false);
+    // Prose INSIDE a pinned tree is prose. No archive object is ever named
+    // README.md, so the carve-out cannot hide a real pin — and without it,
+    // correcting a vector's explanation would need a rebuild declaration.
+    assert.equal(isPinnedPath(`${FIXTURE_DIR}/legacy-shape/README.md`), false);
+    // …but a manifest beside it is still pinned.
+    assert.equal(
+      isPinnedPath(`${FIXTURE_DIR}/legacy-shape/points/manifest.json`),
+      true,
+    );
   });
 
   test('non-string and empty input is not pinned', () => {

@@ -55,6 +55,11 @@ const KNOWN_DIRS = ['docs/roadmap', 'docs/spec'];
 const SCAN = [
   'packages',
   'examples',
+  // Byte-for-byte mirrors of docs/spec/, served as static assets. Their
+  // citations are the VENDORED originals' — checked upstream, where the docs
+  // they name actually live — and scanning the copy would demand a `stt:`
+  // prefix that cannot be added to a file this repo must not edit.
+  ':!examples/showcase/public/spec',
   'tools',
   'scripts',
   'poopdeck-ai',

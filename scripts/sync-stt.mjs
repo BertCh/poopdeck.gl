@@ -45,6 +45,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -220,6 +221,40 @@ if (!existsSync(statusSrc)) {
   }
 }
 
+// ─── 4. The showcase's served mirrors ───────────────────────────────────────
+//
+// `examples/showcase/public/` carries byte-identical copies of the JSON
+// contracts so the site can serve them as static assets, and the showcase's own
+// tests pin that equality. Refreshing them here is what keeps a sync from
+// leaving the SERVED copy a release behind the repository's — a gap nothing
+// else would notice until a contract test went red for a reason that reads like
+// an unrelated failure.
+
+for (const [from, to] of Object.entries(pin.mirrors ?? {})) {
+  if (from.startsWith('$')) continue;
+  const src = join(ROOT, from);
+  if (!existsSync(src)) continue;
+  const isDir = statSync(src).isDirectory();
+  for (const rel of isDir ? walk(src) : ['']) {
+    const srcFile = isDir ? join(src, rel) : src;
+    const dstFile = isDir ? join(ROOT, to, rel) : join(ROOT, to);
+    // Only files the mirror already carries: `docs/spec` holds Markdown the
+    // site renders from its own bundle, and copying that in would add pages
+    // nothing serves.
+    if (!existsSync(dstFile)) continue;
+    const want = readFileSync(srcFile);
+    if (readFileSync(dstFile).equals(want)) continue;
+    if (CHECK)
+      drift.push(
+        `${to}${isDir ? `/${rel}` : ''}: served copy differs from ${from}`,
+      );
+    else {
+      writeFileSync(dstFile, want);
+      synced += 1;
+    }
+  }
+}
+
 // ─── Report ─────────────────────────────────────────────────────────────────
 
 cleanup();
@@ -252,6 +287,9 @@ if (CHECK) {
   console.log(
     synced === 0
       ? `sync-stt: already up to date with ${sourceLabel}`
-      : `sync-stt: updated ${synced} file(s) from ${sourceLabel}`,
+      : `sync-stt: updated ${synced} file(s) from ${sourceLabel}\n` +
+          '         run `pnpm format` — project-status.json is re-serialized here ' +
+          'and oxfmt owns its layout (the `stt` comparison is semantic, so ' +
+          'formatting it back does not reintroduce drift)',
   );
 }
