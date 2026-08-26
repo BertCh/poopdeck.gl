@@ -104,7 +104,11 @@ if (local) {
       'bash',
       [
         '-c',
-        `curl -fsSL ${JSON.stringify(url)} | tar -xz -C ${JSON.stringify(tmp)}`,
+        // `pipefail` is load-bearing: without it bash reports only tar's
+        // status, so a 404 from curl reaches tar as an empty stream and the
+        // whole pipeline "succeeds" — which is how a bad pin crashed later, in
+        // path handling, instead of failing here with the URL in the message.
+        `set -o pipefail; curl -fsSL --retry 2 ${JSON.stringify(url)} | tar -xz -C ${JSON.stringify(tmp)}`,
       ],
       {
         stdio: ['ignore', 'ignore', 'pipe'],
@@ -113,11 +117,22 @@ if (local) {
   } catch (err) {
     cleanup();
     console.error(
-      `sync-stt: could not fetch ${url}\n  ${String(err.stderr ?? err).trim()}`,
+      `sync-stt: could not fetch ${url}\n` +
+        `  ${String(err.stderr ?? err).trim() || 'the fetch failed'}\n` +
+        '  Check that .stt-sync.json names a commit that exists and is reachable.',
     );
     process.exit(1);
   }
-  const [only] = readdirSync(tmp);
+  // Belt and braces: an archive that unpacked to nothing must not become a
+  // silently empty "source" that reports every artifact as MISSING UPSTREAM.
+  const [only, ...rest] = readdirSync(tmp);
+  if (only === undefined || rest.length > 0) {
+    cleanup();
+    console.error(
+      `sync-stt: ${url} did not unpack to a single tree — refusing to compare against it.`,
+    );
+    process.exit(1);
+  }
   source = join(tmp, only);
   sourceLabel = `${pin.repo}@${ref.slice(0, 12)}`;
 }
