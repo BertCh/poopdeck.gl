@@ -9,7 +9,7 @@ description: >-
   the view_map MCP tool, which composes the spec for you.
 license: MIT
 metadata:
-  version: '0.6.0'
+  version: '0.7.0'
 ---
 
 # Wiring a deck.gl layer for STT data

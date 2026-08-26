@@ -13,8 +13,8 @@ that drift.
 
 | Contract               | Current state                                                          | Source of truth                                         |
 | ---------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------- |
-| Rust workspace release | `0.6.0`; MSRV `1.87`                                                   | root `Cargo.toml`                                       |
-| JavaScript release     | seven public packages at `0.6.0`                                       | `packages/*/package.json`                               |
+| Rust workspace release | `0.7.0`; MSRV `1.87`                                                   | root `Cargo.toml`                                       |
+| JavaScript release     | seven public packages at `0.7.0`                                       | `packages/*/package.json`                               |
 | Cesium backend         | frozen npm release `0.5.0`; workspace package is private/experimental  | `packages/cesium/package.json` and README               |
 | Packed archive writer  | `formatVersion: 3`, directory codec v6                                 | `stt-core` pack/directory constants and `docs/spec/`    |
 | Compatibility window   | readers also open packed v2 / directory v5 read-only                   | packed-format spec and conformance fixtures             |

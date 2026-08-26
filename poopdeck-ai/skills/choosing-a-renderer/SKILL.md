@@ -11,7 +11,7 @@ description: >-
   over when you switch.
 license: MIT
 metadata:
-  version: '0.6.0'
+  version: '0.7.0'
 ---
 
 # Choosing an STT renderer backend

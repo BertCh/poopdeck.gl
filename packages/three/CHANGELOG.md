@@ -1,5 +1,159 @@
 # @poopdeck.gl/three
 
+## 0.7.0
+
+### Minor Changes
+
+- [`bfba49c`](https://github.com/BertCh/spatiotemporal-tiles/commit/bfba49c9e5abcd4d1ab301c61fe18b4788d7f18c) Thanks [@BertCh](https://github.com/BertCh)! - **The three non-deck backends render every frozen `LayerKind`.** three, maplibre
+  and cesium each close the last of their gaps in one pass, and now cover all 23
+  kinds — two more than deck, which still has no `ego` layer and degrades
+  `isoLines` to `path`.
+
+  Before this, "alternate renderer" meant "the movement family, and then you go
+  back to deck". The gaps were not exotic: cesium had no polygon, no column and no
+  summary tiers; maplibre could not draw a `path`; three fell back to `point` for
+  anything heatmap-shaped. Every one of those was a demo that offered a renderer
+  toggle and then drew nothing recognisable.
+
+  ### New layers
+  - **`@poopdeck.gl/cesium`** (+17) — a PRIVATE workspace package, frozen at
+    0.5.0 and source-only, so it carries no version bump of its own: `STTPolygonLayer`, `STTColumnLayer`,
+    `STTIconLayer`, `STTTextLayer`, `STTMeshLayer`, `STTBoundingBoxLayer`,
+    `STTSurfelLayer`, `STTPointCloudLayer`, `STTHeatmapLayer`, `STTHexbinLayer`,
+    `STTH3SummaryLayer`, `STTQuadbinSummaryLayer`, `STTFlowmapLayer`,
+    `STTFlowCorridorLayer`, `STTFlowStrokeLayer`, `STTIsoLayer`, `STTEgoLayer`.
+  - **`@poopdeck.gl/maplibre`** (+8): `STTPathLayer`, `STTTextLayer`,
+    `STTMeshLayer`, `STTBoundingBoxLayer`, `STTSurfelLayer`,
+    `STTPointCloudLayer`, `STTIsoLayer`, `STTEgoLayer`.
+  - **`@poopdeck.gl/three`** (+6): `STTHeatmapLayer`, `STTHexbinLayer`,
+    `STTTextLayer`, `STTMeshLayer`, `STTPointCloudLayer` (the new phong-lit one —
+    see the separate breaking-rename entry), `STTFlowStrokeLayer`.
+
+  ### Capabilities
+
+  `liveBundling`, `userExtensions` and `timeAsHeight` are now true on all four
+  backends; `cameraRoll` on all three non-deck ones (deck's `MapView` has no roll
+  axis). Two flags stay honestly false and are not gaps to close later:
+
+  - **cesium `gpuHeatmap`** — CesiumJS gives a primitive author no
+    render-to-texture splat pipeline, so `STTHeatmapLayer` accumulates its density
+    field on the CPU and uploads a raster. It renders the same image; it is not a
+    GPU heatmap, and claiming the flag would be a lie a consumer could budget
+    against.
+  - **three `interleavedBasemap`** — structural, not unbuilt. TSL compiles to the
+    renderer's own node graph; there is no seam to hand a foreign GL context.
+
+  ### `@poopdeck.gl/core` — `./edge-bundling`
+
+  KDEEB edge bundling (Hurter/Ersoy/Telea 2012; CUBu) is hoisted out of
+  `@poopdeck.gl/layers` into a new `@poopdeck.gl/core/edge-bundling` subpath, so
+  all four backends run **one** `bundleEdges` rather than four transcriptions of
+  the same splat → advect → resample → smooth → anneal schedule. A bundle is a
+  function of the edge SET alone — not the playhead, not the camera — which is
+  what makes sharing it correct rather than merely convenient. deck keeps its GPU
+  ping-pong (it already owns a luma `Device`, so the splat is free there) and
+  agrees with the shared kernel on the schedule and the constants.
+
+  `@poopdeck.gl/layers` re-exports the moved symbols from their old path, so
+  nothing breaks; the copies are gone.
+
+- [`bfba49c`](https://github.com/BertCh/spatiotemporal-tiles/commit/bfba49c9e5abcd4d1ab301c61fe18b4788d7f18c) Thanks [@BertCh](https://github.com/BertCh)! - **BREAKING (`@poopdeck.gl/three`): `STTPointCloudLayer` is renamed to `STTPointLayer`, and the `STTPointCloudLayer` name now belongs to a different layer.**
+
+  (Declared `minor`, not `major`: the project is pre-1.0 and
+  `docs/intro/status-and-support.md` states that a minor 0.x release can carry
+  documented breaking changes. A `major` here would resolve to 1.0.0, which is
+  a stability claim this release does not make.)
+
+  The class that renders the `point` layer kind — flat, unlit billboards — was
+  named `STTPointCloudLayer`, while `@poopdeck.gl/maplibre` and
+  `@poopdeck.gl/cesium` both call that same kind `STTPointLayer`. That violated
+  the one-spelling-per-kind rule stated in this package's own barrel header, and
+  it left the canonical name occupied when the backend gained a real `pointCloud`
+  kind (phong-lit 3D points with optional normals — deck's
+  `AnimatedPointCloudLayer`).
+
+  So:
+
+  - `STTPointCloudLayer` → **`STTPointLayer`** (unchanged behaviour; the billboard
+    point layer, moved from `layers/point-cloud-layer.ts` to `layers/point-layer.ts`).
+  - `STTPointCloudLayerOptions` → **`STTPointLayerOptions`**.
+  - **`STTPointCloudLayer` now names the new phong-lit `pointCloud` layer** — a
+    different renderer with a different options type.
+
+  There is deliberately **no deprecated alias**, because the old name is now taken
+  by different behaviour: an alias would silently swap one renderer for another at
+  runtime instead of failing at compile time. Callers must rename the import.
+  The r3f wrapper `<STTPointCloudLayer>` is renamed the same way; the pre-0.5
+  `SttPointCloudLayer` alias continues to resolve to the billboard point layer and
+  is annotated accordingly.
+
+### Patch Changes
+
+- [`2ec0e4d`](https://github.com/BertCh/spatiotemporal-tiles/commit/2ec0e4ddf23c7eaa66a5fb060ccc508a95d45d77) Thanks [@BertCh](https://github.com/BertCh)! - **Onboarding fixes: a column inventory that is actually populated, a transport
+  bar that works on a dark map, a precision warning that stops crying wolf, and a
+  Node floor the browser packages do not need.**
+
+  From a walk of the documented install-to-first-map path against the published
+  packages and the hosted datasets.
+
+  ### `@poopdeck.gl/core`
+  - **`ArchiveMetadata.layers[].properties` is populated.** It is a typed, public,
+    documented field that was hard-coded to `[]` on every archive ever opened, so a
+    browser client's only route to its own column names was hand-decoding
+    `manifest.schemas[].data` (base64 Arrow IPC) or installing the Rust CLIs. It is
+    now derived at open from the manifest's own embedded schema templates — no tile
+    fetch, no extra request — with each column classified as a string, a number or
+    a boolean, plus `geometryTypes` off the CORE template's `stt:geometry` tag and
+    measured `minValue`/`maxValue` when the builder recorded style hints. Fails
+    soft in every direction: an unparseable template or an exotic column type drops
+    that one item and leaves the rest of the metadata intact.
+  - **The Float32 precision guard is scaled to the window being animated.**
+    `assertRelTimeInRange` warned on a fixed 2^24 ms magnitude — an absolute
+    constant of ~4.7 hours — so a dataset with a wider `timeWindow` tripped it by
+    construction. The quickstart printed it on its first render, and so did the
+    live showcase, both telling the reader to check a time offset that was correct.
+    It now measures the actual f32 quantization step at the resolved magnitude
+    against two floors: one 60 fps frame, and a fraction of the animated span. A
+    genuinely mismatched `timeOffset` still reports. `assertRelTimeInRange` takes an
+    optional trailing `spanMs`; `f32QuantumAt` and `RESERVED_TILE_COLUMNS` are newly
+    exported.
+  - `engines.node` relaxed from `>=24.0.0` to `>=20` (see below).
+
+  ### `@poopdeck.gl/layers`
+  - **`onMetadataLoad` is available on every layer**, not just the two summary
+    layers. It fires once per archive init with the decoded metadata — the shortest
+    path to "which column names does this dataset accept?":
+    `onMetadataLoad: (meta) => console.table(meta.layers[0].properties)`.
+    `H3SummaryLayer` and `QuadbinSummaryLayer` inherit it and no longer declare
+    their own; behaviour there is unchanged.
+
+  ### `@poopdeck.gl/react`
+  - **The stylesheet ships a dark palette.** `styles.css` defined one light "paper"
+    palette on bare `:root` with no dark variant, so the transport bar rendered
+    near-black labels and a white scrubber track over the dark map every consumer
+    floats it on. The same eight tokens now switch under
+    `prefers-color-scheme: dark`, and `data-stt-theme="light" | "dark"` on any
+    ancestor pins a mode — the case a dark map inside a light page needs. Setting
+    the tokens yourself still wins over both.
+  - **`PlaybackControlsProps.timeRange` is optional.** `usePlayback` echoes its
+    `timeRange` option back so that `<PlaybackControls {...playback} />` "just
+    works"; it worked at runtime and did not typecheck, because the echo is
+    optional and the prop was required. Omitted, the bar falls back to the
+    degenerate `[currentTime, currentTime]` range.
+
+  ### All six browser packages
+
+  `engines.node` moves from `>=24.0.0` back to `>=20`. The repository's own dev
+  toolchain genuinely needs Node 24, but these packages' `dist` never executes
+  under Node at all — and a floor above both the maintenance and active LTS lines
+  hard-fails any consumer or CI running `engine-strict=true`, for nothing.
+  `@poopdeck.gl/mcp`, which ships a `bin` and really does run under Node, stays at
+  `>=24`.
+
+- Updated dependencies [[`2ec0e4d`](https://github.com/BertCh/spatiotemporal-tiles/commit/2ec0e4ddf23c7eaa66a5fb060ccc508a95d45d77), [`4f4cd71`](https://github.com/BertCh/spatiotemporal-tiles/commit/4f4cd713a2866d4d58b68d95c2133366fa1152f4), [`bfba49c`](https://github.com/BertCh/spatiotemporal-tiles/commit/bfba49c9e5abcd4d1ab301c61fe18b4788d7f18c)]:
+  - @poopdeck.gl/core@0.7.0
+  - @poopdeck.gl/playback@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

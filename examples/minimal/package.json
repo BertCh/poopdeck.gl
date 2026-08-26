@@ -19,8 +19,8 @@
     "@deck.gl/react": "9.3.10",
     "@luma.gl/core": "9.3.6",
     "@luma.gl/engine": "9.3.6",
-    "@poopdeck.gl/layers": "^0.6.0",
-    "@poopdeck.gl/react": "^0.6.0",
+    "@poopdeck.gl/layers": "^0.7.0",
+    "@poopdeck.gl/react": "^0.7.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

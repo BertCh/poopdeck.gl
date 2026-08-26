@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "poopdeck-ai",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "AI-assisted suite for poopdeck.gl / SpatioTemporal Tiles. Bundles the @poopdeck.gl/mcp server (auto-registered via .mcp.json) and ten Agent Skills covering the full toolchain: install the CLIs and scaffold a project, build a .stt from GeoParquet or a DB, generate the bundled reference datasets, tune/lint tiles for publishing, choose a renderer backend (deck.gl / Three.js / MapLibre / Cesium), wire a deck.gl SpatioTemporalLayer, add playback controls, serve or publish the archive, and debug blank renders.",
   "author": {
     "name": "Robert Christie",

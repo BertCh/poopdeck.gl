@@ -9,7 +9,7 @@ description: >-
   reach for.
 license: MIT
 metadata:
-  version: '0.6.0'
+  version: '0.7.0'
 ---
 
 # poopdeck.gl / SpatioTemporal Tiles — orientation & routing

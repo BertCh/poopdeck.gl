@@ -9,7 +9,7 @@ description: >-
   NOT for turning a user's OWN data into a .stt (that's building-stt-datasets / stt-build).
 license: MIT
 metadata:
-  version: '0.6.0'
+  version: '0.7.0'
 ---
 
 # Generating reference STT datasets

@@ -7,8 +7,8 @@ was counted out. Behavior of the CLIs themselves lives in
 > **Status note (2026-08-24).** This is a decision record, so dated registry
 > observations below are retained as history. For the current release procedure,
 > use [CONTRIBUTING.md](../../CONTRIBUTING.md#releasing). The checked-in manifests
-> currently define Rust **0.6.0** with MSRV **1.87**, seven public
-> `@poopdeck.gl/*` packages at **0.6.0**, and the private experimental Cesium
+> currently define Rust **0.7.0** with MSRV **1.87**, seven public
+> `@poopdeck.gl/*` packages at **0.7.0**, and the private experimental Cesium
 > package at **0.5.0**. Rust crates are published manually in dependency order;
 > cargo-dist binaries require a `v{version}` tag followed by a manual **Release**
 > workflow dispatch. The deleted release-plz workflow is not part of the current
@@ -74,7 +74,7 @@ The Rust side was **behind**: crates.io `spatiotemporal-tiles` max_version was
 
 - The seven public npm packages and four published Rust crates are meant to be
   lockstep (npm `fixed` group; `[workspace.package] version`), and the tree is
-  currently **0.6.0**. The private Cesium package is outside that release set.
+  currently **0.7.0**. The private Cesium package is outside that release set.
 - Rust tag: `v{version}` (created manually; cargo-dist consumes it when the
   Release workflow is dispatched). npm tags are changesets-style
   `@poopdeck.gl/pkg@x.y.z`. No overlap.

@@ -153,7 +153,7 @@ and must never be rewritten in place.
 
 ## Project status
 
-The current release line is **0.6.0** and remains pre-1.0. Writers produce
+The current release line is **0.7.0** and remains pre-1.0. Writers produce
 packed format v3 with directory codec v6; reference readers also open published
 format-v2/directory-v5 archives read-only. The deck.gl integration targets the
 pinned 9.3.x line.

@@ -1,6 +1,6 @@
 # Status, support, and compatibility
 
-STT and poopdeck.gl are actively developed and currently on the **0.6.0**
+STT and poopdeck.gl are actively developed and currently on the **0.7.0**
 release line. They are pre-1.0: production use is possible, but public APIs can
 still change between minor releases. Read package changelogs and release notes
 before upgrading.
@@ -11,8 +11,8 @@ before upgrading.
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Packed archive writer     | `formatVersion: 3`, directory codec v6                                                                                    |
 | Packed archive reader     | Format v3/v6 plus read-only compatibility for published format v2/v5 archives                                             |
-| Rust distribution         | `spatiotemporal-tiles` 0.6.0; five installed CLIs                                                                         |
-| Public npm packages       | Seven packages at 0.6.0: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `mcp`                                |
+| Rust distribution         | `spatiotemporal-tiles` 0.7.0; five installed CLIs                                                                         |
+| Public npm packages       | Seven packages at 0.7.0: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `mcp`                                |
 | Primary renderer          | `@poopdeck.gl/layers` on the repository-pinned deck.gl 9.3.x line                                                         |
 | Cesium renderer           | Private workspace package, version-frozen at 0.5.0, source-only and experimental                                          |
 | Showcase generator        | Repository-only `tools/stt-generate` workspace; not installed with the public Rust crate                                  |
