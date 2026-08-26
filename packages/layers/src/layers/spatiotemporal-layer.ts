@@ -367,6 +367,23 @@ export interface _SpatioTemporalLayerProps {
   onTileError?: ((error: Error, tileId?: TileId) => void) | null;
 
   /**
+   * Fired ONCE per archive init (and again if `data` changes), with the
+   * archive's decoded metadata: time range, bounds, zoom range, temporal
+   * bucket, summary tier, style hints — and `layers[].properties`, the column
+   * inventory, which answers "which column names can I pass to `radius` /
+   * `fillColor` / `elevationProperty`?" without a tile fetch or a CLI:
+   *
+   * ```ts
+   * onMetadataLoad: (meta) => console.table(meta.layers[0].properties)
+   * ```
+   *
+   * Lives on the base layer rather than on the summary subclasses alone,
+   * because every layer opens the same archive and every consumer has the
+   * same first question about it (DX review 2026-08-26, F8).
+   */
+  onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
+
+  /**
    * Fired ONCE per archive/tileset initialization (and again if `data`
    * changes and a new tileset is created), with the live tileset. The tileset
    * satisfies the {@link BufferSource} readiness contract, so apps hand it
@@ -771,6 +788,7 @@ const defaultProps: DefaultProps<SpatioTemporalLayerProps> = {
   onTileLoad: { type: 'function', value: null, optional: true },
   onTileUnload: { type: 'function', value: null, optional: true },
   onTileError: { type: 'function', value: null, optional: true },
+  onMetadataLoad: { type: 'function', value: null, optional: true },
   onTilesetReady: { type: 'function', value: null, optional: true },
   onBufferChange: { type: 'function', value: null, optional: true },
 
@@ -2314,8 +2332,8 @@ export class SpatioTemporalLayer<
     metadata: ArchiveMetadata,
     initializationGeneration: number,
   ): void {
-    // Subclass hook (e.g. H3SummaryLayer fires onMetadataLoad + the
-    // no-summary-tier warning here).
+    this.props.onMetadataLoad?.(metadata);
+    // Subclass hook (e.g. H3SummaryLayer's no-summary-tier warning).
     this.onMetadataLoaded(metadata);
 
     // Summary-tier dispatch. When the archive carries a server-aggregated

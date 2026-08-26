@@ -40,6 +40,21 @@ export const GITHUB_BLOB_BASE =
 
 export const docSections: DocSection[] = [
   {
+    id: 'get-started',
+    label: 'Get started',
+    blurb:
+      'From nothing to an animated, streaming map: install, point a layer at a hosted dataset, press play — then swap in your own data.',
+    entries: [
+      {
+        slug: 'intro/quickstart',
+        file: 'intro/quickstart.md',
+        title: 'Quickstart',
+        blurb:
+          'An animated map of a hosted dataset in five minutes, in React or vanilla JS.',
+      },
+    ],
+  },
+  {
     id: 'intro',
     label: 'Introduction',
     blurb:

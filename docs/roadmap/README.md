@@ -348,6 +348,78 @@ aesthetically unverified, in rough priority order:
 
 **Accept:** each line seen and either signed off or turned into a defect.
 
+### DX — Onboarding review (2026-08-26)
+
+A walk of the poopdeck.gl onboarding path exactly as a newcomer takes it —
+`npm install` from the public registry, the quickstart copied verbatim, rendered
+in headless Chromium against `tiles.poopdeck.gl`. Thirteen findings. **Nine are
+fixed in the tree**; the four below are what the fix could not reach from here.
+
+Fixed and not repeated here: the unclickable play button and the light-only
+transport bar in the quickstart's React sample (F1, F6 — the bar now ships a
+dark token set and a `data-stt-theme` pin); the two TypeScript errors in
+copy-pasteable samples plus a CI gate that typechecks the doc snippets so they
+cannot drift again (F3, `scripts/check-doc-snippets.mjs`); the Node-24 engine
+floor on six browser packages (F4); the Float32 precision warning that fired on
+the canonical path (F5); the root README pointing at the CSV guide instead of
+the quickstart (F7); the empty column inventory in `ArchiveMetadata`, now
+derived from the manifest's own schema templates and exposed through a base
+`onMetadataLoad` (F8); the production console warning on the live showcase
+(F10); and the missing basemap and bundle-size notes in the quickstart (F11,
+F12).
+
+**DX1. A multi-entry Vite 8 build renders a blank page, and the bug is
+upstream.** Three HTML entries, two importing `@poopdeck.gl/react` and one
+importing only `@poopdeck.gl/playback`: React never mounts, the root element
+stays empty, and the console carries `TypeError: __exportAll is not a function`.
+Vite 7 (rollup) is clean on the same tree; single-entry Vite 8 is clean;
+`React.lazy` routes are clean. `__exportAll` is a **rolldown** re-export helper,
+so the defect is in Vite 8's bundler — but the shape that trips it is these
+packages' `export *` barrels, and it is our users who get the blank page and the
+unsearchable error. Vite 8 is what `npm create vite` gives someone starting
+today, and it is what this repo itself runs. The quickstart's troubleshooting
+list now names it, which turns a dead end into a known issue; that is mitigation,
+not a fix. **Accept:** a minimal repro filed against rolldown, and the
+troubleshooting entry replaced with a version note when it lands.
+
+**DX2. The flagship dataset's published manifest is patched locally but not
+deployed.** `data/earthquakes-v2/manifest.json` — the first file anyone
+following the quickstart fetches — served `"name": "earthquakes-v2.new"` with an
+empty `description` and an empty `attribution`, uncredited USGS data. The local
+manifest now carries a real name, a one-line description and the ComCat
+attribution (`scripts/patch-manifest-metadata.mjs`), verified to open through
+`STTArchive` unchanged; every content-addressed object is untouched, so
+publishing is a one-object manifest pass. **Accept:** `scripts/r2-sync.sh
+earthquakes-v2` run with R2 credentials, and a plain GET of the live manifest
+shows the three fields.
+
+**DX3. The metadata gap is fleet-wide, not one dataset.** `--scan` over the 70
+local packed datasets: **25 carry a build-scratch name** (`ais-all-us-new`,
+`hurricanes.new`, `lines v2`, …), **66 have no description**, and **67 have no
+attribution** — for datasets whose licences are the reason several of them can be
+published at all. The curated copy already exists in
+`examples/showcase/src/content/demoMeta.ts` (`tagline` + `dataSources` with name,
+url and licence per demo), so this is a mapping job plus a manifest-only
+republish, not a rebuild. **Accept:** `patch-manifest-metadata.mjs --scan` shows
+no scratch names and no empty attribution across the shipped stems, and the
+manifest pass is synced.
+
+**DX4 (unconfirmed). Intermittent deck.gl assertion during playback.** Seen four
+times in ONE run — the first against a cold CDN cache — and never again across
+~10 subsequent runs in dev and production builds:
+
+```text
+deck: initialization of ScatterplotLayer
+  ({id: 'quakes-points-1/0/1/1579046400000#0:default'})
+  deck.gl: assertion failed
+```
+
+The map kept rendering and playback continued, so it degraded rather than broke.
+The cold-cache timing suggests a race between a tile finishing and its sublayer
+initializing, but that is a guess. Recorded so it is not lost. **Accept:** a
+repro, or a second sighting that makes one findable — not worth chasing before
+either.
+
 ### T — Claims the repo makes that the world does not back
 
 **T1. The published repository URL 404s.** `https://github.com/BertCh/spatiotemporal-tiles`

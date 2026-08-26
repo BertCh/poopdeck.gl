@@ -13,7 +13,20 @@ import { PLAYBACK_SHORTCUTS } from '../hooks/use-playback-hotkeys.js';
 
 export interface PlaybackControlsProps {
   currentTime: number;
-  timeRange: { start: number; end: number };
+  /**
+   * Full span the scrubber addresses. OPTIONAL so that
+   * `<PlaybackControls {...usePlayback(...)} />` — the spread the hook's
+   * echoed `timeRange` exists to make work — typechecks: `usePlayback` takes
+   * its own `timeRange` as an option and therefore echoes it back optional
+   * (DX review 2026-08-26, F3).
+   *
+   * Omitted, the bar falls back to the degenerate `[currentTime, currentTime]`
+   * range: every control still renders and every callback still fires, but the
+   * scrubber has nothing to travel over. A player with no range is a real
+   * state (`usePlayback({})` builds one), so this renders it rather than
+   * throwing.
+   */
+  timeRange?: { start: number; end: number };
   /** User intent (drives the play/pause glyph); the governor may still be gating. */
   isPlaying: boolean;
   /**
@@ -666,7 +679,7 @@ const SpeedMenu: React.FC<{
 
 export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   currentTime,
-  timeRange,
+  timeRange: timeRangeProp,
   isPlaying,
   ended = false,
   bufferState,
@@ -687,6 +700,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   style,
 }) => {
   const reducedMotion = useReducedMotion();
+  // A rangeless player collapses to a zero-length range at the playhead. Every
+  // downstream reader already handles `rangeMs === 0` (the fill percentage and
+  // the density buckets both special-case it), so nothing below needs to know.
+  const timeRange = timeRangeProp ?? { start: currentTime, end: currentTime };
   const rangeMs = timeRange.end - timeRange.start;
   // One radio-group name per mounted bar — native radios group by name, and a
   // hardcoded one would fuse two mounted players into a single group.

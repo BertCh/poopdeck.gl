@@ -39,6 +39,25 @@ the stylesheet, but must register the package for scanning (Tailwind ignores
 @source "../node_modules/@poopdeck.gl/react/src";
 ```
 
+### Light and dark
+
+The stylesheet ships **both** palettes. The light "paper" set is the default;
+under `prefers-color-scheme: dark` the same eight tokens switch to the dark set
+the showcase floats over its map canvas. Pin a mode with `data-stt-theme` on any
+ancestor of the bar — `<html>`, a wrapper, or the bar's own `style` prop:
+
+```tsx
+// A transport bar over a dark map, in an otherwise light page.
+<div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 1 }}>
+  <div data-stt-theme="dark">
+    <PlaybackControls {...playback} />
+  </div>
+</div>
+```
+
+Setting the tokens yourself still wins over both — a later `:root` rule in your
+own CSS, or an inline `style` on any ancestor.
+
 ## usePlayback
 
 Generalizes a dataset's `{ timeRange, baseSpeed }` into full playback state. It

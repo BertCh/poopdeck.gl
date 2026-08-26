@@ -136,6 +136,12 @@ const actualPackages = packageDirs.map((dir) => {
     version: manifest.version,
     published: manifest.private !== true,
     node: manifest.engines?.node,
+    // A package with a `bin` RUNS in Node, so it carries the repo's dev
+    // toolchain floor. Everything else ships browser code whose `dist` never
+    // executes under Node at all, and a floor above the current LTS lines
+    // hard-fails any consumer or CI running `engine-strict=true` for nothing
+    // (DX review 2026-08-26, F4).
+    runsInNode: manifest.bin !== undefined,
     file: `packages/${dir}/package.json`,
   };
 });
@@ -155,7 +161,11 @@ for (const actual of actualPackages) {
     actual.published,
     `${actual.name} publication status`,
   );
-  assertEqual(actual.node, status.toolchain.node, `${actual.name} Node engine`);
+  assertEqual(
+    actual.node,
+    actual.runsInNode ? status.toolchain.node : status.toolchain.runtimeNode,
+    `${actual.name} Node engine`,
+  );
 }
 
 const schemaPath = status.$schema;

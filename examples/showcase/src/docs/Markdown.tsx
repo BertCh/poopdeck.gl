@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
@@ -6,18 +6,59 @@ import { Link } from 'react-router';
 import { rewriteHref } from './links';
 import CodeBlock from './CodeBlock';
 import Mermaid from './Mermaid';
+import DocTabs from './DocTabs';
+import { parseDocSegments } from './tabs';
 
 /**
  * The docs markdown renderer: GFM tables, slugged headings with hover
  * anchors, prism-highlighted fences (mermaid fences become diagrams), and
  * GitHub-style relative links rewritten into router links / GitHub blob URLs
  * via `rewriteHref` (resolution is relative to `currentFile`).
+ *
+ * The page is first split into plain-markdown runs and variant tab groups (see
+ * `tabs.ts`); each run and each tab body is rendered by the same
+ * {@link MarkdownBody} below, so a tab body is not a second-class dialect — it
+ * gets the same fences, links, tables and heading anchors. Pages with no tab
+ * markers produce exactly one segment, i.e. the previous behavior.
  */
 const Markdown: React.FC<{
   raw: string;
   /** docs-relative path of this page, e.g. "api/animated-point-layer.md". */
   currentFile: string;
   /** Scroll container for same-page #fragment links. */
+  scrollContainer?: () => HTMLElement | null;
+}> = ({ raw, currentFile, scrollContainer }) => {
+  const segments = useMemo(() => parseDocSegments(raw), [raw]);
+  return (
+    <>
+      {segments.map((segment, i) =>
+        segment.kind === 'markdown' ? (
+          <MarkdownBody
+            key={i}
+            raw={segment.text}
+            currentFile={currentFile}
+            scrollContainer={scrollContainer}
+          />
+        ) : (
+          <DocTabs key={i} tabs={segment.tabs}>
+            {(tab) => (
+              <MarkdownBody
+                raw={tab.text}
+                currentFile={currentFile}
+                scrollContainer={scrollContainer}
+              />
+            )}
+          </DocTabs>
+        ),
+      )}
+    </>
+  );
+};
+
+/** One contiguous run of markdown — a page section or a single tab body. */
+const MarkdownBody: React.FC<{
+  raw: string;
+  currentFile: string;
   scrollContainer?: () => HTMLElement | null;
 }> = ({ raw, currentFile, scrollContainer }) => {
   const scrollToHash = (hash: string) => {

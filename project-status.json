@@ -9,6 +9,7 @@
   "toolchain": {
     "node": ">=24.0.0",
     "nodeMajor": 24,
+    "runtimeNode": ">=20",
     "pnpm": "11.23.0",
     "rust": "1.87"
   },

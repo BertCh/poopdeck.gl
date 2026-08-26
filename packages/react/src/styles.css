@@ -18,10 +18,32 @@
 @import 'tailwindcss/utilities' layer(utilities);
 @source "./";
 
+/* ── Theming ────────────────────────────────────────────────────────────────
+ *
+ * The components consume the eight tokens below and nothing else, so a re-theme
+ * is a token remap — never a selector override. Three ways to set them, in
+ * order of increasing force:
+ *
+ *   1. Do nothing. The light "paper" palette is the default; if the viewer's
+ *      system is in dark mode, the dark palette applies instead.
+ *   2. Pin a mode. `data-stt-theme="light"` or `"dark"` on ANY ancestor of the
+ *      bar (`<html>`, a wrapper div, the bar's own `style` prop) wins over the
+ *      system preference — the right call for an app with a fixed look, and
+ *      for a bar floating over a dark map in an otherwise light page.
+ *   3. Set tokens yourself. A later `:root` rule in your own CSS, or an inline
+ *      `style` on any ancestor, beats every block here.
+ *
+ * A map is dark far more often than a page is, so the transport bar that
+ * floats over one needs a dark palette to be legible: a near-black label on a
+ * white scrubber track over a near-black basemap was the shipped default, and
+ * the quickstart's own step 3 instructs the reader to build exactly that map
+ * (DX review 2026-08-26, F6).
+ *
+ * Every block uses a single-class-worth of specificity (`:root`,
+ * `[data-stt-theme=…]`) so source order decides between them and a consumer's
+ * own `:root` rule still wins. Do not raise it. */
+
 :root {
-  /* Theme tokens the components consume (override any of these in your own
-   * CSS — a later :root rule or any ancestor element wins). Defaults are the
-   * showcase's light "paper" theme. */
   --page-bg: #fbfbf9; /* app background behind translucent panels */
   --surface: #ffffff; /* panel / control surfaces */
   --ink-900: #15171c; /* strongest text */
@@ -33,4 +55,49 @@
   --hairline: #e7e6e0; /* 1px separators, control outlines */
   --accent: #0a7790; /* play button, active states, scrubber fill */
   --accent-soft: rgba(10, 119, 144, 0.08); /* hover / selected washes */
+}
+
+/* The dark palette — the same values the showcase has been floating over its
+ * dark map canvas all along (examples/showcase/src/lib/controlTheme.ts), now
+ * the package default instead of something every consumer re-derives. Same
+ * eight tokens, same roles, contrast measured against --surface the same way:
+ * --ink-900 is 13.2:1, --ink-500 is 5.9:1, --accent is 6.2:1, and --ink-400
+ * stays decorative-only at 3.8:1. --accent is lifted off the light palette's
+ * #0a7790, which reaches only 3.4:1 on a dark surface. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page-bg: #15171c;
+    --surface: #262a33;
+    --ink-900: #f4f5f7;
+    --ink-500: #a0a7b4;
+    --ink-400: #7b8494;
+    --hairline: rgba(255, 255, 255, 0.14);
+    --accent: #1fbad6;
+    --accent-soft: rgba(31, 186, 214, 0.16);
+  }
+}
+
+/* Explicit pins. Later in source order than the media query, so they win in
+ * both directions — including forcing the dark bar onto a light-mode system,
+ * which is what a dark map in a light page needs. */
+[data-stt-theme='light'] {
+  --page-bg: #fbfbf9;
+  --surface: #ffffff;
+  --ink-900: #15171c;
+  --ink-500: #6b7280;
+  --ink-400: #9aa1ad;
+  --hairline: #e7e6e0;
+  --accent: #0a7790;
+  --accent-soft: rgba(10, 119, 144, 0.08);
+}
+
+[data-stt-theme='dark'] {
+  --page-bg: #15171c;
+  --surface: #262a33;
+  --ink-900: #f4f5f7;
+  --ink-500: #a0a7b4;
+  --ink-400: #7b8494;
+  --hairline: rgba(255, 255, 255, 0.14);
+  --accent: #1fbad6;
+  --accent-soft: rgba(31, 186, 214, 0.16);
 }

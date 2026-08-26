@@ -203,27 +203,96 @@ export function relativizeTime(absoluteTime: number, offset: number): number {
 const _relTimeWarned = new Set<string>();
 
 /**
- * Guard the f32 precision contract: a relative time past 2^24 ms loses
- * millisecond precision in the shader. Warns ONCE per key when the resolved
- * relative time crosses {@link MAX_RELATIVE_TIME_MS} in a non-cumulative mode
- * (cumulative intentionally spans years). It lives in framework-free core
- * rather than the deck package so three and maplibre — which otherwise
- * quantize a too-wide span silently — can diagnose it too. Pure/allocation-free
- * on the hot path.
+ * One 60 fps frame, in ms. An absolute silence floor for the precision guard:
+ * a quantization step smaller than a frame cannot move a feature's visibility
+ * by a frame it could be drawn in, whatever the window is.
+ */
+const ONE_FRAME_MS = 1000 / 60;
+
+/**
+ * How large the f32 quantization step has to be, as a fraction of the animated
+ * span, before it is worth a word. A step of `span / 1000` shifts a feature's
+ * window edge by a tenth of a percent of the visible window — the point at
+ * which "this feature popped in slightly early" becomes expressible at all.
+ */
+const PRECISION_WARN_SPAN_FRACTION = 1e-3;
+
+/**
+ * The spacing between adjacent Float32 values at `value`'s magnitude — i.e. the
+ * granularity a relative time is actually stored at once it reaches a shader.
+ * f32 carries a 24-bit mantissa, so at magnitude 2^e the spacing is 2^(e-23):
+ * 1 ms at 2^24 (~4.7 h), 2 ms at 2^25, 128 ms at ~1.15e9 (~13 days), 131,072 ms
+ * at epoch scale. Returns 0 below 1 ms of magnitude, where the step can never
+ * matter to a millisecond clock.
+ */
+export function f32QuantumAt(value: number): number {
+  const magnitude = Math.abs(value);
+  if (!Number.isFinite(magnitude) || magnitude < 1) return 0;
+  return 2 ** (Math.floor(Math.log2(magnitude)) - 23);
+}
+
+/**
+ * Guard the f32 precision contract, scaled to the window being animated.
+ *
+ * ## Why this is not a fixed 2^24 test
+ *
+ * It used to be: any relative time past {@link MAX_RELATIVE_TIME_MS} warned.
+ * That threshold is an absolute constant (~4.7 hours), so a dataset whose own
+ * documented `timeWindow` is 30 days could not help but trip it — the tiles at
+ * the far end of the window are legitimately that far from their own chunk
+ * offsets. The quickstart printed it on its very first render, and so did the
+ * live showcase, telling the reader to "check that the time offset matches the
+ * tile data" when nothing was wrong. A first-render warning that sends a
+ * newcomer hunting a misconfiguration that does not exist is worse than no
+ * warning at all (DX review 2026-08-26, F5).
+ *
+ * ## What it tests instead
+ *
+ * The f32 quantization STEP at the resolved magnitude ({@link f32QuantumAt}),
+ * against two floors:
+ *
+ * 1. one 60 fps frame — below that the error cannot be observed at all; and
+ * 2. {@link PRECISION_WARN_SPAN_FRACTION} of `spanMs`, the span actually being
+ *    animated (the full `timeWindow`, or the wake/trail length for the modes
+ *    that have no window).
+ *
+ * With no span to judge against (`spanMs <= 0` — a caller that does not know
+ * its own window) it falls back to the historical {@link MAX_RELATIVE_TIME_MS}
+ * magnitude rule, which is the strictest reading and the right default for a
+ * caller that cannot say what it is animating. Floor (1) still applies there,
+ * so the first magnitude that speaks is ~2^28 (a 32 ms step) rather than 2^24
+ * (1 ms): between the two, the whole error is under a frame.
+ *
+ * Warns ONCE per key, skips `cumulative` (which intentionally spans years).
+ * Lives in framework-free core rather than the deck package so three and
+ * maplibre — which otherwise quantize a too-wide span silently — diagnose it
+ * the same way. Allocation-free on the hot path until it actually fires.
  */
 export function assertRelTimeInRange(
   relativeTime: number,
   mode: TimeFilterMode,
   key = 'default',
+  spanMs = 0,
 ): void {
   if (mode === 'cumulative') return;
-  if (Math.abs(relativeTime) <= MAX_RELATIVE_TIME_MS) return;
+  const step = f32QuantumAt(relativeTime);
+  if (step <= ONE_FRAME_MS) return;
+  const perceptible =
+    spanMs > 0
+      ? step > spanMs * PRECISION_WARN_SPAN_FRACTION
+      : Math.abs(relativeTime) > MAX_RELATIVE_TIME_MS;
+  if (!perceptible) return;
   if (_relTimeWarned.has(key)) return;
   _relTimeWarned.add(key);
+  const against =
+    spanMs > 0
+      ? ` against a ${spanMs} ms window`
+      : ' at millisecond resolution';
   // eslint-disable-next-line no-console
   console.warn(
-    `[stt/time-filter] relative time ${relativeTime} exceeds ${MAX_RELATIVE_TIME_MS} ms — ` +
-      'Float32 precision is degraded; check that the time offset matches the tile data.',
+    `[stt/time-filter] relative time ${relativeTime} stores to the nearest ` +
+      `${step} ms in Float32 — coarse${against}. This usually means the time ` +
+      'offset does not match the tile data.',
   );
 }
 

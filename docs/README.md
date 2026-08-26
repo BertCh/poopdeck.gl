@@ -7,11 +7,14 @@ render, and work with it in web applications and AI tools.
 
 New to the project? Follow these in order:
 
-1. [Choose whether STT fits](./intro/choosing.md).
-2. Read the [core concepts](./intro/concepts.md).
-3. Build and display data with the
+1. Get an animated map running in five minutes with the
+   [quickstart](./intro/quickstart.md) — React or vanilla JS, against a hosted
+   dataset.
+2. [Choose whether STT fits](./intro/choosing.md).
+3. Read the [core concepts](./intro/concepts.md).
+4. Build and display your own data with the
    [CSV quickstart](./guides/csv-quickstart.md).
-4. Check [status, support, and compatibility](./intro/status-and-support.md)
+5. Check [status, support, and compatibility](./intro/status-and-support.md)
    before adopting a pre-1.0 API or alternate renderer.
 
 The [glossary](./intro/glossary.md) defines project names and format terms.

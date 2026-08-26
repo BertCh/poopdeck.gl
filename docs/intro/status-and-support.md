@@ -7,16 +7,17 @@ before upgrading.
 
 ## What is current
 
-| Surface               | Current state                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------ |
-| Packed archive writer | `formatVersion: 3`, directory codec v6                                                     |
-| Packed archive reader | Format v3/v6 plus read-only compatibility for published format v2/v5 archives              |
-| Rust distribution     | `spatiotemporal-tiles` 0.6.0; five installed CLIs                                          |
-| Public npm packages   | Seven packages at 0.6.0: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `mcp` |
-| Primary renderer      | `@poopdeck.gl/layers` on the repository-pinned deck.gl 9.3.x line                          |
-| Cesium renderer       | Private workspace package, version-frozen at 0.5.0, source-only and experimental           |
-| Showcase generator    | Repository-only `tools/stt-generate` workspace; not installed with the public Rust crate   |
-| Local JS toolchain    | Node 24+ and pnpm 11.23.0                                                                  |
+| Surface                   | Current state                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Packed archive writer     | `formatVersion: 3`, directory codec v6                                                                                    |
+| Packed archive reader     | Format v3/v6 plus read-only compatibility for published format v2/v5 archives                                             |
+| Rust distribution         | `spatiotemporal-tiles` 0.6.0; five installed CLIs                                                                         |
+| Public npm packages       | Seven packages at 0.6.0: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `mcp`                                |
+| Primary renderer          | `@poopdeck.gl/layers` on the repository-pinned deck.gl 9.3.x line                                                         |
+| Cesium renderer           | Private workspace package, version-frozen at 0.5.0, source-only and experimental                                          |
+| Showcase generator        | Repository-only `tools/stt-generate` workspace; not installed with the public Rust crate                                  |
+| Local JS toolchain        | Node 24+ and pnpm 11.23.0 (building THIS repository)                                                                      |
+| Published package runtime | Node 20+ — the browser packages' `dist` never executes under Node; `@poopdeck.gl/mcp` is the exception and needs Node 24+ |
 
 The machine-readable [`project-status.json`](../../project-status.json),
 workspace manifests, and format specification are authoritative if this page

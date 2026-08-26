@@ -12,6 +12,7 @@
 
 ## Start here
 - [Agent guide (AGENTS.md)](https://github.com/BertCh/spatiotemporal-tiles/blob/main/AGENTS.md): how coding agents should work in this repo.
+- [Quickstart](docs/intro/quickstart.md): install, render a hosted dataset, add playback — React or vanilla JS.
 - [Concepts](docs/intro/concepts.md): the space×time tile model, packed archives, playback.
 - [Choosing an approach](docs/intro/choosing.md): static vs served; which renderer.
 - [Status and support](docs/intro/status-and-support.md): maturity tiers, compatibility window, and support expectations.

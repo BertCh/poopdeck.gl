@@ -301,6 +301,15 @@ jobs:
       # rotting the doc. Must run AFTER the build — it imports packages/*/dist.
       - name: backend-capabilities doc in sync
         run: node scripts/gen-capabilities-doc.mjs --check
+      # Copy-paste gate: the quickstart's React samples are the first code a
+      # newcomer runs, and two of them did not compile under strict TS while
+      # every package typechecked clean — the samples live in Markdown, which
+      # nothing here compiled. Extracts every standalone ```ts/```tsx block from
+      # the onboarding docs and typechecks them against the showcase's real
+      # dependency versions. AFTER the build: the snippets import package entry
+      # points, which resolve to dist.
+      - name: onboarding doc samples typecheck
+        run: node scripts/check-doc-snippets.mjs
       - run: pnpm --filter '@poopdeck.gl/core' typecheck
       - run: pnpm --filter '@poopdeck.gl/layers' typecheck
       - run: pnpm --filter '@poopdeck.gl/maplibre' typecheck

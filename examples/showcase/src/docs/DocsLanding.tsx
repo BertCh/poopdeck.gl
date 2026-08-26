@@ -12,15 +12,14 @@ export const meta: MetaFunction = () =>
     path: '/docs',
   });
 
-const QUICK_START = `npm install @poopdeck.gl/core @poopdeck.gl/layers @poopdeck.gl/playback
-
-import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+const QUICK_START = `import { AnimatedPointLayer } from '@poopdeck.gl/layers';
 import { TimeController } from '@poopdeck.gl/playback';
 
 const timeController = new TimeController({ speed: 3600 });
 const layer = new AnimatedPointLayer({
   id: 'earthquakes',
-  data: 'https://tiles.example.com/data/earthquakes/manifest.json',
+  // A real, public archive — CORS + range requests, no server of your own.
+  data: 'https://tiles.poopdeck.gl/data/earthquakes/manifest.json',
   timeController,
   timeWindow: 30 * 24 * 3600 * 1000, // 30-day visible window
 });
@@ -116,7 +115,12 @@ const DocsLanding: React.FC = () => {
         </p>
         <CodeBlock code={QUICK_START} language="typescript" />
         <p className="text-xs" style={{ color: 'var(--ink-400)' }}>
-          Building your own dataset? Start with the{' '}
+          The{' '}
+          <Link to="/docs/intro/quickstart" style={{ color: 'var(--accent)' }}>
+            full quickstart
+          </Link>{' '}
+          runs that end to end — install, first render, playback controls — in
+          React or vanilla JS. Building your own dataset? Start with the{' '}
           <Link
             to="/docs/guides/data-generation"
             style={{ color: 'var(--accent)' }}

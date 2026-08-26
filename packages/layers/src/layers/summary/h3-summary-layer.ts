@@ -56,8 +56,8 @@
  * tile-load updates, throttled animation ticks, byte-budgeted cache,
  * onViewportLoad/onTileLoad/onTileError/loadOptions, viewport-bounds
  * memoization). The summary-tier specifics ride the base's two subclass
- * hooks — {@link onMetadataLoaded} (onMetadataLoad callback + no-tier
- * warning) and {@link getTilesetOptionOverrides} (summary tier dispatch,
+ * hooks — {@link onMetadataLoaded} (the no-tier warning) and
+ * {@link getTilesetOptionOverrides} (summary tier dispatch,
  * tier zoom range, 'no-overlap' refinement) — plus a {@link getZoomLevel}
  * override that clamps to the tier's zoom band and a {@link _handleTimeUpdate}
  * override that re-renders on a sub-bucket crossing. Historically this class
@@ -288,9 +288,6 @@ export interface _H3SummaryLayerProps {
    * @default null
    */
   centerHexagon?: string | null;
-
-  /** Fired once per archive init with the decoded metadata. */
-  onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
 }
 
 /** Complete props accepted by {@link H3SummaryLayer}. */
@@ -426,7 +423,6 @@ const defaultProps: DefaultProps<H3SummaryLayerProps> = {
   material: { type: 'object', value: true, compare: true },
   highPrecision: 'auto',
   centerHexagon: { type: 'object', value: null, optional: true },
-  onMetadataLoad: { type: 'function', value: null, optional: true },
 };
 
 /**
@@ -646,12 +642,12 @@ export class H3SummaryLayer<
 
   /**
    * Subclass hook (base calls it once per archive init, after the
-   * supersession race guard): surface the metadata to the app and warn when
-   * the archive has no summary tier — the layer renders nothing then, which
-   * usually means the archive was built without `--summary-tier`.
+   * supersession race guard): warn when the archive has no summary tier — the
+   * layer renders nothing then, which usually means the archive was built
+   * without `--summary-tier`. The `onMetadataLoad` callback itself is fired by
+   * the base for EVERY layer now, so firing it again here would double-call it.
    */
   protected onMetadataLoaded(metadata: ArchiveMetadata): void {
-    this.props.onMetadataLoad?.(metadata);
     if (!metadata.summaryTier) {
       warnOnce(
         `H3SummaryLayer:noTier:${this.props.data}`,

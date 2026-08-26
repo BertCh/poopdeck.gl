@@ -63,8 +63,8 @@
  * tile-load updates, throttled animation ticks, byte-budgeted cache,
  * onViewportLoad/onTileLoad/onTileError/loadOptions, viewport-bounds
  * memoization). The summary-tier specifics ride the base's two subclass
- * hooks — {@link onMetadataLoaded} (onMetadataLoad callback + no-tier
- * warning) and {@link getTilesetOptionOverrides} (summary tier dispatch,
+ * hooks — {@link onMetadataLoaded} (the no-tier warning) and
+ * {@link getTilesetOptionOverrides} (summary tier dispatch,
  * tier zoom range, 'no-overlap' refinement) — plus a {@link getZoomLevel}
  * override that clamps to the tier's zoom band. This mirrors H3SummaryLayer
  * one-to-one; the only differences are the cell decoder, the QuadkeyLayer
@@ -329,9 +329,6 @@ export interface _QuadbinSummaryLayerProps {
    * @default true
    */
   material?: Material | boolean;
-
-  /** Fired once per archive init with the decoded metadata. */
-  onMetadataLoad?: ((meta: ArchiveMetadata) => void) | null;
 }
 
 /** Complete props accepted by {@link QuadbinSummaryLayer}. */
@@ -438,7 +435,6 @@ const defaultProps: DefaultProps<QuadbinSummaryLayerProps> = {
   wireframe: false,
   // Same permissive descriptor SolidPolygonLayer uses: boolean or material spec.
   material: { type: 'object', value: true, compare: true },
-  onMetadataLoad: { type: 'function', value: null, optional: true },
 };
 
 /**
@@ -636,12 +632,12 @@ export class QuadbinSummaryLayer<
 
   /**
    * Subclass hook (base calls it once per archive init, after the
-   * supersession race guard): surface the metadata to the app and warn when
-   * the archive has no summary tier — the layer renders nothing then, which
-   * usually means the archive was built without `--summary-tier`.
+   * supersession race guard): warn when the archive has no summary tier — the
+   * layer renders nothing then, which usually means the archive was built
+   * without `--summary-tier`. The `onMetadataLoad` callback itself is fired by
+   * the base for EVERY layer now, so firing it again here would double-call it.
    */
   protected onMetadataLoaded(metadata: ArchiveMetadata): void {
-    this.props.onMetadataLoad?.(metadata);
     if (!metadata.summaryTier) {
       warnOnce(
         `QuadbinSummaryLayer:noTier:${this.props.data}`,

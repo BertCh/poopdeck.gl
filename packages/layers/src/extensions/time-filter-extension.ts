@@ -844,10 +844,19 @@ export class TimeFilterExtension extends LayerExtension<
     // Guard the f32 precision contract via the shared kernel diagnostic
     // (warn-once; skipped in cumulative mode, which intentionally spans years).
     // Fires when `timeOffset` doesn't match the tile data.
+    //
+    // The guard is scaled to the span this layer is ACTUALLY animating, not to
+    // a fixed 2^24 constant: a legitimate 30-day `timeWindow` puts the far end
+    // of its own window past 2^24 ms from a tile's chunk offset by
+    // construction, so the constant form warned on the canonical documented
+    // path (DX review 2026-08-26, F5). `timeWindow` is the span for window
+    // mode; wake and trail modes carry theirs in their own length prop.
+    const animatedSpanMs = timeWindow || wakeLength || trailLength || 0;
     assertRelTimeInRange(
       relativeTime,
       cumulative ? 'cumulative' : 'window',
       warnKey,
+      animatedSpanMs,
     );
 
     const timeFilterProps: TimeFilterUniformProps = {

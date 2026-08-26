@@ -3,7 +3,11 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     // Prefer TypeScript sources, matching the other workspace packages.
-    extensions: ['.ts', '.mjs', '.js', '.json'],
+    // `.tsx` is in the list so a test that imports an app COMPONENT gets the
+    // component's own extensionless sibling imports resolved too (docs
+    // Markdown → CodeBlock/Mermaid/DocTabs); without it only the entry file
+    // could carry an explicit .tsx and its imports failed to resolve.
+    extensions: ['.ts', '.tsx', '.mjs', '.js', '.json'],
   },
   test: {
     // Heavy compute suites (fleet-frame decode timing, the full order × gesture

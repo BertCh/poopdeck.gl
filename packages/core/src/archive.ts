@@ -52,7 +52,10 @@ import {
   type HeatmapClassDomain,
   type StyleHints,
   type PropertyStyleHint,
+  type LayerInfo,
+  type PropertyInfo,
   Compression,
+  GeometryType,
 } from './types.js';
 import {
   tileKey,
@@ -66,7 +69,8 @@ import { createDefaultTileDecoder, type TileDecoder } from './tile-decoder.js';
 import { OpfsTileCache } from './opfs-cache.js';
 import { decompress, unzstdSync } from './compression.js';
 import { blake3Hex128 } from './blake3.js';
-import type { TemplateRegistry } from './tile.js';
+import { DataType, Type, tableFromIPC } from 'apache-arrow';
+import { RESERVED_TILE_COLUMNS, type TemplateRegistry } from './tile.js';
 import { createSttTileSource, type SttTileSource } from './tile-source.js';
 import {
   LatencyEstimator,
@@ -1859,6 +1863,156 @@ function buildTemplateRegistry(
   return registry;
 }
 
+/**
+ * Classify one Arrow field into the coarse {@link PropertyInfo} vocabulary.
+ * Returns `undefined` for a type no styling prop can consume (nested lists,
+ * structs, binary), so an exotic column is omitted rather than mislabelled.
+ *
+ * Quantized numerics (`attr-quant`) reach the template as `UInt16` — still a
+ * number logically, and the shader dequantizes it, so `'number'` is correct.
+ * Hoisted categoricals arrive as `Dictionary<_, Utf8>`.
+ */
+function classifyArrowField(type: DataType): PropertyInfo['type'] | undefined {
+  const resolved = DataType.isDictionary(type) ? type.dictionary : type;
+  switch (resolved.typeId) {
+    case Type.Bool:
+      return 'boolean';
+    case Type.Int:
+    case Type.Float:
+    case Type.Decimal:
+    case Type.Date:
+    case Type.Time:
+    case Type.Timestamp:
+      return 'number';
+    case Type.Utf8:
+    case Type.LargeUtf8:
+      return 'string';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * `stt:geometry` (the writer's geoarrow name) → the reader's enum. Typed with
+ * `| undefined` because the lookup key comes off the wire: a geometry name a
+ * future writer adds must read as "unknown", not as a `GeometryType` the
+ * compiler vouched for.
+ */
+const GEOARROW_NAME_TO_TYPE: Record<string, GeometryType | undefined> = {
+  'geoarrow.point': GeometryType.Point,
+  'geoarrow.linestring': GeometryType.LineString,
+  'geoarrow.polygon': GeometryType.Polygon,
+};
+
+/**
+ * Derive the per-layer property and geometry inventory from the manifest's
+ * embedded schema templates (spec §3.2).
+ *
+ * ## Why this exists
+ *
+ * `metadata.layers[].properties` is a typed, public, documented field that
+ * was hard-coded to `[]` on every archive ever opened. A browser client's only
+ * route to its own column names was hand-decoding `manifest.schemas[].data`
+ * (base64 Arrow IPC) or installing the Rust CLIs — on a page whose whole point
+ * is that you do not need them. That is the difference between styling your
+ * own data in one minute and in twenty (DX review 2026-08-26, F8).
+ *
+ * Note this is NOT `metadata.properties`, which is the writer's free-form
+ * `Record<string, string>` attestation bag (`feature_id_scope` and friends)
+ * and has never been a column list.
+ *
+ * ## Attribution
+ *
+ * The writer splits each layer's schema in two: a CORE template (identity,
+ * the temporal pair, geometry) tagged with `stt:layer` + `stt:geometry`, and a
+ * PROPS template carrying the user columns and NO schema metadata. So a props
+ * template can be attributed to a layer only when the archive declares exactly
+ * one — which every archive the fleet has ever published does. With several
+ * layers, tagged templates still resolve and untagged ones are skipped rather
+ * than smeared across layers.
+ *
+ * Fails soft in every direction: a template this Arrow build cannot parse, an
+ * unknown geometry name, an exotic column type — each drops that one item and
+ * leaves the rest of the metadata intact. Nothing here is load-bearing for
+ * rendering.
+ */
+function describeLayers(
+  layerNames: string[],
+  schemas: ManifestSchemaTemplate[] | undefined,
+  hints: StyleHints | undefined,
+): LayerInfo[] {
+  const byName = new Map<string, LayerInfo>(
+    layerNames.map((name) => [
+      name,
+      { name, properties: [], geometryTypes: [] },
+    ]),
+  );
+  const soleLayer = layerNames.length === 1 ? layerNames[0] : undefined;
+  const hintByName = new Map(
+    (hints?.properties ?? []).map((hint) => [hint.name, hint]),
+  );
+  // A column can appear in both a CORE and a PROPS template of the same layer
+  // (and in several templates when the writer emitted more than one shape);
+  // publish each name once per layer.
+  const seen = new Set<string>();
+
+  for (const entry of schemas ?? []) {
+    let schema;
+    try {
+      schema = tableFromIPC(base64ToBytes(entry.data)).schema;
+    } catch {
+      continue; // Unparseable template: skip it, keep the rest of the metadata.
+    }
+    // Prefer the template's own tag; fall back to the sole declared layer.
+    // The fallback covers both the untagged PROPS template and an archive
+    // whose CORE tag does not appear verbatim in `metadata.layers` (the
+    // `v2-golden-tracks` fixture tags `tracks` while declaring `default`) —
+    // in a one-layer archive there is only one thing it can mean. With
+    // several layers `soleLayer` is undefined, so nothing is smeared.
+    const tagged = schema.metadata.get('stt:layer');
+    const layer =
+      (tagged === undefined ? undefined : byName.get(tagged)) ??
+      (soleLayer === undefined ? undefined : byName.get(soleLayer));
+    if (!layer) continue;
+
+    const geometryName = schema.metadata.get('stt:geometry');
+    const geometryType =
+      geometryName === undefined
+        ? undefined
+        : GEOARROW_NAME_TO_TYPE[geometryName];
+    if (
+      geometryType !== undefined &&
+      !layer.geometryTypes.includes(geometryType)
+    ) {
+      layer.geometryTypes.push(geometryType);
+    }
+
+    for (const field of schema.fields) {
+      if (RESERVED_TILE_COLUMNS.has(field.name)) continue;
+      const key = `${layer.name}\u0000${field.name}`;
+      if (seen.has(key)) continue;
+      const type = classifyArrowField(field.type);
+      if (type === undefined) continue;
+      seen.add(key);
+      const hint = hintByName.get(field.name);
+      const info: PropertyInfo = { name: field.name, type };
+      // Percentiles the builder already measured, when it measured them: the
+      // answer to "what range is this column?" arrives with the answer to
+      // "what columns are there?" rather than after a tile fetch.
+      if (hint?.min !== undefined) info.minValue = hint.min;
+      if (hint?.max !== undefined) info.maxValue = hint.max;
+      layer.properties.push(info);
+    }
+  }
+
+  for (const layer of byName.values()) {
+    layer.properties.sort((a: PropertyInfo, b: PropertyInfo) =>
+      a.name < b.name ? -1 : 1,
+    );
+  }
+  return layerNames.map((name) => byName.get(name)!);
+}
+
 /** Normalize any HeadersInit into a plain record, preserving plain-object key casing. */
 function headersToRecord(h: HeadersInit | undefined): Record<string, string> {
   if (!h) return {};
@@ -3050,11 +3204,7 @@ export class STTArchive {
         : { start: 0, end: Date.now() },
       minZoom: json.min_zoom ?? 0,
       maxZoom: json.max_zoom ?? 14,
-      layers: (json.layers ?? []).map((name: string) => ({
-        name,
-        properties: [],
-        geometryTypes: [],
-      })),
+      layers: [], // Replaced below, once styleHints has been parsed.
       temporalBucketMs: json.temporal_bucket_ms ?? 3600 * 1000,
       summaryTier: parseSummaryTier(json.summary_tier),
       // The serialized `temporal_lod` field is omitted when unset; readers
@@ -3068,6 +3218,15 @@ export class STTArchive {
       heatmapDomain: parseHeatmapDomain(json.heatmap_domain),
       styleHints: parseStyleHints(json.style_hints),
     };
+    // Column inventory, derived from the manifest's own embedded Arrow schema
+    // templates — no tile fetch, available the moment the archive opens. Runs
+    // after the object literal because it reads the parsed style hints for the
+    // measured min/max (F8).
+    this.metadataCache.layers = describeLayers(
+      json.layers ?? [],
+      manifest.schemas,
+      this.metadataCache.styleHints,
+    );
     return this.metadataCache;
   }
 

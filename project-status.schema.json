@@ -29,10 +29,11 @@
     },
     "toolchain": {
       "type": "object",
-      "required": ["node", "nodeMajor", "pnpm", "rust"],
+      "required": ["node", "nodeMajor", "runtimeNode", "pnpm", "rust"],
       "properties": {
         "node": { "type": "string" },
         "nodeMajor": { "type": "integer", "minimum": 1 },
+        "runtimeNode": { "type": "string" },
         "pnpm": { "$ref": "#/$defs/version" },
         "rust": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
       },

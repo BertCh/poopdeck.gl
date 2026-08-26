@@ -32,10 +32,67 @@ to individual records rather than immutable published snapshots. See
 
 ## Quick start
 
-The fastest complete tutorial is
-[CSV to an animated map](./docs/guides/csv-quickstart.md).
+The fastest thing that moves is the
+[five-minute Quickstart](./docs/intro/quickstart.md): a hosted dataset, half a
+million streaming earthquakes, and an animated map inside an ordinary app — no
+account, no tile server, and no Rust toolchain. It comes in React and
+vanilla-JS variants, and is the recommended front door.
 
-### Build and validate an archive
+### Render a hosted dataset
+
+`@poopdeck.gl/*` peer-depends on deck.gl and does **not** install it for you.
+Pin the whole deck.gl + luma.gl graph to one 9.3.x minor:
+
+```bash
+npm install @poopdeck.gl/layers @poopdeck.gl/playback \
+  @deck.gl/core@^9.3 @deck.gl/layers@^9.3 @deck.gl/geo-layers@^9.3 \
+  @deck.gl/mesh-layers@^9.3 @deck.gl/aggregation-layers@^9.3 \
+  @deck.gl/extensions@^9.3 \
+  @luma.gl/core@^9.3 @luma.gl/engine@^9.3
+```
+
+```typescript
+import { Deck } from '@deck.gl/core';
+import { AnimatedPointLayer } from '@poopdeck.gl/layers';
+import { SttPlayer } from '@poopdeck.gl/playback';
+
+// A public, CORS-enabled archive: USGS M4.0+ events, 2020-2024.
+const DATA = 'https://tiles.poopdeck.gl/data/earthquakes-v2/manifest.json';
+const TIME_RANGE = {
+  start: Date.parse('2020-01-01T00:00:00Z'),
+  end: Date.parse('2024-12-30T23:56:29Z'),
+};
+
+const player = new SttPlayer({
+  timeRange: TIME_RANGE,
+  baseRate: (TIME_RANGE.end - TIME_RANGE.start) / 60_000, // 5 years in ~60 s
+  loop: true,
+});
+
+const layer = new AnimatedPointLayer({
+  id: 'events',
+  data: DATA,
+  timeController: player.timeController,
+  timeWindow: 30 * 86_400_000,
+  radius: 'magnitude', // any prop that takes a constant also takes a column
+  onTilesetReady: (tileset) => player.setSource(tileset),
+  onBufferChange: (runway) => player.notifyBufferChange(runway),
+});
+
+new Deck({ layers: [layer] });
+player.play();
+```
+
+`SttPlayer` connects the clock to the loading runway so playback buffers instead
+of skipping unloaded time. See the
+[player](./docs/api/stt-player.md) and
+[layer](./docs/api/spatiotemporal-layer.md) references for the complete API.
+
+### Build your own archive
+
+Your own data is where the Rust toolchain comes in;
+[From CSV to an Animated Map](./docs/guides/csv-quickstart.md) is the complete
+tutorial. The short version:
 
 ```bash
 cargo install spatiotemporal-tiles
@@ -72,41 +129,6 @@ The installed package provides five CLIs:
 
 `stt-generate` is a separate, repository-only tool for rebuilding showcase
 datasets; it lives in [`tools/stt-generate`](./tools/stt-generate).
-
-### Render it
-
-```bash
-npm install @poopdeck.gl/layers @poopdeck.gl/playback deck.gl
-```
-
-```typescript
-import { Deck } from '@deck.gl/core';
-import { AnimatedPointLayer } from '@poopdeck.gl/layers';
-import { SttPlayer } from '@poopdeck.gl/playback';
-
-const player = new SttPlayer({
-  timeRange: { start, end },
-  baseRate: (end - start) / 60_000,
-  loop: true,
-});
-
-const layer = new AnimatedPointLayer({
-  id: 'events',
-  data: 'https://tiles.example.com/events/manifest.json',
-  timeController: player.timeController,
-  timeWindow: 86_400_000,
-  onTilesetReady: (tileset) => player.setSource(tileset),
-  onBufferChange: (runway) => player.notifyBufferChange(runway),
-});
-
-new Deck({ layers: [layer] });
-player.play();
-```
-
-`SttPlayer` connects the clock to the loading runway so playback buffers instead
-of skipping unloaded time. See the
-[player](./docs/api/stt-player.md) and
-[layer](./docs/api/spatiotemporal-layer.md) references for the complete API.
 
 ## How the pieces fit
 
