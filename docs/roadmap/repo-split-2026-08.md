@@ -247,3 +247,84 @@ The pre-split commit is tagged `pre-split-0.7.0` on both sides.
   `stt-*` binaries from `PATH`. This was already true — `cli-runner.ts` has
   always resolved them by `PATH` with a `--stt-*-bin` override — so nothing in
   the package changes. Its docs now say the CLIs are a separate install.
+
+## 8. As built — 2026-08-26
+
+The split landed as `71a1ef3` here and `18a4f7c`/`68466a2` in
+[poopdeck.gl](https://github.com/BertCh/poopdeck.gl). Both trees are green.
+What follows is where reality differed from §§1–7, and what the work turned up.
+
+### 8.1 Deviations from the plan
+
+- **The repository is `poopdeck.gl`, not `poopdeck`.** The obvious name was
+  already taken locally by an unrelated project. The chosen name matches the npm
+  scope and the domain, and follows the deck.gl/luma.gl precedent.
+- **24 vendored pages, not 21.** Two generated contracts joined the set (§8.2),
+  and `docs/guides/deploying.md` stayed upstream with the publishing scripts.
+  `docs/spec/backend-capabilities.md` went the other way: it is generated from
+  the TypeScript `BackendDescriptor`s, so it cannot live upstream of them.
+- **The ledgers are duplicated, not split.** §3.3 said the roadmap divides by
+  subject. The open backlog does. The _discharged_ and _consolidation_ ledgers
+  are kept verbatim in both repositories instead: the work they record was done
+  in one tree, and bisecting a frozen history along a boundary that did not
+  exist at the time would misdescribe it.
+- **The 76 GB archive fleet moved too.** It lived at
+  `examples/showcase/public/data` — a path inside a repository that is no longer
+  here. It is now `data-fleet/`, and `r2-sync.sh`, `rebuild-fleet-v3.sh`,
+  `patch-manifest-metadata.mjs`, `tools/fleet-order-audit.sh` and every
+  data-generation script follow it. Untracked, as before.
+- **This record is itself vendored.** Both repositories cite it as the contract,
+  so it has one authored copy rather than two that drift.
+
+### 8.2 One more artifact than planned
+
+§4 named three things crossing the seam. There are four: the MCP server's
+`generate_dataset` tool advertises a dataset enum that a TypeScript test kept
+equal to `stt-generate`'s clap `enum Commands`, by parsing `main.rs`. That test
+could not survive the split either, so the parser moved **here** — a scanner for
+Rust belongs beside the Rust it scans — and emits
+`docs/spec/stt-generate-datasets.json`, gated by
+`scripts/gen-generate-datasets.mjs --check`. The guard that a
+`#[command(rename_all = …)]` has not silently invalidated the kebab-case
+derivation moved with it, and now throws rather than emitting a confidently
+wrong list.
+
+Both cross-language tests therefore ended the same way, and it is the pattern to
+reach for again: **replace a test that reads two trees with an artifact one tree
+publishes and the other asserts against.** The invariant survives intact, and it
+becomes a file a third party can read instead of a check only we can run.
+
+### 8.3 What the gates caught
+
+Worth recording, because it is the argument for keeping them strict:
+
+- The golden-pin gate **rejected the split's own commit**. The relocation had
+  quietly dropped `legacy-shape/README.md`, so it was not the byte-identical
+  move the trailer claimed. The fix was to restore the file, not to relax the
+  claim.
+- That trailer is new. `Rebuild-Window: R1` means "the fleet needs
+  re-uploading"; spending it on a rename would teach everyone to read it as
+  noise. `Pin-Relocation: <old> -> <new>` is **verified against the object
+  database** — the old root must be gone, the new root must be new, and the two
+  must hold the same blobs at the same relative paths. Five tests cover a copy,
+  a changed byte, and a re-blessing smuggled alongside a real move.
+- A `README.md` inside a pinned tree is now explicitly **not** a pin. No archive
+  object is ever named that, so the carve-out cannot hide anything; without it,
+  correcting a vector's own explanation would need a rebuild declaration.
+- Four Rust tests were reading the reader-side fixtures across the old boundary
+  (`container_migration.rs`, `make-golden-fixture.rs`). They went red on the
+  first `cargo test` after the prune, which is exactly what should happen, and
+  they now read `conformance/vectors/`.
+- Both doc-link gates learned that the corpus spans two repositories, in mirror
+  image: a vendored page may link into the other half (42 do upstream, 7
+  downstream), and a page a repository owns alone may not. The alternative —
+  absolute URLs everywhere — would have made the published site link out of
+  itself for pages it is already serving, and is impossible in a vendored file
+  anyway, since it is byte-compared.
+
+### 8.4 Still open
+
+Tracked as S1–S3 in the backlog above: the vendor pin has never been exercised
+without a sibling checkout, the first independent releases are uncut, and the
+rehomed fleet has been repointed by rewrite rather than by running the scripts.
+Neither repository exists on the remote yet (T1).
