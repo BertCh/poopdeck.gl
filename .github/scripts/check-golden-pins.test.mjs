@@ -16,7 +16,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, test } from 'node:test';
@@ -30,6 +30,7 @@ import {
   parseTrailers,
   PINNED_ROOTS,
   rebuildWindowValues,
+  relocationClaims,
   REPO_ROOT,
 } from './check-golden-pins.mjs';
 
@@ -597,5 +598,131 @@ describe('base resolution', () => {
     const r = runGate(REPO_ROOT, ['--help']);
     assert.equal(r.status, 0);
     assert.match(r.stdout, /--working-tree/);
+  });
+});
+
+describe('Pin-Relocation — a verified declaration, not a trusted one', () => {
+  // A pinned tree can MOVE without a byte moving; the 2026-08-26 repository
+  // split did exactly that to the tree upstream. `Rebuild-Window: R1` would be
+  // the wrong thing to say (it means "the fleet needs re-uploading"), so the
+  // gate takes a second, narrower trailer — and checks it against the object
+  // database. Kept here in step with the upstream copy, which is the one that
+  // has actually used it.
+  //
+  // These repos are shaped like a real move: at the base commit the vectors
+  // live at a path PINNED_ROOTS does not name, and the commit under test
+  // creates the pinned one. That makes the additions pinned and the deletions
+  // not, which is the asymmetry a relocation has to survive.
+  const OLD_DIR = 'legacy/fixtures';
+
+  function makeRelocationRepo() {
+    const repo = mkdtempSync(join(tmpdir(), 'golden-pins-reloc-'));
+    tempRepos.push(repo);
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'gate@example.invalid']);
+    git(repo, ['config', 'user.name', 'Gate Test']);
+    git(repo, ['config', 'commit.gpgsign', 'false']);
+    git(repo, ['config', 'core.hooksPath', join(repo, '.no-hooks')]);
+    writeFile(repo, 'packages/core/src/tile-decoder.ts', '// packed reader\n');
+    // Nothing under FIXTURE_DIR: the destination must not exist yet, which is
+    // half of what the gate verifies.
+    writeFile(repo, `${OLD_DIR}/packed-golden/manifest.json`, '{"v":2}\n');
+    writeFile(repo, `${OLD_DIR}/paged-golden/packs/64c8.sttp`, 'binaryish\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-q', '-m', 'chore: seed']);
+    return { repo, base: git(repo, ['rev-parse', 'HEAD']).trim() };
+  }
+
+  /** Move the whole tree from the old root to the pinned one, byte for byte. */
+  function relocate(repo) {
+    const from = join(repo, OLD_DIR);
+    const dest = join(repo, FIXTURE_DIR);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(from, dest, { recursive: true });
+    rmSync(from, { recursive: true });
+  }
+
+  const TRAILER = `Pin-Relocation: ${OLD_DIR} -> ${FIXTURE_DIR}`;
+
+  test('the trailer value parses into a from/to pair', () => {
+    assert.deepEqual(
+      relocationClaims('subject\n\nPin-Relocation: a/b -> c/d\n'),
+      [{ from: 'a/b', to: 'c/d' }],
+    );
+    // Trailing slashes are noise, and the unicode arrow is what a person types.
+    assert.deepEqual(
+      relocationClaims('subject\n\nPin-Relocation: a/b/ → c/d/\n'),
+      [{ from: 'a/b', to: 'c/d' }],
+    );
+    // Prose is not a trailer, same rule as Rebuild-Window.
+    assert.deepEqual(relocationClaims('moved with Pin-Relocation: a -> b'), []);
+  });
+
+  test('a byte-identical move with the trailer passes', () => {
+    const { repo, base } = makeRelocationRepo();
+    relocate(repo);
+    commit(
+      repo,
+      `refactor: rehome the vectors\n\nSame bytes, new path.\n\n${TRAILER}\n`,
+    );
+    const r = runGate(repo, ['--base', base]);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  test('the same move WITHOUT the trailer is an unflagged pin movement', () => {
+    const { repo, base } = makeRelocationRepo();
+    relocate(repo);
+    commit(repo, 'refactor: rehome the vectors\n');
+    const r = runGate(repo, ['--base', base]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /moved a golden byte pin/);
+  });
+
+  test('correcting a README in the same commit does not break the claim', () => {
+    // A fixture's README explains the vector beside it, and the move is the
+    // natural moment to fix a path it names. Prose is not a pin, so this is a
+    // clean relocation — not a byte change wearing one. (Upstream hit exactly
+    // this while moving the tree, which is why the case exists.)
+    const { repo } = makeRelocationRepo();
+    writeFile(repo, `${OLD_DIR}/README.md`, '# vectors\n\nold text\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-q', '-m', 'docs: explain the vectors']);
+    const withReadme = git(repo, ['rev-parse', 'HEAD']).trim();
+    relocate(repo);
+    writeFile(repo, `${FIXTURE_DIR}/README.md`, '# vectors\n\ncorrected\n');
+    commit(repo, `refactor: rehome the vectors\n\n${TRAILER}\n`);
+    const r = runGate(repo, ['--base', withReadme]);
+    assert.equal(r.status, 0, r.stderr);
+  });
+
+  test('a move that also changes a byte is rejected, and says so', () => {
+    const { repo, base } = makeRelocationRepo();
+    relocate(repo);
+    writeFile(repo, `${FIXTURE_DIR}/packed-golden/manifest.json`, '{"v":9}\n');
+    commit(repo, `refactor: rehome the vectors\n\n${TRAILER}\n`);
+    const r = runGate(repo, ['--base', base]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Pin-Relocation rejected/);
+    assert.match(r.stderr, /NOT byte-identical/);
+  });
+
+  test('a move that quietly ADDS a pin is rejected too', () => {
+    const { repo, base } = makeRelocationRepo();
+    relocate(repo);
+    writeFile(repo, `${FIXTURE_DIR}/v2-golden/manifest.json`, '{"v":3}\n');
+    commit(repo, `refactor: rehome the vectors\n\n${TRAILER}\n`);
+    const r = runGate(repo, ['--base', base]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /NOT byte-identical/);
+    assert.match(r.stderr, /1 added/);
+  });
+
+  test('a COPY is rejected — the old root must be gone', () => {
+    const { repo, base } = makeRelocationRepo();
+    cpSync(join(repo, OLD_DIR), join(repo, FIXTURE_DIR), { recursive: true });
+    commit(repo, `chore: duplicate the vectors\n\n${TRAILER}\n`);
+    const r = runGate(repo, ['--base', base]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /a copy, not a move/);
   });
 });

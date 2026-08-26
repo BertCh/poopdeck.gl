@@ -103,13 +103,32 @@ export const TRAILER_KEY = 'Rebuild-Window';
 export const TRAILER_VALUE = 'R1';
 
 /**
+ * The second, narrower declaration: `Pin-Relocation: <old-root> -> <new-root>`.
+ *
+ * A pinned tree can MOVE without any byte moving — `poopdeck:packages/core/test/fixtures`
+ * became `conformance/vectors` in the 2026-08-26 repository split. The gate is
+ * right to notice (it reads a rename as delete + add on purpose, so that moving
+ * a pin out of the tree cannot read as "one file touched"), but
+ * `Rebuild-Window: R1` is the wrong thing to say about it: R1 means the bytes
+ * changed and the fleet needs re-uploading, and spending that signal on a
+ * relocation teaches everyone to read it as noise.
+ *
+ * Unlike R1, this trailer is not taken on trust. The gate VERIFIES it: the old
+ * root must be gone, the new root must be new, and the two must hold exactly
+ * the same set of blobs at the same relative paths. A relocation that changed
+ * so much as one byte fails as an unflagged pin movement, which is what it is.
+ */
+export const RELOCATION_KEY = 'Pin-Relocation';
+const RELOCATION_VALUE_RE = /^(\S+)\s*(?:->|→)\s*(\S+)$/;
+
+/**
  * Prose that happens to live inside a pinned tree. A fixture directory carries
  * a README explaining what the vector exercises; it is documentation, not an
  * oracle, and no archive object is ever named `README.md` — manifests, packs
  * and directory pages have fixed names and content-addressed ones. Gating it
  * would mean either never correcting the explanation or spending a rebuild
  * declaration on a typo, so the carve-out is stated here rather than worked
- * around. Keep it exactly this narrow, and in step with the upstream copy.
+ * around. Keep it exactly this narrow.
  */
 const NOT_A_PIN = /(?:^|\/)README\.md$/;
 
@@ -334,7 +353,7 @@ export function commitsInRange(repo, base, head = 'HEAD') {
  *
  * That is still true, and got louder when the reader-side tree joined
  * `PINNED_ROOTS` on 2026-08-10: `--working-tree` now also reports the ~120
- * uncommitted objects under `packages/core/test/fixtures/` from the same
+ * uncommitted objects under `poopdeck:packages/core/test/fixtures/` from the same
  * in-flight v2→v3 break. Reporting them is CORRECT. Do not silence it by
  * narrowing the watched set — a gate narrowed to stay quiet is the exact
  * failure this file exists to prevent — and do not "clean" the churn either;
@@ -391,8 +410,18 @@ export function checkGoldenPins(opts = {}) {
       files: pinned,
       trailers: rebuildWindowValues(c.message),
     };
-    if (isFlagged(c.message)) flagged.push(entry);
-    else offenders.push(entry);
+    if (isFlagged(c.message)) {
+      flagged.push(entry);
+      continue;
+    }
+    // A byte-identical MOVE of a whole pinned tree is not a pin movement. The
+    // claim is verified against the object database, not believed.
+    const relocation = verifyRelocations(repo, { ...c, files: pinned });
+    if (relocation.ok) {
+      flagged.push({ ...entry, relocation: true });
+      continue;
+    }
+    offenders.push({ ...entry, relocationProblems: relocation.problems });
   }
 
   if (opts.workingTree) {
@@ -418,6 +447,124 @@ export function checkGoldenPins(opts = {}) {
     offenders,
     flagged,
   };
+}
+
+/** Declared `Pin-Relocation` moves on a commit message, as `{from, to}`. */
+export function relocationClaims(message) {
+  return parseTrailers(message)
+    .filter((t) => t.key.toLowerCase() === RELOCATION_KEY.toLowerCase())
+    .map((t) => RELOCATION_VALUE_RE.exec(t.value))
+    .filter(Boolean)
+    .map((m) => ({
+      from: m[1].replace(/\/+$/, ''),
+      to: m[2].replace(/\/+$/, ''),
+    }));
+}
+
+/**
+ * `{ <path relative to root>: <blob sha> }` for one tree at one ref, counting
+ * only the PINS.
+ *
+ * The `NOT_A_PIN` filter is what keeps this coherent with `isPinnedPath`: a
+ * relocation claims the byte pins moved unchanged, and a fixture's README is
+ * not one of them. Without the filter, correcting a vector's own explanation in
+ * the same commit that moves it would read as "the bytes are not identical" —
+ * which is how this was found.
+ */
+function treeBlobs(repo, ref, root) {
+  let out;
+  try {
+    out = git(repo, [
+      'ls-tree',
+      '-r',
+      '--format=%(objectname) %(path)',
+      ref,
+      '--',
+      root,
+    ]);
+  } catch {
+    return null;
+  }
+  const map = new Map();
+  for (const line of out.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const sp = trimmed.indexOf(' ');
+    const sha = trimmed.slice(0, sp);
+    const path = trimmed.slice(sp + 1);
+    if (path === root || !path.startsWith(`${root}/`)) continue;
+    if (NOT_A_PIN.test(path)) continue;
+    map.set(path.slice(root.length + 1), sha);
+  }
+  return map.size === 0 ? null : map;
+}
+
+/**
+ * True when every pinned path a commit touched is accounted for by a DECLARED
+ * and byte-identical relocation. This is deliberately stricter than the trailer
+ * itself: the claim is checked against the object database, so it cannot be
+ * used to wave a real byte change past the gate.
+ */
+export function verifyRelocations(repo, commit) {
+  const claims = relocationClaims(commit.message);
+  if (claims.length === 0) return { ok: false, problems: [] };
+
+  const parent = `${commit.sha}^`;
+  const problems = [];
+  const covered = new Set();
+
+  for (const { from, to } of claims) {
+    const before = treeBlobs(repo, parent, from);
+    const after = treeBlobs(repo, commit.sha, to);
+    if (!before) {
+      problems.push(`${from} -> ${to}: nothing at \`${from}\` in ${parent}`);
+      continue;
+    }
+    if (!after) {
+      problems.push(`${from} -> ${to}: nothing at \`${to}\` in the commit`);
+      continue;
+    }
+    if (treeBlobs(repo, commit.sha, from)) {
+      problems.push(
+        `${from} -> ${to}: \`${from}\` still exists — a copy, not a move`,
+      );
+      continue;
+    }
+    const onlyBefore = [...before.keys()].filter((k) => !after.has(k));
+    const onlyAfter = [...after.keys()].filter((k) => !before.has(k));
+    const changed = [...before.keys()].filter(
+      (k) => after.has(k) && after.get(k) !== before.get(k),
+    );
+    if (onlyBefore.length || onlyAfter.length || changed.length) {
+      problems.push(
+        `${from} -> ${to}: NOT byte-identical` +
+          (changed.length
+            ? ` — ${changed.length} file(s) changed content`
+            : '') +
+          (onlyBefore.length ? ` — ${onlyBefore.length} dropped` : '') +
+          (onlyAfter.length ? ` — ${onlyAfter.length} added` : ''),
+      );
+      continue;
+    }
+    for (const k of before.keys()) {
+      covered.add(`${from}/${k}`);
+      covered.add(`${to}/${k}`);
+    }
+  }
+
+  if (problems.length > 0) return { ok: false, problems };
+  const uncovered = commit.files.filter((f) => !covered.has(f));
+  if (uncovered.length > 0) {
+    return {
+      ok: false,
+      problems: [
+        `${uncovered.length} pinned path(s) are not covered by any declared relocation: ` +
+          uncovered.slice(0, 5).join(', ') +
+          (uncovered.length > 5 ? ', …' : ''),
+      ],
+    };
+  }
+  return { ok: true, problems: [] };
 }
 
 /**
@@ -471,6 +618,15 @@ trailer on the commit that moves the bytes:
 
   The trailer must be in the commit message's LAST paragraph. Naming it in
   prose does not count, on purpose.
+
+If you are MOVING a pinned tree without changing a byte, say that instead —
+R1 means "the fleet needs re-uploading" and must not be spent on a rename:
+
+      git commit --trailer '${RELOCATION_KEY}: old/path -> new/path' ...
+
+  This one is verified, not trusted: the old root must be gone, the new root
+  must be new, and the two must hold the same blobs at the same relative paths.
+  One changed byte and it fails as the pin movement it is.
 `;
 
 function renderFailure(report) {
@@ -521,6 +677,11 @@ function renderFailure(report) {
           `expected \`${TRAILER_VALUE}\``,
       );
     }
+    // A relocation claim that did not hold up is the most useful thing to say:
+    // the author already knows they moved a tree and believes it was clean.
+    for (const problem of o.relocationProblems ?? []) {
+      console.error(`      ${RELOCATION_KEY} rejected: ${problem}`);
+    }
     console.error('');
   }
   console.error(RATIONALE.trim());
@@ -568,10 +729,24 @@ export function main(argv = process.argv.slice(2)) {
     return 1;
   }
 
+  // The two declarations mean different things — one says the fleet needs
+  // re-uploading, the other says nothing moved but the path — so the summary
+  // must not blur them into one count.
+  const rebuilt = report.flagged.filter((f) => !f.relocation).length;
+  const relocated = report.flagged.length - rebuilt;
+  const notes = [];
+  if (rebuilt > 0) {
+    notes.push(
+      `${rebuilt} pin change(s) flagged \`${TRAILER_KEY}: ${TRAILER_VALUE}\``,
+    );
+  }
+  if (relocated > 0) {
+    notes.push(
+      `${relocated} verified byte-identical relocation(s) (\`${RELOCATION_KEY}\`)`,
+    );
+  }
   const flaggedNote =
-    report.flagged.length > 0
-      ? `, ${report.flagged.length} pin change(s) flagged \`${TRAILER_KEY}: ${TRAILER_VALUE}\``
-      : ', none touch the pins';
+    notes.length > 0 ? `, ${notes.join(', ')}` : ', none touch the pins';
   console.log(
     `golden pins: ${report.commitsChecked} commit(s) checked in ${report.range}${flaggedNote}.`,
   );
