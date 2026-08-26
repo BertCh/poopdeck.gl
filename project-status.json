@@ -72,7 +72,7 @@
       "rust": "0.7.0"
     },
     "toolchain": {
-      "rust": "1.87"
+      "rust": "1.88"
     },
     "archive": {
       "writes": {
