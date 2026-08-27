@@ -119,7 +119,7 @@ interface BinaryFeatures {
 
   /**
    * True when this tile's rows are stable-sorted by `start_time` — declared
-   * by the packed formatVersion-3 frame's TILE_META `sorted` flag.
+   * by the layer frame's TILE_META `sorted` flag.
    * `undefined` for synthetic fixtures: per the spec, readers MUST NOT assume
    * sortedness without the flag.
    */
@@ -161,19 +161,24 @@ interface BinaryFeatures {
 ## Why a custom binary shape
 
 1. **Zero-copy GPU upload**: typed arrays go straight to GPU buffers. The
-   coordinate/index arrays are views into the tile's Arrow IPC buffer
-   (archives written with the aligned layer frame place every IPC stream
-   on an 8-byte boundary precisely so these views never copy).
+   coordinate/index arrays are views into the tile's Arrow IPC buffer (each
+   layer's IPC stream is a freshly spliced buffer starting at offset 0, so
+   apache-arrow wraps its buffers zero-copy — a misaligned stream would
+   silently copy every one).
 2. **Cache-friendly**: columnar layout iterates fast.
 3. **Transferable**: typed-array buffers transfer (not copy) from the
    worker decoder to the main thread — including `vertexValues` and the
-   raw per-layer Arrow IPC bytes (`Layer.arrowIpc`).
-4. **Bake-time tessellation**: polygon triangles can arrive ready to draw —
-   the renderer never runs earcut at tile-arrival time. `stt-build` bakes
-   them for a whole layer when `--pre-tessellate` is passed **or** when any
-   feature in it is multi-ring. The Rust writer stores feature-LOCAL indices;
-   the decoder pre-shifts them by each feature's `startIndices[i]` so the
-   buffer is directly drawable.
+   raw per-layer Arrow IPC bytes (`STTTileLayer.arrowIpc`).
+4. **Bake-time tessellation**: polygon triangles arrive ready to draw.
+   `stt-build` emits the sidecar for a layer when `--pre-tessellate` is passed
+   **or** when any feature in it is multi-ring or multi-part. By default the
+   bake is PARTIAL — only features a renderer's own single-boundary earcut
+   cannot reproduce carry indices, which is what declares the
+   `triangles-partial` capability; `decodeTile` completes the buffer by
+   earcutting each provably single-ring feature, so every consumer still sees a
+   full one. `--no-partial-triangles` bakes every feature instead. The Rust
+   writer stores feature-LOCAL indices; the decoder pre-shifts them by each
+   feature's `startIndices[i]` so the buffer is directly drawable.
 
 ## Feature identity: read `featureIds64`, not `featureIds`
 
@@ -187,18 +192,10 @@ distinct cells collide there and the discriminating bits are simply gone.
 Do not use `featureIds` as a dedupe key, a picking-map key, or a cross-tile
 identity without first establishing that the archive's id domain is 32-bit.
 
-Two further notes:
-
-- **It is materialized lazily.** A consumer that only ever reads `featureIds64`
-  never pays for the gather. (On a little-endian host the mask is a stride-2
-  `Uint32Array` gather over the `BigUint64Array`'s own buffer, so no `BigInt`
-  ever materialises: ~0.8 ms per million ids.)
-- **Before the masking fix** this field was computed as `Number(bigint)`, which
-  rounds through f64 _before_ the `Uint32Array` store — so above 2⁵³ the stored
-  bits were not even a truncation, they were garbage (Quadbin
-  `0x4CFFFFFFFFFFFFFF` landed on `0` rather than `4294967295`). Any code or
-  comment predating that fix which describes this field as a faithful low-half
-  mirror was wrong twice over.
+It is also materialized LAZILY, so a consumer that only ever reads
+`featureIds64` never pays for the gather. (On a little-endian host the mask is
+a stride-2 `Uint32Array` gather over the `BigUint64Array`'s own buffer, so no
+`BigInt` ever materialises: ~0.8 ms per million ids.)
 
 `globalFeatureIds` is **vestigial**: no writer in this repo emits it and no
 reader consumes it, so it is always `undefined` in practice. Cross-tile identity
@@ -228,13 +225,15 @@ Three nested offset arrays, coarsest to finest — **feature ⊇ part ⊇ ring**
   in the layer is single-part** — the encoder omits the underlying column
   entirely in that case, so absence is information, not a gap.
 
-Both `ringIndices` and `partIndices` are absent for non-polygon geometries and
-for polygon tiles decoded by readers predating those columns.
+Both `ringIndices` and `partIndices` are absent for non-polygon geometries.
 
 **Holes render correctly** through the baked `triangles` sidecar, which
-`stt-build` emits for the whole layer whenever any feature in it is multi-ring —
-so no build flag is needed for holed data. `--pre-tessellate` only extends the
-sidecar to simple single-ring polygons.
+`stt-build` emits for the layer whenever any feature in it is multi-ring or
+multi-part — so no build flag is needed for holed data. By default only those
+features are baked and `decodeTile` earcuts the single-ring remainder (the
+`triangles-partial` capability); `--pre-tessellate` extends the sidecar to
+layers that would carry none, and it and `--no-partial-triangles` both bake
+every feature.
 
 ## loaders.gl alignment caveats
 
@@ -266,8 +265,7 @@ to its `currentTime` uniform; if you build a custom layer, pass
 
 ## Row ordering (`timesSorted`)
 
-`timesSorted` mirrors the packed formatVersion-3 frame's `TILE_META.sorted`
-flag: `true` means the tile's rows are stable-sorted by `start_time`, which
+`timesSorted` mirrors the layer frame's `TILE_META.sorted` flag: `true` means the tile's rows are stable-sorted by `start_time`, which
 enables window slicing and future partial decode. Per the spec, readers **must
 not** assume sortedness without the flag — `undefined` (synthetic fixtures and
 hand-built tiles) means "unknown", not "sorted".

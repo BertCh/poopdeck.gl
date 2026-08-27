@@ -12,7 +12,7 @@ individual `STTLayer`s) and a declarative react-three-fiber binding at the
 `@poopdeck.gl/three/r3f` subpath (`<STTCanvas>` + layer components). It covers
 a first-class local-metric (ENU) frame for the AV LIDAR cockpit — oriented
 Gaussian surfels included — alongside mercator and globe projections, viewport
-streaming, and a near-full port of the geographic layer catalog. See
+streaming, and the complete 23-kind layer catalog. See
 [System overview](../architecture/system-overview.md) for where it sits in
 the stack and [renderer-architecture.md](../roadmap/renderer-architecture.md)
 for the deck-parity design rationale.
@@ -23,12 +23,17 @@ for the deck-parity design rationale.
 pnpm add @poopdeck.gl/three three
 # for the react-three-fiber binding:
 pnpm add @react-three/fiber @react-three/drei react react-dom
+# only for <STTTiles3D> / <STTAtmosphere>:
+pnpm add 3d-tiles-renderer @takram/three-atmosphere
 ```
 
-`three` (`>=0.171.0`) is a peer dependency. `@react-three/fiber`,
-`@react-three/drei`, and `react` are peer dependencies too, but only required
-if you import from the `@poopdeck.gl/three/r3f` subpath — the base package
-has no React dependency.
+`three` is a peer dependency at **`>=0.183.0 <0.190.0`** — an upper-bounded
+range, not an open floor, because the TSL node API still moves between minors.
+Every other peer is optional: `@react-three/fiber` (`>=9`),
+`@react-three/drei` (`>=10`) and `react` (`>=19`) are needed only if you import
+from the `@poopdeck.gl/three/r3f` subpath (the base package has no React
+dependency), and `3d-tiles-renderer` (`^0.5.2`) / `@takram/three-atmosphere`
+(`^0.19.1`) only by the `<STTTiles3D>` / `<STTAtmosphere>` components.
 
 > **Needs WebGPU or WebGL2.** TSL node materials only compile on Three's
 > `WebGPURenderer` (which transparently falls back to its own WebGL2 backend
@@ -173,14 +178,10 @@ layer (not one draw call per tile, unlike the maplibre adapter), and
 per-frame animation is a uniform write — no rebuild. The kind→class map is in
 the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appendix-canonical-concept-map-deck--three--maplibre).
 
-> **Renamed in 0.6.0.** Through 0.5.x these classes were unprefixed
-> (`ArcLayer`, `IconLayer`, `TripsLayer`, …), which shadowed deck.gl's own
-> exports of the same names in any app importing both — and deck is the
-> primary backend, so that is the normal case. Every layer class now carries
-> the `STT` prefix, matching `@poopdeck.gl/maplibre` and `@poopdeck.gl/cesium`,
-> so one layer kind has one spelling on every backend. The old unprefixed
-> names have been removed. The deck column below keeps deck's own `Animated*` names —
-> those never collided and did not change.
+Every class carries the `STT` prefix, matching `@poopdeck.gl/maplibre` and
+`@poopdeck.gl/cesium`, so one layer kind has one spelling on every backend (and
+nothing shadows deck's own exports in an app importing both); the deck column
+below keeps deck's own `Animated*` names.
 
 | Class                    | Geometry                         | Deck equivalent                                                  | Notes                                                                                                                                                                                                                                                                                                      |
 | ------------------------ | -------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -203,14 +204,43 @@ the [renderer-architecture.md appendix](../roadmap/renderer-architecture.md#appe
 | `STTFlowCorridorLayer`   | LineString + value matrix        | `FlowCorridorLayer`                                              | Static route network geometry, ridership-over-time from a `vertexValueMatrix` baked into a linear-filtered `DataTexture` (GPU does the two-bucket lerp — no CPU re-expand per sub-step).                                                                                                                   |
 | `STTH3SummaryLayer`      | H3 cell (summary tier)           | `H3SummaryLayer`                                                 | Decodes summary-tier u64 cell ids to H3 boundary rings; static (built once).                                                                                                                                                                                                                               |
 | `STTQuadbinSummaryLayer` | Quadbin cell (summary tier)      | `QuadbinSummaryLayer`                                            | Decodes summary-tier u64 cell ids to CARTO quadbin quads; static.                                                                                                                                                                                                                                          |
+| `STTHeatmapLayer`        | Point (density field)            | `AnimatedHeatmapLayer`                                           | Per-pixel density heatmap — additive splat pass, then a ramp-resolve pass. This is the `gpuHeatmap` capability.                                                                                                                                                                                            |
+| `STTFlowStrokeLayer`     | LineString + value matrix        | `FlowStrokeLayer`                                                | Extends `STTFlowCorridorLayer`: twin offset ribbons whose WIDTH (not colour) breathes with the active bucket.                                                                                                                                                                                              |
+| `STTTextLayer`           | Point → glyph run                | `AnimatedTextLayer`                                              | One billboard-quad instance per character over a caller-supplied SDF/bitmap font atlas, sampled the way `STTIconLayer` samples icons.                                                                                                                                                                      |
+| `STTMeshLayer`           | Point (keyframed) → model        | `AnimatedMeshLayer` / `AnimatedScenegraphLayer`                  | Recognizable glTF models on the same pooled-track motion as `STTBoundingBoxLayer` — the mesh analogue of the detection cuboid.                                                                                                                                                                             |
+| `STTPointCloudLayer`     | Point (lit, with normals)        | `AnimatedPointCloudLayer`                                        | Phong-lit 3-D points with optional surface normals — between flat `STTPointLayer` dots and oriented `STTSurfelLayer` disks.                                                                                                                                                                                |
+| `STTHexbinLayer`         | Point → hex prism                | `AnimatedHexagonLayer`                                           | Runtime hexbin over the raw point tier: world-space hex lattice, one instanced prism per occupied cell, coloured/extruded by aggregate weight.                                                                                                                                                             |
 
-Not ported: `AnimatedHeatmapLayer` (GPU multi-pass aggregation — deferred;
-the backend descriptor advertises `point` as the fallback kind),
-`BundledFlowmapLayer`'s live KDEEB edge bundling (a deterministic
-`preBundled`/`StaticBundle` path exists conceptually in the design but has no
-three-side layer yet), and the `CategoryColorExtension` GPU palette-texture
-path (categorical colour is CPU-expanded per tile, same as the maplibre
-adapter).
+### Colour management
+
+**Three is colour-managed and deck is not.** Every STT colour — `colorMapping`
+values, ramp stops, palette textures, the `r,g,b`/`point_rgba` columns — is
+authored as **sRGB bytes**, the same numbers deck writes straight to an
+unmanaged canvas. `WebGPURenderer.outputColorSpace` defaults to
+`SRGBColorSpace` (and r3f re-asserts it unless `<Canvas linear>`), so Three's
+output pass runs the linear→sRGB OETF over whatever the fragment stage
+produced. Handing it a value that is already sRGB encodes it twice: mid-tones
+lift by ~50/255 and saturated colours go pastel — the app cyan `[31,186,214]`
+reaches the screen as `[98,222,236]`.
+
+So a material's `colorNode` **must** be wrapped in `srgbToWorking()` (exported
+from the package root, `tsl/color-space.ts`), which runs the matching EOTF in
+the fragment stage so the output pass returns the authored byte exactly. Two
+rules bind every caller:
+
+- **Convert colour only** — never alpha, never an id material. Alpha is linear
+  already (`opacityNode` is not part of the transfer function), and the GPU-pick
+  pass renders into a `RenderTarget` that stays in the working space with no
+  output encode, so its 24-bit indices must reach the readback bit-exact.
+- **Convert last**, on the final fragment colour — after the gradient `mix()`es,
+  after the column shade term, after the icon atlas × tint product. deck does
+  all of those on sRGB values, so interpolating the varying and converting
+  per-fragment reproduces deck's result; converting per-vertex first would
+  interpolate in a different space.
+
+`srgbToLinear` in `lib/color.ts` is the CPU mirror, for the few layers that
+shade through a classic `vertexColors` material rather than a TSL graph (the H3
+/ Quadbin summaries, the AV map paths and bounding boxes).
 
 ### Time-window vocabulary
 
@@ -276,13 +306,18 @@ function Viewport({ getTime }: { getTime: () => number }) {
 ```
 
 Every `Stt*Layer` component (`STTSurfelLayer`, `STTPointLayer`,
-`STTBoundingBoxLayer`, `STTMapPolygonLayer`/`STTPolygonLayer`,
-`STTMapLineLayer`/`STTPathLayer`, `STTOdLineLayer`, `STTArcLayer`,
-`STTIconLayer`, `STTColumnLayer`, `STTTripsLayer`, `STTTripHeadsLayer`,
-`STTQuadbinLayer`, `STTH3Layer`, `STTFlowmapLayer`, `STTFlowCorridorLayer`,
+`STTPointCloudLayer`, `STTBoundingBoxLayer`,
+`STTMapPolygonLayer`/`STTPolygonLayer`, `STTMapLineLayer`/`STTPathLayer`,
+`STTOdLineLayer`, `STTArcLayer`, `STTIconLayer`, `STTTextLayer`,
+`STTMeshLayer`, `STTColumnLayer`, `STTTripsLayer`, `STTTripHeadsLayer`,
+`STTQuadbinLayer`, `STTH3Layer`, `STTHexbinLayer`, `STTHeatmapLayer`,
+`STTFlowmapLayer`, `STTFlowCorridorLayer`, `STTFlowStrokeLayer`,
 `STTIsoLayer`, `STTEgoLayer`) takes the corresponding engine layer's options
 plus a `url` (archive manifest) and an optional `lodMode`/`sourceRequired`.
-`STTGlobeBasemap` mounts a static earth-sphere mesh for globe scenes.
+`STTGlobeBasemap` mounts a static earth-sphere mesh for globe scenes;
+`<STTAtmosphere>` and `<STTTiles3D>` add a scattering atmosphere and a
+3D-Tiles tileset to one (they are the reason `@takram/three-atmosphere` and
+`3d-tiles-renderer` are optional peers).
 
 ### `STTCanvasProps`
 
@@ -317,18 +352,22 @@ pump (`advance(now)` every frame) so the scene tracks the external clock.
 
 ## Picking
 
-Two independent mechanisms exist:
+Picking is hybrid — two mechanisms, one of them the declared one:
 
-- **CPU ray-OBB** (`pickBoxes`/`rayObbHit`, wired by default in `<STTCanvas>`
-  via `onPick`) — hit-tests a pointer click against every registered
-  pickable layer's boxes (objects + ego). This is the mechanism the backend
-  descriptor reports (`pickMechanism: 'cpu-ray'`).
 - **GPU id-colour picking** (`GpuPicker`, `encodeId`/`decodeId`/`buildIdColors`,
   and `STTPointLayer.pick()`) — an opt-in off-screen id-buffer render pass +
   readback for merged-instance point clouds, resolved back to a feature via
   the `InstanceProvenance` merged-buffer identity contract
-  (`resolvePointPick`). Exists and is unit-tested on the resolve half; the
-  live GPU pass is browser-verify-only (needs a device-backed harness).
+  (`resolvePointPick`). This is the mechanism the backend descriptor declares
+  (`pickMechanism: 'gpu-id'`, matching deck for the identical technique).
+  Unit-tested on the resolve half; the live GPU pass is browser-verify-only
+  (needs a device-backed harness).
+- **CPU ray-OBB** (`pickBoxes`/`rayObbHit`, wired by default in `<STTCanvas>`
+  via `onPick`) — the complement covering the box/ego path: it hit-tests a
+  pointer click against every registered pickable layer's boxes (objects +
+  ego), which number in the tens. Picking here is genuinely hybrid; the
+  descriptor has one `pickMechanism` slot and no `'hybrid'` member, so it
+  declares the id-buffer half.
 
 ## Compared to `@poopdeck.gl/layers` (deck.gl)
 
@@ -341,11 +380,11 @@ Two independent mechanisms exist:
 | Viewport streaming                                | ✓ (`StreamingTileSource` wraps the shared `SpatioTemporalTileset`)                                                       | ✓                                                      |
 | GPU time filtering (window/wake/cumulative/trail) | ✓ (`tsl/time-filter.ts`, parity across all 4 modes)                                                                      | ✓ (`TimeFilterExtension`)                              |
 | Basemap                                           | Host-owned maplibre **overlay canvas**, camera-synced (not interleaved — WebGPU/WebGL contexts can't share a GL context) | Interleaved (`interleaved: true`) or overlay           |
-| GPU heatmap aggregation                           | — (deferred; fall back to a point-density layer)                                                                         | ✓ (`AnimatedHeatmapLayer`)                             |
-| Live edge bundling                                | — (deferred; static `preBundled` design only, unported)                                                                  | ✓ (`BundledFlowmapLayer`)                              |
-| Category-color GPU palette texture                | — (CPU-expanded per tile)                                                                                                | ✓ (`CategoryColorExtension`)                           |
+| GPU heatmap aggregation                           | ✓ (`STTHeatmapLayer` — additive splat, then ramp resolve)                                                                | ✓ (`AnimatedHeatmapLayer`)                             |
+| Live edge bundling                                | ✓ (`lib/edge-bundler.ts` over `core/edge-bundling`'s shared `bundleEdges`)                                               | ✓ (`BundledFlowmapLayer`)                              |
+| Category-color GPU palette texture                | ✓ (`tsl/palette.ts` + `lib/palette.ts` — stable slot, recolour = one texture swap)                                       | ✓ (`CategoryColorExtension`)                           |
 | Surfel / oriented-splat rendering                 | ✓ (`STTSurfelLayer`, ENU-only)                                                                                           | ✓ (`SplatLayer`/`SplatPrimitiveLayer`)                 |
-| Picking                                           | CPU ray-OBB (default) + opt-in GPU id-buffer (browser-verify)                                                            | GPU id-colour (`Deck.pickObject`)                      |
+| Picking                                           | GPU id-buffer (declared) + CPU ray-OBB for the box/ego path                                                              | GPU id-colour (`Deck.pickObject`)                      |
 | fp64 precision                                    | Not needed — RTC (relative-to-center f32 + f64 CPU origin) instead of an in-shader fp64 split                            | fp64 attribute split                                   |
 | 16-attribute WebGL2 budget                        | Not applicable (WebGPU/TSL has no such ceiling)                                                                          | `NoPickingPathLayer` workaround needed for some layers |
 
@@ -363,16 +402,6 @@ machine-generated, drift-guarded capability matrix across all four backends
   — the maplibre basemap sits on its own camera-synced canvas underneath, so
   there is no per-pixel depth-weaving between 3D basemap content (extruded
   buildings, terrain) and STT layers; three content always composites on top.
-- **GPU heatmap aggregation is deferred.** `AnimatedHeatmapLayer` has no
-  three port; the backend descriptor's capability matrix reports
-  `gpuHeatmap: false` with `point` as the declared fallback kind.
-- **Live edge bundling (`BundledFlowmapLayer`) is unported.** Only the
-  design for a deterministic pre-bundled `DataTexture` path exists; there is
-  no three-side layer for it yet (the backend descriptor's `layerKinds.flowStroke`
-  is `{ supported: false, fallbackKind: 'flowCorridor' }`).
-- **Categorical colour is CPU-expanded per tile,** not a GPU palette-texture
-  lookup — matching the maplibre adapter, not the deck `CategoryColorExtension`
-  path. Hot-swapping a palette re-uploads the colour attribute.
 - **`STTSurfelLayer` is ENU-only** — the surfel orientation quaternions are baked
   at build time in the local-ENU render basis; there is no mercator/globe
   surfel port.
@@ -380,8 +409,6 @@ machine-generated, drift-guarded capability matrix across all four backends
   sphere mis-registers geometry against a true ellipsoidal frame (e.g.
   Cesium's) by up to ~20 km at mid-latitudes. Pass `datum: 'wgs84'`
   explicitly when ellipsoid accuracy matters.
-- **User `LayerExtension`-style hooks and camera roll are not implemented**
-  (`userExtensions: false`, `cameraRoll: false` in the backend descriptor).
 - **GPU id-colour picking is browser-verify-only.** The pure index→feature
   resolve path (`resolvePointPick`) is unit-tested; the live off-screen
   render-and-readback pass needs a real WebGPU device and has not been
@@ -390,9 +417,19 @@ machine-generated, drift-guarded capability matrix across all four backends
   resident tiles currently rebase to one scene-wide `timeOrigin`, which is
   exact for AV-scale (second-to-minute) spans but can lose f32 precision for
   a streaming dataset spanning many days/years within one resident set.
-- **General (non-AV) showcase wiring is partial.** Only the AV cockpit's
-  `AvThreeViewer` composes layers today; a generic `buildDemoLayers`-style
-  three path for the rest of the showcase demo catalog is not yet built (see
+- **Showcase wiring covers the geo cases, not the whole demo catalog.**
+  `SttThreeGeoViewer` is the geographic analog of the AV cockpit's
+  `AvThreeViewer` and mirrors `point`, `tripHeads`, `path`, `trips` (including
+  the `flowMatrix` / `flowStroke` corridor variants, which route to
+  `STTFlowCorridorLayer`), `arc`, `column`, `h3Summary`, `quadbinSummary`,
+  `flowmap`, `flowmap-bundled`, `polygon` and `heatmap`. The showcase's own
+  composite types (`radar`, `weather`, `lightning`, `worlds`) and `av` never
+  reach it: `datasetSupportsThree` keeps the three toggle off those demos, and
+  `av` has the cockpit's own viewer. The remaining kinds the three backend
+  itself declares — `line`, `icon`, `boundingBox`, `surfel`, `text`, `mesh`,
+  `pointCloud`, `hexbin`, `isoLines`, `ego`, plus `flowCorridor` / `flowStroke`
+  as standalone dataset types rather than `trips` variants — have no case in
+  the viewer's switch and would render nothing; no shipped demo uses one (see
   [renderer-architecture.md §5.2](../roadmap/renderer-architecture.md#52-three-backend--integration-tail)).
 
 ## Live demo

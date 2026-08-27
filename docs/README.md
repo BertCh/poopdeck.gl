@@ -8,9 +8,11 @@ render, and work with it in web applications and AI tools.
 The two live in separate repositories — [spatiotemporal-tiles][stt-repo] for the
 format and the toolchain, [poopdeck.gl][pd-repo] for the renderers and this
 site — and meet at the archive on disk. This index covers both, because a reader
-needs both; the pages under **Build data** and **Normative specification** are
-authored upstream and vendored here so there is exactly one copy to read and one
-to edit.
+needs both. Many pages are authored upstream and vendored here — the format
+specification, the CLI reference, the format architecture pages, and most of the
+intro and guides — so there is exactly one copy to read and one to edit.
+`.stt-sync.json` is the exact list; the two `docs/spec/` files it omits, the
+capability matrix and the render-kernel contract, are owned here.
 
 [stt-repo]: https://github.com/BertCh/spatiotemporal-tiles
 [pd-repo]: https://github.com/BertCh/poopdeck.gl
@@ -38,30 +40,39 @@ The [glossary](./intro/glossary.md) defines project names and format terms.
   animated React map.
 - [Python guide](./guides/python.md) — GeoPandas, DuckDB, and pyarrow input
   workflows.
-- [Data generation](./guides/data-generation.md) — rebuild the bundled showcase
-  datasets with `stt-generate`, in the [STT repository][stt-repo].
-- [Tile tuning](./guides/tuning-tiles.md) — analyze and improve archive layout
-  without silently dropping data.
+- [Data generation](./guides/data-generation.md) — `stt-generate` for the
+  bundled reference datasets (it builds only from the [STT
+  repository][stt-repo]) and `stt-build` for your own;
+  [`stt-generate-datasets.json`](./spec/stt-generate-datasets.json) is its
+  machine-readable dataset list.
+- [Tile tuning](./guides/tuning-tiles.md) — measure, interpret, and decide with
+  `stt-optimize`, without silently dropping data.
 
-Default and `--auto` builds preserve every usable feature. Summary and raster
-tiers are explicit coarse-zoom additions, not replacements for the raw tier.
+Default and `--auto` builds preserve every usable feature. A summary tier is an
+explicit coarse-zoom addition, not a replacement for the raw tier — those are
+the only two variant kinds the manifest schema admits.
 
 ## Render and play
 
-- [SpatioTemporalLayer](./api/spatiotemporal-layer.md) — primary deck.gl layer
-  and tile lifecycle.
-- [Choose a backend and layer](./intro/choosing.md) — short decision tables for
+- [SpatioTemporalLayer](./api/spatiotemporal-layer.md) — primary deck.gl layer,
+  tile lifecycle, and the base class the whole layer catalog extends;
+  [extension compatibility](./api/extensions.md) routes into the deck.gl
+  catalog.
+- [Choose a backend and layer](./intro/choosing-a-renderer.md) — short decision tables for
   deck.gl, Three.js, MapLibre, and the experimental Cesium source tree.
-- [Backend capability matrix](./spec/backend-capabilities.md) — generated,
-  authoritative feature comparison.
-- [STT archive reader](./api/stt-loader.md) and
+- [Backend capability matrix](./spec/backend-capabilities.md) — generated from
+  each backend's `BackendDescriptor`; authoritative for which layer kinds and
+  capabilities a backend actually has.
+- [Tile decoding](./api/stt-loader.md) and
   [SpatioTemporalTileset](./api/spatiotemporal-tileset.md) — Range loading,
   decoding, selection, caching, and prefetch.
 - [SttPlayer](./api/stt-player.md) — recommended clock and buffering facade.
 - [React integration](./api/stt-react.md) — playback hooks and controls.
-- [Layer base class](./api/spatiotemporal-layer.md) and
-  [extension compatibility](./api/extensions.md) — routes into the complete
-  deck.gl catalog.
+- Coarse-zoom aggregation — [H3SummaryLayer](./api/h3-summary-layer.md) and
+  [QuadbinSummaryLayer](./api/quadbin-summary-layer.md) render an archive's
+  built summary tier;
+  [AnimatedHexagonLayer](./api/animated-hexagon-layer.md) bins raw features in
+  the client.
 
 The deck.gl packages target the repository-pinned 9.3.x line.
 
@@ -71,7 +82,8 @@ The deck.gl packages target the repository-pinned 9.3.x line.
   CORS, and safe publication order.
 - [`stt-serve` protocol](./spec/stt-serve-protocol.md) — dynamic service routes,
   response headers, and metadata.
-- [Export](./guides/export.md) — move data out of STT-compatible workflows.
+- [Export](./guides/export.md) — read a built archive back out to GeoParquet 1.1
+  with `stt-optimize export`.
 - [WebAssembly](./guides/wasm.md) — optional decoder build and integration.
 
 ## Architecture
@@ -80,11 +92,11 @@ The deck.gl packages target the repository-pinned 9.3.x line.
   storage, loading, and rendering pipeline.
 - [Packed archive performance](./architecture/archive-format-performance.md) —
   layout and generation decisions.
-- [Tile payload](./architecture/data-format.md) — Arrow IPC and GeoArrow layer
-  frames.
-- [deck.gl integration](./architecture/deckgl-integration.md) — relationship to
-  deck.gl's tile lifecycle.
-- [Render kernel](./api/render-kernel.md) — shared renderer-independent logic.
+- [deck.gl integration](./architecture/deckgl-integration.md) — how
+  `SpatioTemporalLayer` maps onto, and departs from, deck.gl's `TileLayer`.
+- [Render kernel](./api/render-kernel.md) — shared renderer-independent logic;
+  [`render-spec.json`](./spec/render-spec.json) freezes the time-filter op-set
+  every backend's hand-written shader must reproduce.
 
 ## Normative specification
 
@@ -104,8 +116,8 @@ format v2 with directory v5 read-only.
 
 ## AI integration
 
-- [AI suite guide](./guides/ai-suite.md) — the `poopdeck-ai` plugin, MCP server,
-  skills, and security model.
+- [AI suite guide](./guides/ai-suite.md) — the `poopdeck-ai` plugin, its ten
+  skills, the MCP server, and the security model.
 - [`@poopdeck.gl/mcp`](./api/stt-mcp.md) — dataset discovery, analysis, map
   composition, and gated CLI operations.
 

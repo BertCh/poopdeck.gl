@@ -114,9 +114,11 @@ with a session-aware proxy for multi-client production use.
 
 ## Tools
 
-Thirteen tools, read-only by default. Ten always register; the three execution
-tools register only with `--allow-cli`, and the three analysis tools register
-unconditionally but self-gate on it (see [below](#the---allow-cli-safety-note)).
+Thirteen tools, read-only by default. Ten always register — three of them
+(`dataset_report`, `recommend_build`, `diff_datasets`) degrade without
+`--allow-cli`: `dataset_report` falls back to a manifest-only summary, the other
+two decline. The three execution tools register only with `--allow-cli` (see
+[below](#the---allow-cli-safety-note)).
 
 ### Discovery (always registered)
 
@@ -149,7 +151,7 @@ client's request timeout — pass `exact: true` for a full decode. `name` (under
 The corpus is `docs/README.md`, every `*.md` directly under
 `docs/{intro,architecture,spec,api,guides}` — the same set the docs site renders
 — plus the direct `*.json` children of `docs/spec/`: the normative machine-
-readable schemas (`manifest.schema.json`, `scene.schema.json`,
+readable schemas (e.g. `manifest.schema.json`, `scene.schema.json`,
 `tile-matrix-set.json`, `render-spec.json`), served verbatim so an agent can
 `JSON.parse` a contract instead of reading prose about it. `docs/roadmap/` is
 excluded, as is every other extension and any nested path.
@@ -234,12 +236,12 @@ filesystem** (10-minute default timeout, `timeoutMs` to change).
 
 `generate_dataset` **downloads** and builds one of the bundled reference
 datasets: network-bound, long-running, and writes to the filesystem (15-minute
-default timeout). `dataset` is an enum of 17 subcommands — 16 generators
+default timeout). `dataset` is an enum of the 16 `stt-generate` subcommands
 (`earthquakes`, `ais`, `flights`, `hurricanes`, `wildfires`, `nyc-rideshare`,
 `bixi`, `gtfs`, `nwm`, `nyc-taxi-points`, `satellites`, `drifters`,
-`drifters-hourly`, `animals`, `osm-edits`, `storms`) plus `all`, which builds the
-three no-parameter datasets into `output` as a directory. Source-specific flags
-(`--date`, `--start`/`--end`, `--synthetic`, …) pass through `extraArgs`
+`drifters-hourly`, `animals`, `osm-edits`, `storms`); `output` is a single
+`.stt` file path — omit it to take the generator's own default. Source-specific
+flags (`--date`, `--start`/`--end`, `--synthetic`, …) pass through `extraArgs`
 verbatim.
 
 All six shell-out tools (`build_dataset`, `validate_dataset`, `generate_dataset`,
@@ -341,10 +343,13 @@ bind is a real risk — the server's own `--help` says as much.
 
 **Binary resolution** (`--stt-optimize-bin` / `--stt-build-bin` /
 `--stt-validate-bin` / `--stt-generate-bin`): an explicit override always wins;
-otherwise the server searches `target/release/<name>` walking up from
-`--data-root` and the process CWD (this repo's Cargo workspace output);
-otherwise it falls back to the bare command name resolved via `PATH` (works once
-the binaries are `cargo install`ed).
+otherwise the server probes `target/release/<name>` and
+`tools/<name>/target/release/<name>` (where `stt-generate` builds, outside the
+root Cargo workspace) walking up from `--data-root` and the process CWD — which
+finds anything only when the server runs inside a `spatiotemporal-tiles` source
+checkout; otherwise it falls back to the bare command name resolved via `PATH`,
+the route for an `npx` or poopdeck.gl-checkout install (works once the binaries
+are `cargo install`ed or the release artifacts are unpacked onto `PATH`).
 
 ## Where it fits
 

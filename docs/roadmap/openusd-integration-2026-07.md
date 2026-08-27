@@ -142,10 +142,11 @@ Two consequences, one for each direction:
   (the Rust crates in §8.4 are reverse-engineered). Default to `usda` for
   interchange artifacts and treat `usdc` as an optimization requiring a
   dependency decision.
-- **STT has what USD does not.** `docs/spec/stt-packed-format.md` is a normative,
-  1,487-line container specification with a stability promise and a changelog.
-  When §1 says STT contributes to the data-formats space, this is a concrete part
-  of what it contributes — not just an axis, but an axis that is _specified_.
+- **STT has what USD does not.** `docs/spec/stt-packed-format.md` is a normative
+  container specification with a stability promise and an explicit versioning
+  contract (`stt-packed-format.md §9`). When §1 says STT contributes to the
+  data-formats space, this is a concrete part of what it contributes — not just
+  an axis, but an axis that is _specified_.
 
 ## 4. Why STT fits by construction
 
@@ -182,15 +183,15 @@ Cesium's globe anchors, and `LocalEnuProjection` / `computeWorldToEcef` in
 USD already has every primitive needed to express a spatiotemporal tile pyramid.
 No one has assembled them into one.
 
-| STT concept                | USD mechanism                                                    |
-| -------------------------- | ---------------------------------------------------------------- |
-| spatial tile `(z, x, y)`   | a prim with a **payload** — declared cheaply, loaded on demand   |
-| temporal bucket            | a **value clip** within that prim's clip set                     |
-| the directory              | the **clip manifest** — the index that avoids opening every clip |
-| `cover_t_min` / `time_end` | clip `active` ranges + `interpolateMissingClipValues`            |
-| temporal LOD tier          | a **named clip set**, selected by a **variant set**              |
-| content-addressed pack     | a clip `assetPath`                                               |
-| `--time-origin` rebasing   | **LayerOffset** (`stageTime = layerTime × scale + offset`)       |
+| STT concept                                  | USD mechanism                                                    |
+| -------------------------------------------- | ---------------------------------------------------------------- |
+| spatial tile `(z, x, y)`                     | a prim with a **payload** — declared cheaply, loaded on demand   |
+| temporal bucket                              | a **value clip** within that prim's clip set                     |
+| the directory                                | the **clip manifest** — the index that avoids opening every clip |
+| `cover_t_min` / `time_end`                   | clip `active` ranges + `interpolateMissingClipValues`            |
+| temporal LOD tier                            | a **named clip set**, selected by a **variant set**              |
+| content-addressed pack                       | a clip `assetPath`                                               |
+| `--time-origin` rebasing (U4, **not built**) | **LayerOffset** (`stageTime = layerTime × scale + offset`)       |
 
 The manifest correspondence is the sharpest one. USD's clip manifest exists so
 that "value resolution [does not] open every clip to determine attribute
@@ -450,10 +451,13 @@ frozen `mesh` kind still covers both, and `backend-descriptor.ts` needed no chan
 **What the earlier draft of this section got wrong.** It said "the only missing
 piece is USD → glTF at the front." The conversion is indeed available and
 scriptable (`omni.kit.asset_converter` has a documented Python async API), but
-four deck-level constraints were verified against the installed deck 9.3.2 /
-luma 9.3.3 / loaders.gl 4.4.2 and each one silently changes what an asset looks
+four deck-level constraints were verified against deck 9.3.2 / luma 9.3.3 /
+loaders.gl 4.4.2 (2026-07-29) and each one silently changes what an asset looks
 like in the browser versus in the DCC. They are now documented on the layer, with
-one-time warnings where detectable:
+one-time warnings where detectable. **The tree now runs deck 9.3.10 / luma 9.3.6 /
+loaders.gl 4.4.5 and the four constraints have not been re-verified against it** —
+fold that re-verification into this section's browser accept, which is already
+open:
 
 1. **Skinned geometry does not deform.** `scenegraph-layer-vertex.glsl` declares
    `positions`/`texCoords`/`normals` only — no `JOINTS_0`/`WEIGHTS_0` — and

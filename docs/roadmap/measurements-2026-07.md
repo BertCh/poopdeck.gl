@@ -4,6 +4,13 @@
 not state its cold-start cost. This is that number, measured, with the method
 and the caveats attached so it can be re-run and disputed.
 
+§1, §4, §5, §6 and §8 were superseded by
+[measurements-2026-08.md §9](./measurements-2026-08.md) (2026-08-10, eight
+datasets, republished fleet) and have been cut to pointers; their headings stay
+because other records cite them by number. §2 (method), §3 (the archives at
+rest) and §7 (caveats, including the discharged `DYNAMIC` correction) are not
+restated there and stand.
+
 [`stt-packed-format-decisions.md`](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/stt-packed-format-decisions.md) names
 COPC's benchmark as the bar to clear — _"4 reads / ~110 KB on a 5.7 GB,
 1.2-billion-point file"_ — and the paged directory exists specifically to make
@@ -21,22 +28,9 @@ pnpm --filter @poopdeck.gl/bench bench:cold-start -- --cache-bust
 
 ## 1. The headline
 
-Every archive below is opened from a cold client — no manifest, no directory,
-no tiles — and taken to the point where the first frame is drawable at the
-demo's own default camera and playhead.
-
-| dataset              | shape                | archive  | features   | **requests** | **bytes to first frame**   | % of archive |
-| -------------------- | -------------------- | -------- | ---------- | ------------ | -------------------------- | ------------ |
-| `earthquakes-v2`     | sparse global events | 45.6 MiB | 522,982    | **5**        | **335.4 KiB** (343,492 B)  | 0.718 %      |
-| `flights`            | dense trajectories   | 807 MiB  | 40,342,819 | **5**        | **5.69 MiB** (5,967,269 B) | 0.705 %      |
-| `goes-glm-lightning` | summary tier (h3)    | 136 MiB  | 14,401,199 | **4**        | **250.9 KiB** (256,888 B)  | 0.180 %      |
-
-Four to five HTTP requests, in every case, regardless of whether the archive is
-46 MB or 807 MB. That is the property the format was built for, and it holds.
-
-The byte figure is not scale-invariant, and should not be quoted as if it were:
-it tracks how much _data_ the first viewport actually contains. `flights` costs
-5.69 MiB because the first frame genuinely draws 155,992 aircraft positions.
+**Superseded.** The current headline — eight datasets against the republished
+fleet, captured 2026-08-10 — is
+[measurements-2026-08.md §9.1](./measurements-2026-08.md).
 
 ---
 
@@ -70,9 +64,9 @@ time   = [playhead - timeWindow/2, playhead + timeWindow/2]
 `SpatioTemporalTileset`'s speculative work: prefetch lookahead, coarse
 parent-fallback zoom levels, and the overview storyboard tier. All three are
 throughput spent _after_ the first frame is already drawable. **A real app's
-first-second traffic is therefore higher than the table above** — what these
-numbers bound is the critical path, which is the thing the format claims to
-make cheap.
+first-second traffic is therefore higher than what this harness reports** —
+what these numbers bound is the critical path, which is the thing the format
+claims to make cheap.
 
 Also excluded: HTTP header bytes, TLS record overhead, and TCP/QUIC framing.
 Body lengths are read from `content-length` (for a `206` that is exactly the
@@ -114,87 +108,32 @@ cells, each standing for many raw flashes.
 
 ## 4. Where the bytes go
 
-| dataset              | manifest        | directory (root + leaves) | tile blobs                  |
-| -------------------- | --------------- | ------------------------- | --------------------------- |
-| `earthquakes-v2`     | 1 req, 2,882 B  | 2 req, 235,637 B (68.6 %) | 2 req, 104,973 B            |
-| `flights`            | 1 req, 14,948 B | 2 req, 62,788 B (1.1 %)   | 2 req, 5,889,533 B (98.7 %) |
-| `goes-glm-lightning` | 1 req, 4,902 B  | 2 req, 138,994 B (54.1 %) | 1 req, 112,992 B            |
-
-The directory is always **two** requests: the root page, then a single
-coalesced range covering every leaf that survived the root's bbox / zoom /
-temporal pruning. The exact traces (warm edge):
-
-```
-earthquakes-v2
-  200  manifest      2.8 KiB   HIT
-  206  directory       502 B   HIT   bytes=0-501            <- root page
-  206  directory   229.6 KiB   HIT   bytes=154227-389361    <- surviving leaves
-  206  pack         50.4 KiB   HIT   bytes=4886013-4937627
-  206  pack         52.1 KiB   HIT   bytes=12450290-12503647
-
-flights
-  200  manifest     14.6 KiB   HIT
-  206  directory       927 B   HIT   bytes=0-926
-  206  directory    60.4 KiB   HIT   bytes=927-62787
-  206  pack         1.15 MiB   HIT   bytes=40781426-41989538
-  206  pack         4.46 MiB   HIT   bytes=49697015-54378434
-
-goes-glm-lightning
-  200  manifest      4.8 KiB   HIT
-  206  directory       219 B   HIT   bytes=0-218
-  206  directory   135.5 KiB   HIT   bytes=219-138993
-  206  pack        110.3 KiB   HIT   bytes=57496930-57609921
-```
-
-**The paged directory is doing its job, and it is also the remaining cost.**
-Only 11.5 % of `earthquakes-v2`'s 2 MB directory and 2.0 % of `flights`' 3 MB
-directory is ever fetched — the pruning works. But on the two sparse datasets
-the surviving leaves are _the majority of the cold start_: 68.6 % for
-earthquakes, 54.1 % for lightning. The dominant term there is the leaf page
-granularity (4096 entries), not the tile data. Halving `pageEntries` is the
-obvious lever and has not been tried; recording it here so the next person does
-not have to rediscover which knob matters.
+**Superseded.** The current per-request byte split, the directory-leaf share
+and the warm-edge traces are
+[measurements-2026-08.md §9.3](./measurements-2026-08.md).
 
 ---
 
 ## 5. Wall time
 
-Median of 5 cold opens, same machine, same session. Wall time includes zstd
-decompression and Arrow decode, not just transfer.
-
-| dataset              | warm edge (`cf-cache-status: HIT`) | cold edge (`--cache-bust`, forced to R2 origin) |
-| -------------------- | ---------------------------------- | ----------------------------------------------- |
-| `earthquakes-v2`     | 128 ms                             | 549 ms                                          |
-| `flights`            | 431 ms                             | 1,207 ms                                        |
-| `goes-glm-lightning` | 90 ms                              | 792 ms                                          |
-
-Request and byte counts are identical in both columns — the protocol does not
-change, only the latency of each hop.
+**Superseded.** The current warm-edge and cold-edge wall times are
+[measurements-2026-08.md §9.4](./measurements-2026-08.md).
 
 ---
 
 ## 6. Context
 
-|            |                                                                           |
-| ---------- | ------------------------------------------------------------------------- |
-| Machine    | Apple M3 Pro, 36 GB RAM, macOS 14.1 (23B2073), arm64                      |
-| Runtime    | Node v22.20.0 (`fetch` / undici), HTTP/2                                  |
-| Deployment | Cloudflare R2 behind the `tiles.poopdeck.gl` custom domain                |
-| Edge PoP   | `BOS` (`cf-ray: …-BOS`)                                                   |
-| Link       | DNS 3.5 ms · TCP connect 15.5 ms · TLS 33 ms · TTFB 58 ms (warm manifest) |
-| Throughput | ~40 MiB/s (~336 Mbps) sustained on a 16 MiB warm range read               |
-| Measured   | 2026-07-24                                                                |
-
-This is one client, on one link, against one PoP. The **request counts** are a
-property of the format and travel; the **wall times** are a property of this
-machine and this network and do not.
+**Superseded.** The current capture context — machine, runtime, reader build,
+deployment, PoP, link — is the table in
+[measurements-2026-08.md §9.4](./measurements-2026-08.md).
 
 ---
 
 ## 7. Caveats, including one correction
 
 1. **These are warm-edge numbers by default.** `cf-cache-status: HIT` on all
-   three. `--cache-bust` gives the origin round-trip figures in §5.
+   three. `--cache-bust` gives the origin round-trip figures in
+   [measurements-2026-08.md §9.4](./measurements-2026-08.md).
 
 2. **Correction to the pre-measurement assumption.** This deployment was
    believed to be serving `cf-cache-status: DYNAMIC` — i.e. uncached — which
@@ -237,22 +176,14 @@ machine and this network and do not.
 6. **Not measured, and worth measuring next:** the same figures from a real
    browser (including the tileset's prefetch and parent-fallback traffic), the
    cost of a _seek_ rather than a cold open, and the effect of a smaller
-   directory `pageEntries` on §4's dominant term.
+   directory `pageEntries` on the directory-leaf term
+   ([measurements-2026-08.md §9.3](./measurements-2026-08.md)).
 
 ---
 
 ## 8. Datasets probed and dropped
 
-At capture time (2026-07-24/26) five of the 64 registered dataset URLs returned
-**404** and a `formatVersion` sweep found **35 v2 / 24 v1 / 5 × 404** — so a
-quarter of the fleet was unopenable by the post-`e084ccd` reader and could not be
-measured. The 2026-07-31 republish closed that: all 68 registered manifests now
-return `formatVersion: 2`.
-
-⚠️ **These figures therefore predate the republish, and the republish changed the
-layout they measure** — the 2026-07-26 payload byte break re-addressed every pack.
-Re-running the capture is the open half; the method, the harness and the cameras
-below are unaffected and stand as written.
-
-No dataset was included in this file on the strength of an assumption; every row
-was measured against a manifest that returned 200.
+**Superseded.** Five of the 64 registered dataset URLs 404'd at capture time
+(2026-07-24/26) and could not be measured. All five are live post-B2 and were
+re-captured on 2026-08-10; the fleet-state table is in
+[measurements-2026-08.md §9.4](./measurements-2026-08.md).

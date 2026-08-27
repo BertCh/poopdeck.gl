@@ -79,21 +79,23 @@ both reference implementations pin their constant lists against
 `KNOWN_CAPABILITIES`; the same TS contract test for
 `KNOWN_MANIFEST_CAPABILITIES`), so a registry addition on either side fails
 CI until the schema and both readers agree. Current entries: `attr-quant`,
-`coord-quant`, `elevation-fold`, `time-delta`, `vertex-value-quant`.
+`coord-quant`, `elevation-fold`, `time-delta`, `triangles-partial`,
+`vertex-time-feature-anchor`, `vertex-value-quant`.
 
 ### 2.2 Committed golden fixtures
 
-Tiny, deterministic, byte-stable datasets live under
-`packages/core/test/fixtures/` and are read by the TS reader tests to prove
-cross-implementation agreement — the genuine **Rust writes → TS reads** cases.
-All generated archives are `formatVersion: 3`; there is no other version to
-emit.
+Tiny, deterministic, byte-stable datasets live under `conformance/vectors/`
+(byte-pinned by `.github/scripts/check-golden-pins.mjs`; the TypeScript reader
+vendors the tree verbatim and reads it from its own test fixtures directory) and
+prove cross-implementation agreement — the genuine **Rust writes → TS reads**
+cases. `conformance/README.md` says how a third party consumes them. All
+generated archives are `formatVersion: 3`; there is no other version to emit.
 
 | fixture                                  | exercises                                                                                                                                                                                                                                     |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packed-golden/`                         | manifest folding, v6 directory decode (12 entries), **byte-identical blob dedup** (3 tiles share one physical blob), multi-pack cutting. Self-contained frames (inline schemas, no `schemas` table)                                           |
 | `paged-golden/` + `paged-golden-single/` | the **paged ⇄ whole-load differential**: the same 252-tile corpus emitted both ways, asserting paged queries return _byte-identical_ results to a whole-load directory while fetching only the leaf pages a viewport/zoom/time window touches |
-| `v2-golden/`                             | the real v3 `stt-build` writer on points (historical path name): manifest-level `schemas` templates, coord-quant, per-tile `qa` affines, numeric + two adaptive categorical columns with nulls, paged directory                               |
+| `v2-golden/`                             | the real v3 `stt-build` writer on points: manifest-level `schemas` templates, coord-quant, per-tile `qa` affines, numeric + two adaptive categorical columns with nulls, paged directory                                                      |
 | `v2-golden-tracks/`                      | the same for trajectories: delta `vertex_time` with the `vt` TILE_META affine, unquantized Float64 coordinates, single (whole-load) directory                                                                                                 |
 | `legacy-shape/` (4 datasets)             | frozen real **formatVersion 2** archives (no `variants` registry, directory codec v5) proving the read window of §9.1 actually opens and decodes them, and that `formatVersion: 1` is still refused                                           |
 
@@ -101,10 +103,7 @@ They are **committed, not regenerated per build**, so they double as a
 regression corpus. `legacy-shape/` in particular must **never** be
 regenerated: it is frozen evidence of what v2 archives look like in the wild,
 and regenerating it with the current writer would emit v3 and silently delete
-the only coverage the compatibility path has. (These were negative fixtures
-under the original clean-cutover plan; they became positive ones when the read
-window was kept — see the `formatVersion: 3` rationale in §9.1 of the packed
-spec.)
+the only coverage the compatibility path has.
 
 Two generators, because the families are produced by different halves of the
 toolchain:
@@ -116,8 +115,8 @@ cargo run -p stt-core --example make-golden-fixture
 
 # v2-golden*/ — historical fixture-directory names; the bytes are the current
 # v3 archive emitted by the real stt-build writer from synthetic DuckDB
-# sources (needs `--features duckdb`).
-packages/core/scripts/make-v2-golden.sh
+# sources (the script builds with `--features duckdb` itself).
+conformance/make-vectors.sh
 ```
 
 The first generator (`crates/stt-core/examples/make-golden-fixture.rs`) uses
@@ -136,9 +135,9 @@ fixtures conformant even though `stt-core` cannot depend on
 Decoding a fixture proves reader agreement. Pinning a fixture's _bytes_ proves
 the writer did not drift.
 
-| version                  | fixtures                                                                                                                                          | asserted by                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| 3 (**the only version**) | `crates/stt-core/tests/fixtures/v2-golden/` — a historical path containing current `single/` and `paged/` v3 datasets plus `expected-hashes.json` | `crates/stt-core/tests/v2_golden.rs` |
+| version                  | fixtures                                                                                                             | asserted by                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| 3 (**the only version**) | `crates/stt-core/tests/fixtures/v2-golden/` — current `single/` and `paged/` v3 datasets plus `expected-hashes.json` | `crates/stt-core/tests/v2_golden.rs` |
 
 The byte pin catches a writer that starts emitting different bytes even when
 the changed encoder still round-trips cleanly. The `v2-golden*` path names are
@@ -160,9 +159,11 @@ a value assertion catches it.
 
 `stt-validate <dataset>` (a `[[bin]]` of the `spatiotemporal-tiles` crate —
 there is no `stt-validate` package) is the executable specification of the
-integrity contract. It accepts a packed dataset directory
-or its `manifest.json` (the single-file `.stt` container has been removed — only
-the packed format is accepted), and runs, by cost tier:
+integrity contract. It accepts a packed dataset directory, its `manifest.json`,
+or a single-file `.sttb` bundle of one (detected by extension or by the `STTB`
+magic; the integrity tier then verifies each in-bundle object's blake3 against
+its key exactly as in the exploded case). The internal single-file `.stt`
+streaming container is refused. It runs, by cost tier:
 
 **Cheap (all tiles):**
 
@@ -185,12 +186,20 @@ the packed format is accepted), and runs, by cost tier:
   `geometry` with a `geoarrow.*` extension name) and the permitted optional/
   property column types (`check_tile_schema`);
 - **quantization gate** — an `Int32`-leaf `geometry` column MUST carry
-  `stt:quant` (otherwise a naïve reader misdecodes grid indices as degrees);
+  `stt:quant` (otherwise a naïve reader misdecodes grid indices as degrees), and
+  a `Float64`-leaf one MUST NOT (the affine re-types honest coordinates as grid
+  indices) — both errors;
 - **vertex-time metadata sanity** — a delta `vertex_time` column (`List<UInt16>`
-  **or** `List<UInt32>`) MUST carry parseable `stt:vertex_time_origin_ms` /
-  `stt:vertex_time_step_ms`, and an absolute `List<Int64>` one MUST NOT;
-- **CRS84 tagging** — a missing/non-CRS84 `ARROW:extension:metadata` on an
-  unquantized `geometry` field is warned (the writer MUST of §3);
+  **or** `List<UInt32>`) MUST carry **either** the layer-anchored pair
+  `stt:vertex_time_origin_ms` + `stt:vertex_time_step_ms` **or** the
+  feature-anchored `stt:vertex_time_feature_step_ms` alone — never both, the two
+  delta tiers being mutually exclusive — each parseable (an integer Unix-ms
+  origin, a positive integer ms step); an absolute `List<Int64>` column MUST
+  carry none of the three;
+- **CRS84 tagging** — on an unquantized `geometry` field, an
+  `ARROW:extension:metadata` that is present but does not pin `OGC:CRS84` is an
+  **error**; its complete **absence** is a warning, because the writer MUST of
+  §3 is newer than much of the deployed fleet and a rebuild re-emits it;
 - **interval sanity** — every feature satisfies `end_time >= start_time`;
 - **`time_end` tightness** — each entry's `time_end` equals the maximum
   feature `end_time` in the tile (the [time-model §5](./time-model.md#5-read-time-temporal-pruning--cover_t_min)
@@ -206,9 +215,12 @@ the packed format is accepted), and runs, by cost tier:
   and passes, as is the presence-vs-absence of a documented **optional
   reserved** column (`vertex_time`, `vertex_value`, `vertex_value_matrix`,
   `triangles`, `part_offsets`) — each is emitted per tile, iff that tile's data
-  needs it, which is the format's design and not a producer defect. A
-  **property** column appearing in one tile and absent in another, or any
-  column changing type family, is _structural_ and errors.
+  needs it, which is the format's design and not a producer defect — and so is a
+  **categorical** property column encoded as plain `Utf8` in one tile and
+  `Dictionary(UInt16, Utf8)` in another, the dictionary-vs-`Utf8` verdict the
+  encoder resolves per dataset. A **property** column appearing in one tile and
+  absent in another, or any other column changing type family, is _structural_
+  and errors.
 
 The validator sees the payload **after** re-inflation, so the compact time
 forms and per-vertex value quantization are invisible to it by construction —
@@ -219,8 +231,9 @@ and `part_offsets` as a reserved `List<UInt32>` column.
 > **Why the drift check is asymmetric.** A per-tile encoding _choice_ and a
 > producer that changed mid-build look identical to a schema comparison, so
 > the classifier can only distinguish them by knowing which variation the
-> format sanctions. Two are sanctioned — integer width, and optional-reserved
-> presence — and both are properties the reference readers already branch on.
+> format sanctions. Three are sanctioned — integer width, optional-reserved
+> presence, and the categorical `Utf8` ⇄ `Dictionary(UInt16, Utf8)` swing — and
+> all three are properties the reference readers already branch on.
 > Everything else errors. This is why the attribute quantizer's sole refusal
 > keys off value _magnitude_ (a property of the column's domain) rather than
 > span or distribution (properties of the tile's sample): a sample-dependent
@@ -255,13 +268,32 @@ and `part_offsets` as a reserved `List<UInt32>` column.
   schema-checks perfectly. A stride-2 read of a 3D `xyz` leaf once flattened and
   scrambled 106 archives and **every one passed** the checks above it.
 
+  Check 12 also enforces a **feature-loss floor** against
+  `metadata.distinct_feature_count`. On a full decode the rows at the **fullest
+  single zoom** MUST be at least the declared count — per-zoom and not
+  per-archive, because pyramid replication would let a whole-archive floor
+  absorb >85% loss before firing — and a shortfall there is an **error**. Under
+  `--sample`, and for any overshoot, it warns. `--allow-distinct-shortfall`
+  demotes both feature-loss errors to warnings and is the documented escape
+  hatch for colliding source ids and features the tiler could not place; it
+  suppresses nothing else, and the downgraded finding is still reported. The
+  stricter **distinct-ID** comparison is armed only from the writer's recorded
+  `metadata.properties.feature_id_construction` (`source` / `anchor-hash` — a
+  dataset-wide key), or from an explicit `feature_id_scope: global` /
+  `global-feature-ids` attestation, and is disarmed by `feature_id_scope: local`;
+  it is never inferred from the numbers happening to agree. On a non-arming
+  construction (`row-index`, `segment-hash`) the two counts are different
+  quantities and a deviation is a **note**, not a defect.
+
   When the fingerprint is **absent** — which is every archive published before
   the field existed — the run **warns and continues**, mirroring the CRS84
-  precedent. The JSON report's `fingerprint_checked` boolean says whether the
-  comparison ran at all; `false` means the archive's CONTENT is unverified and
-  only its structure was checked. Distinct-feature counts are compared through a
-  fixed-size HyperLogLog sketch, the one approximation in an otherwise exact
-  validator, so any finding derived from it prints its error bound.
+  precedent. The JSON report says which comparisons ran: `fingerprint_checked`
+  (`false` means the archive's CONTENT is unverified and only its structure was
+  checked), `bounds_checked` and `bounds_enforced` for check 13, and
+  `distinct_id_basis` / `feature_id_construction` for the arming decision above.
+  Distinct-feature counts are compared through a fixed-size HyperLogLog sketch,
+  the one approximation in an otherwise exact validator, so any finding derived
+  from it prints its error bound.
 
   `--emit-fingerprint <PATH>` and `--expect-fingerprint <PATH>` run the same
   comparison against an **external** file rather than the manifest's own block.
@@ -318,44 +350,27 @@ and `part_offsets` as a reserved `List<UInt32>` column.
 > unchanged while sums and means do not.
 
 > **What check 13 still does NOT cover — both gaps are the antimeridian.**
-> Containment now has a validator behind it (check 13 above) and the reference
-> builder now _declares_ the honest vertex box by default
-> (`default_bounds_mode_is_vertex_since_the_r1_rebuild`,
-> `crates/stt-build/src/input.rs`), so the two caveats that used to live here are
-> gone. Two narrower ones replace them, and both were measured against the real
-> tiler rather than assumed:
 >
-> - **A seam escape is downgraded to a warning, by design.** `stt-build` splits
->   a ±180°-crossing ring and synthesises vertices at exactly ±180 that the
->   source never carried, while `metadata.bounds` is a plain unwrapped min/max
->   over the _source_ vertices — so a polygon reaching 178°E and 178°W declares
->   `[-178, 178]` and decodes to `[-180, 180]`. That is correct writer behaviour
->   producing a real containment failure, so check 13 reports it as a warning
->   naming the seam instead of failing the archive. The relaxation is scoped by
->   three conditions — no latitude escape, every escaping longitude edge landing
->   _on_ ±180 within the wire's quantization step, and a declared interval
->   already wider than 180° — so a compact archive whose tiles decoded to the
->   world edges (the scrambled-coordinate class) still errors. Pinned by
->   `antimeridian_seam_split_escape_warns_rather_than_failing` and
->   `the_seam_exemption_is_scoped_to_the_seam_and_nothing_else`
->   (`crates/spatiotemporal-tiles/src/bin/stt-validate/fingerprint.rs`), against
->   the builder-side measurement in
->   `seam_split_synthesises_pm180_vertices_the_declared_source_bbox_cannot_contain`
->   (`crates/stt-build/tests/antimeridian_polygon.rs`). The durable fix is at the
->   writer: widen the declared longitude interval to the full `[-180, 180]` when
->   the source straddles ±180.
-> - **A seam-crossing LINE is invisible to check 13.** Lines are not split at
->   the seam — `clip_trajectory` ends the run at the `|Δlon| > 180°` edge and
->   never emits that edge — so the decode stays strictly _inside_ the declared
->   source bbox and containment passes while geometry is missing. The loss is
->   uncounted (`TileStats::antimeridian_fallbacks` covers the polygon
->   dead-letter only). Pinned, as a known gap rather than a fixed one, by
->   `a_seam_crossing_line_loses_its_crossing_edge_instead_of_being_split` and
->   `a_two_vertex_seam_crossing_line_dead_letters_into_one_tile_uncounted`
->   (`crates/stt-build/tests/antimeridian_polygon.rs`).
+> - **A seam escape warns rather than fails, by design.** `stt-build` splits a
+>   ±180°-crossing ring and synthesises vertices at exactly ±180 that the source
+>   never carried, while `metadata.bounds` is an unwrapped min/max over the
+>   _source_ vertices — so a polygon reaching 178°E and 178°W declares
+>   `[-178, 178]` and decodes to `[-180, 180]`. The relaxation is scoped by three
+>   conditions — no latitude escape, every escaping longitude edge landing _on_
+>   ±180 within the wire's quantization step, and a declared interval already
+>   wider than 180° — so a compact archive whose tiles decoded to the world edges
+>   (the scrambled-coordinate class) still errors. Pinned in
+>   `crates/spatiotemporal-tiles/src/bin/stt-validate/fingerprint.rs`. The
+>   durable fix is at the writer: declare the full `[-180, 180]` longitude
+>   interval when the source straddles the seam.
+> - **A seam-crossing LINE is invisible to check 13.** Lines are not split at the
+>   seam — `clip_trajectory` ends the run at the `|Δlon| > 180°` edge and never
+>   emits that edge — so the decode stays strictly _inside_ the declared source
+>   bbox and containment passes while geometry is missing, uncounted. Pinned, as
+>   a known gap rather than a fixed one, in
+>   `crates/stt-build/tests/antimeridian_polygon.rs`.
 >
-> For both, `stt-optimize export`'s bbox — the comparison a human used to find
-> the 106-archive defect — remains the manual cross-check.
+> For both, `stt-optimize export`'s bbox remains the manual cross-check.
 
 For a **paged** directory it additionally runs `verify_paged_structure`: every
 leaf descriptor's bounds (geo bbox, zoom range, `[t_min, t_max]`) **cover** the
@@ -384,7 +399,7 @@ of the report must not upgrade that to a content guarantee. The one invariant a
 clean report never certifies is `metadata.bounds` containment (see the note
 above).
 
-The full numbered list — checks 1–12, cited as "check N" in reports and reviews
+The full numbered list — checks 1–13, cited as "check N" in reports and reviews
 — lives in the `stt-validate` module doc and is restated in
 [`docs/api/cli-reference.md`](../api/cli-reference.md); the three numberings are
 pinned against each other by
@@ -471,15 +486,22 @@ A conformant writer **MUST**:
 - declare the required `variants` registry, including `{id: 0, kind: "raw"}`,
   and qualify every directory entry with a declared `variant_id`;
 - declare every required-to-understand feature it used in
-  `manifest.capabilities` (registry: `coord-quant`, `attr-quant`,
-  `elevation-fold`, `time-delta`, `vertex-value-quant` —
+  `manifest.capabilities` (registry: `attr-quant`, `coord-quant`,
+  `elevation-fold`, `time-delta`, `triangles-partial`,
+  `vertex-time-feature-anchor`, `vertex-value-quant` —
   [packed-format §3.1](./stt-packed-format.md#31-required-to-understand-capabilities-capabilities)),
   omitting the key when none were used; additive columns
   (`triangles`, `part_offsets`, vector groups, …) are never declared.
+  `triangles-partial` covers a polygon `triangles` column that MIXES baked and
+  empty per-feature lists (an empty list means "the reader earcuts this ring");
+  `vertex-time-feature-anchor` covers `TILE_META.vtf`, which re-types the
+  `vertex_time` leaf to `UInt16` deltas measured from each feature's own
+  `start_time` instead of a layer-wide origin.
   **Note that `time-delta` applies to a default build** — the compact time
   forms are on unless suppressed, so a writer that emits them without
   declaring the capability is non-conformant even though it "changed
-  nothing";
+  nothing"; the same holds for `triangles-partial` on any default polygon
+  build whose layer actually mixes;
 - **content-address** every pack and directory object by blake3-128 (32 hex
   chars) and name each file by its hash;
 - emit a v6 directory: delta + zig-zag varint key columns, blob-run RLE, the
@@ -497,12 +519,8 @@ A conformant writer **MUST**:
   discard tiles that really do carry visible data. Likewise `metadata.z_range`,
   when declared, MUST contain every altitude the archive decodes to. This is a
   MUST newer than the deployed fleet, exactly like the CRS84 tagging above:
-  see §3.1 for what enforces it and what does not. ⚠️ **The reference writer
-  does not yet satisfy it across the ±180° seam** — it folds min/max over the
-  _source_ vertices while the tiler synthesises seam vertices at exactly ±180,
-  so a seam-crossing non-point dataset declares a box 2°-ish short of its own
-  output. That is a known, measured gap with a warning (not an error) behind it;
-  §2.3's antimeridian note states the shape and the writer-side fix;
+  see §3.1 for what enforces it and what does not, and §2.3's antimeridian note
+  for the one measured gap where the reference writer does not yet satisfy it;
 - write a **CRC32C** of each compressed blob into its directory entry;
 - pad every frame section to an 8-byte boundary with a **derived** (never
   stored) pad, and write every Arrow IPC stream at **8-byte buffer
@@ -510,10 +528,14 @@ A conformant writer **MUST**:
   content addresses nor its payload sizes
   ([packed-format §5.2](./stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing));
 - ship **no shared zstd dictionary** — each blob is an independent zstd frame;
-- emit `triangles` **all-or-nothing per layer**: once any feature in a layer
-  carries baked indices, every feature in it MUST carry a non-empty list
-  (all three reference renderers bind the column as one whole-layer index
-  buffer and draw nothing for an empty slice);
+- emit `triangles` **all-or-nothing per layer** — once any feature in a layer
+  carries baked indices, every feature in it MUST carry a non-empty list —
+  **unless** it declares the `triangles-partial` capability, in which case a
+  layer MAY mix baked and empty per-feature lists and an empty list means "the
+  reader earcuts this single ring at decode". The capability gate is what makes
+  the mixed shape safe: all three reference renderers bind the column as one
+  whole-layer index buffer and draw nothing for an empty slice, so an
+  un-capable reader would silently vanish every single-ring polygon;
 - emit `part_offsets` iff some feature in a polygon layer is multi-part, with
   feature-local ring indices starting at `0` and strictly increasing —
   absence means every feature is single-part;
@@ -578,8 +600,7 @@ A conformant writer **SHOULD**:
   _across processes_. The reference Rust writer meets **both** on Arrow ≥59
   (sorted-`BTreeMap` metadata assembly + Arrow 59's stable IPC metadata
   serialization; see
-  [packed-format §7-D6](./stt-packed-format.md#7-design-decisions)) — the former
-  cross-process gap that existed under Arrow 54 is now closed;
+  [packed-format §7-D6](./stt-packed-format.md#7-design-decisions));
 - compress the directory at rest (`directory.encoding: "zstd"`);
 - emit a paged directory (`layout: "paged"`) for large datasets so cold readers
   fetch directory bytes proportional to the viewport;
@@ -589,6 +610,15 @@ A conformant writer **SHOULD**:
   the validator degrades to a warning, mirroring the CRS84 precedent. A writer
   that emits one MUST compute it pre-tiling: recomputing it from its own tiles
   proves only that the tiles agree with themselves (§3.1);
+- **stamp its attestations into `metadata.properties`**: `bounds_mode`
+  (`vertex` | `centroid`) and `feature_id_construction`
+  (`source` | `anchor-hash` | `row-index` | `segment-hash`), plus
+  `feature_id_scope` (`global` | `local`) when the writer asserts one. These are
+  what let checks 12 and 13 tell an attested claim from a pre-attestation
+  archive: an unstamped archive is treated as unattested, so the identical
+  finding degrades from an error to a warning. Stamp them in **both**
+  directions — a build that considered the question and answered `centroid` or
+  `local` is then distinguishable from one that predates the question;
 - emit the additive `metadata.z_range` when any vertex — or a property column
   the build declares as its elevation source — carries altitude. Metadata only:
   declaring an elevation column here does not rewrite geometry;
@@ -602,13 +632,15 @@ A conformant writer **SHOULD**:
 
 ### 3.1 Content claims and the transform rule
 
-Four manifest fields are unlike the rest of the envelope. `metadata.bounds`,
-`metadata.z_range` and `metadata.content_fingerprint` do not describe the
-container; they **assert something about the data inside it**. (The fourth,
-`orderingWorkload`, asserts something about the assumptions the layout was
-priced under.) A claim is only worth having if it is true, so this section
-states each obligation, and — because a MUST nothing executes is prose that
-rots — names exactly what enforces it and what does not.
+Five manifest fields are unlike the rest of the envelope. `metadata.bounds`,
+`metadata.z_range`, `metadata.distinct_feature_count` and
+`metadata.content_fingerprint` do not describe the container; they **assert
+something about the data inside it** — `distinct_feature_count` is the count of
+distinct SOURCE features, and the quantity check 12's decoded-row floor is
+measured against. (The fifth, `orderingWorkload`, asserts something about the
+assumptions the layout was priced under.) A claim is only worth having if it is
+true, so this section states each obligation, and — because a MUST nothing
+executes is prose that rots — names exactly what enforces it and what does not.
 
 **The transform rule.** A tool that transforms an archive **losslessly** —
 reorder, repack, re-optimize — **MUST** carry `metadata.content_fingerprint`
@@ -629,25 +661,25 @@ A transform that legitimately changes content (a re-quantization, a tier drop)
 is **not** a lossless transform, and must be rebuilt from source rather than
 re-stamped.
 
-**Readers need nothing new.** All four fields are additive metadata, and §4's
+**Readers need nothing new.** All five fields are additive metadata, and §4's
 "ignore unknown fields at every manifest envelope level" already covers them.
 None of them re-types a tile column, so none of them is a capability — §3's
 capability rule explicitly exempts additive metadata.
 
 #### Rule → the test that enforces it
 
-| obligation                                                                | enforced by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **MUST** — declared `bounds` (and `z_range`) contain every decoded vertex | ✅ **writer and validator.** Writer: `vertex_bbox_is_a_conservative_superset_of_every_vertex_and_of_the_centroid_box`, `null_island_sentinel_features_are_excluded_from_both_bboxes`, `z_range_comes_from_three_element_positions` (`crates/stt-build/src/input.rs`) pin the honest computation; `default_bounds_mode_is_vertex_since_the_r1_rebuild` (same file) and `the_shipped_default_is_the_honest_quantity` (`crates/stt-build/tests/vertex_bounds_multi_tile.rs`) pin that it is what the reference builder now **declares by default**, with `--bounds-mode centroid` the documented rollback; `long_lines_declare_bounds_that_contain_every_decoded_vertex` and `centroid_bounds_would_lose_data_on_the_same_fixture` (same file) prove containment end to end through the tiler. Validator: check 13 recomputes containment from the decode — `wrong_hemisphere_declared_bounds_fails`, `understated_bounds_warn_on_legacy_and_fail_once_attested`, `honest_declared_bounds_pass_full_and_sampled` (`crates/spatiotemporal-tiles/tests/validate_cli.rs`). ⚠️ Two antimeridian gaps remain — see §2.3's antimeridian note. |
-| **MUST** — a lossless transform carries the fingerprint verbatim          | `expect_fingerprint_accepts_identical_and_rejects_mutated` (`validate_cli.rs`) enforces the _acceptance_ half: a mutated copy fails against a captured truth. ⚠️ Nothing tests that a transform tool **preserves the key**, because no in-repo tool rewrites an archive today — the one that did (`reoptimize`) was deleted after the incident. Any successor lands with that test, or the rule is unenforced again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **SHOULD** — emit `content_fingerprint` v1, computed pre-tiling           | `built_archive_declares_a_fingerprint_that_validates` (the end-to-end build→validate loop) and `fingerprint_is_byte_identical_across_builds_and_survives_quantization` (`validate_cli.rs`); `content_fingerprint_is_order_independent_and_reproducible` (`input.rs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| check 12's comparison semantics (containment vs equality, severity)       | `containment_always_equality_only_on_full_decode`, `escaping_vertex_is_an_error_even_when_sampled`, `numeric_column_containment`, `unknown_fingerprint_version_warns_and_skips`, `distinct_count_drift_warns_with_its_error_bound` (`crates/stt-core/src/metadata.rs`); `honest_fingerprint_passes_full_and_sampled`, `absent_fingerprint_warns_but_never_fails`, `sampled_fingerprint_still_catches_out_of_bbox` (`validate_cli.rs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| a tolerance without its capability is rejected                            | `tolerance_without_its_capability_is_rejected`, `on_wire_quant_step_is_admitted_as_slack` (`metadata.rs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| the recorded regression class stays caught                                | `stride_two_xyz_fold_escapes_the_declared_bbox` (`metadata.rs`, the defect shape in isolation) and `fingerprint_catches_scrambled_coordinates` (`validate_cli.rs`, end to end through the binary).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| **SHOULD** — emit `z_range` when altitude is present                      | `z_range_roundtrips_through_json`, `z_range_field_omitted_when_unset`, `z_range_is_normalised_and_refuses_non_finite`, `tilejson_bounds_stay_four_elements_with_a_z_range_declared` (`metadata.rs`); `six_element_bbox_when_a_z_range_is_declared` / `four_element_bbox_when_no_z_range_is_declared` (`crates/stt-build/src/stac.rs`); `elevation_column_folds_into_the_z_range` (`input.rs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **SHOULD** — record the workload a `blobOrdering` was priced under        | `ordering_workload_is_omitted_unless_the_ordering_was_simulated`, `manifest_records_the_ordering_workload_at_both_pinned_keys` (`crates/stt-core/src/pack/mod.rs`); `recorded_workload_drift_is_flagged_including_the_reader_gap` (`crates/stt-optimize/src/order_audit.rs`); `default_measured_build_validates_and_records_its_ordering_and_workload` (`validate_cli.rs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| the wire shape of all four blocks                                         | `metadata_honesty_blocks_match_the_published_schema`, `honesty_blocks_are_absent_from_a_legacy_metadata` (`crates/stt-core/tests/spec_conformance.rs`, writer side); the `manifest honesty blocks (M7)` suite in `packages/core/test/manifest-schema.test.ts` (reader side, incl. wrong-arity bbox, malformed per-column maps, non-integer `coalesce_gap_bytes`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| the two `orderingWorkload` copies stay identical                          | `manifest_records_the_ordering_workload_at_both_pinned_keys` (values) and `the two ordering-workload copies are pinned to the SAME shape` (schema declarations).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| obligation                                                                                 | enforced by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MUST** — declared `bounds` (and `z_range`) contain every decoded vertex                  | ✅ **writer and validator.** Writer: `crates/stt-build/src/input.rs` pins the honest computation and `default_bounds_mode_is_vertex_since_the_r1_rebuild`; `crates/stt-build/tests/vertex_bounds_multi_tile.rs` proves containment end to end through the tiler, with `--bounds-mode centroid` the documented rollback. Validator: check 13 recomputes containment from the decode (`crates/spatiotemporal-tiles/tests/validate_cli.rs`). ⚠️ Two antimeridian gaps remain — see §2.3's antimeridian note. |
+| **MUST** — a lossless transform carries the fingerprint verbatim                           | `expect_fingerprint_accepts_identical_and_rejects_mutated` (`crates/spatiotemporal-tiles/tests/validate_cli.rs`) enforces the _acceptance_ half: a mutated copy fails against a captured truth. ⚠️ Nothing tests that a transform tool **preserves the key**, because no in-repo tool rewrites an archive today. Any successor lands with that test, or the rule is unenforced again.                                                                                                                     |
+| **SHOULD** — emit `content_fingerprint` v1, computed pre-tiling                            | `crates/spatiotemporal-tiles/tests/validate_cli.rs` (the end-to-end build→validate loop, and byte-identity across builds); `crates/stt-build/src/input.rs` (order-independence).                                                                                                                                                                                                                                                                                                                          |
+| check 12's comparison semantics (containment vs equality, severity, the decoded-row floor) | `crates/stt-core/src/metadata.rs` and `crates/spatiotemporal-tiles/tests/validate_cli.rs`.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| a tolerance without its capability is rejected                                             | `tolerance_without_its_capability_is_rejected`, `on_wire_quant_step_is_admitted_as_slack` (`crates/stt-core/src/metadata.rs`).                                                                                                                                                                                                                                                                                                                                                                            |
+| the recorded regression class stays caught                                                 | `stride_two_xyz_fold_escapes_the_declared_bbox` (`crates/stt-core/src/metadata.rs`, the defect shape in isolation) and `fingerprint_catches_scrambled_coordinates` (`crates/spatiotemporal-tiles/tests/validate_cli.rs`, end to end through the binary).                                                                                                                                                                                                                                                  |
+| **SHOULD** — emit `z_range` when altitude is present                                       | `crates/stt-core/src/metadata.rs` (JSON round-trip, omission when unset, non-finite refusal, four-element TileJSON bounds); `crates/stt-build/src/stac.rs` (six- vs four-element STAC bbox); `elevation_column_folds_into_the_z_range` (`crates/stt-build/src/input.rs`).                                                                                                                                                                                                                                 |
+| **SHOULD** — record the workload a `blobOrdering` was priced under                         | `crates/stt-core/src/pack/mod.rs` (omitted unless simulated, written at both pinned keys); `crates/stt-optimize/src/order_audit.rs` (drift flagged, including the reader gap); `crates/spatiotemporal-tiles/tests/validate_cli.rs`.                                                                                                                                                                                                                                                                       |
+| the wire shape of the four honesty blocks                                                  | `metadata_honesty_blocks_match_the_published_schema`, `honesty_blocks_are_absent_from_a_legacy_metadata` (`crates/stt-core/tests/spec_conformance.rs`, writer side); the `manifest honesty blocks (M7)` suite in `packages/core/test/manifest-schema.test.ts` (reader side, incl. wrong-arity bbox, malformed per-column maps, non-integer `coalesce_gap_bytes`).                                                                                                                                         |
+| the two `orderingWorkload` copies stay identical                                           | `manifest_records_the_ordering_workload_at_both_pinned_keys` (values) and `the two ordering-workload copies are pinned to the SAME shape` (schema declarations).                                                                                                                                                                                                                                                                                                                                          |
 
 #### Reference-writer status (2026-08)
 
@@ -658,25 +690,19 @@ the failure mode this table exists to prevent, so:
   `stt-build --content-fingerprint`; the key is absent from every published
   archive. The validator's absent-key path is therefore the normal path today,
   and is permanent, not transitional.
-- **`metadata.bounds` is vertex-derived by default (flipped in rebuild window
-  R1).** `DEFAULT_BOUNDS_MODE` is `BoundsMode::Vertex`, `stt-build --bounds-mode
-{vertex,centroid}` selects it explicitly, and the choice is stamped into
-  `metadata.properties.bounds_mode` — the exact key and `vertex` spelling
-  `stt-validate`'s check 13 reads as an _attestation_, pinned on both sides by
+- **`metadata.bounds` is vertex-derived by default.** `DEFAULT_BOUNDS_MODE` is
+  `BoundsMode::Vertex`, `stt-build --bounds-mode {vertex,centroid}` selects it
+  explicitly, and the choice is stamped into `metadata.properties.bounds_mode` —
+  the exact key and `vertex` spelling `stt-validate`'s check 13 reads as an
+  _attestation_, pinned on both sides by
   `bounds_mode_manifest_stamp_matches_the_validator_contract`
-  (`crates/stt-build/src/input.rs`) and
-  `the_manifest_records_which_quantity_bounds_came_from`
-  (`crates/stt-build/tests/vertex_bounds_multi_tile.rs`). The legacy centroid box
-  is the documented rollback, not a deleted path, and an archive built without
-  the stamp stays unattested so the pre-R1 fleet is not turned red. Flipping the
-  default widens manifest values fleet-wide, which is why it rode one scheduled
-  rebuild window rather than dribbling across the fleet.
-- **`metadata.z_range` is written when the source carries altitude.** The
-  builder folds the pre-tiling profile's vertical extent into the manifest, and
-  the field stays absent — byte-invisibly — for a 2D source:
+  (`crates/stt-build/src/input.rs`). The centroid box is the documented
+  rollback, not a deleted path, and an archive built without the stamp stays
+  unattested.
+- **`metadata.z_range` is written when the source carries altitude**, and stays
+  absent — byte-invisibly — for a 2D source:
   `z_range_is_declared_only_when_the_source_carried_altitude`
-  (`crates/stt-build/tests/vertex_bounds_multi_tile.rs`) pins both halves, over
-  the same `profile_features_with` → `Metadata::with_z_range` path the CLI uses.
+  (`crates/stt-build/tests/vertex_bounds_multi_tile.rs`) pins both halves.
   ⚠️ A build using `--point-elevation-column` must pass that column to the
   profiler too (the encoder folds it into point `z` long after the profile runs)
   — `elevation_column_folds_into_the_z_range` (`crates/stt-build/src/input.rs`).
@@ -712,10 +738,15 @@ A conformant reader **MUST**:
 - bound every tile decompression by its directory-declared
   `uncompressed_size`, and bound directory page decompression before allocating
   attacker-controlled counts;
-- accept **all three** `vertex_time` encodings — `List<UInt16>` and
-  `List<UInt32>` deltas (both carrying `origin`/`step`, v2: `TILE_META.vt`)
-  and absolute `List<Int64>` — keying "is it a delta?" off the metadata and
-  "how wide?" off the Arrow leaf type, never off the leaf type alone;
+- accept **all four** `vertex_time` encodings — `List<UInt16>` and
+  `List<UInt32>` **layer-anchored** deltas (both carrying `origin`/`step`, v2:
+  `TILE_META.vt`), `List<UInt16>` **feature-anchored** deltas measured from each
+  feature's own `start_time` (a step and deliberately no origin, v2:
+  `TILE_META.vtf`, gated by the `vertex-time-feature-anchor` capability so a
+  reader that does not implement it refuses at open rather than inventing an
+  origin), and absolute `List<Int64>` — keying "is it a delta, and anchored to
+  what?" off the metadata and "how wide?" off the Arrow leaf type, never off the
+  leaf type alone;
 - accept a quantized `<prop>` column at **either** integer leaf (`UInt16`,
   `Int32`) and reconstruct through the per-tile `stt:qa` affine, without
   caching the affine or the leaf width across tiles;
@@ -723,6 +754,13 @@ A conformant reader **MUST**:
   as properties (`part_offsets` is the current example: a reader that has
   never heard of it must not surface `List<UInt32>` ring indices as a numeric
   property);
+- **earcut an empty `triangles` slice** if it accepts the `triangles-partial`
+  capability: a feature whose triangle slice is empty is a single-ring polygon
+  the writer left for the reader to tessellate, never a feature to draw nothing
+  for (a reader that does not implement the capability refuses the dataset at
+  open instead — all three reference renderers bind the column as one
+  whole-layer index buffer, which is why an un-capable reader would silently
+  vanish every such polygon);
 - **coalesce range reads per pack** (a range must not bridge two pack objects);
 - prune by time with `time_end >= w_start AND (cover_t_min ?? time_start) <= w_end`,
   falling back to `time_start` when `cover_t_min` is absent.
@@ -776,14 +814,11 @@ cargo test -p stt-core --test v2_golden                     # writer byte pin
 cargo test -p stt-core --test capability_registry           # registry ⇄ schema pin
 cargo test -p spatiotemporal-tiles --test cli_reference_doc # CLI surface ⇄ docs
 cargo test -p spatiotemporal-tiles --test validate_cli      # validator behavior
-cargo run  -p stt-core --example make-golden-fixture        # regenerate the reader fixtures
+cargo run  -p stt-core --example make-golden-fixture        # regenerate the hand-built vectors
+conformance/make-vectors.sh                                 # regenerate the stt-build vectors
 pnpm --filter @poopdeck.gl/core test                        # manifest contract + golden-fixture reads
 stt-validate <your-dataset>                                 # validate your own output
 ```
-
-(`packages/core/scripts/make-v2-golden.sh` is listed in §2.2 for
-completeness but does not currently run — it still passes the removed
-`--format-version` flag.)
 
 `stt-validate` is a `[[bin]]` of the `spatiotemporal-tiles` crate, not a
 package — `cargo test -p stt-validate` has never resolved.

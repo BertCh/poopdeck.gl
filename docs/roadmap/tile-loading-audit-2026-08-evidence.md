@@ -1,158 +1,8 @@
 # Tile loading audit (2026-08-24) — evidence appendix
 
-Raw per-subsystem reports from the ten auditors, verbatim, plus the shared brief they were given. The consolidated audit is [tile-loading-audit-2026-08.md](./tile-loading-audit-2026-08.md); finding IDs there (A1…G4) cite the IDs used here (CS-/CE-/PR-/G/NS-/D/SEL-/LC-/F/TO-). Line numbers are as of the 2026-08-24 working tree.
+Raw per-subsystem reports from the ten auditors, verbatim. The consolidated audit is [tile-loading-audit-2026-08.md](./tile-loading-audit-2026-08.md); finding IDs there (A1…G4) cite the IDs used here (CS-/CE-/PR-/G/NS-/D/SEL-/LC-/F/TO-). The audited code moved into this repository at the 2026-08-26 split: every path below is relative to the poopdeck.gl repository root, and line numbers are as of the 2026-08-24 working tree.
 
-Contents: 0 shared brief · 1 selection & LOD · 2 prefetch & runway · 3 governor coupling · 4 cache & eviction · 5 network & scheduler · 6 decode · 7 layer consumption · 8 cold start & small archives · 9 tests & observability · 10 showcase config
-
----
-
-# Appendix 0 — brief-common
-
-## Tile-loading audit — common brief (2026-08-24)
-
-Repo: `/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles` (pnpm monorepo, TS + Rust).
-You are ONE of ten parallel auditors. **READ-ONLY. Do not edit any file, do not run
-`git checkout` / `git stash` / `git reset` (the tree carries large uncommitted work).**
-You may run `pnpm --filter @poopdeck.gl/core test -- <file>` style test runs and
-node scripts in the scratchpad dir
-`/private/tmp/claude-501/-Users-robertchristie-Documents-GitHub-spatiotemporal-tiles/a58aa049-4720-403a-afe7-b3cd0e4c45fc/scratchpad/`
-if that helps you PROVE a claim. A dev server is on http://localhost:3000 (showcase,
-`/demo/<id>`), and `stt-serve` on :8787 — you may use Playwright from
-`tools/render-test/` to measure, but do not spend more than ~10 minutes on browser runs.
-
-## The user's goal (what "good" means)
-
-"Fully optimized for VERY LARGE datasets, functional for SMALLER ones, and the PLAYBACK
-experience must be seamless." Judge every finding against those three axes:
-
-- **Large**: local fleet tops out at `nyc-taxi-paths` 3.1 GB / 429k tiles / 60 s buckets /
-  z10-14; `gtfs-ch` 2.4 GB / 558k tiles; `drifters` 2.4 GB / 256k tiles / z0-4 (huge coarse
-  tiles); `satellites` 1.8 GB / 24k tiles / z0-3 (tiles of ~70 KB avg); `flights` 804 MB /
-  43.5M features; `ais-all-us` 498 MB / 560k tiles z0-14; `earthquakes` 23 MB but 350k tiles
-  (tiny tiles — per-tile overhead dominates).
-- **Small**: `storm4d-reports` 80 tiles, `lines-v2` 492 tiles/0.2 MB, `bixi-flowmap`
-  59 tiles, `storm4d-sounding` 4 tiles. Whole archive fits in memory trivially; the
-  question is whether the large-dataset machinery adds latency/overhead/complexity
-  (debounce, prefetch passes, eviction scans, coverage-index rebuilds, worker pool
-  spin-up, gating that can never fail) or breaks (e.g. gates never satisfiable, runway
-  math with a single bucket, zoom ranges outside camera zoom).
-- **Playback seamless**: no stalls, no flashing/pop, no re-fetch churn, no visible
-  LOD swap while playing, clock never runs ahead of data, bounded memory, works at
-  high playback speeds (e.g. 157× sim on gtfs-ch, 288× storm-4d) and on slow links.
-
-## Architecture (so you don't have to rediscover it)
-
-- `packages/core/src/spatiotemporal-tileset.ts` (6196 lines) = THE loader. Key
-  methods: `update()` :2475 → `selectAndLoadTiles()` :2825 → `processRequestQueue()`
-  :3612 → `startTileBatch()` :3881; `prefetchFutureTiles()` :3305 (+ `prefetch-policy.ts`);
-  `evictUnusedTiles()` :5233 (4-tier playhead-relative); `getVisibleTiles()` :5592 with
-  `coverWithAncestorDp` :5899; runway: `getBufferedRunway` :4429, `getBufferedRanges`
-  :4531, `estimateCost` :4577, `maybeRebuildCoverageIndex` :5113; overview preload
-  :4840-5095; `cancelSupersededRequests` :4319; retry ladder :4102-4290;
-  `setAnimationState` :2006, `setInteractive`(scrub) :2055, `setLoopWindow` :2112.
-  Options interface at :956, defaults at :1328-1364 (maxRequests 24, maxCacheSize 2000
-  tiles, maxCacheByteSize 2 GiB, prefetchAhead 30000 ms, prefetchSteps 4,
-  refinementStrategy 'best-available', lodMode 'parent-fallback', placeholderPolicy
-  'expected-value', coverSearch 'dp', temporalTierPolicy 'zoom-threshold'). Constants
-  :49-460 (PARENT_FALLBACK_LEVELS 4, CHILD_LOOKAHEAD_LEVELS 2, RUNWAY_HORIZON_REAL_MS
-  10 s, MAX_COALESCE_BATCH 1024, DEFAULT_OVERVIEW_BUDGET_BYTES 20 MiB …).
-- `packages/core/src/archive.ts` (5886 lines) = `STTArchive`: manifest + directory
-  (paged when > SMALL_DIR_THRESHOLD 256 KiB), `getTiles`/`getTileDataBatch` :4205,
-  range coalescing (`DEFAULT_RANGE_COALESCE_GAP` 2 MiB, adaptive 256 KiB–4 MiB),
-  shared byte cache (500 tiles / 512 MiB, playhead-aware score BH-8), OPFS cache
-  (`opfs-cache.ts`), retries/timeouts (transfer timeout 20 s), `getTileIdsInBounds`
-  :4797, summary/temporal-LOD id queries, `estimateSelectionCost` :3509,
-  `asTileSource` :5333 (the bridge to the tileset).
-- `packages/core/src/request-scheduler.ts` + `shared-scheduler.ts`: DRR + EDF shared
-  scheduler, 24 slots across all archives; `throughput.ts` dual-EWMA link estimator.
-- `packages/core/src/tile-decoder.ts` + `tile-decoder.worker.ts`: worker pool
-  (grow/shrink), `tile.ts` (`decodeTile`, `tableToBinaryFeatures`),
-  `tile-transferables.ts`.
-- `packages/core/src/tile-budget.ts` (viewport cell budget 256 + hysteresis),
-  `geo/frustum-cover.ts` (549 lines — check whether it is WIRED into selection or dead),
-  `geo/viewport-bounds.ts` (the 2026-07 3D bounds fix).
-- `packages/playback/src/playback-governor.ts` (3305 lines): clock↔buffer gate,
-  frontier hold, low watermark, degraded creep, multi-source min-gate + fairness +
-  run-ahead cap, auto-speed; `time-controller.ts`; `stt-player.ts`.
-- `packages/core/src/render/tileset-adapter.ts` (88 lines) bridges tileset → layers
-  (`makeTilesetCallbacks`). `packages/layers/src/layers/spatiotemporal-layer.ts`
-  (3033 lines) is the deck chassis: `tileset.update()` :1442/:1672,
-  `getVisibleTiles()` :1456/:1511/:1685, `setAnimationState` :1119/:1285/:2145,
-  `setOptions` :1368. three/maplibre/cesium backends have their own consumers.
-- Showcase wiring: `examples/showcase/src/components/demo/buildDemoLayers.ts`
-  (`tileLoadingProps` from `src/types.ts:1844` = prefetchAhead max(window, speed×5 s),
-  prefetchSteps 4, maxRequests 12; composites split caches 2000/N tiles, 2 GiB/N),
-  `DemoViewer.tsx`, `src/datasets.ts` (per-demo config incl. `tileLoadTimeWindow`,
-  `headsOverlayTimeWindow`, `overlayGatesPlayback`, `tier`, `zRange`).
-- Docs that describe intent: `docs/roadmap/playback-and-loading.md`,
-  `docs/roadmap/tile-loading-3d-2026-07.md`, `stt:docs/roadmap/optimization-conformance-2026-08.md`
-  (§5-6 open defects), `docs/roadmap/measurements-2026-08.md`, `docs/roadmap/README.md`
-  "The backlog". Treat docs as CLAIMS; the code is the truth. Report doc↔code drift.
-- Tests: `packages/core/test/*` (prefetch-_, eviction-_, buffered-runway, cost-oracle,
-  frustum-cover, tile-budget, request-scheduler, selection-hardening …),
-  `packages/playback/test/*`, `packages/layers/test/chassis-*`.
-- Telemetry: `packages/core/src/telemetry.ts` channels → `globalThis.__sttProbe`.
-  Bench: `tools/bench/src/{cold-start,frame-cost,policy-record,policy-replay,scrub-cost}.mjs`,
-  `tools/render-test/probe-*.mjs` (Playwright, `STT_URL=` env).
-
-## Already known — do NOT re-report as new (cite as context only if relevant)
-
-- 3D viewport bounds bug (fixed 2026-07 via `viewport.getBounds()` + `viewport-bounds.ts`);
-  `maxPitch` 70 ceiling is deliberate (unproject inverts ≥71.57°).
-- Prefetch supersession policy (in-flight prefetch exempt from `cancelSupersededRequests`),
-  prefetch slicing (byte-budgeted slices, nearest-first), per-batch dispatch accounting.
-- 4-tier playhead-relative eviction + `prefetchPressureScale` ladder; run-ahead fairness;
-  `overlayGatesPlayback` default true; per-archive cache split in composites.
-- Fine-bucket overlay must not inherit primary `timeWindow` (`headsOverlayTimeWindow`);
-  `best-available` double-draw fixed with `no-overlap` on overlays; trip-heads cull by
-  `tile.timeRange`; `prefetchAhead` double-counts speed in the shared showcase helper
-  (left alone on purpose).
-- F5 retry ladder (attempts cap = readiness write-off only; fetch follows exp backoff).
-- `blobOrdering: spatial` breaks multi-cell playback (build-side; time-major mandated).
-- `metadata.bounds` is a centroid bbox (K11). Axis rebasing measured to LOSE (don't propose).
-- luma.gl UBO re-upload bug (patched); `/drive` + earthquakes are draw-call bound
-  (cross-tile consolidation is the named fix); temporal culling ruled out there.
-- `archive.stats` byte cache shows 0% hit rate under the decoded-tile cache (noted, open).
-- Read amplification via `coalesceGapBytes` 2 MiB default not plumbed to layer props (open).
-- M2 dictionary-hoist 39× resident-memory regression partially fixed (open: array-identity
-  sharing in `tile.ts`, manifest growth to 291 KB).
-- Scrub-LOD exists, default OFF, wired in zero showcase call sites (deliberate DT-4 decision
-  in measurements-2026-08 §10.7 — read it before proposing scrub changes).
-- Uncommitted in-flight change in the tree (DO NOT flag as a bug; assess it): CO-7 —
-  `prefetchFutureTiles` now prefetches PRIMARY ZOOM ONLY (parents excluded) except under
-  `lodMode:'additive'`; plus worker decode timing split (`decompressMs`/`parseMs`) on the
-  `decode` probe.
-
-## What to produce
-
-1. A full report written to the scratchpad file named in your task
-   (`audit-<dimension>.md`), in this exact structure:
-   - `## Findings` — each finding as:
-     `### <ID> [<critical|high|medium|low>] <title>` then fields: **Where** (file:line, several
-     if the mechanism spans sites), **Mechanism** (precise, in terms of the actual code — quote
-     the decisive lines), **Scenario** (which dataset shape triggers it: large / small /
-     playback / all; name a concrete local demo when possible), **Consequence** (what the user
-     sees or pays: stalls, flashes, bytes, ms, MB, missed tiles — with numbers when you can
-     compute them from constants), **Evidence** (what you did to convince yourself; a
-     computation, a test you ran, a grep proving no caller, a probe reading), **Fix** (concrete,
-     smallest sound change; note the blast radius and any test that pins current behavior),
-     **Confidence** (high/medium/low + why), **How to verify** (a test or measurement that
-     would fail today and pass after).
-   - `## Checked and correct` — mechanisms you examined that are sound (one line each with
-     file:line), so nobody re-audits them.
-   - `## Doc ↔ code drift` — claims in docs/comments that the code does not do (or vice versa).
-   - `## Needs measurement` — hypotheses you could not settle from code alone, with the exact
-     measurement that would settle each.
-2. Return as your final message: a compact summary — the finding IDs with severity + one-line
-   title each, the count of checked-correct items, and the path of your report file.
-
-Standards: read the actual code paths end-to-end; do not report from comments or docs alone.
-Before writing a finding, try to refute it (find the guard you missed, the test that pins it,
-the caller that compensates). Prefer fewer, verified findings over many plausible ones. Give
-`file:line` for every claim. Distinguish "the code does X" from "I think X". Where a constant
-or default is the problem, show the arithmetic for a named local dataset. Do not propose
-format/byte-layout changes or thinning of data (project rules: base tier stays lossless;
-reductions must be declared tiers). Do not restate the known list above as findings.
+Contents: 1 selection & LOD · 2 prefetch & runway · 3 governor coupling · 4 cache & eviction · 5 network & scheduler · 6 decode · 7 layer consumption · 8 cold start & small archives · 9 tests & observability · 10 showcase config
 
 ---
 
@@ -170,7 +20,7 @@ live directories on `localhost:3000` (`scratchpad/measure-selection.mjs`), and a
 scratchpad vitest run against the TS sources (`scratchpad/selproof/selection.test.ts`,
 7/7 pass — each test is a proof of the mechanism it is named for).
 
-All paths below are under `/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles/`.
+All paths below are relative to the repository root.
 `tileset.ts` = `packages/core/src/spatiotemporal-tileset.ts`; `chassis` =
 `packages/layers/src/layers/spatiotemporal-layer.ts`.
 
@@ -607,7 +457,7 @@ rule is live on the first selection.
 
 ## Doc ↔ code drift
 
-1. `optimization-conformance-2026-08.md:28` "§8 frustum selection FS-1 … FS-3 **3/3**" vs six `it.fails('PENDING FS-3 REPAIR')` tests; `tile-loading-3d-2026-07.md:290,347` "Wave 3 … NOT built" vs FS-1/FS-2 landed 2026-08-11. Both stale, in opposite directions.
+1. `stt:docs/roadmap/optimization-conformance-2026-08.md:28` "§8 frustum selection FS-1 … FS-3 **3/3**" vs six `it.fails('PENDING FS-3 REPAIR')` tests; `tile-loading-3d-2026-07.md:290,347` "Wave 3 … NOT built" vs FS-1/FS-2 landed 2026-08-11. Both stale, in opposite directions.
 2. `archive.ts:771` "the tileset's selection key folds in the time range — so during playback it re-runs at display refresh, not at 10 Hz" — true for maplibre, false for deck (throttled to ≤10 Hz at `chassis:1416-1421`).
 3. `tileset.ts:2857-2862` "Running on a TimeController tick that hasn't crossed a bucket boundary, this is the common case" — the key folds the exact `timeRange`; only an identical time hits the fast path (proved: 100 scans / 20 advancing updates).
 4. `tileset.ts:253` "Higher numbers don't add load pressure (each lower zoom has 4× fewer cells)" — bytes per bucket are ~flat across zooms in a replicated archive (gtfs-ch z6 7.0 MB … z14 12.9 MB per bucket); the parent band is 5.4× the primary bytes at Zürich z14.
@@ -1158,7 +1008,7 @@ The gate path (`evaluateGate`, horizon 2 s/4 s × |speed| = 570 s/1140 s on stor
 
 **Consequence** Bounded per-event (≤ 1 frame snap + ≤ 1 frame stall on coarse buckets), but periodic, and it inflates QoE `stallCount` so the CI "stallCount stays bounded" probe measures the wrong thing. On fine-bucket fast demos it escalates to genuine hysteresis stalls.
 
-**Evidence** Code; `playback-governor.test.ts:234-250` pins the clamp with a STATIC runway (the frontier never moves between probe and clamp) — the moving-frontier case has no test. The `backjumps` diagnostic exists because backward jumps were observed in a flash repro (git `92dc0d1`).
+**Evidence** Code; `playback-governor.test.ts:234-250` pins the clamp with a STATIC runway (the frontier never moves between probe and clamp) — the moving-frontier case has no test. The `backjumps` diagnostic exists because backward jumps were observed in a flash repro (git `stt:92dc0d1`).
 
 **Fix** In `tickHandler`, before `setClockTime(frontier)`: call `refreshFrontier()` once (one probe, only on a crossing) and recompute the overrun; only gate if the playhead is still past the fresh frontier. Optionally consult `predictsPlaythrough` on the clamp path with the watermark window so the gate factor matches the watermark's decision. ~10 lines; the static-runway test still passes.
 
@@ -1196,7 +1046,7 @@ The gate path (`evaluateGate`, horizon 2 s/4 s × |speed| = 570 s/1140 s on stor
 
 **Scenario** All demos; the byte-cliff case the plan motivates (storm-4d cell entry, multi-source composites).
 
-**Consequence** The "thin now, wall later" pass-through the fluid check exists to refuse still passes; Auto-speed still upshifts into a density spike it never priced. No stall is caused by this directly, but the shipped behaviour is not what `optimization-conformance-2026-08.md` §1 ("M5 CO-1…CO-7 **7/7** landed") and `optimization-implementation-plan-2026-08.md:247-287` describe.
+**Consequence** The "thin now, wall later" pass-through the fluid check exists to refuse still passes; Auto-speed still upshifts into a density spike it never priced. No stall is caused by this directly, but the shipped behaviour is not what `stt:docs/roadmap/optimization-conformance-2026-08.md` §1 ("M5 CO-1…CO-7 **7/7** landed") and `stt:docs/roadmap/optimization-implementation-plan-2026-08.md:247-287` describe.
 
 **Evidence** `grep -rn "getThroughput\|baseSpeed:" packages/react/src examples/showcase/src packages/three/src packages/maplibre/src` → no governor option sites. 4751 lines of governor tests exercise these paths with explicit options.
 
@@ -1311,7 +1161,7 @@ Vacuous/misleading: BH-4 "does not mask a genuine laggard" (:2805) and the BH-4 
 1. `docs/roadmap/playback-and-loading.md` §6.1 "Dynamic weights — `base × clamp((slack + laggard)/(slack + runway_i), 0.25, 4)`": the shipped default is the BH-3 progressive fill by byte need (`fairness.ts:117-160`, `USE_PROGRESSIVE_FILL_WEIGHTS = true` at governor :625); the 1/x shed is the retained fallback.
 2. `playback-and-loading.md` §5 and `docs/api/playback-governor.md` ("Constructor" table row and "Cadence tolerance band"): "`runwayToleranceMs` default 200 (the tick-probe interval)". Unauthored, the band is the per-source BH-4 derivation `τ_i = max(Δ_i, Δ_L) + 200 ms × |speed|` (governor :2116-2131); 200 ms is only the residue. Both docs also claim the band absorbs jitter "without lowering genuine stall protection" — false for bucket-coarse composites (G2).
 3. Governor `scrubTo` docstring (:1326-1329, "no tileset update storm, no fetches") and `docs/api/stt-player.md` ("previews are free"): the layer's tick path updates the tileset at ≤10 Hz during previews and issues priority fetches (`spatiotemporal-layer.ts:1410-1442`; measured 0.3–2.2 MiB per drag, `measurements-2026-08.md §10.6`). What is true: no PREFETCH flush per preview.
-4. `stt:docs/roadmap/optimization-conformance-2026-08.md` §1 "M5 CO-1…CO-7 **7/7** landed" and `optimization-implementation-plan-2026-08.md:247-287`: CO-3's fluid check + dispersion re-fit and CO-4's ladder are unreachable from every shipped consumer (G5). Governor :365-386 says `baseSpeed` "i.e. `SttPlayer.baseRate`" — `SttPlayer` does not pass it (`stt-player.ts:150-153`).
+4. `stt:docs/roadmap/optimization-conformance-2026-08.md` §1 "M5 CO-1…CO-7 **7/7** landed" and `stt:docs/roadmap/optimization-implementation-plan-2026-08.md:247-287`: CO-3's fluid check + dispersion re-fit and CO-4's ladder are unreachable from every shipped consumer (G5). Governor :365-386 says `baseSpeed` "i.e. `SttPlayer.baseRate`" — `SttPlayer` does not pass it (`stt-player.ts:150-153`).
 5. Governor header (:9-16) and `playback-governor.md` "Gates and hysteresis": "resume hysteresis so stall/resume never oscillates" — the clamp path can oscillate 1-frame stalls (G3); "Low watermark … tick-driven (every ~200 ms)" — it is also event-driven, unthrottled, on every buffer change (G6).
 6. `playback-governor.md` "Loop wraps": "A wrap into fully-cached time passes the gate synchronously, so seamless loops stay seamless" — true of the governor, never true of the loader on large archives (G4); the doc should say every lap on a large archive gates.
 7. `BufferSource.setPrefetchRunAheadLimit` docstring (governor :128-142) says the loader "may enforce its own internal safety floor" — the floor `max(Δ, timeWindow, 5 s × speed)` (`prefetch-policy.ts:96-101`) exceeds the cap `laggard + 3 s × speed` whenever the laggard is < 2 s × speed ahead, i.e. the cap is inert in exactly the starved case it targets. (Documented behaviour, but the doc's "Shaka caps ~1 segment past the neediest" framing overstates what ships.)
@@ -1539,13 +1389,14 @@ is therefore CORRECT on this path — the bytes are real.
 `gtfs-ch` `agency_id` 360 categories, 8,084 B/copy, shared in-worker → on the main thread
 **8.3 KB of duplicated strings per tile** (measured `bytesize-structural.mjs`: gtfs-ch z10 tiles
 are 93 B of buffers + 8,331 B of category strings — 90 % of the tile). At the 2000-tile cap that is
-16.6 MB of duplicates; the 14,653-category column cited in `optimization-conformance-2026-08.md`
-§6.1 (~527 KB/copy) would be ~1 GB at 2000 resident. Non-hoisted (tile-local) dictionaries are
+16.6 MB of duplicates; the 14,653-category column cited in
+`stt:docs/roadmap/optimization-conformance-2026-08.md` §6.1 (~527 KB/copy) would be ~1 GB at
+2000 resident. Non-hoisted (tile-local) dictionaries are
 unaffected and are the bigger absolute cost today: `satellites` `object_name`+`intl_designator`
 4,610–4,713 categories per tile, **454 KB of strings per z1 tile, 1.5 MB per z0 tile**.
 
-**Consequence** The 39× regression `optimization-conformance-2026-08.md` §6.1 describes is still the
-browser's behaviour for hoisted columns; only Node tests see the fix. Heap, not ArrayBuffer memory
+**Consequence** The 39× regression `stt:docs/roadmap/optimization-conformance-2026-08.md` §6.1
+describes is still the browser's behaviour for hoisted columns; only Node tests see the fix. Heap, not ArrayBuffer memory
 — V8 heap strings trigger GC pauses and iOS Safari's tab budget earlier than typed arrays.
 
 **Evidence** greps above (no `categor` in `tile-decoder.ts`, none in the worker after decode);
@@ -1814,7 +1665,7 @@ Scope: `packages/core/src/archive.ts` (open → directory → `getTiles` → `fe
 
 **Q4 — timeouts/retries.** `withTransferTimeout` (:849-887) starts the 20 s timer BEFORE `fetchFn` and the same signal races `response.arrayBuffer()` (:2447): it is a total-transfer deadline, not a stall timeout. On `TimeoutError` (name ≠ `AbortError`) `fetchObjectRangeWithRetry` (:2512-2540) re-issues the **identical** `(url,start,end)` after 250 ms and 1000 ms (±50 % jitter), never re-splitting; each failed attempt feeds `throughput.addSample(1, attemptMs)` (:2535). After 3 failures `getTiles`' `fetchGroup` (:4408-4450) fetches every member individually, in parallel, single attempt each, same 20 s deadline. Survivors are `null`; the tileset counts a null priority tile as a non-aborted failure (`startTileBatch` finally :4051 → `noteSettledWithoutTile(key, header, false)`), advances the ladder `500 ms × 2^(settles-1)` capped at 60 s (:4163, constants :345/:354), writes readiness off after 3 attempts (:318) but keeps re-enqueueing forever (`retryFailedTiles` :4230). A 404 pack takes the same path (NS-9). See NS-1.
 
-**Q5 — small archives.** `storm4d-sounding` (4 tiles, 101 KB pack, 153 B directory): open = manifest GET + whole-directory GET; first frame = 1 range (all 4 tiles are one bucket, z3–z6 parents included, pack < gap); playback = 0 more. `lines-v2` (492 tiles, 180 KB pack): any batch from the pack fuses into ONE range (pack < 2 MiB gap), so requests = number of batches the prefetch runway does not cover, not tiles. There is no "tiny archive → fetch each pack whole" path. Such a path would be sound: packs are content-addressed and served `cache-control: public, max-age=31536000, immutable` (r2-sync.sh:108; verified live), so a 200 GET of a whole pack is browser-cacheable and the byte cache (500 tiles / 512 MiB) can hold every blob. Overhead of the large-dataset machinery on small archives is small on this side: `ensurePagesForTiles` is a no-op when not paged (:3379), OPFS lookups only when an OPFS cache is configured (none in the showcase), scheduler enqueue is synchronous.
+**Q5 — small archives.** `storm4d-sounding` (4 tiles, 101 KB pack, 153 B directory): open = manifest GET + whole-directory GET; first frame = 1 range (all 4 tiles are one bucket, z3–z6 parents included, pack < gap); playback = 0 more. `lines-v2` (492 tiles, 180 KB pack): any batch from the pack fuses into ONE range (pack < 2 MiB gap), so requests = number of batches the prefetch runway does not cover, not tiles. There is no "tiny archive → fetch each pack whole" path. Such a path would be sound: packs are content-addressed and served `cache-control: public, max-age=31536000, immutable` (`stt:scripts/r2-sync.sh:108`; verified live), so a 200 GET of a whole pack is browser-cacheable and the byte cache (500 tiles / 512 MiB) can hold every blob. Overhead of the large-dataset machinery on small archives is small on this side: `ensurePagesForTiles` is a no-op when not paged (:3379), OPFS lookups only when an OPFS cache is configured (none in the showcase), scheduler enqueue is synchronous.
 
 **Q6 — fairness.** DRR currency is bytes: quantum `weight × 512 KiB` per round (:827-830, :871-880), admission `deficit ≥ min(costBytes, quantum)` (:856-860), spend `deficit −= costBytes` (:796-800), deficit clamped to ≤ one quantum at crediting (:878) but never clamped from below, pruned only when the source has nothing queued AND nothing running (:726-731). Trace for a required source R and three optional overlays O1–O3, all weight 1: R dispatches a 15 MiB group → deficit = 0.5 − 15 = −14.5 MiB; each round adds 0.5 MiB (`min(−14 MiB, 0.5 MiB) = −14 MiB`), so R needs ~29 rounds to re-admit, and in every round each overlay is admitted for ~512 KiB of groups regardless of tier, because `pickEligible` (:887-901) applies the deficit gate BEFORE the priority comparison. Measured on the real scheduler (`drr-arrears3.mjs`): optional PREFETCH groups (priority ≥ 1e15) dispatched while R's NEED-NOW group (priority 1000) waited — 0 after a 512 KiB group, **17 (4.3 MB) after a 2 MiB group, 173 (43 MB) after a 15 MiB group**, 30 (7.5 MB) with R re-weighted to 4×, 0 once R is fully idle (prune forgives arrears). The governor's fairness pass only re-weights incomplete REQUIRED sources within [0.25×, 4×] (`fairness.ts:33-35`, governor :2622-2790); optional sources keep weight 1 and are never de-weighted. EDF term = sim-ms `timeStart − playhead` (:3948-3956), not speed-scaled — consistent across sources sharing one clock, but keyed on `timeStart` only (NS-7).
 
@@ -1939,7 +1790,7 @@ Scope: `packages/core/src/archive.ts` (open → directory → `getTiles` → `fe
 
 ## Checked and correct
 
-- `fetchManifest` :2169-2280 — single-flight (`manifestPromise`), format/version/capability/variant validation before any tile fetch, retried with the same ladder; manifest is a plain GET with default cache mode (R2 serves `max-age=60, must-revalidate` per `scripts/r2-sync.sh:109`).
+- `fetchManifest` :2169-2280 — single-flight (`manifestPromise`), format/version/capability/variant validation before any tile fetch, retried with the same ladder; manifest is a plain GET with default cache mode (R2 serves `max-age=60, must-revalidate` per `stt:scripts/r2-sync.sh:109`).
 - `fetchAndBuildIndex` :2772-2846 — paged/whole decision `layout==='paged' && length > 256 KiB && rootLength && rootHash && pageHashes`; whole-load path verifies the blake3 content address (:2851-2866); paged path verifies root + every leaf hash before decompression (:2803, :3100).
 - `decodePagedRoot` (directory.ts:132-269) — validates page count/entries against the manifest, monotone non-overlapping leaf ranges, bounds within payload; `decodeDirectory` :358-530 guards entry count vs remaining bytes before allocating.
 - `ensurePagesForBounds` :3235-3271 — wrap-aware longitude intervals, ordered latitude band, shares `pageOverlapsQuery` with `unknownEntriesInBounds` :3349; `ensurePagesForTiles` :3373-3452 has a sound upper temporal prune (`tMin > t + maxBucketMs`).
@@ -1983,7 +1834,7 @@ Scope: `packages/core/src/archive.ts` (open → directory → `getTiles` → `fe
 
 ## Audit — DECODE PIPELINE (bytes → renderable tile, and the main-thread cost of it)
 
-Date 2026-08-24. Read-only. All paths under `/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles`.
+Date 2026-08-24. Read-only. All paths are relative to the repository root.
 Bench scripts used for evidence live in the scratchpad dir: `scan-zstd-headers.mjs`,
 `bench-fzstd.mjs`, `bench-decode-phases.mjs`, `bench-mainthread.mjs`, `bench-clone.mjs`,
 `bench-crc.mjs`, `bench-inline-decode.mjs` (all run against the REAL local fleet packs via the
@@ -2799,9 +2650,8 @@ Local fleet facts used throughout (from `manifest.json`):
 
 ## Tile-loading audit — tests, telemetry, benches, gaps (2026-08-24)
 
-Dimension: what the loader can PROVE about itself. Read-only. Repo root
-`/Users/robertchristie/Documents/GitHub/spatiotemporal-tiles`; all paths below are relative
-to it unless absolute. Line numbers are against the working tree at ~12:10–12:25 EDT; note
+Dimension: what the loader can PROVE about itself. Read-only. All paths below
+are relative to the repository root unless absolute. Line numbers are against the working tree at ~12:10–12:25 EDT; note
 that `packages/core/src/tile-decoder*.ts` and `packages/core/test/tile-decoder.test.ts` were
 being edited by ANOTHER session during this audit (mtimes 12:10–12:16), see TO-4.
 
@@ -2869,7 +2719,7 @@ The 8 red tests at 12:12 were a mid-edit snapshot, not a regression — see TO-4
 
 ### TO-4 [low] The 8 red `tile-decoder` tests at 12:12 were a concurrent-edit artefact; the current tree is green — but the working tree is being edited under the auditors
 
-**Where** `packages/core/test/tile-decoder.test.ts` (mtime 12:16:29 today; 1567 → 1671 lines during this audit), `packages/core/src/tile-decoder.ts` (mtime 12:14:30, +180 lines uncommitted), `packages/core/src/tile-decoder.worker.ts` (12:10:03, +180 lines uncommitted). `git diff --stat` (read-only) confirms all three modified; `git log -3 --oneline -- packages/core/test/tile-decoder.test.ts` = `d5163aa e084ccd 5f5a693`.
+**Where** `packages/core/test/tile-decoder.test.ts` (mtime 12:16:29 today; 1567 → 1671 lines during this audit), `packages/core/src/tile-decoder.ts` (mtime 12:14:30, +180 lines uncommitted), `packages/core/src/tile-decoder.worker.ts` (12:10:03, +180 lines uncommitted). `git diff --stat` (read-only) confirms all three modified; `git log -3 --oneline -- packages/core/test/tile-decoder.test.ts` = `d5163aa e084ccd 5f5a693` (pre-split history — these resolve in the STT repository, not here).
 **Mechanism** The uncommitted BH-7 change makes `pullNext` post one `{type:'decodeBatch', items:[…]}` envelope (`tile-decoder.ts:792`) instead of per-tile `{type:'decode'}` messages. The decoder reader ran HEAD's test file against the current source: 23/48 fail, all because `FakeWorker` pushed the envelope verbatim and `decodeMessages()` filtered `type==='decode'` → `[]`. The uncommitted test diff is the adaptation (`FakeWorker.postMessage` unwraps `decodeBatch` :71-77, new `settleAll()` :145-157, BH-6 `answerOne` :900-910). The 8-failure snapshot is the intermediate state where the unwrap had landed but `settleAll`/`answerOne` had not (the six BH-5 order tests + BH-6 (1) grow + (3) templates = 8). Not `hardwareConcurrency` (every BH-6 test injects `cores` via the constructor seam :924 → `src:467-476`); not the `decompressMs/parseMs` split (additive, asserted nowhere: grep `decompressMs|parseMs|queueWaitMs|__sttProbe` in the test → none); not a real regression (52/52 ×3 at 12:16+, 1358/1358 in my 12:22 full re-run).
 **Scenario** n/a (process).
 **Consequence** Any "baseline" number recorded by the ten parallel auditors between 12:10 and 12:17 for `tile-decoder*` is from a moving target. The BH-7 batch-envelope change is real, uncommitted, and — per the decoder reader — the worker module `tile-decoder.worker.ts` is executed by NO test (its batch reply assembly, cancel-ACK, timing object and transferable dedupe at `:150-166` run only in a browser).
@@ -3201,7 +3051,7 @@ daytime samples and `{12, 5.0 MB}` at the 75 % (night) sample.
 ### F4 [medium] Derived playback params are not safe to adopt: the resolver's defaults would over-select 12–4 320× on 11 of the 12 large demos, and the fleet's `suggested_playback_seconds` is a constant 20
 
 **Where** `packages/playback/src/derive-params.ts:180` (`DEFAULT_TIME_WINDOW_BUCKETS = 24`), `:376-387` (window precedence), `:365` (`suggestedPlaybackSeconds` precedence); consumers `useDemoPlayback.ts:14-25` (passes archive metadata + every authored override) and `buildDemoLayers.ts:521-528` (passes NO metadata).
-**Mechanism** Every registered demo authors `timeWindow` and `targetPlaybackSeconds`, so the resolver's derivations are dead paths today. If a demo dropped them: window → `min(24×bucket, span)`; duration → `styleHints.suggestedPlaybackSeconds` (present on 32 local archives; value 20 on 31 of them, 48 on drifters — the Rust emitter's `clamp(round(sqrt(bucket_count)), 20, 90)` per `optimization-implementation-plan-2026-08.md:464`).
+**Mechanism** Every registered demo authors `timeWindow` and `targetPlaybackSeconds`, so the resolver's derivations are dead paths today. If a demo dropped them: window → `min(24×bucket, span)`; duration → `styleHints.suggestedPlaybackSeconds` (present on 32 local archives; value 20 on 31 of them, 48 on drifters — the Rust emitter's `clamp(round(sqrt(bucket_count)), 20, 90)` per `stt:docs/roadmap/optimization-implementation-plan-2026-08.md:464`).
 Hand-set vs derived (>2× rows):
 
 | demo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | hand window    | derived window | ratio           | hand target | hinted target   | which is right                                                      |

@@ -19,8 +19,8 @@ pruning) plus `packages/playback/src/time-controller.ts` (the playhead) on the
 TS side. If an implementation and this document disagree, that divergence is a
 **bug in one of them** — resolved by an erratum to whichever is wrong, never by
 silently redefining the spec to match the code. Spec revisions follow the
-stability promise and changelog in the
-[packed spec §9.1/§9.3](./stt-packed-format.md#91-stability--versioning-promise).
+stability promise in
+[packed spec §9.1](./stt-packed-format.md#91-stability--versioning-promise).
 
 ## 1. Time base — Unix milliseconds, UTC
 
@@ -64,9 +64,10 @@ Every feature carries two absolute timestamps in its tile payload (see the
 
 - An **interval** feature (a trip, a storm cell's lifetime, a feature edit
   window) has `start_time < end_time`.
-- An **instantaneous** feature (an earthquake, a single ping, a dropoff) is
-  represented as `start_time == end_time`. When the input has no end-time field,
-  the builder sets `end_time = start_time` (`crates/stt-build/src/columnar.rs`).
+- An **instantaneous** feature (an earthquake, a single ping, a dropoff) MUST
+  be represented as `start_time == end_time`. When the input has no end-time
+  field, the builder sets `end_time = start_time`
+  (`crates/stt-build/src/columnar.rs`).
 
 For LineStrings built with an end-time field, each _vertex_ additionally carries
 its own timestamp (the `vertex_time` column) so a trip animates along its path;
@@ -86,7 +87,16 @@ bucket(t) = floor(t / temporal_bucket_ms) * temporal_bucket_ms
 ```
 
 `temporal_bucket_ms` MUST be **> 0** — a zero or negative width makes
-`bucket(t)` undefined, and the reference builder rejects it.
+`bucket(t)` undefined — so a writer MUST NOT emit `temporal_bucket_ms == 0`.
+The reference builder enforces this only when a temporal-LOD pyramid is
+declared (`validate_temporal_lod`, `metadata.rs`); on the plain path a zero
+width is silently **coerced to 1 ms** (`chunk_by_temporal_bucket`, `tiler.rs`)
+rather than rejected, so a conformant reader MUST NOT rely on the builder to
+catch it.
+
+§3, §3.1 and §3.2 specify **fixed-bucket mode** — the default, and the only
+mode a reader may assume. `stt-build --adaptive-temporal` replaces the grid
+with data-driven windows; see §3.3.
 
 > **Boundary semantics (normative).** Bucket _assignment_ is half-open;
 > feature _validity_ is inclusive. An instant exactly on a bucket boundary
@@ -117,14 +127,14 @@ bucket containing its `start_time` (`tiler.rs`, `chunk_by_temporal_bucket`):
 feature_bucket = floor(start_time / temporal_bucket_ms) * temporal_bucket_ms
 ```
 
-A feature is **not** duplicated into every bucket its `[start_time, end_time]`
-interval overlaps. This keeps the format lossless and compact (one physical copy
-per feature), and pushes interval-overlap handling to read time via the covering
-bound (§5). The consequence a reader MUST account for: a long-lived interval
-feature lives in the tile of its _start_ bucket, so a query window that opens
-_after_ the feature started must look _back_ far enough to find it — which is
-exactly what `cover_t_min` (§5) and the directory's per-leaf `t_min`/`t_max`
-(§4.1 of the packed spec) make cheap.
+A writer MUST NOT duplicate a feature into every bucket its `[start_time,
+end_time]` interval overlaps. This keeps the format lossless and compact (one
+physical copy per feature), and pushes interval-overlap handling to read time
+via the covering bound (§5). The consequence a reader MUST account for: a
+long-lived interval feature lives in the tile of its _start_ bucket, so a query
+window that opens _after_ the feature started must look _back_ far enough to
+find it — which is exactly what `cover_t_min` (§5) and the directory's per-leaf
+`t_min`/`t_max` (§4.1 of the packed spec) make cheap.
 
 ### 3.2 The dataset bucket size
 
@@ -150,6 +160,52 @@ flowchart LR
 
 Feature B spans three buckets but is stored once, in its start bucket (00:00).
 
+`metadata.time_range.start` is the first event time **floored to the coarsest
+declared bucket width** (the base, or the largest `temporal_lod[].bucket_ms`
+when a pyramid exists), so the range bounds the bucket-aligned tile _starts_
+rather than naming the earliest feature; `time_range.end` is not aligned.
+Adaptive-window builds (§3.3) apply no alignment.
+
+### 3.3 Adaptive temporal windows (`--adaptive-temporal`)
+
+`stt-build --adaptive-temporal <N>` replaces the fixed grid, **per spatial
+cell**, with contiguous windows of ~`N` features each — dense periods get fine
+windows, sparse periods coarse ones. In-memory (non-streaming) builds only. In
+this mode the grid of §3 does not apply, and the following holds instead:
+
+- A tile's `t` address is the window's **first feature timestamp**, not a
+  multiple of any width. With `--adaptive-boundary-count <N>` (default `256`)
+  that timestamp is snapped **down** onto a dataset-wide candidate set derived
+  as quantiles of the timestamp distribution, so adjacent spatial cells land on
+  the same fetch instants; `0` disables snapping, and a window whose snap would
+  collide with the previous window's key keeps its exact timestamp.
+- Features sharing one exact timestamp within a cell are **inseparable** — a
+  window is never closed mid-run — so every `(z, x, y, t)` key stays distinct
+  (`chunk_adaptive_dp` / `chunk_adaptive_by_count`, `tiler.rs`).
+- The shared candidate instants are published as the additive manifest field
+  `adaptiveBoundaries` (an ascending `i64` array, omitted when empty). That is
+  how a client keeps §3.2's enumerate-ahead prefetch contract with no fixed
+  width to step by. A reader that ignores the field still decodes every tile
+  correctly; it merely prefetches less well.
+- `metadata.temporal_bucket_ms` still records the `--temporal-bucket` value but
+  does **not** describe the emitted windows; no `time_range` alignment is
+  applied (§3.2); and trajectories are not sliced at bucket boundaries — a
+  segment is assigned to a window by its start time. A bucket pyramid has no
+  base width to multiply here, so the auto-tuner refuses to apply a budgeted
+  `--temporal-lod` spec in this mode.
+- `stt-serve` **rejects** `--adaptive-temporal` per request: a window is sized
+  across a cell's whole time range, which a single-tile request cannot see.
+  Pre-bake it with `stt-build`.
+
+> **Status (normative scoping).** This mode is a shipped builder flag whose
+> relationship to the fixed-grid model above is **under adjudication** — it is
+> the highest-priority open semantic verdict in the project's formal-semantics
+> register (`docs/roadmap/formal-semantics-2026-08.md` §5.5), whose candidate
+> resolutions are to declare it as a tier variant or to withdraw it. Until that
+> resolves, the fixed-grid MUSTs in §3 and §3.1 are scoped to fixed-bucket
+> mode, and a reader MUST NOT assume an adaptive archive's `t` values are
+> multiples of `metadata.temporal_bucket_ms`.
+
 ## 4. Temporal LOD — the coarser-bucket pyramid
 
 A multi-year dataset animated at the base bucket would stream an impractical
@@ -161,28 +217,48 @@ the base buckets.
 
 - Each LOD level's `bucket_ms` MUST be **strictly greater than the base** and an
   **exact integer multiple** of `temporal_bucket_ms`.
-- Levels are stored **sorted ascending** by `bucket_ms`.
-- Each level carries a `max_zoom_level`: the deepest spatial zoom at which that
-  coarse tier is still the right choice.
+- Levels MUST be stored **sorted ascending** by `bucket_ms`.
+- Each level MUST carry a `max_zoom_level`: the deepest spatial zoom at which
+  that coarse tier is still the right choice.
 
-**Content contract (normative).** A conformant coarse-tier tile contains
-**exactly the base features, re-bucketed at the coarser width**: for a given
-spatial cell, the coarse tile for bucket `[B, B + bucket_ms)` holds the union
-of the features of every base bucket that coarse bucket spans — identical
-features, identical geometry and times, **no reduction, aggregation, or
-thinning**. A coarse tier trades request count for bytes, nothing else, and a
-reader may rely on feature identity between tiers (the same feature `id`
-resolves to the same feature in every tier that contains it). Reduced or
-aggregated tiers are a **future declared variant** — they will be announced
-by an explicit metadata field when specified — not silently permitted; two
-writers emitting "1d" tiers today MUST agree on the identity semantics above.
+**Content contract (normative).** Each level declares what a reader may assume
+about its tiles in `temporal_lod[].contract`:
+
+| `contract`            | a tile at this level contains                                           |
+| --------------------- | ----------------------------------------------------------------------- |
+| `"union"` (or absent) | exactly the base features, re-bucketed at the coarser width — lossless  |
+| `"reduced"`           | **fewer** features than the base tier, derived by the declared `method` |
+
+`contract` is optional and **absent means `"union"`**, so a manifest written
+before the field existed stays valid and unchanged.
+
+A `"union"` level MUST hold, for a given spatial cell, the union of the
+features of every base bucket the coarse bucket `[B, B + bucket_ms)` spans —
+identical features, identical geometry and times, **no reduction, aggregation,
+or thinning**. It trades request count for bytes and nothing else, and a reader
+may rely on feature identity between tiers (the same feature `id` resolves to
+the same feature in every tier that contains it). A `"union"` level MUST NOT
+carry `method` — a method there is a category error.
+
+A `"reduced"` level is explicitly **not** lossless; the base tier stays
+complete and addressable beside it. It MUST name `method`, one of `"m4"` or
+`"minmaxlttb"`. A reduced level with no method is unreadable, because a reader
+cannot know what was dropped. Both rules are enforced by
+`validate_temporal_lod` (`metadata.rs`).
+
+**Reader negotiation (normative).** A reader MUST NOT substitute any non-base
+tier for base content unless it understands the declared `contract` (and
+`method`, when reduced). An unrecognised contract or method is simply never
+substituted — the reader falls back to the base tier — which keeps the
+conservative-superset guarantee as the vocabulary grows.
 
 Recorded in metadata as:
 
 ```jsonc
 "temporal_lod": [
-  { "bucket_ms": 86400000,   "max_zoom_level": 8 },  // 1 day,  used up to z8
-  { "bucket_ms": 2592000000, "max_zoom_level": 4 }   // 30 days, used up to z4
+  { "bucket_ms": 86400000,   "max_zoom_level": 8 },  // 1 day, up to z8 (absent = union)
+  { "bucket_ms": 2592000000, "max_zoom_level": 4,    // 30 days, up to z4
+    "contract": "reduced", "method": "minmaxlttb" }  // fewer features, by MinMaxLTTB
 ]
 ```
 
@@ -203,7 +279,8 @@ tileset does not switch to them automatically. An application calls
 
 then reads with `getTilesInBoundsForTemporalLod(...)`. The contract: zoomed out
 and scrubbing a decade, read 30-day aggregates; zoomed in, read per-hour base
-tiles.
+tiles. A reader that opts into the pyramid SHOULD select its tier that way — the
+coarsest level whose `max_zoom_level` covers the current zoom.
 
 ```mermaid
 flowchart TD
@@ -222,8 +299,8 @@ per entry:
 - **`cover_t_min`** — the **earliest `start_time` of any feature actually in the
   tile** (`tiler.rs`). It may be `<` or `>` `time_start` and is `≤ time_end`.
   Stored as a signed delta against `time_start` in the directory's covering
-  section (§4 of the packed spec); `None` on pre-covering archives, where readers
-  fall back to `time_start`.
+  section (§4 of the packed spec); `None` on pre-covering archives, where a
+  reader MUST fall back to `time_start`.
 - **`time_end`** — the tile's inclusive upper temporal bound. A writer MUST
   set it to the **maximum feature `end_time` actually in the tile** — the
   _tight_ bound, not the nominal bucket end `time_start +
@@ -236,7 +313,7 @@ temporal_bucket_ms - 1`. This is load-bearing for correctness, not an
   tile. (When every feature ends inside the bucket, the tight bound is _below_
   the nominal end and additionally saves wasted fetches.)
 
-A reader keeps a tile for a query window `[w_start, w_end]` iff:
+A reader MUST keep a tile for a query window `[w_start, w_end]` iff:
 
 ```
 time_end >= w_start  AND  (cover_t_min ?? time_start) <= w_end
@@ -283,10 +360,10 @@ matrices plus an STT `dimensions` block); the mapping is:
 
 | STT concept                                | OGC TMS concept                                                                                                                   |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `zoom`                                     | `tileMatrix` identifier within the TileMatrixSet (WebMercatorQuad, z0–z24)                                                        |
+| `zoom`                                     | `tileMatrix` identifier within the TileMatrixSet (WebMercatorQuad, z0–z22 — `MAX_ZOOM`, `tile.rs`)                                |
 | `x`, `y`                                   | `tileCol`, `tileRow` (WebMercatorQuad, top-left origin)                                                                           |
 | `bucket` start, width `temporal_bucket_ms` | an extra dimension `{ "id": "time", "unitSymbol": "ms", "resolution": temporal_bucket_ms, "default": metadata.time_range.start }` |
-| `metadata.time_range`                      | the dimension's `[start, end]` interval                                                                                           |
+| `metadata.time_range`                      | the dimension's `[start, end]` interval (`start` is bucket-aligned, §3.2)                                                         |
 | `--temporal-lod` level                     | a per-`tileMatrix` coarser dimension `resolution` (bigger step at lower zoom)                                                     |
 
 ```json
@@ -307,34 +384,3 @@ is ratified, STT's directory is already expressible in its terms; until then the
 an external tool can reason about STT addressing in OGC vocabulary. See also
 [OGC Moving Features](./stt-packed-format.md#102-ogc-moving-features-mf-json) for
 the per-vertex trajectory lineage.
-
-## 8. Summary of normative requirements
-
-- **MUST** represent all times as `i64` Unix-ms UTC; no timezone or calendar
-  semantics are carried by the format.
-- **MUST** use **non-negative** absolute times (`t ≥ 0`); the reference builder
-  rejects pre-1970 (negative) timestamps because the in-memory temporal index
-  (`TimeRange`, `TileId.t`) is unsigned `u64`. (The directory codec stores signed
-  `i64`, so `cover_t_min` deltas and per-leaf `t_min`/`t_max` may still be
-  negative.)
-- **MUST** represent instantaneous features as `start_time == end_time`.
-- **MUST** use a strictly positive bucket width (`temporal_bucket_ms > 0`) in
-  every tier.
-- **MUST** place each feature in exactly one base bucket
-  (`floor(start_time / temporal_bucket_ms) * temporal_bucket_ms`); a writer MUST
-  NOT silently duplicate a feature across buckets. Assignment is half-open —
-  an instant exactly on a bucket boundary belongs to the bucket it starts —
-  while feature validity `[start_time, end_time]` stays inclusive (§3).
-- **MUST** set each directory entry's `time_end` to the **maximum feature
-  `end_time` in the tile** (the tight bound, §5) — interval features are
-  findable after their start bucket only through it.
-- LOD levels **MUST** be strictly-increasing exact multiples of the base bucket,
-  stored sorted ascending, each with a `max_zoom_level`.
-- A coarse LOD tile **MUST** contain exactly the base features re-bucketed at
-  the coarser width — no reduction, aggregation, or thinning (§4); reduced
-  tiers are a future _declared_ variant, not silently permitted.
-- A reader **MUST** prune by `time_end >= w_start AND (cover_t_min ?? time_start)
-<= w_end`, and **MUST** fall back to `time_start` when `cover_t_min` is absent.
-- A reader **MUST NOT** assume bucket boundaries align to calendar units.
-- A reader **SHOULD** select temporal LOD via `max_zoom_level` (coarsest level
-  covering the zoom) when the application opts into the pyramid.

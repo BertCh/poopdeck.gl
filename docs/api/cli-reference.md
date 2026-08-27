@@ -1,9 +1,8 @@
 # CLI Reference
 
 `cargo install spatiotemporal-tiles` installs five binaries — `stt-build`,
-`stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` — and **not**
-`stt-generate`, which is `publish = false` and builds only from a repo
-checkout. You can also grab a prebuilt binary from the
+`stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve`. You can also grab a
+prebuilt binary from the
 [GitHub releases page](https://github.com/BertCh/spatiotemporal-tiles/releases)
 (shell/powershell installers included), or build from the repo root with
 `cargo build --release -p spatiotemporal-tiles` (binaries land in
@@ -20,10 +19,6 @@ checkout. You can also grab a prebuilt binary from the
 The default install gives [`stt-serve`](#stt-serve) the PostGIS backend;
 `--features cli` (or `--features serve`) adds the embedded-DuckDB backend, a
 heavy bundled C++ compile.
-
-A sixth binary, **`stt-generate`** (the bundled showcase-dataset generators,
-see [below](#stt-generate)), is **repo-only** — it is not on crates.io and no
-install command produces it.
 
 ---
 
@@ -56,8 +51,10 @@ or **DuckDB** query and build the identical packed archive it would from a file
 everything downstream — LOD, quantization, summary tiers, `--publish` — works
 unchanged. `--postgres`/`--duckdb` are mutually exclusive with each other and
 with `--input`, which then becomes optional. Each reader is behind an
-off-by-default cargo feature, so build with the matching feature:
-`cargo build --release -p stt-build --features postgres` (or `duckdb`).
+off-by-default cargo feature, so install with the matching feature:
+`cargo install spatiotemporal-tiles --features postgres` (or `duckdb`). From a
+repo checkout the equivalent is
+`cargo build --release -p spatiotemporal-tiles --features postgres`.
 The full design + benchmarks are in
 [db-input-adaptors.md](../roadmap/db-input-adaptors.md).
 
@@ -68,7 +65,7 @@ The full design + benchmarks are in
 | `--table <NAME>`       | —       | Source table to read (optionally schema-qualified, e.g. `public.hurricane_obs`). Mutually exclusive with `--sql`; provide exactly one.                                                                                                                                     |
 | `--sql <SELECT>`       | —       | Arbitrary SQL `SELECT` to read from (wrapped as a subquery). Mutually exclusive with `--table`. Must expose `--geom-column` and `--time-field`.                                                                                                                            |
 | `--geom-column <NAME>` | `geom`  | Geometry column. Must be (or reproject to) EPSG:4326 lon/lat.                                                                                                                                                                                                              |
-| `--where <SQL>`        | —       | Optional SQL predicate appended to a `--table` read (e.g. `--where "iso_time >= '1970-01-01'"`).                                                                                                                                                                           |
+| `--where <SQL>`        | —       | Optional SQL predicate applied to the wrapped source query — works with `--table` and `--sql` alike (e.g. `--where "iso_time >= '1970-01-01'"`).                                                                                                                           |
 | `--source-srid <SRID>` | —       | Reproject the source geometry from this EPSG code to 4326 at ingest (PostGIS `ST_Transform`; DuckDB `ST_Transform(..., always_xy => true)`).                                                                                                                               |
 
 The `--time-field` / `--time-format` / `--end-time-field` flags below apply
@@ -168,7 +165,8 @@ There is **no `--format-version` flag.** `stt-build` emits packed
 schema templates embedded in the
 manifest (no per-tile schema tax), sectioned layer frames with `TILE_META`,
 time-sorted rows, and `STTP`/`STTD` object magic (packed spec §5.2, §9.2).
-Retired packed versions can no longer be written or read by this toolchain.
+There is no other version to write. Readers additionally open published
+`formatVersion: 2` archives read-only (packed spec §9.1).
 
 ### Size & layout
 
@@ -176,14 +174,14 @@ The directory shape is **adaptive by default**: small archives use one
 compressed frame; large archives use a tiny root page + leaf pages so a cold
 reader fetches only the leaves its viewport/time-window touches.
 
-| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ----------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--publish`                         | off     | Deploy-ready build: raises the zstd level to 19 for serve-as-is output (see `--zstd-level` for why); `--zstd-level` overrides it. The directory is already paged by default, so this only bumps the level. This is what `stt-generate` uses, so a from-source build is publish-quality as written (no separate repack pass). (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.)                                                                                                                              |
-| `--zstd-level <1..22>`              | `3`     | zstd level for tile blobs + directory. Default 3 is zstd's "fast" tier; a publish build should pass 19 — the format is write-once / serve-many, so the higher (one-time, offline) build CPU buys −10..19% on every client fetch, and decode is level-independent (free on the client). 19 ≈ 22 on STT tiles, so there's no reason to go past 19.                                                                                                                                                                                        |
-| `--quantize-coords <METERS>`        | `0`     | Opt-in coordinate quantization: store geometry as fixed-point integers at this ground precision in **meters** instead of Float64 lon/lat. `0` keeps Float64 GeoArrow coords. Coordinates are the dominant, near-incompressible tile column, so e.g. `--quantize-coords 1` (sub-meter error) is the largest size lever — measured −25..47% on trip/path datasets. Trade-off: a quantized tile is no longer self-describing Float64 GeoArrow (the per-tile affine rides in geometry field metadata; the STT reader reconstructs Float64). |
-| `--single-directory`                | off     | Force one compressed whole-load `.sttd`. By default the writer chooses this shape automatically for small directories.                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--page-entries <N>`                | `4096`  | Entries per leaf page once adaptive paging activates. Ignored with `--single-directory`.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--paged-directory-min-entries <N>` | `8192`  | Minimum tile entries before paging activates. Smaller archives use one compressed frame to avoid root/page overhead. Set to `1` to force paging.                                                                                                                                                                                                                                                                                                                                                                                        |
+| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--publish`                         | off     | Deploy-ready build: raises the zstd level to 19 for serve-as-is output (see `--zstd-level` for why); `--zstd-level` overrides it. The directory is already paged by default, so this only bumps the level. This is what `stt-generate` uses, so a from-source build is publish-quality as written (no separate repack pass). (Coordinate quantization stays a per-dataset opt-in via `--quantize-coords`.)                                                                                                                        |
+| `--zstd-level <1..22>`              | `3`     | zstd level for tile blobs + directory. Default 3 is zstd's "fast" tier; a publish build should pass 19 — the format is write-once / serve-many, so the higher (one-time, offline) build CPU buys −10..19% on every client fetch, and decode is level-independent (free on the client). 19 ≈ 22 on STT tiles, so there's no reason to go past 19.                                                                                                                                                                                  |
+| `--quantize-coords <METERS>`        | `0`     | Opt-in coordinate quantization: store geometry as fixed-point integers at this ground precision in **meters** instead of Float64 lon/lat. `0` keeps Float64 GeoArrow coords. Coordinates are the dominant, near-incompressible tile column, so e.g. `--quantize-coords 1` (sub-meter error) is the largest size lever — measured −25..47% on trip/path datasets. Trade-off: a quantized tile is not self-describing Float64 GeoArrow (the per-tile affine rides in geometry field metadata; the STT reader reconstructs Float64). |
+| `--single-directory`                | off     | Force one compressed whole-load `.sttd`. By default the writer chooses this shape automatically for small directories.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `--page-entries <N>`                | `4096`  | Entries per leaf page once adaptive paging activates. Ignored with `--single-directory`.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--paged-directory-min-entries <N>` | `8192`  | Minimum tile entries before paging activates. Smaller archives use one compressed frame to avoid root/page overhead. Set to `1` to force paging.                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### Column encoding & packing (opt-in)
 
@@ -264,9 +262,6 @@ attributes are untouched.
 | `--min-zoom-field <NAME>` | —       | Per-feature numeric property naming the shallowest zoom a feature appears at (road-class-style LOD). A feature is skipped at any zoom below its value — major roads when zoomed out, all streets up close.                                                                                                                                   |
 | `--max-zoom-field <NAME>` | —       | Per-feature numeric property naming the DEEPEST zoom a feature appears at (LOD ceiling). A feature is skipped at any zoom above its value. Paired with `--min-zoom-field` it confines a feature to a zoom band `[min_zoom, max_zoom]` — e.g. coarse-zoom clustered/aggregated overviews that must not bleed into full-resolution deep zooms. |
 
-The per-tile budgets and attribute-control flags hook into the in-memory build
-path only.
-
 ### Trajectory clipping
 
 LineStrings with `--end-time-field` are clipped at tile boundaries with
@@ -280,22 +275,26 @@ sub-trajectory animates correctly.
 | `--clip-buffer-px <F>`      | `8`       | LINE clip buffer, in pixels of a 256-px tile, resolved per zoom                                                                                                                                                                                                                                                                 |
 | `--additive-lod [S_PX]`     | _(off)_   | DT-2: assign each feature ONE home zoom (additive decomposition) instead of replicating it into every zoom of its band. Optional voxel pitch in screen pixels (default `0.4`). Mutually exclusive with `--min-zoom-field`. Declares `metadata.partition = "home-zoom"` and the must-understand capability `additive-partition`. |
 | `--clip-buffer-degrees <F>` | _(unset)_ | Pin the LINE clip buffer to fixed degrees (legacy rollback; `0.001` = pre-TB-7)                                                                                                                                                                                                                                                 |
-| `--simplify-degree-table`   | `false`   | Simplify with the legacy fixed per-zoom degree table instead of the default latitude-corrected metric tolerance                                                                                                                                                                                                                 |
 
 NON-trajectory geometry (polygons, MultiPolygons, timeless
 (Multi)LineStrings, MultiPoints) is coverage-clipped unconditionally — it
-lands in every tile it spans. The legacy whole-feature-placement kill switch
-that opted out of this was removed with the other 0.6.0 deprecation shims;
-there is no flag to restore it.
+lands in every tile it spans. There is no flag to opt out.
 
 ### Simplification
 
-| Flag                      | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--simplify`              | off     | Per-zoom Visvalingam–Whyatt simplification on LineStrings                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--simplify-max-zoom <N>` | `14`    | Above this zoom, keep full vertex detail                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--simplify-metric`       | off     | Simplify with a latitude-corrected **metric** tolerance instead of the fixed per-zoom degree table. The longitude axis is scaled by `cos(latitude)` before simplifying, so a given zoom's tolerance means the same GROUND distance at every latitude (a fixed degree tolerance is up to ~2× coarser in E–W terms at 60° than at the equator). Opt-in — without it, builds are byte-identical to before. Takes effect together with `--simplify`. |
-| `--time-aware-simplify`   | off     | Use time-aware TD-TR (Synchronized Euclidean Distance) instead of plain spatial Visvalingam — preserves per-vertex timing so zoomed-out playback keeps moving objects in the right place at the right time. Takes effect together with `--simplify`.                                                                                                                                                                                             |
+Per-zoom simplification uses a **latitude-corrected metric tolerance**: the
+longitude axis is scaled by `cos(latitude)` before simplifying, so a given
+zoom's tolerance means the same GROUND distance at every latitude (a fixed
+degree tolerance is up to ~2× coarser in E–W terms at 60° than at the equator).
+`--simplify-metric` is an accepted no-op alias, kept so existing scripts keep
+working.
+
+| Flag                      | Default | Description                                                                                                                                                                                                                                          |
+| ------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--simplify`              | off     | Per-zoom Visvalingam–Whyatt simplification on LineStrings                                                                                                                                                                                            |
+| `--simplify-max-zoom <N>` | `14`    | Above this zoom, keep full vertex detail                                                                                                                                                                                                             |
+| `--simplify-degree-table` | off     | Rollback: simplify with the legacy fixed per-zoom degree table instead of the metric tolerance. Takes effect together with `--simplify`.                                                                                                             |
+| `--time-aware-simplify`   | off     | Use time-aware TD-TR (Synchronized Euclidean Distance) instead of plain spatial Visvalingam — preserves per-vertex timing so zoomed-out playback keeps moving objects in the right place at the right time. Takes effect together with `--simplify`. |
 
 ### Polygon pre-tessellation
 
@@ -343,8 +342,7 @@ the pins existed — it is not a performance flag.
 
 `--streaming` is ignored when `--temporal-lod` is set (a warning is logged; the
 temporal-LOD pyramid needs the in-memory pipeline), and `--style-hints` is
-skipped under it. The per-tile budgets and attribute-control flags likewise
-apply to the in-memory build path only. The `--summary-tier`,
+skipped under it. The `--summary-tier`,
 `--heatmap-weight`/`--heatmap-class`, and `--metadata-output` passes run over
 the loaded features after the raw tier is written, so they compose with
 `--streaming`.
@@ -385,12 +383,11 @@ the recipe it returns. Sizes accept bytes or a `K`/`M`/`G` (binary, ×1024) or
 of the binary forms and a fractional value works (`1.5G`). After the build the
 log reports the archive's real byte size against the target.
 
-**What it may apply** — all lossless, all reversible: `--max-zoom` (zoom clamp),
-`--temporal-bucket` (coarser width), `--temporal-lod` (additive coarse tiers),
-the zstd level (`--publish` / `--zstd-level`, swept per dataset and capped at
-19), `--blob-ordering` and `--pack-size`. Where a budget is present its verdict
-supersedes the advisor's on those flags. Every application is logged with the
-measured byte price that bought it.
+See [Budget mode](#budget-mode-target-size) for the lever set it may apply, why
+it never drops, samples or aggregates a feature to hit the number, and what it
+does when the budget is unreachable. Where a budget is present its verdict
+supersedes the advisor's on the levers they share, and every application is
+logged with the measured byte price that bought it.
 
 > `--temporal-lod` is auto-applied **only** in budget mode. Everywhere else it
 > stays suggestion-only. The exception is scoped because under a budget a tier
@@ -400,13 +397,9 @@ measured byte price that bought it.
 > still wins. If you pinned a `--temporal-bucket` the tiers were not priced
 > against, the tier is skipped with a warning rather than failing the build.
 
-**What it will never do.** It never drops, samples, or aggregates a single
-feature to hit the number. No lossy flag is ever applied: quantization is
-priced and logged as a `suggested, not applied (LOSSY shadow price, …)` line
-for you to add by hand. A playback-caveated `spatial` blob ordering stays
-suggestion-only however tight the budget gets. If the budget is unreachable
-with reversible levers alone the build proceeds at the smallest reversible
-recipe (the _floor_), says so loudly, and still contains every feature.
+Quantization is logged as a `suggested, not applied (LOSSY shadow price, …)`
+line for you to add by hand, and a playback-caveated `spatial` blob ordering
+stays suggestion-only however tight the budget gets.
 
 `--target-size` needs a GeoParquet `--input`, exactly as `--auto` does — the
 analyzer samples and trial-encodes the source file to measure the budget, so
@@ -420,14 +413,14 @@ When set, the archive carries one summary tile per `(zoom, x, y, t)` in
 addition to the raw tier — readers dispatch between them automatically
 from `metadata.summaryTier`. `h3` and `quadbin` are the available schemes.
 
-| Flag                        | Default                       | Description                                                                                                                                                                                                                                   |
-| --------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--summary-tier <SCHEME>`   | —                             | `h3` (Uber H3 hexes) or `quadbin` (CARTO quadbin)                                                                                                                                                                                             |
-| `--summary-min-zoom <N>`    | `min-zoom`                    | Lowest zoom for summary tiles                                                                                                                                                                                                                 |
-| `--summary-max-zoom <N>`    | `min(min-zoom + 4, max-zoom)` | Highest zoom for summary tiles                                                                                                                                                                                                                |
-| `--summary-columns <SPEC>`  | `""`                          | Comma-separated `name:agg` list, e.g. `magnitude:mean,magnitude:max,depth:sum`. `count` is always implicit.                                                                                                                                   |
-| `--summary-layer <NAME>`    | `summary`                     | Layer name carried in summary tile frames                                                                                                                                                                                                     |
-| `--summary-sub-buckets <N>` | `1`                           | Sub-buckets PER tile temporal bucket. `>1` adds N `bucket_<i>` count columns per cell (one per `bucket_ms / N` sub-window) so the renderer can animate through them with no data re-upload. Recommended 12–30 for hour buckets; capped at 32. |
+| Flag                        | Default                       | Description                                                                                                                                                                                                                                                                                                               |
+| --------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--summary-tier <SCHEME>`   | —                             | `h3` (Uber H3 hexes) or `quadbin` (CARTO quadbin)                                                                                                                                                                                                                                                                         |
+| `--summary-min-zoom <N>`    | `min-zoom`                    | Lowest zoom for summary tiles                                                                                                                                                                                                                                                                                             |
+| `--summary-max-zoom <N>`    | `min(min-zoom + 4, max-zoom)` | Highest zoom for summary tiles                                                                                                                                                                                                                                                                                            |
+| `--summary-columns <SPEC>`  | `""`                          | Comma-separated `name:agg` list, e.g. `magnitude:mean,magnitude:max,depth:sum`. `count` is always implicit.                                                                                                                                                                                                               |
+| `--summary-layer <NAME>`    | `summary`                     | Layer name carried in summary tile frames                                                                                                                                                                                                                                                                                 |
+| `--summary-sub-buckets <N>` | `1`                           | Sub-buckets PER tile temporal bucket. `>1` adds N `bucket_<i>` count columns per cell (one per `bucket_ms / N` sub-window) so the renderer can animate through them with no data re-upload. Recommended 12–30 for hour buckets; 32 is the practical ceiling (tile size grows ~N × 6 bytes per cell), not an enforced one. |
 
 ### HeatmapLayer build-time domain
 
@@ -558,11 +551,9 @@ range-adaptive step is read off the column's own `stt:qa` affine.
 Off by default because it adds a manifest key: turn it on for a whole fleet at
 a rebuild window, not one archive at a time.
 
-⚠️ **Transform rule.** A tool that transforms an archive losslessly (reorder,
-repack, re-optimize) MUST carry `content_fingerprint` through **verbatim** and
-MUST NOT recompute it from its own output — recomputing is exactly how a
-corrupting transform would self-certify. Accept such a transform with
-`stt-validate --emit-fingerprint` / `--expect-fingerprint` instead.
+⚠️ A lossless transform (reorder, repack, re-optimize) MUST carry
+`content_fingerprint` through **verbatim**, never recompute it — see
+[`stt-validate`](#stt-validate) for the two-command recipe that accepts one.
 
 ### Feature-id scope (what `distinct_feature_count` may be compared against)
 
@@ -669,14 +660,16 @@ Full profile rationale: [packed-format spec §10.3](../spec/stt-packed-format.md
 
 ### Metadata
 
-| Flag                         | Description                                                                                                                                                                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--name <STR>`               | Archive name                                                                                                                                                                                       |
-| `--description <STR>`        | Description                                                                                                                                                                                        |
-| `--attribution <STR>`        | Attribution text                                                                                                                                                                                   |
-| `--metadata-output <PATH>`   | Also write a sidecar JSON for the showcase config (its `filename` points at `<dir>/manifest.json`)                                                                                                 |
-| `--no-manifest-capabilities` | Deprecated compatibility spelling. Accepted only when the encoder requires no capabilities, where it has no effect; a conforming v3 build refuses to suppress required-to-understand declarations. |
-| `-v, --verbose`              | Debug-level tracing                                                                                                                                                                                |
+| Flag                       | Description                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `--name <STR>`             | Archive name                                                                                       |
+| `--description <STR>`      | Description                                                                                        |
+| `--attribution <STR>`      | Attribution text                                                                                   |
+| `--metadata-output <PATH>` | Also write a sidecar JSON for the showcase config (its `filename` points at `<dir>/manifest.json`) |
+| `-v, --verbose`            | Debug-level tracing                                                                                |
+
+`--no-manifest-capabilities` is accepted as a no-op for script compatibility: a
+conforming v3 build never suppresses a required-to-understand declaration.
 
 ### Examples
 
@@ -749,11 +742,14 @@ which the reference tessellator uses to earcut each part separately. Split
 multi-geometries into one row per part before export if you need them
 addressable as independent features (distinct ids, properties, picking).
 
-Two optional list columns are recognised when present: `vertex_timestamps`
+Three optional list columns are recognised when present: `vertex_timestamps`
 (`List<Timestamp>` / `List<Int64>`, real per-segment timing for
-trajectories) and `vertex_values` (`List<Float32>` / `List<Float64>`, a
-per-vertex scalar such as sea-surface temperature), both aligned with the
-geometry's vertices.
+trajectories), `vertex_values` (`List<Float32>` / `List<Float64>`, a
+per-vertex scalar such as sea-surface temperature), and `vertex_value_matrix`
+(`List<Float32>`, one row flattened **vertex-major** over per-vertex ×
+per-bucket values — the static-geometry overview shape a renderer animates by
+selecting the active bucket column, and mutually exclusive with `vertex_values`
+in practice). All are aligned with the geometry's vertices.
 
 ---
 
@@ -785,24 +781,24 @@ stt-generate <SUBCOMMAND> [OPTIONS]
 
 Subcommands:
 
-| Subcommand        | Source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `earthquakes`     | USGS API (M4.0+ global, 2020–2024)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `ais`             | NOAA Marine Cadastre AIS vessel positions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `flights`         | OpenSky Network ADS-B (Mondays 2017–2020); `--paths` emits LineString trajectories instead of points                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `hurricanes`      | NOAA IBTrACS historical archive                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `wildfires`       | NIFC perimeters (1000+ acres)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `nyc-rideshare`   | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows binned to intersection-to-intersection road segments (`--flow-bin` default `15m`), `--od` for one straight 2-vertex origin→destination LineString per trip (no OSRM — the `AnimatedArcLayer`/`AnimatedLineLayer` overview geometry; mutually exclusive with `--paths`/`--flows`); `--with-bearing` adds a per-feature `bearing` numeric column (initial O→D great-circle heading with `--od`, heading toward the next trip point for point trajectories) |
-| `bixi`            | Montréal BIXI open-data trips → a directed origin→destination flowmap. Geometry modes and flags: [below](#bixi-flags).                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `gtfs`            | Static GTFS feed → every vehicle journey scheduled on one service date. Flags and conventions: [below](#gtfs-flags).                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `nwm`             | NOAA National Water Model retrospective discharge over the CONUS river network. Flags and conventions: [below](#nwm-flags).                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `satellites`      | CelesTrak TLE + SGP4 propagation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `drifters`        | NOAA Global Drifter Program 6-hourly buoy trajectories                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `drifters-hourly` | EXPERIMENTAL: GDP hourly product (`drifter_hourly_qc`) — 6× the temporal resolution (and volume) of `drifters`                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `animals`         | GBIF animal-tracking datasets (license-filtered via `--licenses`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `osm-edits`       | OSM editing history — `--source nodes` (first-version node creations from a full-history `.osh.pbf`) or `--source changesets` (bbox-centroids from `changesets-latest.osm.bz2`), scoped to a metro `--bounds`. © OpenStreetMap contributors (ODbL).                                                                                                                                                                                                                                                                                                                       |
-| `storms`          | NEXRAD storm-radar tiles for the 2020-08-10 Iowa derecho. Downloads archived Level II volumes from AWS, reprojects/mosaics each ~5-min scan, and bakes **three** packed archives under `--output`: `storm-field` (filled reflectivity contour bands), `storm-cells` (storm-cell centroids), and `storm-tracks` (cells linked across scans into animated trails).                                                                                                                                                                                                          |
+| Subcommand        | Source                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `earthquakes`     | USGS API (M4.0+ global, 2020–2024)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `ais`             | NOAA Marine Cadastre AIS vessel positions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `flights`         | OpenSky Network ADS-B (Mondays 2017–2020); `--paths` emits LineString trajectories instead of points                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `hurricanes`      | NOAA IBTrACS historical archive                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `wildfires`       | NIFC perimeters (1000+ acres)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `nyc-rideshare`   | NYC TLC trips + OSRM routing; `--paths` for LineString trajectories, `--flows` for pre-aggregated corridor flows over the real OSM street network (requires `--osm-pbf`; one corridor per trafficked way, its intersection-to-intersection node sequence as the geometry, carrying per-vertex traversal counts per `--flow-bin` — default `15m` — plus a road-class `min_zoom` for LOD), `--od` for one straight 2-vertex origin→destination LineString per trip (no OSRM — the `AnimatedArcLayer`/`AnimatedLineLayer` overview geometry; mutually exclusive with `--paths`/`--flows`); `--with-bearing` adds a per-feature `bearing` numeric column (initial O→D great-circle heading with `--od`, heading toward the next trip point for point trajectories) |
+| `bixi`            | Montréal BIXI open-data trips → a directed origin→destination flowmap. Geometry modes and flags: [below](#bixi-flags).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `gtfs`            | Static GTFS feed → every vehicle journey scheduled on one service date. Flags and conventions: [below](#gtfs-flags).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `nwm`             | NOAA National Water Model retrospective discharge over the CONUS river network. Flags and conventions: [below](#nwm-flags).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `nyc-taxi-points` | derived from `nyc-rideshare` via polyline interpolation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `satellites`      | CelesTrak TLE + SGP4 propagation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `drifters`        | NOAA Global Drifter Program 6-hourly buoy trajectories                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `drifters-hourly` | EXPERIMENTAL: GDP hourly product (`drifter_hourly_qc`) — 6× the temporal resolution (and volume) of `drifters`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `animals`         | GBIF animal-tracking datasets (license-filtered via `--licenses`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `osm-edits`       | OSM editing history — `--source nodes` (first-version node creations from a full-history `.osh.pbf`) or `--source changesets` (bbox-centroids from `changesets-latest.osm.bz2`), scoped to a metro `--bounds`. © OpenStreetMap contributors (ODbL).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `storms`          | NEXRAD storm-radar tiles for the 2020-08-10 Iowa derecho. Downloads archived Level II volumes from AWS, reprojects/mosaics each ~5-min scan, and bakes **three** packed archives under `--output`: `storm-field` (filled reflectivity contour bands), `storm-cells` (storm-cell centroids), and `storm-tracks` (cells linked across scans into animated trails).                                                                                                                                                                                                                                                                                                                                                                                               |
 
 Each subcommand has its own flags — run `stt-generate <subcommand> --help`
 for the per-dataset options. See the
@@ -854,6 +850,14 @@ Properties emitted: numeric `trip_id`; categorical `route_type` as a string labe
 Also `--bin` (default `1h`), `--max-trips` (even temporal stride),
 `--min-zoom`/`--max-zoom` (default 6–14), and `--skip-build`. `--out` is an alias
 of `--output`.
+
+`--bake-elevation` samples the AWS Terrarium DEM along each trip and bakes a
+per-vertex elevation profile into the `vertex_values` channel — ground modes get
+a max-grade clamp (a rail line's DEM profile over a base tunnel would otherwise
+climb the massif), aerial modes span station-to-station — so a 3D terrain
+basemap needs no runtime DEM queries. `--dem-zoom` (default `12`) sets the DEM
+tile zoom and `--dem-cache` (default `data/dem/terrarium`) the on-disk tile
+cache.
 
 ### `nwm` flags
 
@@ -1061,8 +1065,11 @@ hash-like ids), `dead-columns` (constant/all-null columns → `--exclude`,
 one finding per column, sampled evidence), `z0-bomb` (deep shallow pyramid
 under tiny bounds → `--min-zoom`), `unpaged-large` (whole-load directory
 past 10k entries → repack paged), `oversized-blobs` (tiles past 1 MiB
-compressed), and `missing-summary-tier` (huge point dataset with no
-aggregated tier → `--summary-tier`).
+compressed), `missing-summary-tier` (huge point dataset with no
+aggregated tier → `--summary-tier`), and `vertex-time-precision` (a
+`vertex_time` column stuck on the u32-delta or exact-i64 tier while playback
+could not resolve the default 1000 ms ceiling → `--vertex-time-precision`; Info
+severity, so it never trips `--strict`).
 
 | Flag                  | Description                                                                                                                                                                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1144,8 +1151,7 @@ diffed.
 Validates an STT dataset in the **packed format** — pass the dataset
 directory, its `manifest.json`, or a single-file `.sttb` bundle (the
 integrity tier then verifies each in-bundle object's blake3 against its key
-exactly like the exploded case). (The single-file `.stt` container has been
-removed; only the packed format is accepted.)
+exactly like the exploded case).
 
 ```bash
 stt-validate my-dataset/ [--json] [--fail-fast] [--skip-decode]
@@ -1161,7 +1167,7 @@ three cannot drift apart:
 1. (packed) Every pack and the directory object blake3-hash to the name
    the manifest gave them, on-disk lengths match, and the directory
    references no out-of-range `pack_id`.
-2. The index decodes and every entry has the columns the schema promises.
+2. The directory decodes and every entry has the columns the schema promises.
 3. Every tile blob round-trips its content hash and decompresses to its
    declared uncompressed size.
 4. Every payload decodes as a layer frame of Arrow IPC streams.
@@ -1174,15 +1180,15 @@ three cannot drift apart:
 11. Metadata totals (`tile_count`/`feature_count`) match the directory-derived totals; zeroed totals from pre-0.1.1 writers warn instead of failing.
 12. **Semantic content fingerprint.** When `metadata.content_fingerprint` is present, the decoded content's vertex bbox, z range, per-column numeric ranges and categorical cardinalities are recomputed and compared — _containment_ under `--sample`, containment plus equality within the declared tolerances under a full decode. Declared tolerances are rejected unless their matching capability (`coord-quant`, `attr-quant`) is declared. When the fingerprint is **absent** — every archive published before it existed — the run **warns** and continues, exactly like the missing-CRS84 case.
 
-    **Feature loss** is caught two ways. The _decoded-row floor_ always applies: on a full decode, the rows at the **fullest single zoom** must be at least the declared `distinct_feature_count` (under `--sample` the same shortfall is a warning naming sampling). It is tight on points and loose on anything clipping replicates across tiles. The declared count is additionally compared against the **decoded id count** whenever the archive's recorded id construction is a dataset-wide key — `metadata.properties.feature_id_construction` of `source` or `anchor-hash`, which is the ordinary state of a line or polygon build — or when it explicitly attests one (`global-feature-ids` capability, `metadata.properties.feature_id_scope = global`). That comparison is unaffected by replication, so it is what catches a 40 % line/polygon loss the row floor sleeps through. On `row-index` / `segment-hash` archives the two are different quantities and a deviation is reported as a **note**, which never affects the exit code. `feature_id_scope = local` disarms the comparison (the rollback). Nothing is ever inferred from the two numbers happening to agree. See [`--feature-id-scope`](#feature-id-scope-what-distinct_feature_count-may-be-compared-against).
+    **Feature loss** is caught two ways. The _decoded-row floor_ always applies: on a full decode, the rows at the **fullest single zoom** must be at least the declared `distinct_feature_count` (under `--sample` the same shortfall is a warning naming sampling). It is tight on points and loose on anything clipping replicates across tiles, so the declared count is additionally compared against the **decoded distinct-id count** — which replication does not move — whenever the archive's recorded id construction is a dataset-wide key (`metadata.properties.feature_id_construction` of `source` or `anchor-hash`) or it explicitly attests one (the `global-feature-ids` capability with `feature_id_scope = global`). Where the two are different quantities a deviation is reported as a **note**, which never affects the exit code, and nothing is ever inferred from the numbers happening to agree. See [`--feature-id-scope`](#feature-id-scope-what-distinct_feature_count-may-be-compared-against).
 
-13. **Declared bounds containment.** `metadata.bounds` must **contain** the decoded vertex bbox, and `metadata.z_range` (when declared) the decoded vertical extent — compared on the same decode pass as check 12, so it costs nothing extra. The direction is asymmetric on purpose: a declared box that is too **small** is silent data loss at query time (tile selection, frustum pre-culling and the showcase's opening camera all pre-intersect query boxes against `metadata.bounds`, so they discard tiles that really do carry visible data), while a box that is too **large** keeps every reader sound and is at most a warning. Severity mirrors check 12: an **error** on an archive that _attests_ vertex-derived bounds — it carries a `content_fingerprint`, or a `bounds_mode = vertex` entry in `metadata.properties` — and a **warning naming the rebuild** on every legacy archive, whose centroid-derived bbox under-states non-point geometry by construction. Quantization steps carried on the wire are admitted as slack; an escape explained entirely by the writer's null-island `(0,0)` sentinel policy warns rather than fails; and a **wrapped** (antimeridian) longitude interval is not decidable against an unwrapped decoded bbox, so that axis is skipped with a warning instead of guessed at.
+13. **Declared bounds containment.** `metadata.bounds` must **contain** the decoded vertex bbox, and `metadata.z_range` (when declared) the decoded vertical extent — compared on the same decode pass as check 12, so it costs nothing extra. Severity mirrors check 12: an **error** on an archive that _attests_ vertex-derived bounds — it carries a `content_fingerprint`, or a `bounds_mode = vertex` entry in `metadata.properties` — and a **warning naming the rebuild** on every legacy archive. Quantization steps carried on the wire are admitted as slack; an escape explained entirely by the writer's null-island `(0,0)` sentinel policy warns rather than fails; and a **wrapped** (antimeridian) longitude interval is not decidable against an unwrapped decoded bbox, so that axis is skipped with a warning instead of guessed at. See [Declared bounds](#declared-bounds-metadatabounds).
 
 | Flag                          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--json`                      | Machine-readable report (suitable for CI)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `--fail-fast`                 | Exit on the first failure                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--skip-decode`               | Skip the per-tile decode step — only header/integrity, index, and content-hash checks                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `--skip-decode`               | Skip the per-tile decode step — only header/integrity, directory, and content-hash checks                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `--sample <N>`                | Decode only a deterministic, evenly-spread sample of at most N tiles instead of every tile. The integrity / header / content-hash / temporal-bound checks still run over ALL tiles (they're cheap); only the expensive Arrow-decode + schema + feature-count checks are sampled. The sample is reproducible (every `ceil(total/N)`-th entry), and the report makes clear the decode was sampled rather than exhaustive. Useful for very large archives.                                                 |
 | `--emit-fingerprint <PATH>`   | Write the OBSERVED content fingerprint to `PATH` as JSON. Requires a full decode (refused under `--sample` / `--skip-decode`, because a fingerprint captured from a subset understates the content and would later be an expectation that cannot fail).                                                                                                                                                                                                                                                 |
 | `--expect-fingerprint <PATH>` | Compare the decoded content against an EXTERNAL fingerprint file, in addition to any the manifest declares.                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -1197,10 +1203,11 @@ vertex-derived bounds, so an under-statement fails rather than warns),
 allowed to compare `distinct_feature_count` against), and
 `feature_id_construction` (the writer's own record of HOW it built the `id`
 column — `source` / `anchor-hash` / `row-index` / `segment-hash`, absent on
-archives that predate the key). The two are reported together because the basis
-alone used to misdescribe the archive: every non-attesting one was explained
-with the point-archive row-index story, including the line and polygon archives
-that never used it. A `notes` array appears
+archives that predate the key). The two are reported together because the
+basis alone does not say how the ids were built, and reading it without the
+construction record invites explaining every non-attesting archive with the
+point-archive row-index story — wrong for line and polygon archives, which
+never used it. A `notes` array appears
 when there is anything below warning level to say; like `warnings` it never
 affects the exit code, and unlike `warnings` it is not part of the noise budget
 an operator is expected to drive to zero.
@@ -1265,14 +1272,18 @@ Optional binary (feature-gated in the `spatiotemporal-tiles` crate) that
 generates STT tiles **on the fly** from a live PostGIS or DuckDB source — the
 `ST_AsMVT` analog for the STT format, with no pre-bake. It shares `stt-build`'s
 per-tile encoder, so a served tile is byte-identical to the offline-built tile
-for the same `(z,x,y,t)` and source rows. The default build already ships the
-PostGIS backend; opt into the embedded-DuckDB backend with a feature:
+for the same `(z,x,y,t)` and source rows once the per-tile flags are set to
+match — three of them default the other way here (see below). The default build
+already ships the PostGIS backend; opt into the embedded-DuckDB backend with a
+feature:
 
 ```bash
 # Default install already includes the PostGIS serve backend:
 cargo build --release -p spatiotemporal-tiles
 # Add the embedded-DuckDB backend (heavy bundled C++ compile); `--features serve` enables both:
 cargo build --release -p spatiotemporal-tiles --features serve-duckdb
+# Add TLS for a managed Postgres (a connection string with sslmode=require):
+cargo build --release -p spatiotemporal-tiles --features serve-postgres-tls
 
 # PostGIS backend:
 stt-serve --postgres "$PGURL" --table hurricane_obs --geom-column geom \
@@ -1294,7 +1305,7 @@ unchanged. Full HTTP semantics:
 
 | Flag                                              | Default          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--postgres <CONN>`                               | —                | PostGIS backend (deadpool pool, NoTls). Env fallback: `STT_POSTGRES_URL` / `DATABASE_URL`. Mutually exclusive with `--duckdb`.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `--postgres <CONN>`                               | —                | PostGIS backend (deadpool pool; NoTls by default). An explicit `sslmode=require` (or stricter) in the connection string opts into TLS and needs a `--features serve-postgres-tls` build — without it the server refuses rather than downgrading silently; `sslmode=disable`/`prefer` keep the NoTls path. Env fallback: `STT_POSTGRES_URL` / `DATABASE_URL`. Mutually exclusive with `--duckdb`.                                                                                                                                           |
 | `--duckdb <PATH>`                                 | —                | DuckDB backend (r2d2 pool; read-only file, or `:memory:` for external-file `--sql` scans). Env fallback: `STT_DUCKDB_PATH`. Mutually exclusive with `--postgres`.                                                                                                                                                                                                                                                                                                                                                                          |
 | `--table <NAME>` / `--sql <SELECT>`               | —                | Source table or arbitrary `SELECT` (provide exactly one). A `--sql` source must expose `--geom-column` and `--time-field`.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `--geom-column <NAME>`                            | `geom`           | Geometry column (EPSG:4326 lon/lat, unless `--source-srid` says otherwise).                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -1311,7 +1322,7 @@ unchanged. Full HTTP semantics:
 | `--heatmap-weight <PROP>`                         | —                | Numeric property driving `HeatmapLayer` weight. Its `[min, 95th percentile]` (per `--heatmap-class` if set) is computed ONCE at startup via a SQL aggregate over the whole source and advertised as `heatmapDomain` in `/metadata.json` — matches `stt-build --heatmap-weight`.                                                                                                                                                                                                                                                            |
 | `--heatmap-class <PROP>`                          | —                | Categorical property whose distinct values become per-class `heatmapDomain` entries (capped at 8). Matches `stt-build --heatmap-class`.                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--bind <ADDR>`                                   | `127.0.0.1:8088` | Listen address.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--compact-times`                                 | off              | Emit the compact time columns (`TILE_META.st`/`.et`) instead of the historical absolute `Int64` pair — the inverse default of `stt-build`, whose `--no-compact-times` is the kill switch. Opt-in here because a served tile carries no manifest, so a client that predates the `time-delta` capability cannot refuse it and would silently misdecode; `/metadata.json` advertises `capabilities` for clients that do check. Turning it on restores byte parity with a default `stt-build` archive.                                         |
+| `--compact-times`                                 | off              | Emit the compact time columns (`TILE_META.st`/`.et`) instead of the absolute `Int64` pair — the inverse default of `stt-build`, whose `--no-compact-times` is the kill switch. Opt-in here because a served tile carries no manifest, so a client that predates the `time-delta` capability cannot refuse it and would silently misdecode; `/metadata.json` advertises `capabilities` for clients that do check. Turning it on restores byte parity with a default `stt-build` archive.                                                    |
 | `--partial-triangles`                             | off              | Bake polygon triangle indices only for features a renderer's own single-boundary earcut cannot reproduce (holes, multi-part), leaving the rest for the client to backfill at decode — the inverse default of `stt-build`, whose `--no-partial-triangles` is the rollback. Opt-in here for the same reason as `--compact-times`: a served tile carries no manifest, so a client that predates the backfill cannot refuse it and would draw every single-ring polygon as nothing. Adds `triangles-partial` to the advertised `capabilities`. |
 
 `stt-serve` also accepts the full offline **per-tile** flag surface
@@ -1322,12 +1333,12 @@ per-tile budgets `--maximum-tile-bytes`/`--maximum-tile-features`/
 `--drop-densest-as-needed`, `--exclude`/`--include`/`--exclude-all`,
 `--min-features-per-tile`) and the **encoder** flags (`--quantize-coords`,
 `--quantize-attr`, `--quantize-attrs-auto`, `--vector-group`,
-`--point-elevation-column`, `--vertex-time-precision`) — resolved identically to
-the offline build via the shared `build_options` module, into an explicit
-per-dataset encoder config (never process-wide state, so two datasets served
-from one process cannot inherit each other's settings). `--summary-tier` and
-`--adaptive-temporal` are **not** servable per single-tile request (rejected at
-startup — pre-bake them with `stt-build`).
+`--point-elevation-column`, `--vertex-time-precision`) — the encoder flags
+resolved through the shared `build_options` module exactly as the offline build
+resolves them, into an explicit per-dataset encoder config (never process-wide
+state, so two datasets served from one process cannot inherit each other's
+settings). `--summary-tier` and `--adaptive-temporal` are **not** servable per
+single-tile request (rejected at startup — pre-bake them with `stt-build`).
 
 `stt-serve` **inverts the `stt-build` default for compact times**: they are
 opt-in here via `--compact-times`, so an out-of-the-box served tile matches an
@@ -1341,6 +1352,11 @@ settings, which gives a current client a way to check — but an already-shipped
 client does not read it, and the format's stated worst failure mode is silent
 garbage, so the safe shape is the default. `--quantize-vertex-values` has no
 serve twin at all (it is off by default on both sides).
+
+`--simplify-metric` is inverted too, without that justification: it is opt-in
+here, while `stt-build` simplifies with the latitude-corrected metric tolerance
+unless `--simplify-degree-table` says otherwise. Pass it to match an offline
+`--simplify` build.
 
 Served tiles are self-contained `formatVersion` 2 frames — every layer inlines
 its own schema, since a live server has no manifest to carry a `schemas`

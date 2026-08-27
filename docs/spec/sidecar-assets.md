@@ -28,7 +28,8 @@ _outside_ a single packed dataset:
 3. **Approximate / local-frame georeferencing.** Some sources (e.g. Waymo
    Perception) disclose no usable global georeference. Their geometry is a local
    metric frame _anchored_ to a plausible lon/lat, not authoritative WGS84 — a
-   case the core spec's CRS pinning (§3.4) does not cover.
+   case the core format's
+   [CRS pinning](../architecture/data-format.md#geoarrow-interop) does not cover.
 
 This document makes all three normative so a third party can produce or consume
 a scene bundle, and so the profile's deviations from the core spec are explicit
@@ -44,6 +45,9 @@ subdirectory), and zero or more **sidecar files**:
 <sceneId>/
   scene.json              # bundle envelope (manifest of manifests) — schema below
   lidar/                  # packed STT point dataset   (manifest.json + index/ + packs/)
+  lidar-med/, lidar-high/, lidar-ultra/, lidar-full/
+                          # [optional] denser selectable lidar tiers, each its own
+                          #   packed dataset, listed in streams.lidar.densities[]
   ego/                    # packed STT trips dataset    (one LineString = ego path)
   objects/                # packed STT point dataset    (one point / object / sample)
   tracks/                 # [optional] packed STT line dataset (one trail / tracked object)
@@ -145,7 +149,16 @@ stream. Both are defined in [`scene.schema.json`](./scene.schema.json).
 - `objectColors` / `lidarColors` are the categorical palettes baked at build time
   (mirroring the canonical `OBJECT_COLORS` / `LIDARSEG_COLORS`); they let the
   client color without inferring a palette. **If a client keeps its own copy of
-  these palettes, the bundle's copy is authoritative.**
+  these palettes, the bundle's copy is authoritative for every category it
+  carries.** The sole exception is the synthetic `ego` track colour: it is a
+  consumer-side value with no `scene.json` entry (`tsOnlyKeys` in
+  [`av-palettes.json`](./av-palettes.json)), so a consumer MUST supply its own
+  colour for `tracks.category == "ego"`.
+- The canonical palette values ship as [`av-palettes.json`](./av-palettes.json),
+  generated from `av_common.py` and gated in CI. It **value-locks**
+  `OBJECT_COLORS`, `LIDARSEG_COLORS` and `HEIGHT_BAND_COLORS`, and **key-locks**
+  `MAP_LAYERS` and `ISO_DENSITY_BANDS` (whose colours live only on the render
+  side).
 
 ## 3.1 Stream sub-dataset conventions
 
@@ -153,20 +166,28 @@ Each stream is an ordinary packed STT dataset; the profile fixes _which columns_
 each carries so the cockpit can render them uniformly (full column list in
 `av_common.py`):
 
-| stream                  | geometry             | key columns                                                                                 | notes                                                                                                                                                                                                                                                          |
-| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lidar`                 | Point                | `height_band` (categorical), `z`, optional `seg_class`                                      | colored by `seg_class` when present, else `height_band`. (`intensity` is **legacy** — accepted as a producer arg but no longer emitted; `av_common.write_lidar_points` intentionally drops it as near-incompressible dead weight the render path never reads.) |
-| `ego`                   | LineString           | `vertex_timestamps`, optional `vertex_values` (speed)                                       | one trip = the ego path; per-vertex time drives the trail                                                                                                                                                                                                      |
-| `objects`               | Point                | `category`, `heading` (rad, 0 = east, CCW+), `length`/`width`/`height`, `track_id`, `speed` | rendered as oriented boxes by [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md)                                                                                                                                                              |
-| `tracks`                | LineString           | `vertex_timestamps`, `vertex_values` (speed m/s), `category`                                | one trail per tracked object (ego folded in as category `"ego"`); mirrors `ego` but multi-row                                                                                                                                                                  |
-| `stage`                 | Point                | same as `lidar`                                                                             | scene-split bundles: the static accumulated surfel cloud, built with one full-range temporal bucket                                                                                                                                                            |
-| `map_poly` / `map_line` | Polygon / LineString | `map_layer` (categorical)                                                                   | **static**: built with one temporal bucket ≥ scene duration so the map loads once and persists                                                                                                                                                                 |
+| stream                  | geometry             | producer (GeoParquet) columns                                                               | notes                                                                                                                                                                                                    |
+| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lidar`                 | Point                | `height_band` (categorical), `z`, optional `seg_class`                                      | colored by `seg_class` when present, else `height_band`. (`write_lidar_points` still accepts an `intensity` argument for call-site compatibility but never writes the column — no render path reads it.) |
+| `ego`                   | LineString           | `vertex_timestamps`, optional `vertex_values` (speed)                                       | one trip = the ego path; per-vertex time drives the trail                                                                                                                                                |
+| `objects`               | Point                | `category`, `heading` (rad, 0 = east, CCW+), `length`/`width`/`height`, `track_id`, `speed` | rendered as oriented boxes by [`AnimatedBoundingBoxLayer`](../api/animated-bounding-box-layer.md)                                                                                                        |
+| `tracks`                | LineString           | `vertex_timestamps`, `vertex_values` (speed m/s), `category`                                | one trail per tracked object (ego folded in as category `"ego"`); mirrors `ego` but multi-row                                                                                                            |
+| `stage`                 | Point                | same as `lidar`                                                                             | scene-split bundles: the static accumulated surfel cloud, built with one full-range temporal bucket                                                                                                      |
+| `map_poly` / `map_line` | Polygon / LineString | `map_layer` (categorical)                                                                   | **static**: built with one temporal bucket ≥ scene duration so the map loads once and persists                                                                                                           |
 
-> **Categorical-column gotcha (normative for producers).** `stt-build` promotes
+These are the producer's **input** column names. In the tile payload the
+per-vertex pair is encoded as `vertex_time` / `vertex_value` (see the
+[column-name table](../architecture/data-format.md#per-vertex-column-names-across-the-pipeline));
+every other column above keeps its name through the build.
+
+> **Categorical-column domains (normative for producers).** `stt-build` promotes
 > an all-numeric-string column to a numeric column, which silently disables
-> categorical color mapping. Profile categorical columns (`height_band`,
-> `map_layer`) MUST use non-numeric range labels (e.g. `"0-2"`, `"2-4"`, `">10"`),
-> never bare numbers.
+> categorical color mapping — which is why the profile's categorical labels are
+> non-numeric strings. They are also **fixed domains**, not free-form:
+> `height_band` MUST use one of the eight canonical band labels (`"<-2"`,
+> `"-2-0"`, `"0-2"`, `"2-4"`, `"4-6"`, `"6-8"`, `"8-10"`, `">10"`) and
+> `map_layer` MUST use a name from `MAP_LAYERS`. Both domains are locked in
+> [`av-palettes.json`](./av-palettes.json).
 
 ## 3.2 Sidecar files
 
@@ -242,7 +263,7 @@ content-GC'd. A consumer MUST NOT assume a sidecar URL is immutable.
 ## 4. Georeferencing: `georeferenced` vs `anchored-local`
 
 The core spec pins every tile's coordinates to **OGC:CRS84** lon/lat
-(§3.4 / [GeoArrow interop](../architecture/data-format.md#geoarrow-interop)).
+([GeoArrow interop](../architecture/data-format.md#geoarrow-interop)).
 That payload invariant holds here too: a scene-bundle tile's geometry is always
 interleaved `[lon, lat]` degrees. This profile additionally classifies _how
 trustworthy that lon/lat is_, because some sources only support an approximate
@@ -256,8 +277,10 @@ A scene bundle is in one of two **frames**:
   - _nuScenes:_ equirectangular about the map's SW-corner origin
     (`lat = originLat + y/111320`, `lon = originLon + x/(111320·cos originLat)`),
     accurate to ~5 m over a ~1 km scene.
-  - _Argoverse 2:_ the city-frame UTM zone projected via a proper CRS transform
-    (`pyproj`), removing the ~75 m equirectangular error at multi-km range.
+  - _Argoverse 2:_ the city frame projected with the AV2 devkit's exact
+    per-city CRS transform (`av2.geometry.utm.convert_city_coords_to_wgs84`),
+    covering all six cities and removing the ~75 m equirectangular error at
+    multi-km range.
 
   `scene.json.georef` carries the `{originLat, originLon}` this projection is
   anchored to. The scene renders on a **real basemap** and the geometry lines up
@@ -325,7 +348,8 @@ can tell, even though a program cannot.
   that exist;
 - ship each tiled stream as a conformant packed STT dataset;
 - sort `telemetry.json` `samples` and `cameras.json` `frames` ascending by time;
-- use non-numeric labels for categorical columns (`height_band`, `map_layer`);
+- draw `height_band` and `map_layer` values from their canonical domains in
+  [`av-palettes.json`](./av-palettes.json) (§3.1);
 - label an `anchored-local` scene's anchoring honestly in `location` /
   `description` (e.g. `"San Francisco (Waymo world frame, anchored)"`).
 
@@ -343,4 +367,6 @@ can tell, even though a program cannot.
   from an out-of-band, per-dataset fact — not from `scene.json` (§4.1) — and
   render `anchored-local` scenes on a neutral basemap without assuming basemap
   alignment;
-- prefer the bundle's baked palettes over any local copy.
+- prefer the bundle's baked palettes over any local copy for every category the
+  bundle carries, and supply their own colour for `tracks.category == "ego"` —
+  the one palette entry that has no `scene.json` counterpart (§3).

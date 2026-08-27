@@ -10,7 +10,7 @@ props to every binary sublayer.
 This page is the reference for which deck extensions work as-is, the two that
 are ported or adapted, and the three that are skipped, with reasons. It
 cross-references the parity decision record
-(`docs/roadmap/renderer-architecture.md`, §3 "Tier 3 — extensions").
+([renderer-architecture.md §3.4 "Extension posture"](../roadmap/renderer-architecture.md#34-extension-posture)).
 
 ## How pass-through works
 
@@ -20,8 +20,14 @@ Two mechanisms combine:
    `extensions` list to its sublayers (its internal `TimeFilterExtension` /
    `CategoryColorExtension` / …). Because an explicit sublayer list _beats_
    deck's inheritance, the layer merges your top-level `extensions` prop into
-   that list so your extension is never dropped. Internal extensions come
-   first, so your shader injections compose _on top of_ the time-fade alpha.
+   that list. Internal extensions come first, so your shader injections
+   compose _on top of_ the time-fade alpha. The merge **dedupes by class**:
+   your instance is appended unless an instance of the same class is already
+   installed internally (`TimeFilterExtension`, `CategoryColorExtension`,
+   `STTDataFilterExtension`, …), in which case the internal one wins — it
+   carries the per-tile wiring — and yours is dropped with a one-time console
+   warning. Configure the internal instance through the layer's own props
+   instead.
 2. **Extension `getSubLayerProps` pass** — deck's `CompositeLayer` walks its
    own `extensions` and merges each `extension.getSubLayerProps()` into the
    sublayer props. That forwards the scalar props named in the extension's
@@ -57,12 +63,38 @@ forwarded `extensions` prop and warn once**.
 Add these to the top-level `extensions` prop of any STT layer. No import from
 `@poopdeck.gl/layers` needed.
 
-| Extension              | What passes through                                                                                                                                                                                                                                  | Documented limit                                                                                                                                                                |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **BrushingExtension**  | `brushingEnabled`, `brushingRadius`, `brushingTarget` (`'source'` / `'target'` / `'source_target'`) — GPU show/hide by pointer distance. Great on point / arc layers.                                                                                | `brushingTarget: 'custom'` needs `getBrushingTarget`, a per-feature accessor — no rows to bind on a binary tile. Constant targets only.                                         |
-| **MaskExtension**      | `maskId`, `maskByInstance`, `maskInverted` — geofence an STT layer to another layer's geometry (e.g. clip ship traffic to a harbor polygon). The base `operation: 'mask'` prop also forwards, so the mask-defining layer can itself be an STT layer. | None for the common case.                                                                                                                                                       |
-| **ClipExtension**      | `clipBounds`, `clipByInstance` — rectangular clip. Pure uniforms, no accessors.                                                                                                                                                                      | None.                                                                                                                                                                           |
-| **PathStyleExtension** | Constant `getDashArray` (`[dash, gap]`), `getOffset`, `dashJustified`, `dashGapPickable` — dashed / offset paths (already a dep; `flow-stroke-layer.ts` uses `{ offset: true }`).                                                                    | Per-**feature** dash/offset diverges — a function `getDashArray`/`getOffset` is forwarded but binds to no rows. Constant only; a baked-column variant is low-value future work. |
+| Extension              | What passes through                                                                                                                                                                                                                                  | Attributes added                                                                                                                                                                            | Documented limit                                                                                                                                                                |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **BrushingExtension**  | `brushingEnabled`, `brushingRadius`, `brushingTarget` (`'source'` / `'target'` / `'source_target'`) — GPU show/hide by pointer distance. Great on point / arc layers.                                                                                | **1** — `brushingTargets` (size 2), registered unconditionally.                                                                                                                             | `brushingTarget: 'custom'` needs `getBrushingTarget`, a per-feature accessor — no rows to bind on a binary tile. Constant targets only.                                         |
+| **MaskExtension**      | `maskId`, `maskByInstance`, `maskInverted` — geofence an STT layer to another layer's geometry (e.g. clip ship traffic to a harbor polygon). The base `operation: 'mask'` prop also forwards, so the mask-defining layer can itself be an STT layer. | **0**.                                                                                                                                                                                      | None for the common case.                                                                                                                                                       |
+| **ClipExtension**      | `clipBounds`, `clipByInstance` — rectangular clip. Pure uniforms, no accessors.                                                                                                                                                                      | **0**.                                                                                                                                                                                      | None.                                                                                                                                                                           |
+| **PathStyleExtension** | Constant `getDashArray` (`[dash, gap]`), `getOffset`, `dashJustified`, `dashGapPickable` — dashed / offset paths (already a dep; `flow-stroke-layer.ts` uses `{ offset: true }`).                                                                    | **1–3**, by construction option — `instanceDashArrays` (size 2) under `{dash}`, `instanceDashOffsets` under `{dash, highPrecisionDash}` on a path host, `instanceOffsets` under `{offset}`. | Per-**feature** dash/offset diverges — a function `getDashArray`/`getOffset` is forwarded but binds to no rows. Constant only; a baked-column variant is low-value future work. |
+
+Attaching one of these is not free of GPU budget. Every path-family STT layer
+starts from the non-picking `PathLayer` (**12** slots) plus
+`TimeFilterExtension` (**3**), against WebGL2's guaranteed **16**
+vertex-attribute floor — but only one of them stops there:
+
+- **`AnimatedPathLayer`** — 12 + 3 = **15**; it deliberately installs no
+  `CategoryColorExtension`, so exactly one slot is free. Spend it on one
+  attribute-registering extension _or_ on `filterProperty` _or_ on
+  `pickable: true` (which swaps in the stock 13-attribute `PathLayer`) — never
+  two. The layer warns once if you ask for both of the last two.
+- **`AnimatedTripsLayer`** and **`FlowCorridorLayer`** — 12 + 3 + 1 for the
+  internal `CategoryColorExtension` = **16**, zero headroom, so any
+  attribute-registering extension overflows. Setting `filterProperty` does not
+  free anything: the layer drops the (idle) `CategoryColorExtension` to pay for
+  `filterValue` and stays at 16.
+- **`FlowStrokeLayer`** — **16** either way. At the default `offsetWidths: 0.6`
+  it trades the `CategoryColorExtension` slot for `PathStyleExtension`'s
+  `instanceOffsets`; at `offsetWidths: 0` it keeps the category slot instead.
+
+Overflow is a fatal per-pipeline link failure that renders a **blank layer, not
+an error**; see
+[renderer-architecture.md §2.13](../roadmap/renderer-architecture.md#213-the-webgl2-16-attribute-floor-is-a-real-ceiling-and-it-fails-silently).
+Point and arc hosts have room; so does the polygon fill, but
+`AnimatedPolygonLayer`'s outline sublayer is itself a non-picking `PathLayer`
+and reaches 16 once `filterProperty` is set.
 
 ```ts
 import { AnimatedPointLayer } from '@poopdeck.gl/layers';
@@ -101,10 +133,10 @@ accessor by running JS over binary features. Each is adapted to source its
 per-feature value from a **baked tile column** via the accessor-alias
 mechanism — the same shape as the internal `TimeFilterExtension`.
 
-| Extension                    | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **STTDataFilterExtension**   | port-adapted (P1, flagship) | Register a `filterValue` attribute from a baked column via accessor-alias (exactly like `TimeFilterExtension`, its hand-built descendant); keep `filterRange` / `filterSoftRange` / `filterEnabled` as constant uniforms. Passing it raw does **not** work — deck would run a JS accessor over binary features. Unlocks "filter vessels by speed", "filter by any baked property". ⚠️ **`filterRange` defaults to `null` (idle) here, where upstream defaults to `[-1, 1]` (active)** — pass `[-1, 1]` explicitly to reproduce upstream. The four upstream construction options with no binary-tile meaning (`fp64`, `countItems`, `onFilteredItemsChange`, `categorySize`) are accepted so porting code type-checks, but each warns once and is dropped. See [STTDataFilterExtension](./data-filter-extension.md) for the full option/prop surface. |
-| **CollisionFilterExtension** | adapted (P2)                | The **constant** case (`collisionEnabled` / `collisionGroup` / `collisionTestProps`, plus a constant `collisionPriority` that ranks a whole layer) works today via pass-through — great for de-cluttering `AnimatedIconLayer` / text labels. The `collisionFilterProps()` helper in `extensions/collision-filter-extension.ts` makes that one import and adds range-clamping. **Data-driven** priority (`collisionPriorityProperty`, a per-feature baked column) is **deferred**: it needs a `collisionPriorities` instanced attribute emitted by the layers (a layer-level change), so passing it warns once and falls back to the constant priority — we ship the honest helper rather than force a broken accessor. See [CollisionFilterExtension](./collision-filter-extension.md).                                                              |
+| Extension                    | Status                      | Notes                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **STTDataFilterExtension**   | port-adapted (P1, flagship) | Binds `filterValue` (**1** attribute) from a baked column via accessor-alias; `filterRange` / `filterSoftRange` / `filterEnabled` stay constant uniforms. ⚠️ `filterRange` defaults to `null` (idle) here, not upstream's `[-1, 1]` (active). See [STTDataFilterExtension](./data-filter-extension.md).                                               |
+| **CollisionFilterExtension** | adapted (P2)                | The constant configuration works today via pass-through; `collisionFilterProps()` bundles it into one spread and clamps the priority range. deck's class registers `collisionPriorities` (**1** attribute) on every host; per-feature priority baked from a tile column is deferred. See [CollisionFilterExtension](./collision-filter-extension.md). |
 
 ```ts
 import { AnimatedIconLayer } from '@poopdeck.gl/layers';
@@ -139,4 +171,4 @@ new AnimatedIconLayer({
   capabilities and degrades any option the host cannot support, with a one-time
   warning, rather than emitting an undeclared GLSL identifier.
 - [`SplatExtension`](./splat-extension.md) — soft-gaussian point splatting.
-- Parity decision record: `docs/roadmap/renderer-architecture.md`, §3 "Tier 3 — extensions".
+- Parity decision record: [renderer-architecture.md §3.4 "Extension posture"](../roadmap/renderer-architecture.md#34-extension-posture).

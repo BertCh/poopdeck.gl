@@ -17,12 +17,14 @@ graph TD
         BUILD[stt-build]
         OPTIMIZE[stt-optimize]
         VALIDATE[stt-validate]
+        BUNDLE[stt-bundle]
         GEN[stt-generate]
         SERVE[stt-serve]
         CORE_RS[stt-core]
         BUILD --> CORE_RS
         OPTIMIZE --> CORE_RS
         VALIDATE --> CORE_RS
+        BUNDLE --> CORE_RS
         GEN --> BUILD
         SERVE --> CORE_RS
     end
@@ -106,8 +108,17 @@ recipes.
 Reads a GeoParquet input and prints recommended `stt-build` settings —
 zoom range, temporal bucket size, compression — based on the data's
 spatial density and temporal distribution. Wired into the builder via
-`stt-build --auto`: every flag the user did NOT pass explicitly is
-filled in from the recommendation.
+`stt-build --auto`: bare `--auto` fills in the zoom range and temporal bucket;
+`--auto encode` also applies the non-lossy byte levers (zstd level,
+`--blob-ordering`, `--pack-size`). An explicitly passed flag always wins, and
+lossy advice (quantization, per-tile budgets) is logged, never applied.
+
+The other five subcommands work on an already-built archive rather than on
+GeoParquet: `inspect` (per-zoom directory stats, dedup and compression ratios,
+per-column compressed cost), `diff` (two archives compared), `doctor`
+(severity-ranked findings each with a remediation flag), `export` (back out to
+GeoParquet, whole or bbox/time-subset), and `order-audit` (measured
+per-ordering range-read cost, recommending `--blob-ordering`).
 
 ### `stt-validate`
 
@@ -116,15 +127,26 @@ anomalies. It first checks the
 **content-addressing contract** (each pack/directory object blake3-hashes to its
 filename, declared lengths match, no out-of-range `pack_id`), then verifies every
 tile's CRC32C, decodes each Arrow IPC payload, and checks
-feature-count and temporal-extent consistency. Suitable for CI.
+feature-count and temporal-extent consistency. Suitable for CI. It accepts a
+`.sttb` bundle directly as well as a directory or `manifest.json`.
+
+### `stt-bundle`
+
+Folds an exploded packed dataset (`manifest.json` + its content-addressed
+objects) into a single `.sttb` file for hand-off, and explodes one back
+(`pack` / `unpack`). Objects round-trip byte-identical: `pack` re-hashes each
+one on the way in and `unpack` re-verifies with the same integrity pass
+`stt-validate` runs. Strictly an interchange profile (packed format spec §13) —
+production serving stays on the exploded layout, because nothing serves bundles
+over HTTP Range requests.
 
 ### `stt-generate`
 
-Convenience CLI that downloads + processes + builds the showcase datasets
-(earthquakes, AIS, flights, hurricanes, wildfires, storms, NYC rideshare,
-NYC taxi points, BIXI, satellites, drifters, drifters-hourly, animals,
-OSM edits).
-Each subcommand emits GeoParquet and calls `stt-build` internally.
+Convenience CLI that downloads + processes + builds the showcase datasets.
+Each subcommand emits GeoParquet and calls `stt-build` internally. The dataset
+inventory is generated from the CLI and CI-checked, so read it from
+[`stt-generate-datasets.json`](../spec/stt-generate-datasets.json) rather than
+from a hand-maintained prose list.
 
 ### `stt-serve`
 
@@ -169,128 +191,35 @@ compression abstraction, Hilbert/temporal indexing, and metadata.
 
 ## TypeScript stack
 
-### `@poopdeck.gl/core`
+The client half splits along one seam. **`@poopdeck.gl/core`** owns everything
+that is not a renderer: `STTArchive`, the packed-format reader over HTTP Range
+(with its OPFS persistent cache and worker decoder pool — see
+[tile decoding](../api/stt-loader.md)), and `SpatioTemporalTileset`, the
+viewport- and time-aware selector behind bucket-aligned prefetch, raw/summary
+tier dispatch and temporal-aware eviction (see
+[the tileset](../api/spatiotemporal-tileset.md)). The same package carries the
+framework-free **render kernel** — time-filter math, style expansion,
+projection and view state, geometry and trip helpers, edge bundling, picking
+identity, and the `LayerKind`/`Capability` vocabulary — exposed as
+tree-shakeable sub-paths so the backends share one copy instead of maintaining
+forks ([render kernel](../api/render-kernel.md)).
 
-- **`STTArchive`** — packed-format reader over HTTP Range. Fetches
-  `manifest.json` (metadata + directory pointer + pack table), then the
-  directory object, then per-tile blobs via Range requests against the pack
-  objects. Coalesces adjacent reads **within a pack** (≤2 MiB gap by default; a
-  range never bridges two packs) and runs groups through a bounded concurrency
-  pool. Caches compressed bytes (device-aware sizing). Exposes `asTileSource()`
-  for loaders.gl-style integrations.
-- **`OpfsTileCache`** — optional persistent cache backed by the Origin
-  Private File System. Survives reloads; uses `isOpfsAvailable()` to
-  feature-detect.
-- **`TileDecoder`** — see [stt-loader.md](../api/stt-loader.md). Worker-pool
-  by default in browsers; inline fallback elsewhere. Crashed workers are
-  replaced automatically.
-- **`SpatioTemporalTileset`** — viewport + time-aware tile selection,
-  bucket-aligned prefetch, direction hysteresis to suppress scrub jitter,
-  grace-period LRU eviction. Dispatches between the raw and **summary**
-  tiers per zoom (`tier: 'raw' | 'summary' | 'auto'`). Temporal-LOD
-  dispatch is reader-API-only (`STTArchive.pickTemporalLodForZoom` /
-  `getTilesInBoundsForTemporalLod`); an app calls these methods to select a
-  coarser tier.
-- **`createSttTileSource`** — a structural (no runtime dependency)
-  loaders.gl-style tile source over an `STTArchive`, so apps already
-  using `@loaders.gl/*` can drop STT into their existing tile source
-  plumbing. See the [tile decoding](../api/stt-loader.md) page.
-
-### `@poopdeck.gl/core` render kernel
-
-The framework-free logic every renderer backend shares, exposed as tree-shakeable
-sub-paths so the four backends stay CONSISTENT by importing one copy instead of
-hand-maintaining forks (see
-[renderer-architecture.md](../roadmap/renderer-architecture.md)):
-
-- **`core/time-filter`** — the CPU time-filter alpha (window/wake/cumulative/trail),
-  `relativizeTime` + the `MAX_RELATIVE_TIME_MS` f32 guard, `resolveTimeFilterParams`
-  (full-width `timeWindow` ⇄ half-width vocabulary), and `DEFAULT_WAKE_TAIL_SCALE`.
-- **`core/shader-codegen`** — the scalar alpha authored a SECOND time as an
-  `Expr` AST (`ALPHA_EXPR`), independently of `core/time-filter`. Despite the
-  name, no shipped shader is generated from it: all four backends hand-write
-  their own dialect (deck GLSL ES 3.00, maplibre GLSL ES 1.00, three TSL;
-  Cesium has no time-filter shader at all and filters on the CPU). Its value
-  is `evalExpr` as a SECOND ORACLE — each backend's shader math is pinned by
-  a conformance test to both it and `timeFilterAlpha`. The GLSL emitters were
-  removed at 0.6.0 (nothing compiled their output); the AST and evaluator are
-  the load-bearing half and stayed.
-- **`core/style`** — categorical / ramp / RGB color expansion (`'u8'`|`'f32'`).
-- **`core/geometry`** — OD endpoint derivation + pre-baked-aware `tessellateFeature`.
-- **`core/geo`** — pluggable `Projection` (`LocalEnu`/`Mercator`/`Globe` with a
-  WGS84-ellipsoid datum) + `ViewState` (with `roll`/`altitude`) + zoom helpers.
-- **`core/picking`** — `SttPickResult` shape, the 24-bit id scheme, and the
-  `InstanceProvenance` merged-buffer identity contract.
-- **`core/tileset-adapter`** — `makeTilesetCallbacks(archive)`, the single
-  `SpatioTemporalTileset` fetch-callback bundle all backends consume.
-- **`core/capabilities`** — the `LayerKind`/`Capability`/`TimeFilterMode`
-  vocabulary + `BackendDescriptor` + typed `Degradation` + `assertDescriptorConsistent`
-  over-claim gate. Each backend publishes a descriptor; the generated
-  [backend-capabilities.md](../spec/backend-capabilities.md) is the matrix.
-
-### `@poopdeck.gl/layers`
-
-- **`SpatioTemporalLayer`** — composite layer; owns the archive + tileset,
-  delegates rendering to specialized sublayers.
-- **`AnimatedPointLayer` / `AnimatedPathLayer` / `AnimatedPolygonLayer` /
-  `AnimatedTripsLayer`** — deck.gl layers with GPU time filtering.
-- **`AnimatedTripHeadsLayer`** — a moving dot at the head of each active trip;
-  the head position is interpolated along the path per frame on the CPU and
-  drawn through a stock ScatterplotLayer (fp64, globe, circular markers).
-- **`AnimatedHeatmapLayer`** — temporal density heatmap built on the canonical
-  `@deck.gl/aggregation-layers` HeatmapLayer + `DataFilterExtension`
-  (per-channel categorical splits, bake-time intensity-domain support;
-  visible-tile data is consolidated into one buffer set per channel).
-- **`FlowCorridorLayer`** — static corridor geometry animated by a per-vertex
-  × per-bucket value matrix (pre-aggregated flow overviews).
-- **`H3SummaryLayer`** — renders the server-aggregated summary tier as
-  extrudable H3 hexagons (wraps `H3HexagonLayer`).
-- **`TimeFilterExtension`** — relativizes time against a per-layer
-  `timeOffset` so f32 stays exact; supports window mode (whole feature on
-  / off) and trail mode (per-vertex fade). Runs on both instanced layers and
-  `SolidPolygonLayer` directly.
-- **`CategoryColorExtension`** — texture-based palette lookup, scales to
-  many categories without CPU-side color expansion.
-- **`TimeController`** — `requestAnimationFrame`-driven playback clock.
-- **`PlaybackGovernor`** — video-player-style buffering: gates play/seek on a
-  buffered runway ahead of the playhead and can auto-adapt playback speed to
-  measured throughput.
-
-### `@poopdeck.gl/three`
-
-The same tiles + clock rendered through a Three.js **WebGPU** renderer with TSL
-node materials, as a retained scene that merges resident tiles into one
-`InstancedMesh` per layer (rebased to a scene-wide `timeOrigin`). Owns its own
-scene/camera/projection (`core/geo`) + streaming; the basemap rides a separate
-camera-synced overlay canvas (TSL compiles only on `WebGPURenderer`, so it can't
-interleave into a WebGL context). Near-deck-parity layer catalog; defers GPU
-heatmap + live edge-bundling. See
-[renderer-architecture.md](../roadmap/renderer-architecture.md).
-
-### `@poopdeck.gl/maplibre`
-
-Same archive reader and tileset, rendered through MapLibre GL's
-`CustomLayerInterface` in raw WebGL — for sites that don't want a deck.gl
-dependency or that need to interleave STT layers between native MapLibre
-style layers. Fifteen layer classes across four families mirror most of the
-deck.gl coverage: **core geometry** (`STTPointLayer`, `STTLineLayer`,
-`STTPolygonLayer`, `STTHeatmapLayer`), **motion + 3D** (`STTTripsLayer`,
-`STTTripHeadsLayer`, `STTIconLayer`, `STTColumnLayer`, `STTArcLayer`),
-**summary tiers** (`STTH3SummaryLayer`, `STTQuadbinSummaryLayer`,
-`STTHexbinLayer`) and **flow** (`STTFlowCorridorLayer`, `STTFlowStrokeLayer`,
-`STTFlowmapLayer`). Globe renders on v5+ MapLibre hosts, which expose the
-projection prelude and `projectTile` to custom layers; v3/v4 hosts and Mapbox
-GL JS stay mercator-only. See [stt-maplibre.md](../api/stt-maplibre.md).
-
-### `@poopdeck.gl/cesium`
-
-A CesiumJS backend that renders STT on a real **WGS84 globe** (CesiumJS is
-Apache-2.0; no Cesium ion token needed). The first green-field consumer of the
-render kernel — a `CesiumPointLayer` (`SttRenderNode`) + a `BackendDescriptor` +
-a `ViewState`⇄Cesium camera bridge, built entirely from `core/{geo,style,
-time-filter,tileset-adapter,picking}` with no new shared code. A
-worked `point` scaffold today (rendering is browser-verified). See
-[stt-cesium.md](../api/stt-cesium.md).
+Four renderer backends sit on the far side of that seam and consume the kernel
+rather than reimplementing it: **deck.gl**
+([`SpatioTemporalLayer`](../api/spatiotemporal-layer.md)), **Three.js**
+([`@poopdeck.gl/three`](../api/stt-three.md) — a retained WebGPU scene with TSL
+node materials), **MapLibre**
+([`@poopdeck.gl/maplibre`](../api/stt-maplibre.md) — raw WebGL through
+`CustomLayerInterface`, no deck.gl dependency) and **Cesium**
+([`@poopdeck.gl/cesium`](../api/stt-cesium.md) — a real WGS84 globe). Each
+publishes a `BackendDescriptor`, and the generated
+[capability matrix](../spec/backend-capabilities.md) is the authority on which
+layer kinds and capabilities a given backend renders natively and where it
+degrades; [renderer-architecture.md](../roadmap/renderer-architecture.md)
+records how the backends are tiered and why. Playback is renderer-free and
+sits beside them: `@poopdeck.gl/playback` carries the clock, the buffering
+governor and an `HTMLMediaElement`-shaped facade, and is imported directly
+rather than re-exported by the layers.
 
 ## Design decisions
 

@@ -11,6 +11,7 @@ import {
   TimeFilterExtension,
   relativizeTime,
   MAX_RELATIVE_TIME_MS,
+  NEVER_ENDS,
 } from '@poopdeck.gl/layers';
 ```
 
@@ -46,29 +47,30 @@ const layer = new ScatterplotLayer({
 
 ## Extension Props
 
-| Property           | Type                     | Default | Description                                                                                                                                                                |
-| :----------------- | :----------------------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `currentTime`      | `number`                 | `0`     | Current time (Unix ms).                                                                                                                                                    |
-| `getTime`          | `(() => number) \| null` | `null`  | Dynamic time getter — called every `draw()` so the layer instance stays cached across animation ticks (only uniforms update per frame). Takes priority over `currentTime`. |
-| `timeOffset`       | `number`                 | `0`     | The per-layer time origin all attribute times are relative to. **Critical for f32 precision — see below.**                                                                 |
-| `timeWindow`       | `number`                 | `0`     | Window size in ms (window mode): features within `currentTime ± timeWindow/2` are visible.                                                                                 |
-| `fadeInDuration`   | `number`                 | `0`     | Fade-in duration (ms) for appearing features.                                                                                                                              |
-| `fadeOutDuration`  | `number`                 | `0`     | Fade-out duration (ms) for disappearing features (window mode only).                                                                                                       |
-| `trailLength`      | `number`                 | `0`     | Trail length in ms (trail mode when > 0).                                                                                                                                  |
-| `fadeTrail`        | `boolean`                | `true`  | In trail mode: fade head→tail (the classic comet trail) vs constant opacity along the whole length (a solid snake).                                                        |
-| `wakeLength`       | `number`                 | `0`     | Wake length in ms (wake mode when > 0).                                                                                                                                    |
-| `wakeTailScale`    | `number`                 | `0.15`  | Trailing-edge point-size multiplier in wake mode (0..1; head = 1.0).                                                                                                       |
-| `cumulative`       | `boolean`                | `false` | Cumulative ("draw and persist") mode.                                                                                                                                      |
-| `timeHeightScale`  | `number`                 | `0`     | Time-as-height: meters of altitude per sim-ms (0 = off).                                                                                                                   |
-| `timeHeightOrigin` | `number`                 | `0`     | Absolute time (Unix ms) mapped to altitude 0 in time-as-height mode.                                                                                                       |
+| Property           | Type                     | Default | Description                                                                                                                                                                                                                                                                                                       |
+| :----------------- | :----------------------- | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `currentTime`      | `number`                 | `0`     | Current time (Unix ms).                                                                                                                                                                                                                                                                                           |
+| `getTime`          | `(() => number) \| null` | `null`  | Dynamic time getter — called every `draw()` so the layer instance stays cached across animation ticks (only uniforms update per frame). Takes priority over `currentTime`.                                                                                                                                        |
+| `timeOffset`       | `number`                 | `0`     | The per-layer time origin all attribute times are relative to. **Critical for f32 precision — see below.**                                                                                                                                                                                                        |
+| `timeWindow`       | `number`                 | `0`     | Window size in ms (window mode): features within `currentTime ± timeWindow/2` are visible.                                                                                                                                                                                                                        |
+| `fadeInDuration`   | `number`                 | `0`     | Fade-in duration (ms) for appearing features.                                                                                                                                                                                                                                                                     |
+| `fadeOutDuration`  | `number`                 | `0`     | Fade-out duration (ms) for disappearing features (window mode only).                                                                                                                                                                                                                                              |
+| `trailLength`      | `number`                 | `0`     | Trail length in ms (trail mode when > 0).                                                                                                                                                                                                                                                                         |
+| `fadeTrail`        | `boolean`                | `true`  | In trail mode: fade head→tail (the classic comet trail) vs constant opacity along the whole length (a solid snake).                                                                                                                                                                                               |
+| `wakeLength`       | `number`                 | `0`     | Wake length in ms (wake mode when > 0).                                                                                                                                                                                                                                                                           |
+| `wakeTailScale`    | `number`                 | `0.15`  | Trailing-edge point-size multiplier in wake mode (0..1; head = 1.0).                                                                                                                                                                                                                                              |
+| `cumulative`       | `boolean`                | `false` | Cumulative ("draw and persist") mode.                                                                                                                                                                                                                                                                             |
+| `timeHeightScale`  | `number`                 | `0`     | Time-as-height: meters of altitude per sim-ms (0 = off).                                                                                                                                                                                                                                                          |
+| `timeHeightOrigin` | `number \| null`         | `null`  | Absolute time (Unix ms) mapped to altitude 0 in time-as-height mode. `null` — and a literal `0`, treated identically — anchors altitude 0 at the tile's own `timeOffset`. Pass the dataset's `timeRange.start` for altitudes that agree across temporal chunks.                                                   |
+| `segmentTime`      | `boolean`                | `false` | Trail mode: re-point `instanceEndTime` from the feature's end to the NEXT VERTEX's time, so the trail interpolates across each segment instead of stepping (window mode then reads `NEVER_ENDS` for the feature end). Pair with the `pathSegmentTime` constructor option, which injects the interpolation itself. |
 
 ## Data Accessors
 
-| Property                | Type               | Default    | Description                                                                                                                                            |
-| :---------------------- | :----------------- | :--------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getInstanceStartTime`  | `Accessor<number>` | `0`        | Feature start time, RELATIVE to `timeOffset`.                                                                                                          |
-| `getInstanceEndTime`    | `Accessor<number>` | `Infinity` | Feature end time, RELATIVE to `timeOffset`.                                                                                                            |
-| `getInstanceVertexTime` | `Accessor<number>` | `0`        | Per-vertex timestamp (trail mode), RELATIVE to `timeOffset`. The attribute is always registered, so the constant default keeps non-trail layers valid. |
+| Property                | Type               | Default      | Description                                                                                                                                                                                                                                                                                                                                                    |
+| :---------------------- | :----------------- | :----------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getInstanceStartTime`  | `Accessor<number>` | `0`          | Feature start time, RELATIVE to `timeOffset`.                                                                                                                                                                                                                                                                                                                  |
+| `getInstanceEndTime`    | `Accessor<number>` | `NEVER_ENDS` | Feature end time, RELATIVE to `timeOffset`. The default is `NEVER_ENDS` (`3.4028234663852886e38`, the f32 maximum), **not `Infinity`** — and a custom accessor must likewise return a large FINITE number: deck rejects non-finite constant attribute values and falls back to `0`, which hides every feature the moment the playhead passes `timeWindow / 2`. |
+| `getInstanceVertexTime` | `Accessor<number>` | `0`          | Per-vertex timestamp (trail mode), RELATIVE to `timeOffset`. The attribute is always registered, so the constant default keeps non-trail layers valid.                                                                                                                                                                                                         |
 
 ## Modes
 
@@ -86,6 +88,8 @@ Progressive drawing with a trailing fade — the `AnimatedTripsLayer` "vehicle m
 visible if: currentTime - trailLength <= vertexTime <= currentTime
 alpha = fadeTrail ? 1 - age / trailLength : 1
 ```
+
+Unlike upstream `TripsLayer`, the tail is **always** culled at `currentTime - trailLength`; `fadeTrail: false` only selects a flat alpha, giving a fixed-length solid snake rather than an ever-growing inked route — use `cumulative: true` for the draw-and-persist look. The cull is shared with `trailAlpha()` in `@poopdeck.gl/core/time-filter`, the kernel oracle the three and maplibre backends are pinned against, so it cannot be changed in deck alone.
 
 ### Wake mode (`wakeLength > 0`)
 
@@ -138,11 +142,18 @@ new ScatterplotLayer({
 new ScatterplotLayer({ getTime: () => timeController.getTime() });
 ```
 
-Other built-in optimizations: the shader-injection object is memoized per extension instance (object identity prevents pipeline re-links across sublayers sharing the singleton), and fully-hidden features are collapsed at the VERTEX stage (degenerate clip-space position ⇒ zero fragments rasterized) in the whole-feature modes.
+Other built-in optimizations: the shader-injection object is memoized per extension instance — deck calls `getShaders()` once per sublayer (one per visible tile), and while luma keys its shader and pipeline caches on source text (so a fresh literal would not re-link), the memo saves the per-sublayer allocation of the modules array and inject strings plus deck's `mergeShaders` pass over them. Fully-hidden features are collapsed at the VERTEX stage (degenerate clip-space position ⇒ zero fragments rasterized) in the whole-feature modes.
+
+## Constructor options
+
+| Option            | Type                                      | Default  | Description                                                                                                                                                                                                                                                                                                                                                           |
+| :---------------- | :---------------------------------------- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pathSegmentTime` | `boolean`                                 | `false`  | Inject the per-segment time interpolation that turns a staircase trail into a glide. **PATH-family hosts only** — it reads `PathLayer`'s `vPathPosition` / `vPathLength` varyings, and on a `ScatterplotLayer` or `ArcLayer` those identifiers do not exist and the shader fails to compile. Pair it with the `segmentTime` prop, which arms the branch at draw time. |
+| `mode`            | `'auto' \| 'window' \| 'trail' \| 'both'` | `'auto'` | Reserved for forward-compat with deck.gl 9.4's `gl_InstanceID` picking path. All values behave identically today.                                                                                                                                                                                                                                                     |
 
 ## Limitations
 
-- The three time attributes plus a layer's own attributes can brush WebGL2's 16-vertex-attribute guaranteed minimum when stacked with fp64 positions, picking, and `CategoryColorExtension`. On GPUs reporting exactly 16 slots, deck.gl logs a link warning and falls back to a non-picking shader; rendering proceeds. `AnimatedPathLayer`/`AnimatedTripsLayer` avoid this by default via `NoPickingPathLayer`. The constructor's `mode` option is reserved and has no effect.
+- The three time attributes plus a layer's own attributes can brush WebGL2's 16-vertex-attribute guaranteed minimum when stacked with fp64 positions, picking, and `CategoryColorExtension`. On GPUs reporting exactly 16 slots, deck.gl logs a link warning and falls back to a non-picking shader; rendering proceeds. `AnimatedPathLayer`/`AnimatedTripsLayer` avoid this by default via `NoPickingPathLayer`.
 - `TimeFilterExtension` works on `SolidPolygonLayer` directly (no separate polygon extension needed).
 
 ## Source

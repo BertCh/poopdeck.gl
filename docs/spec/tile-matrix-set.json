@@ -10,7 +10,8 @@
   "tileWidth": 256,
   "tileHeight": 256,
   "minTileMatrix": "0",
-  "maxTileMatrix": "24",
+  "maxTileMatrix": "22",
+  "$note": "maxTileMatrix is 22 because that is `stt_core::tile::MAX_ZOOM` (crates/stt-core/src/tile.rs) — the deepest zoom STT can address. `TileId::children()` refuses to descend past it, so no producer emits a deeper `tileMatrix` and a conformant reader MUST reject one. The bound comes from the format, not from cartography: tile coordinates are bounded by `1u32 << z`, and 22 also keeps the `2·z`-bit Hilbert directory sort key well inside `u64`. The spatial matrices themselves are the registered OGC WebMercatorQuad set truncated to 0..=22 — same 256×256 tile, same 2^z × 2^z grid per level, same EPSG:3857 origin and scale denominators.",
   "dimensions": [
     {
       "id": "time",

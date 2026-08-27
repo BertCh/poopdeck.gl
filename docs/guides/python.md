@@ -27,8 +27,11 @@ gdf = gpd.read_file("earthquakes.geojson")
 # declared CRS:
 gdf = gdf.to_crs(4326)
 
-# stt-build expects timestamps as Unix-ms (Int64), Unix-s (Int64), or ISO
-# 8601 strings. Convert if needed:
+# stt-build accepts a native Arrow Timestamp column at any precision
+# (second/ms/us/ns), an Int64 of Unix ms or seconds per --time-format, or ISO
+# 8601 strings. A pandas datetime64 column exports as a native Timestamp and
+# is read as-is; the Int64 conversion below is optional, and pairs with the
+# --time-format unix-ms passed to stt-build further down.
 gdf["timestamp"] = (
     gdf["time"].astype("datetime64[ms]").astype("int64")
 )
@@ -50,10 +53,6 @@ Two export pitfalls the build catches with a hard error:
 geometry_encoding="geoarrow")` writes line/polygon geometry in a layout
   the build cannot ingest and fails with a re-export hint. Keep the
   default WKB encoding (or pass `geometry_encoding="WKB"` explicitly).
-- **Nanosecond timestamps.** Native Arrow Timestamp columns are read
-  directly, but only at ms/µs precision — pandas `datetime64[ns]` exports
-  as a nanosecond Timestamp and fails with _"Unsupported timestamp column
-  type"_. The Int64 conversion above sidesteps it.
 
 Pre-1970 timestamps are rejected in all modes — the STT temporal index
 stores unsigned ms-since-epoch. Filter or re-epoch historical rows before
@@ -72,9 +71,12 @@ stt-build \
 > an `earthquakes/` directory (`manifest.json` + `index/*.sttd` + `packs/*.sttp`),
 > not a single file. The `.stt` extension is stripped for convenience.
 
-`--auto` runs `stt-optimize` over the input to pick a sensible zoom range
-and temporal bucket. Any flag you also pass explicitly wins. (Compression
-is not auto-tuned — the packed format is zstd-only.)
+Bare `--auto` (= `--auto basic`) runs `stt-optimize` over the input to pick a
+sensible zoom range and temporal bucket. `--auto encode` additionally applies
+the advisors' non-lossy byte-level levers — zstd level, `--blob-ordering`,
+`--pack-size` (the packed format is zstd-only, so the level is the compression
+knob). Lossy advice is logged, never applied, and any flag you pass explicitly
+still wins.
 
 ## 2. DuckDB → GeoParquet (no Python deps beyond duckdb)
 

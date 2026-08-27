@@ -2,7 +2,7 @@
 
 The `AnimatedPathLayer` renders time-series path/trajectory data as lines. It extends [`SpatioTemporalLayer`](./spatiotemporal-layer.md) and provides GPU-accelerated time filtering.
 
-It operates in **window mode**: each feature is shown (with optional fade) whenever its `[startTime, endTime]` overlaps the current time window — whole paths render at once. For a "vehicle moving along the route" trailing effect, use [`AnimatedTripsLayer`](./animated-trips-layer.md) instead, which renders per-vertex with a fading trail.
+It operates in **window mode** by default: each feature is shown (with optional fade) whenever its `[startTime, endTime]` overlaps the current time window — whole paths render at once. Set `revealTrail` for a progressive per-vertex reveal (see [Reveal (trail) mode](#reveal-trail-mode)), or use [`AnimatedTripsLayer`](./animated-trips-layer.md) when the archive carries real per-vertex times.
 
 ## Installation
 
@@ -45,6 +45,15 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `fadeInDuration`  | `number`                           | `300`              | Duration (ms) for paths to fade in when their time range enters the window.                                                                                                                                                                                                                 |
 | `fadeOutDuration` | `number`                           | `300`              | Duration (ms) for paths to fade out when their time range leaves the window.                                                                                                                                                                                                                |
 
+### Reveal (trail) mode
+
+| Property         | Type      | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                     |
+| :--------------- | :-------- | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `revealTrail`    | `boolean` | `false` | Draw each path **progressively** up to the play head instead of whole: a vertex becomes visible as the play head reaches its time. Fed by the tile's `vertexTimestamps` when present, otherwise by monotone times synthesized from each feature's `[startTime, endTime]` span, so a timeless line inks itself in along its length. Off keeps window mode.                                                       |
+| `revealDuration` | `number`  | `0`     | Trailing-window length (ms). `0` persists the whole revealed portion (draw-and-keep); a positive value is a finite comet trail that erases behind the head. ⚠️ Persistence is a shader property, not a tile-residency one: a finite value auto-widens the load window to `2 × revealDuration`, but `0` cannot be satisfied by any finite window — set `tileLoadTimeWindow` wide enough or the layer warns once. |
+| `fadeTrail`      | `boolean` | `true`  | Fade the trail head→tail (the classic comet) vs. draw it at constant opacity (a solid snake). No effect outside reveal mode.                                                                                                                                                                                                                                                                                    |
+| `reducedMotion`  | `boolean` | `false` | Accessibility: suppress the reveal animation and render the whole path (window mode). Wire the host's `prefers-reduced-motion` here. No effect when `revealTrail` is off.                                                                                                                                                                                                                                       |
+
 ### Data Accessors
 
 | Property              | Type                            | Default                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -53,7 +62,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `getColor`            | `Color \| string \| null`       | `null`                 | Upstream-vocabulary (PathLayer) alias of `pathColor`. Accepts a constant or a property-column NAME — NOT a function accessor (binary tiles can't run per-feature JS; a function warns once and falls back to `pathColor`). When set, it wins.                                                                                                                                                                                                                                                                                                     |
 | `pathWidth`           | `number \| string`              | `3`                    | Path width: constant, or a numeric property name — also the fallback width for tiles that do not carry the named column. **Default drift**: upstream `PathLayer.getWidth` defaults to `1`, which in this layer's `'pixels'` units is a hairline that all but disappears on a HiDPI display.                                                                                                                                                                                                                                                       |
 | `getWidth`            | `number \| string \| null`      | `null`                 | Upstream-vocabulary alias of `pathWidth` (same domain rules).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `colorPalette`        | `Color[]`                       | 10-color palette       | Palette for categorical `pathColor` (GPU lookup via `CategoryColorExtension`, up to 4096 entries).                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `colorPalette`        | `Color[]`                       | 10-color palette       | Palette for categorical `pathColor`, indexed by first-seen category order within each tile. Resolved on the CPU into a per-vertex `getColor` buffer at tile-prepare time.                                                                                                                                                                                                                                                                                                                                                                         |
 | `colorMapping`        | `Record<string, Color> \| null` | `null`                 | Explicit category-string → color map for categorical `pathColor`. Resolved per-tile against each tile's own category dictionary, so the same category (e.g. an HD-map `lane_divider` class) renders the same color in every tile — unlike `colorPalette`, whose indices are assigned per-tile in first-seen order. Takes precedence over `colorPalette` when set.                                                                                                                                                                                 |
 | `colorMappingDefault` | `Color`                         | `[120, 120, 120, 255]` | Fallback color for categories absent from `colorMapping`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `filterProperty`      | `string \| null`                | `null`                 | Name of a baked NUMERIC column to GPU-filter paths by — wires the column into [`STTDataFilterExtension`](./data-filter-extension.md). A path renders when its value is inside `filterRange`, else it is hidden (or soft-faded via `filterSoftRange`); composes WITH the time filter (a path must pass both). Accessor-alias of deck's `getFilterValue`: pass a column NAME, not a function (a function warns once and is ignored). Unset ⇒ the extension is not installed (zero cost). A categorical column can't be range-filtered (warns once). |
@@ -104,13 +113,18 @@ occluding everything below it.
 | `elevationOpacityNear`  | `number`                         | `1`     | Alpha multiplier (0–1) at the LOW end of `elevationOpacityRange` — the ground layer of the stack.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `elevationOpacityFar`   | `number`                         | `1`     | Alpha multiplier (0–1) at the HIGH end of `elevationOpacityRange` — the top of the stack. Values below `1` fade the upper terraces translucent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
-Together, a density-band categorical color plus a numeric elevation column
-produce a readable 3D iso-surface from a single dataset: `pathColor`/
-`colorMapping` paint each ring by its density band, `elevationProperty`/
-`elevationScale` stack the bands into a hill by that same (or a related)
-band value, and `elevationOpacityRange` thins out the upper terraces so nothing
-above ground level fully hides the terrain underneath it when viewed from
-above.
+Together they produce a readable 3D iso-surface from one dataset:
+
+```ts
+new AnimatedPathLayer({
+  pathColor: 'band',
+  colorMapping: { low: [40, 90, 180, 255], high: [220, 60, 40, 255] },
+  elevationProperty: 'band_value',
+  elevationScale: 50,
+  elevationOpacityRange: [0, 10],
+  elevationOpacityFar: 0.35,
+});
+```
 
 ## Architecture & performance
 
@@ -121,27 +135,27 @@ above.
 - **Per-tile binary sublayers**: one `PathLayer` per (tile, layer) pair
   using the binary `data: { length, startIndices, attributes }` interface;
   typed arrays reference the tile's Arrow buffers zero-copy. New tiles are
-  additive — one sublayer, one GPU upload. `positionFormat` is **not**
-  forwarded: `PathLayer` derives the geometry stride from
-  `data.attributes.getPath.size`, which this layer always sets, and only falls
-  back to `positionFormat` when the descriptor carries no `size` — so passing
-  it was inert and the prop has been removed.
+  additive — one sublayer, one GPU upload.
 - **Sublayer + prepared-data caches** with content-keyed style digests, so
   unchanged tiles short-circuit deck.gl's prop diff entirely.
 - **Per-tile `timeOffset`** through a window-mode
   [`TimeFilterExtension`](./time-filter-extension.md); time updates flow
   via `getTime()` per draw (no layer recreation per frame).
-- **Categorical color on the GPU** via
-  [`CategoryColorExtension`](./category-color-extension.md) — category
-  indices upload once as a float attribute; the palette is a shared 16 KB
-  texture per device.
-- **Picking and the attribute budget**: by default sublayers render through
-  `NoPickingPathLayer`, which strips `instancePickingColors` — PathLayer's
-  13 attributes + TimeFilter's 3 + CategoryColor's 1 = 17 would otherwise
-  exceed WebGL2's 16-attribute guaranteed minimum on some GPUs. Setting
-  `pickable: true` switches to the stock `PathLayer` so picking works
-  (with a one-time warning about the possible link warning on
-  16-slot GPUs).
+- **Categorical color on the CPU**: `PathLayer` instances are SEGMENTS, so
+  [`CategoryColorExtension`](./category-color-extension.md)'s per-FEATURE
+  `instanceCategoryIndex` would under-size the draw. `colorPalette` /
+  `colorMapping` are instead resolved per tile and expanded into a per-vertex
+  `getColor` RGBA buffer at prepare time (cached, never on the draw path). The
+  extension is not installed at all, which also frees a vertex-attribute slot.
+- **Picking and the attribute budget**: counting `in` declarations in deck.gl
+  9.3's shipped `PathLayer` vertex shader — stock `PathLayer` 13,
+  `NoPickingPathLayer` 12 (picking colors stripped), + TimeFilterExtension 3,
+  - STTDataFilterExtension 1 — the four combinations are 15 (default), 16
+    (`filterProperty`), 16 (`pickable`) and 17 (`filterProperty` + `pickable`).
+    Only the last exceeds WebGL2's guaranteed 16-slot floor and can fail to link
+    (blank paths) on GPUs that report exactly 16; the layer warns once for
+    exactly that combination. Prefer `pickable: false` when filtering, or filter
+    with [`AnimatedPointLayer`](./animated-point-layer.md).
 
 The sublayer short id for `_subLayerProps` overrides is **`paths`**. Without a `type` override the class is `PathLayer` when `pickable`, `NoPickingPathLayer` otherwise.
 

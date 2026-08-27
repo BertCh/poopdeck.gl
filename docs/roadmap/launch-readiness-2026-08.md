@@ -1,9 +1,13 @@
 # Launch readiness — August 2026
 
-This is the short, active launch checklist for STT and poopdeck.gl. It tracks
-only work that changes whether the project can be launched confidently. Design
+This is the short, active launch checklist for **poopdeck.gl**. It tracks only
+work that changes whether the renderer can be launched confidently. Design
 history, experiments, and measured investigations stay in the subject-specific
-decision records in this directory.
+decision records in this directory. Format, tiler, optimizer and dataset launch
+items live in the STT repository's
+[own register](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/README.md);
+the STT rows below are read-only facts, carried here because launch material
+quotes them.
 
 ## Current release contract
 
@@ -11,16 +15,21 @@ These facts are authoritative for the launch candidate. If one changes, update
 the named source first and let `project-status.json` validation catch copies
 that drift.
 
-| Contract               | Current state                                                          | Source of truth                                         |
-| ---------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------- |
-| Rust workspace release | `0.7.0`; MSRV `1.87`                                                   | root `Cargo.toml`                                       |
-| JavaScript release     | seven public packages at `0.7.0`                                       | `packages/*/package.json`                               |
-| Cesium backend         | frozen npm release `0.5.0`; workspace package is private/experimental  | `packages/cesium/package.json` and README               |
-| Packed archive writer  | `formatVersion: 3`, directory codec v6                                 | `stt-core` pack/directory constants and `docs/spec/`    |
-| Compatibility window   | readers also open packed v2 / directory v5 read-only                   | packed-format spec and conformance fixtures             |
-| Installed CLIs         | `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` | `stt:crates/spatiotemporal-tiles/src/bin/`              |
-| Dataset generator      | repo-only workspace at `stt:tools/stt-generate`                        | `stt:tools/stt-generate/Cargo.toml`                     |
-| JavaScript runtime     | Node 24+ and pnpm 11.23.0                                              | `.node-version`, package engines, root `packageManager` |
+| Contract               | Current state                                                                                      | Source of truth                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Rust workspace release | `0.8.0`; MSRV `1.88`                                                                               | vendored `stt` block of `project-status.json`                                                               |
+| JavaScript release     | seven public packages at `0.8.0`                                                                   | `packages/*/package.json`                                                                                   |
+| Cesium backend         | frozen npm release `0.5.0`; workspace package is private/experimental                              | `packages/cesium/package.json` and README                                                                   |
+| Packed archive writer  | `formatVersion: 3`, directory codec v6                                                             | `stt:crates/stt-core` constants and `docs/spec/`                                                            |
+| Compatibility window   | readers also open packed v2 / directory v5 read-only                                               | packed-format spec and conformance fixtures                                                                 |
+| Installed CLIs         | `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve`                             | `stt:crates/spatiotemporal-tiles/src/bin/`                                                                  |
+| Dataset generator      | repo-only workspace at `stt:tools/stt-generate`                                                    | `stt:tools/stt-generate/Cargo.toml`                                                                         |
+| JavaScript runtime     | dev toolchain Node 24+ and pnpm 11.23.0; published packages `node >=20`, `@poopdeck.gl/mcp` `>=24` | `.node-version` and root `packageManager`; `project-status.json` `toolchain.node` / `toolchain.runtimeNode` |
+
+Rows sourced upstream (`stt:` prefixed, plus the Rust release and MSRV) are not
+re-derived here — `scripts/check-project-status.mjs` deliberately verifies only
+the half this repository still decides, and the rest arrives as the vendored
+`stt` block, byte-gated by `pnpm stt:check`.
 
 `STT` is the neutral format and toolchain name. `poopdeck.gl` is the rendering
 package family and public showcase. Launch material should keep that distinction
@@ -31,12 +40,17 @@ names.
 
 ### Source and release
 
-- [ ] The configured GitHub repository is public and every package/crate source,
-      issue, homepage, and release link resolves.
-- [ ] Required GitHub Actions complete on the public repository from a clean
-      checkout, with protected-branch checks enabled.
-- [ ] One release candidate installs from crates.io, npm, and release binaries
-      using only the documented prerequisites.
+- [x] The configured GitHub repository is public and every package/crate source,
+      issue, homepage, and release link resolves. Both `BertCh/poopdeck.gl` and
+      `BertCh/spatiotemporal-tiles` are public as of 2026-08-26.
+- [x] Required GitHub Actions complete on the public repository from a clean
+      checkout. `CI` and `Release npm (@poopdeck.gl)` are both green on `main` at
+      `027e2f6` (2026-08-26). Residual: protected-branch required checks are not
+      configured yet.
+- [x] One release candidate installs from crates.io and npm using only the
+      documented prerequisites — 0.8.0, both registries, 2026-08-26. Residual:
+      the cargo-dist prebuilt binaries for the `v0.8.0` tag have not been
+      install-tested.
 - [x] Release notes describe the Rust and JavaScript artifacts, format
       compatibility, maturity tiers, and known limitations together.
 
@@ -67,37 +81,35 @@ names.
       reviewed `DemoViewer` re-base).
 - [ ] Run automated accessibility checks plus representative Chromium, Firefox,
       and WebKit smoke tests.
-- [ ] Define deployment security headers in source and verify the headers served
-      at the edge. Source policy and worker tests are complete; live edge
-      verification remains.
+- [x] Define deployment security headers in source and verify the headers served
+      at the edge. `curl -sI https://poopdeck.gl` returns every header declared in
+      `examples/showcase/public/_headers` (CSP `frame-ancestors`, HSTS,
+      Permissions-Policy, Referrer-Policy, X-Content-Type-Options,
+      X-Frame-Options), verified 2026-08-26.
 
-Local production verification on 2026-08-24 prerendered the public route set,
-generated an 87-URL sitemap, emitted the documentation/status artifacts, and
-then failed the final bundle gate: `DemoViewer` was 9.0 KiB gzip against its
-7 KiB budget.
-
-**Resolved 2026-08-25 by re-basing the budget to 9.5 KiB, reviewed.** The
-deployed component measured 5.1 KiB gzip (14,004 B raw) and the local build
-9.0 KiB (26,697 B) — the growth is the interleaved MapboxOverlay terrain path,
-the mobile chrome, and the pitch/camera limits, all of which are intended and
-shipped. The 7 KiB number was calibrated against the 5.1 KiB component and
-predates all three, so it was stale rather than breached. Every other budget
-passes with headroom. The reduction still available is splitting the terrain
-path behind a dynamic import — most demos never load it, and it is the largest
-single addition; that is a follow-up, not a launch blocker.
+`DemoViewer`'s 7 KiB gzip budget was calibrated against a 5.1 KiB component and
+predates the interleaved MapboxOverlay terrain path, the mobile chrome and the
+pitch/camera limits; it was re-based to 9.5 KiB on 2026-08-25 against a measured
+9.0 KiB (26,697 B raw) local build, reviewed. Splitting the terrain path behind a
+dynamic import is the remaining reduction — a follow-up, not a blocker.
 
 ### Reliability and operations
 
-- [ ] Pass the complete Rust and TypeScript suites on hosted CI. A local audit
-      is not release evidence.
-- [ ] Verify deterministic archive output, format conformance fixtures, npm
-      tarballs, CLI feature lanes, and the showcase demo probe in the release run.
-- [ ] Record source, licence, acquisition date, generator command/commit,
-      checksums, and rebuild status for every showcased dataset.
-- [ ] Add dependency review, JavaScript and Rust vulnerability scanning, release
-      provenance/checksums, and minimal workflow permissions.
-- [ ] Document manifest-first deployment ordering, canary verification, and
-      rollback for the archive fleet and website.
+- [x] Pass the complete TypeScript suite on hosted CI. Green 2026-08-26 on
+      `027e2f6`: typecheck plus vitest for all eight packages, the showcase, and
+      `@poopdeck.gl/bench`.
+- [ ] Verify npm tarballs and the showcase demo probe in the release run.
+      `smoke-pack` and `showcase-probe` both run in `ci.yml`; what remains is
+      wiring them as required checks on the release path.
+- [ ] Add dependency review, JavaScript vulnerability scanning, release
+      provenance/checksums, and minimal workflow permissions. (Provenance is
+      **T3** in the [backlog](./README.md).)
+- [ ] Document canary verification and rollback for the website.
+
+Deterministic archive output, conformance fixtures, CLI feature lanes, dataset
+provenance and archive-fleet deployment ordering are STT-owned launch items and
+live in its
+[register](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/README.md).
 
 ## Implementation order
 

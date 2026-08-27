@@ -26,35 +26,36 @@ different things:
 | Cost     | ~100 tok idle, <5k on trigger                                              | tool defs load up front           | crawl-time                     |
 | Best for | multi-step workflows, "which layer / which tool", consistency-critical ops | real-time state, mutating actions | cheap fallback                 |
 
-The arrangement follows Cloudflare's `wrangler` skill, which routes between its
-MCP server and its CLI: here the `stt-*` Rust CLIs are the CLI, the MCP server is
-the live surface, and the skills route between them.
-
 ## Install (Claude Code plugin)
 
 The repo root is a plugin marketplace. From a checkout:
 
 ```
-/plugin marketplace add /path/to/spatiotemporal-tiles
+/plugin marketplace add /path/to/poopdeck.gl
 /plugin install poopdeck-ai
 ```
 
-The bundled `.mcp.json` launches the built server over stdio, scanning
-`examples/showcase/public/data` for datasets. Build the server once first:
+The bundled `.mcp.json` runs the **published** server over stdio via
+`npx -y @poopdeck.gl/mcp` — no repo checkout, no build step, no `dist/` on disk.
+The documentation corpus rides inside that tarball, so `search_docs` / `get_doc`
+work immediately.
 
-```bash
-pnpm --filter @poopdeck.gl/mcp build
-```
+### Pointing it at your datasets
 
-To use the published MCP server instead of a workspace build, switch the
-command in `.mcp.json` to `npx -y @poopdeck.gl/mcp` and drop the local build
-step.
+The plugin sets **no dataset root** — a marketplace install has no idea where
+your archives live. The server falls back to `$STT_DATA_ROOT`, else
+`<cwd>/examples/showcase/public/data`, so a fresh install returns an _empty_
+`list_datasets` catalog rather than failing (docs, `view_map`, and the playback
+intents work regardless). To see your own archives, export
+`STT_DATA_ROOT=/path/to/archives` before launching, or add
+`"--data-root", "/path/to/archives"` to the server args. A dataset is any
+directory containing a `manifest.json`, found up to six levels under the root.
 
 ### What you get out of the box
 
-The bundled `.mcp.json` launches the server with **`--allow-cli`** — a locally
-installed, stdio-only plugin the user deliberately enabled — so all thirteen
-tools are live. Seven of them are read-only and shell nothing out:
+The plugin runs the server in its **default, read-only mode** — no
+`--allow-cli`, so ten of the thirteen tools register and nothing the plugin
+registers can spawn a process or write a file. Seven shell nothing out at all:
 
 - `list_datasets`, `describe_dataset` — discover + inspect archives (manifest only).
 - `view_map` — compose a `@deck.gl/json` spec for one or more datasets.
@@ -67,19 +68,37 @@ tools are live. Seven of them are read-only and shell nothing out:
 
 The other six — `recommend_build`, `diff_datasets`, `dataset_report`,
 `validate_dataset`, `build_dataset`, `generate_dataset` — shell out to the
-`stt-*` binaries (resolved from `target/release/` or `PATH`); of those only
-`generate_dataset` touches the network.
+`stt-*` binaries (resolved from `PATH`, or from `target/release/` in a source
+checkout) and need `--allow-cli`: without it `build_dataset`, `validate_dataset`
+and `generate_dataset` don't register at all, while `recommend_build`,
+`diff_datasets` and `dataset_report` register but don't shell out — the first two
+return an "enable `--allow-cli`" hint, `dataset_report` answers from the manifest
+alone. Of the six only `generate_dataset` touches the network.
 
 > **Security:** `--allow-cli` lets the MCP client spawn the `stt-*` binaries,
 > which read and write the filesystem (and, for `generate_dataset`, fetch over
-> the network). That's the intended behavior for a trusted local stdio session.
-> **Remove `--allow-cli` from the server args in `.mcp.json` for a read-only,
-> no-shell-out setup** — the three execution tools (`build_dataset`,
-> `validate_dataset`, `generate_dataset`) then don't register at all, and the
-> three analysis tools return an "enable `--allow-cli`" hint (or, for
-> `dataset_report`, a manifest-only summary) instead of running. Do **not**
-> pair `--allow-cli` with a non-localhost HTTP transport on an untrusted
-> network.
+> the network) with paths the model chose. It is off by default and the plugin
+> does not turn it on. **Opt in by adding it to the server args** — only for a
+> local stdio server you trust:
+>
+> ```json
+> {
+>   "mcpServers": {
+>     "stt": {
+>       "command": "npx",
+>       "args": [
+>         "-y",
+>         "@poopdeck.gl/mcp",
+>         "--allow-cli",
+>         "--data-root",
+>         "/path/to/archives"
+>       ]
+>     }
+>   }
+> }
+> ```
+>
+> Do **not** pair `--allow-cli` with a non-localhost HTTP transport.
 
 See the [MCP reference](../api/stt-mcp.md#the---allow-cli-safety-note) for the
 full tool table and the safety model.
@@ -155,20 +174,6 @@ other skill-aware harnesses — not just Claude Code.
 **Static tier.** [`llms.txt`](https://github.com/BertCh/poopdeck.gl/blob/main/llms.txt)
 at the repo root is the cheap fallback: a curated index of the docs for any agent
 that can only be pointed at a URL.
-
-## Security model
-
-Field defaults, enforced by the _server/operator_, not the model:
-
-- **Read-only by default.** Mutating and shell-out tools are absent (or inert)
-  until `--allow-cli`.
-- **Least privilege.** `--data-root <dir>` roots the server to one tree; no
-  arbitrary filesystem or shell.
-- **Gated shell-outs.** Execution tools run known `stt-*` binaries with validated
-  argument arrays — no shell string interpolation — and the child is killed on
-  client cancel/timeout.
-- **HTTP hardening.** DNS-rebinding Host/Origin allow-lists; stateless sessions.
-  Don't expose `--transport http --allow-cli` on a non-localhost bind.
 
 ## Further reading
 

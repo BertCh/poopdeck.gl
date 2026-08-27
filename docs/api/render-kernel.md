@@ -18,17 +18,19 @@ each module is its own `exports` sub-path in `packages/core/package.json`,
 so a backend imports only the pieces it needs and bundlers tree-shake the
 rest:
 
-| Sub-path                             | Source file                                                                        | Consumed by                                          |
-| :----------------------------------- | :--------------------------------------------------------------------------------- | :--------------------------------------------------- |
-| `@poopdeck.gl/core/time-filter`      | [`render/time-filter.ts`](../../packages/core/src/render/time-filter.ts)           | layers, three, cesium                                |
-| `@poopdeck.gl/core/shader-codegen`   | [`render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts)     | backend conformance tests; one unwired cesium export |
-| `@poopdeck.gl/core/style`            | [`render/style.ts`](../../packages/core/src/render/style.ts)                       | layers, three, maplibre, cesium                      |
-| `@poopdeck.gl/core/geometry`         | [`render/geometry.ts`](../../packages/core/src/render/geometry.ts)                 | layers, three, maplibre                              |
-| `@poopdeck.gl/core/geo`              | [`geo/index.ts`](../../packages/core/src/geo/index.ts)                             | three, cesium                                        |
-| `@poopdeck.gl/core/picking`          | [`render/picking.ts`](../../packages/core/src/render/picking.ts)                   | three, maplibre, cesium                              |
-| `@poopdeck.gl/core/tileset-adapter`  | [`render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts)   | layers, three, maplibre                              |
-| `@poopdeck.gl/core/capabilities`     | [`render/capabilities.ts`](../../packages/core/src/render/capabilities.ts)         | layers, three, maplibre, cesium                      |
-| `@poopdeck.gl/core/capabilities-doc` | [`render/capabilities-doc.ts`](../../packages/core/src/render/capabilities-doc.ts) | doc generation only                                  |
+| Sub-path                             | Source file                                                                        | Consumed by                                                    |
+| :----------------------------------- | :--------------------------------------------------------------------------------- | :------------------------------------------------------------- |
+| `@poopdeck.gl/core/time-filter`      | [`render/time-filter.ts`](../../packages/core/src/render/time-filter.ts)           | layers, three, maplibre, cesium                                |
+| `@poopdeck.gl/core/shader-codegen`   | [`render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts)     | backend conformance tests only — nothing that ships imports it |
+| `@poopdeck.gl/core/style`            | [`render/style.ts`](../../packages/core/src/render/style.ts)                       | layers, three, maplibre, cesium                                |
+| `@poopdeck.gl/core/geometry`         | [`render/geometry.ts`](../../packages/core/src/render/geometry.ts)                 | layers, three, maplibre, cesium                                |
+| `@poopdeck.gl/core/trips`            | [`render/trips.ts`](../../packages/core/src/render/trips.ts)                       | three, maplibre, cesium                                        |
+| `@poopdeck.gl/core/edge-bundling`    | [`render/edge-bundling.ts`](../../packages/core/src/render/edge-bundling.ts)       | layers, three, maplibre, cesium                                |
+| `@poopdeck.gl/core/geo`              | [`geo/index.ts`](../../packages/core/src/geo/index.ts)                             | three, maplibre, cesium                                        |
+| `@poopdeck.gl/core/picking`          | [`render/picking.ts`](../../packages/core/src/render/picking.ts)                   | three, maplibre, cesium                                        |
+| `@poopdeck.gl/core/tileset-adapter`  | [`render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts)   | layers, three, maplibre                                        |
+| `@poopdeck.gl/core/capabilities`     | [`render/capabilities.ts`](../../packages/core/src/render/capabilities.ts)         | layers, three, maplibre, cesium                                |
+| `@poopdeck.gl/core/capabilities-doc` | [`render/capabilities-doc.ts`](../../packages/core/src/render/capabilities-doc.ts) | doc generation only                                            |
 
 A repo test (`packages/core/test/kernel-framework-free.test.ts`) statically
 scans every file under `packages/core/src` and fails the build if it imports
@@ -150,7 +152,10 @@ oracle_ — `evalExpr` is a separate, differently-shaped implementation of the
 same four modes, so a backend's math can be pinned against two
 independently-authored references instead of one. A transcription slip in
 either implementation shows up as a failing test rather than as drifted
-pixels. Read it as a conformance oracle, not a compiler.
+pixels. Read it as a conformance oracle, not a compiler. The `emit*` string
+emitters this module once carried were removed at the 0.6.0 cut because nothing
+compiled their output; the AST and its evaluator remain because conformance
+compares the alpha VALUE, not the shader TEXT.
 
 ```typescript
 type Expr =
@@ -236,21 +241,6 @@ throws on any unknown node class or operator, so a graph rewritten with a new
 op fails loudly instead of silently passing. Compiled-shader
 _pixels_ remain outside what any of this proves — see
 [renderer-architecture.md §2.9](../roadmap/renderer-architecture.md#29-five-tier-enforcement-ladder--its-honest-ceiling).
-
-> **There is no GLSL emitter any more, by decision.** `emitGLSL300` and its
-> only caller, `@poopdeck.gl/cesium`'s `timeFilterAlphaGlsl`, were removed at
-> the 0.6.0 cut; `emitGLSL100` had gone earlier. None of them was ever in a
-> render path — every backend hand-writes its shader in its own dialect, and
-> Cesium CPU-filters through `timeFilterAlpha`. What the kernel exports is the
-> AST and its evaluator, because conformance compares the alpha VALUE, not the
-> shader TEXT. Re-add an emitter when something compiles its output.
-
-There is **no `emitTSL`**, in this package or in `@poopdeck.gl/three`, and
-there never was. Where the name still appears — in
-[renderer-architecture.md §5.1](../roadmap/renderer-architecture.md#51-decision-6--gpu-conformance-ci-the-one-live-decision-blocked)'s
-open question — it is a proposal, not a function. three's TSL alpha
-(`@poopdeck.gl/three`'s `tsl/time-filter.ts`) is a hand-written node-graph
-mirror of `core/time-filter`.
 
 ## `core/style`
 
@@ -381,12 +371,147 @@ polygons (see [Binary Features § Polygon rings](./binary-features.md#polygon-ri
 Returns `null` when the feature has no polygon geometry, or (non-prebaked
 path) fewer than 3 ring vertices.
 
+## `core/trips`
+
+The CPU trip kernel every non-deck backend shares: index a tile set's
+LineString features once, then interpolate a moving head — or trim a trailing
+tail — per frame with no projection and no allocation. Lifted verbatim from
+`@poopdeck.gl/three`'s pure `lib/trip-heads.ts` when Cesium became its third
+consumer; deck keeps the original copies.
+
+```typescript
+type TripPrecision = 'f32' | 'f64';
+
+interface Trip {
+  positions: Float32Array | Float64Array; // x,y,z interleaved, RELATIVE to the index origin
+  vertexTimes: Float32Array | Float64Array; // relative to timeOrigin, monotonic non-decreasing
+  numVerts: number;
+  start: number;
+  end: number; // feature window, relative to timeOrigin
+  binary: BinaryFeatures;
+  featureIndex: number; // picking provenance
+}
+
+interface TripIndex {
+  trips: Trip[];
+  origin: [number, number, number]; // f64 world origin all positions are relative to (RTC)
+}
+
+interface Head {
+  x: number;
+  y: number;
+  z: number;
+}
+
+function buildTripIndex(
+  tiles: Tile[],
+  projection: Projection,
+  timeOrigin: number,
+  options?: { precision?: TripPrecision },
+): TripIndex;
+
+function sampleHead(trip: Trip, t: number): Head | null;
+function sampleHeads(index: TripIndex, t: number, out: Float32Array): number;
+function trimTrail(
+  trip: Trip,
+  t: number,
+  trailLength: number,
+  out: Float64Array | Float32Array,
+): number;
+function synthesizeVertexTimes(binary: BinaryFeatures): Float32Array;
+```
+
+`buildTripIndex` walks every LineString layer (points/polygons are skipped),
+projects each vertex once **relative to a shared RTC origin** — the first usable
+vertex, so the offsets stay small enough for f32 on a GPU — and rebases each
+feature's `[startTime, endTime]` plus its per-vertex times onto the scene's
+common `timeOrigin`. Per-vertex times come from the tile's own
+`vertexTimestamps` column when present; otherwise `synthesizeVertexTimes`
+distributes `[start, end]` across the vertices by cumulative haversine distance
+(a verbatim port of deck's function of the same name).
+
+`sampleHead` binary-searches the segment bracketing `t` and lerps, returning
+`null` when the trip is inactive; `sampleHeads` writes every active head into a
+caller-grown `Float32Array` and returns the count. `trimTrail` is the CPU
+analogue of the GPU `trail` vertex fade, for hosts whose stock polyline
+primitive has no per-vertex shader hook (Cesium): it returns the sub-polyline in
+`[t − trailLength, t]` tail→head, with interpolated head and tail vertices,
+writing into an `out` sized for `numVerts + 2` vertices.
+
+**Precision is a contract, not a tuning knob.** `'f32'` (the default) is for
+GPU-buffer consumers and is byte-identical to the pre-lift three build; `'f64'`
+is for CPU-double consumers — Cesium's `Cartesian3` — where the RTC offset
+itself can span the globe and would otherwise quantize to metres.
+
+## `core/edge-bundling`
+
+The pure, device-free KDEEB math behind the `liveBundling` capability. Kernel
+density edge bundling (Hurter, Ersoy & Telea 2012) with a CUBu-style pipeline
+(van der Zwan & Telea 2016) turns geometrically-close flows into smooth rivers
+by iteratively advecting each edge's control points up the gradient of an
+edge-density field. One iteration is:
+
+1. **Splat** — additively rasterize an Epanechnikov kernel of radius `h` at
+   every control point into a density texture.
+2. **Advect** — move each interior control point a step `h` along the normalized
+   density gradient `∇ρ/‖∇ρ‖`.
+3. **Resample** — redistribute each edge's points to uniform arc-length spacing
+   (advection bunches them; without this you get gaps and kinks).
+4. **Smooth** — one 1D Laplacian pass along each edge. _This_ is what makes the
+   bundles smooth; advection alone is jagged.
+5. **Anneal** — shrink `h` and repeat, progressively tightening the bundles.
+
+```typescript
+type Vec2 = readonly [number, number];
+
+const BUNDLING_EPS = 1e-9; // degenerate-length guard for lengths and radii
+const BUNDLING_WORK_SIZE = 1000; // side of the normalized simulation box
+
+function epanechnikovWeight(dist: number, radius: number): number;
+function annealRadius(radius: number, lambda: number): number; // lambda clamped to [0.5, 0.9]
+
+interface BundleEdgesOptions {
+  iterations?: number; // @default 15
+  kernelRadius?: number; // initial bandwidth h AND the advection step. @default 3% of the work box
+  lambda?: number; // per-round bandwidth decay. @default 0.85
+  smoothing?: number; // Laplacian strength per round. @default 0.5
+  densityResolution?: number; // density grid per axis. @default 256
+}
+
+function bundleEdges(
+  points: ArrayLike<number>,
+  edgeCount: number,
+  pointsPerEdge: number,
+  opts?: BundleEdgesOptions,
+): Float64Array;
+```
+
+`points` is edge-major and 2-D — edge `e`'s point `i` sits at
+`(e * pointsPerEdge + i) * 2` — and coordinates are expected **in the shared
+`BUNDLING_WORK_SIZE` box**: map your cosLat-corrected endpoints into it first so
+the bandwidth constants mean the same thing at every scale, then map back. The
+input is never mutated; a new buffer is returned. **Endpoints are pinned**:
+column `0` and column `pointsPerEdge - 1` of every edge are copied through
+untouched each round, because a bundled flow must still start and end where its
+data says it does. Degenerate inputs (fewer than 3 points per edge, or a single
+edge) return a copy rather than throwing.
+
+These primitives live in core so the four backends share ONE definition instead
+of hand-copying constants that have drifted before. Each backend still writes
+its own device path — luma for deck, TSL for three, hand-written GLSL for
+maplibre, and a plain CPU schedule for Cesium — and pins that path to these
+functions as the CPU oracle, the same conformance idiom `core/time-filter` uses
+for the scalar alpha. Note the split of responsibility: **endpoint pinning
+inside `bundleEdges` is a property of these primitives, but a caller running its
+own advect loop over `epanechnikovWeight`/`laplacianStep` owns that pinning
+itself.**
+
 ## `core/geo`
 
-A pluggable lon/lat(+altitude) ↔ world-space projection, for the CPU-side
-projecting backends (three today; Cesium and a future WebGL-three next).
-deck.gl projects entirely on the GPU against a host `WebMercatorViewport`/
-`GlobeViewport` and does not consume this module.
+A pluggable lon/lat(+altitude) ↔ world-space projection, for the three
+CPU-projecting backends — three, maplibre and Cesium. deck.gl projects entirely
+on the GPU against a host `WebMercatorViewport`/`GlobeViewport` and does not
+consume this module.
 
 ```typescript
 interface GeoAnchor {
@@ -612,6 +737,10 @@ const LAYER_KINDS = [
   'flowStroke',
   'isoLines',
   'ego',
+  'text',
+  'mesh',
+  'pointCloud',
+  'hexbin',
 ] as const;
 type LayerKind = (typeof LAYER_KINDS)[number];
 
@@ -742,6 +871,8 @@ import { expandCategoricalColors } from '@poopdeck.gl/core/style';
 - [`packages/core/src/render/shader-codegen.ts`](../../packages/core/src/render/shader-codegen.ts)
 - [`packages/core/src/render/style.ts`](../../packages/core/src/render/style.ts)
 - [`packages/core/src/render/geometry.ts`](../../packages/core/src/render/geometry.ts)
+- [`packages/core/src/render/trips.ts`](../../packages/core/src/render/trips.ts)
+- [`packages/core/src/render/edge-bundling.ts`](../../packages/core/src/render/edge-bundling.ts)
 - [`packages/core/src/geo/index.ts`](../../packages/core/src/geo/index.ts), [`local-enu.ts`](../../packages/core/src/geo/local-enu.ts), [`mercator.ts`](../../packages/core/src/geo/mercator.ts), [`globe.ts`](../../packages/core/src/geo/globe.ts), [`view-state.ts`](../../packages/core/src/geo/view-state.ts)
 - [`packages/core/src/render/picking.ts`](../../packages/core/src/render/picking.ts)
 - [`packages/core/src/render/tileset-adapter.ts`](../../packages/core/src/render/tileset-adapter.ts)

@@ -16,7 +16,7 @@ not that the spec is implementable by a stranger.
 This crate does not fix that. What it does is far cheaper and, for adoption,
 probably worth more: it puts the reader somewhere a **third party** can reach
 it without porting anything. A Python notebook, a Go service, a C++ host, a
-future GDAL or Martin path — none of them is going to reimplement a v5 varint
+future GDAL or Martin path — none of them is going to reimplement a v6 varint
 directory, and all of them already read Arrow IPC. Bytes in, Arrow out.
 
 It is additive by construction: a new crate, no format change, no change to any
@@ -110,16 +110,21 @@ and the module stays small and synchronous.
 
 | method                                              | takes                                              | gives                                              |
 | --------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
+| `version()`                                         |                                                    | the decoder's crate version                        |
 | `SttArchive.open(bytes)`                            | `manifest.json` bytes                              | an archive handle                                  |
 | `.formatVersion()`                                  |                                                    | `3`                                                |
 | `.metadataJson()`                                   |                                                    | dataset metadata as JSON (bbox, time range, zooms) |
 | `.directoryKey()` / `.directoryLength()`            |                                                    | the object to fetch next, and its size             |
+| `.directoryIsPaged()`                               |                                                    | whether the directory object is paged              |
 | `.loadDirectory(bytes)`                             | the whole directory object                         | tile count                                         |
 | `.tileCount()` / `.tile(i)`                         |                                                    | one `TileInfo`                                     |
 | `.tilesJson()`                                      |                                                    | every tile as one JSON array (bulk path)           |
 | `.packCount()` / `.packKey(id)` / `.packLength(id)` |                                                    | pack object keys                                   |
 | `.decodeTile(i, blob)`                              | exactly the tile's `[offset, offset+length)` bytes | a `DecodedTile`                                    |
 | `.decodeTileInPack(i, packBytes)`                   | the whole pack object                              | a `DecodedTile`                                    |
+
+`version()` is a free module export, not a method on `SttArchive` — a host logs
+it to record which decoder it loaded.
 
 `TileInfo` carries `zoom`, `x`, `y`, `timeStart`, `timeEnd`, `featureCount`,
 `packId`, `offset`, `length`, `uncompressedSize`. Times and offsets are plain
@@ -205,9 +210,10 @@ Named honestly, because each one is a real gap and not a rounding error:
   cache, no concurrency control — the TypeScript reader has all of that, and
   none of it is here.
 - **Paged directories load whole.** `loadDirectory` takes the entire `.sttd`
-  even when the manifest says `layout: "paged"`. The paging win — fetching only
-  the leaf pages a viewport and time window touch — needs a leaf-at-a-time API
-  this crate does not expose. Correct, just not cold-start-cheap.
+  even when the manifest says `layout: "paged"` (`.directoryIsPaged()` reports
+  which layout you got). The paging win — fetching only the leaf pages a
+  viewport and time window touch — needs a leaf-at-a-time API this crate does
+  not expose. Correct, just not cold-start-cheap.
 - **No tile lookup by address or time.** You get the directory as a flat list in
   directory order (zoom, then Hilbert index) and index into it. Spatial and
   temporal query live in the host for now; `tilesJson()` exists so you can build
@@ -233,6 +239,7 @@ cargo test -p stt-wasm
 ```
 
 Fixtures are written by the real `PackWriter` in both v3 directory layouts:
-single and paged. Frozen pre-v3 manifests are rejection fixtures, not a
-second reader path. A format change fails here rather than in a published
-artifact.
+single and paged. Refusal is covered by mutating a live manifest — an unknown
+required capability, an unsupported `formatVersion`, and non-STT JSON — since
+this reader accepts exactly `formatVersion` 3 and nothing else. A format change
+fails here rather than in a published artifact.

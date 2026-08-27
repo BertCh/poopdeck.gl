@@ -55,7 +55,7 @@ every descriptor is typed so a `Record<LayerKind, …>` or
 ```
 point · path · polygon · arc · line · icon · column · trips · tripHeads ·
 boundingBox · surfel · heatmap · h3Summary · quadbinSummary · flowmap ·
-flowCorridor · flowStroke · isoLines · ego
+flowCorridor · flowStroke · isoLines · ego · text · mesh · pointCloud · hexbin
 ```
 
 Each concrete layer class documented elsewhere in `docs/api/` backs exactly
@@ -108,17 +108,17 @@ interface BackendDescriptor {
 }
 ```
 
-| Field                | Description                                                                                                                                                                                                                                                                                                                                        |
-| :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                 | Short backend identifier (`'deck'`, `'maplibre'`, `'three'`, `'cesium'`); the column header in the generated matrix.                                                                                                                                                                                                                               |
-| `capabilities`       | One boolean per `Capability` — exhaustive, `tsc`-enforced.                                                                                                                                                                                                                                                                                         |
-| `timeFilterModes`    | The `TimeFilterMode`s this backend implements.                                                                                                                                                                                                                                                                                                     |
-| `layerKinds`         | One `LayerKindSupport` per `LayerKind` — exhaustive, `tsc`-enforced.                                                                                                                                                                                                                                                                               |
-| `projectsOnCpu`      | Whether lon/lat → world projection happens on the CPU (three, Cesium) vs. on the GPU against a host viewport (deck).                                                                                                                                                                                                                               |
-| `tilesetOwnership`   | `'shared'` — one tileset feeds every layer (deck, three, Cesium) — vs. `'per-layer'` — each layer class owns its own archive (MapLibre).                                                                                                                                                                                                           |
-| `pickMechanism`      | How picking resolves: `'gpu-id'` (an id color buffer), `'cpu-ray'` (ray/OBB intersection), `'id-fbo'` (a dedicated id framebuffer pass — defined for a future backend, not used by any of the four today), `'host'` (delegated to the host engine, e.g. Cesium's `scene.pick`), or `'none'`.                                                       |
-| `interleavedBasemap` | Whether STT geometry can share the basemap's own GL/scene context vs. needing a camera-synced overlay canvas. Mirrored inside `capabilities.interleavedBasemap`, which is the value the over-claim gate actually checks; this top-level field is the same fact exposed as a direct trait for code that branches on it without a capability lookup. |
-| `basemapProjection`  | The projection the backend's basemap integration assumes: `'mercator'` or `'globe'`.                                                                                                                                                                                                                                                               |
+| Field                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| :------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                 | Short backend identifier (`'deck'`, `'maplibre'`, `'three'`, `'cesium'`); the column header in the generated matrix.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `capabilities`       | One boolean per `Capability` — exhaustive, `tsc`-enforced.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `timeFilterModes`    | The `TimeFilterMode`s this backend implements.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `layerKinds`         | One `LayerKindSupport` per `LayerKind` — exhaustive, `tsc`-enforced.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `projectsOnCpu`      | Whether lon/lat → world projection happens on the CPU (three, Cesium) vs. on the GPU against a host viewport (deck).                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `tilesetOwnership`   | `'shared'` — one tileset feeds every layer (deck, three, Cesium) — vs. `'per-layer'` — each layer class owns its own archive (MapLibre).                                                                                                                                                                                                                                                                                                                                                                                 |
+| `pickMechanism`      | How picking resolves: `'gpu-id'` (a persistent GPU id-colour pass — deck, three), `'id-fbo'` (a dedicated id framebuffer with synchronous on-demand 1×1 readback — MapLibre's `STTBaseLayer.pick`), `'host'` (delegated to the host engine — Cesium's `scene.pick`), `'cpu-ray'` (ray/OBB intersection; defined but declared by none of the four today — three's box path uses the technique, but its descriptor declares `'gpu-id'` for the instanced-cloud id pass, since there is no `'hybrid'` member), or `'none'`. |
+| `interleavedBasemap` | Whether STT geometry can share the basemap's own GL/scene context vs. needing a camera-synced overlay canvas. Mirrored inside `capabilities.interleavedBasemap`, which is the value the over-claim gate actually checks; this top-level field is the same fact exposed as a direct trait for code that branches on it without a capability lookup.                                                                                                                                                                       |
+| `basemapProjection`  | The projection the backend's basemap integration assumes: `'mercator'` or `'globe'`.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## `LayerKindSupport` — native, fallback, or unsupported
 
@@ -136,9 +136,9 @@ error against `Record<LayerKind, LayerKindSupport>`):
 - **`{ supported: true }`** — native. The backend renders this kind directly
   (rendered as `✅` in the generated matrix).
 - **`{ supported: false, fallbackKind, reason }`** — degrades to a different,
-  supported kind (rendered as `↳ <fallbackKind>`). Example: MapLibre has no
-  arc geometry, so `arc` degrades to `line`; `@poopdeck.gl/three` has no GPU
-  heatmap, so `heatmap` degrades to `point` density.
+  supported kind (rendered as `↳ <fallbackKind>`). One live case today: the
+  deck.gl backend has no dedicated iso layer, so `isoLines` degrades to `path`
+  (`AnimatedPathLayer` density mode).
 - **`{ supported: false, reason }`** (no `fallbackKind`) — genuinely
   unsupported, with no in-backend substitute (rendered as `—`). Example: the
   deck.gl backend has no dedicated `ego` layer — AV cockpits compose it from
@@ -203,20 +203,27 @@ than it proves is what fails.
 
 Each backend package supplies its own `test/backend-descriptor.test.ts`
 against this gate, building `ConformanceEvidence` from the package's own
-reality:
+reality. What that evidence actually proves differs per package, and the
+difference is worth knowing before trusting a green gate:
 
-- **Layer-kind evidence is structural**: for every `LayerKind` the descriptor
-  claims `supported: true`, the test maps it to the concrete class expected to
-  back it (e.g. `point` → `AnimatedPointLayer` for deck.gl, `STTPointLayer`
-  for three) and checks that class is a real, live export from the package's
-  `src/index.ts`. A renamed or deleted export drops that kind out of the
-  proven set and trips the gate — this is the mechanism that stops the
-  descriptor from silently drifting away from the code.
-- **Capability and time-filter-mode evidence** is currently built from the
-  descriptor's own claimed `true` capabilities and declared modes (i.e. it
-  documents the backend's shipped reality rather than being independently
-  proven by a dedicated conformance case per capability/mode) — the exported
-  layer catalog is the part of the contract with real teeth today.
+- **`@poopdeck.gl/maplibre` is the strongest, and the shape to copy.** Layer
+  kinds are proven structurally (each supported kind maps to a class that must
+  be a real, live export from `src/index.ts`), and every capability claimed
+  `true` must have a **behavioural predicate** in `CAPABILITY_EVIDENCE` that
+  passes — real constructed layers and real compiled shader sources, not the
+  descriptor's own claim. A claim with no predicate is itself a failure, so a
+  future capability flip cannot ride the declaration.
+- **`@poopdeck.gl/layers` and `@poopdeck.gl/three` prove layer kinds
+  structurally, not capabilities.** deck derives capability evidence from
+  `deckBackend.capabilities` itself; three deliberately passes the full
+  `CAPABILITIES` set and says so in the test, on the grounds that deriving
+  evidence from the descriptor is a tautology that can never fail. On both, the
+  exported layer catalog is the part with teeth.
+- **`@poopdeck.gl/cesium`'s gate is self-referential on both axes.** It builds
+  evidence by filtering `cesiumBackend`'s own claimed capabilities and
+  supported kinds, with no class-export mapping, so it proves internal
+  consistency and nothing more. It is the one package that has not caught up to
+  maplibre's shape.
 
 ## Reading the generated matrix
 
@@ -260,10 +267,16 @@ render for a given layer kind, natively or via fallback (Layer kinds).
 | Three.js    | `@poopdeck.gl/three`    | `three`    | [`packages/three/src/backend-descriptor.ts`](../../packages/three/src/backend-descriptor.ts)       |
 | CesiumJS    | `@poopdeck.gl/cesium`   | `cesium`   | [`packages/cesium/src/backend-descriptor.ts`](../../packages/cesium/src/backend-descriptor.ts)     |
 
-deck.gl is the reference backend (full catalog, GPU id-buffer picking, all
-four time-filter modes, interleaves into the basemap's GL context). The other
-three each degrade a documented subset relative to it — see each file's own
-header comment for what it does and doesn't cover, and
+deck.gl remains the reference backend for shader-math conformance and for the
+fullest per-layer prop surface, but on catalog coverage the relationship has
+inverted: three, maplibre and cesium each render all 23 kinds natively, deck
+renders 21, and deck is the only one of the four without `cameraRoll`. Three
+genuine holes remain — deck's `isoLines` (degrades to `path`) and `ego` (no
+layer at all), cesium's `gpuHeatmap` (its heatmap is an honest CPU field), and
+three's `interleavedBasemap`, which is permanently structural: TSL compiles only
+on `WebGPURenderer`, every basemap-interleave path mechanically needs
+`new WebGLRenderer({context: gl})`, and WebGL and WebGPU are non-interoperable
+browser contexts. See each descriptor file's own header comment, and
 [`stt-cesium.md`'s "Backend descriptor" section](./stt-cesium.md#backend-descriptor)
 for a worked walkthrough of one descriptor's fields end to end.
 
@@ -283,11 +296,12 @@ Record<LayerKind, LayerKindSupport>` on a literal object, or
    against how the backend actually works, not aspirationally.
 5. Export the descriptor (conventionally `<name>Backend`) from the package's
    `src/index.ts`.
-6. Add a `test/backend-descriptor.test.ts` mirroring the existing four: for
-   every `LayerKind` claimed `supported: true`, map it to the concrete class
-   backing it and assert that class is a real export; assert every
-   unsupported kind carries a `reason`; then build a `ConformanceEvidence`
-   from those real exports (plus the descriptor's claimed capabilities/modes)
+6. Add a `test/backend-descriptor.test.ts` modelled on
+   `packages/maplibre/`'s, which is the standard: for every `LayerKind` claimed
+   `supported: true`, map it to the concrete class backing it and assert that
+   class is a real export; assert every unsupported kind carries a `reason`;
+   give every capability claimed `true` a behavioural predicate that must pass;
+   then build a `ConformanceEvidence` from those real exports and predicates
    and assert `assertDescriptorConsistent(...)` returns `[]`.
 7. Add the new descriptor to the import list and array in
    [`scripts/gen-capabilities-doc.mjs`](../../scripts/gen-capabilities-doc.mjs)

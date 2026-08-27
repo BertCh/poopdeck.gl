@@ -8,7 +8,7 @@ verbs:
 ```
  source parquet ──▶ analyze / recommend --explain ──▶ stt-build --auto [encode]
                                                             │
- rebuilt dataset ◀── diff --fail-on-growth ◀── doctor ◀── inspect ◀── packed dataset
+ rebuilt dataset ◀── diff --fail-on-growth ◀── doctor ◀── inspect / order-audit ◀── packed dataset
 ```
 
 This guide walks the loop end-to-end. Flag tables live in the
@@ -48,12 +48,22 @@ Advisor evidence:
         time-major blob order keeps consecutive time buckets in the same packs
 ```
 
-Two rules govern the output:
+Three rules govern the output:
 
 - Suggestions marked `[LOSSY - opt-in]` (quantization, budgets) never join the
   suggested command and are never auto-applied. You opt in per flag, per dataset.
+- Suggestions marked `[SUGGESTION - needs a decision]` are non-lossy but carry a
+  tradeoff only you can settle — a `--blob-ordering spatial` pick that shrinks
+  bytes but breaks time-playback buffering, for instance. Like lossy advice they
+  never join the suggested command.
 - Where it matters, projections are measured — the advisor trial-encodes your
   sample rather than extrapolating from a formula.
+
+For a hard byte budget, `recommend --target-size 250MiB` solves the recipe
+instead of suggesting one, searching only reversible levers (zoom clamp, bucket
+width, temporal-LOD tiers, zstd level, blob ordering, pack size) — nothing is
+ever dropped to hit the number, and an unreachable budget reports the floor.
+See [Budget mode](../api/cli-reference.md#budget-mode-target-size).
 
 ## 2. Build: `--auto` vs `--auto encode`
 
@@ -86,13 +96,16 @@ reports per-zoom directory stats, dedup and compression ratios, and
 per-column compressed cost:
 
 ```
-💾 Per-column cost (standalone IPC+zstd-19; shares, not absolute wire)
-  column        dtype                        comp KB    B/feat  share%  note
-  geometry      FixedSizeList(Int32, 2)        812.4      4.21   38.2%  quantized coords (stt:quant)
-  speed         Float64                        673.1      7.94   31.6%  plain f64 (unquantized)
-  id            UInt64                          87.0      1.02    4.1%
+💾 Per-column cost (leave-one-out marginals, IPC+zstd-19; shares ±1 stderr, not absolute wire)
+  column                 dtype                           comp KB    B/feat  share%       ±  note
+  geometry               FixedSizeList(Int32, 2)           812.4      4.21   38.2%   0.41%  quantized coords (stt:quant)
+  speed                  Float64                           673.1      7.94   31.6%   0.55%  plain f64 (unquantized)
+  id                     UInt64                             87.0      1.02    4.1%   0.12%
   ...
 ```
+
+Costs are leave-one-out **marginals**: a share is what removing that column
+would actually save, not what it would cost re-encoded on its own.
 
 How to read a row like `speed`: a raw Float64 column carries full entropy
 per row, so zstd can barely touch it — 8 bytes in is ~8 bytes out. Columns
@@ -129,10 +142,26 @@ stt-optimize doctor --archive my-dataset/
 Every rule keys off numbers measured for _this_ tileset and cites them in
 its message; the rule catalog (raw f64 columns, expensive feature ids, dead
 columns, z0 pyramid bombs, unpaged large directories, oversized tiles,
-missing summary tier) is in the
+missing summary tier, over-precise vertex times — that last fix is lossy and
+says so in its own remediation text) is in the
 [doctor reference](../api/cli-reference.md#stt-optimize-doctor). In CI, add
 `--strict` — it exits non-zero when any Warning-or-worse finding exists, so
 a regression fails the pipeline instead of shipping.
+
+### `order-audit` — was the blob ordering right?
+
+`recommend` picks `--blob-ordering` from the source; `order-audit` measures it
+on the built archive, simulating scrub, pan and playback range reads over the
+directory (no decode) and ranking the four orderings by blended read cost:
+
+```bash
+stt-optimize order-audit --archive my-dataset/
+```
+
+It never re-sorts anything — rebuild with `--blob-ordering measured` to adopt
+the recommendation. In CI, `--strict` exits non-zero when the archive's
+recorded ordering isn't the measured one
+([reference](../api/cli-reference.md#stt-optimize-order-audit)).
 
 ### `diff` — gate the rebuild
 

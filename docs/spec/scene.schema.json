@@ -91,7 +91,7 @@
             },
             "style": {
               "type": "string",
-              "description": "Presentation hint for the cockpit (e.g. 'actors' in a scene-split bundle)."
+              "description": "Presentation hint naming the extractor mode that produced this archive. The shipping vocabulary is exactly five values: 'world' (--worldbuild — the consolidated cross-sweep cloud carrying world_class / is_dynamic), 'scan' (--scan — the per-return scan-time sweep, always paired with `scan: true`), 'iso' (--contours — the archive holds windowed density iso-line LineStrings, NOT points), 'actors' (the animated half of a --scene-split bundle) and 'stage' (its timeless half, which appears on the `stage` stream). Absent on a plain density-tier bundle. Deliberately not an enum: the render path is chosen from the dataset's own flags, so a reader MUST tolerate an unrecognised value rather than reject the bundle."
             },
             "scan": {
               "type": "boolean",
@@ -104,10 +104,36 @@
                 "type": "object",
                 "required": ["id", "url"],
                 "properties": {
-                  "id": { "type": "string" },
-                  "label": { "type": "string" },
+                  "id": {
+                    "type": "string",
+                    "description": "Stable variant id, unique within the array. The shipping ids are the five fixed density tiers ('small', 'medium', 'large', 'ultra', 'full'), the single-variant extractor modes ('surfel', 'world', 'scan', 'iso', 'lod') and the scene-split pair ('stage', 'actors')."
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "Selector label."
+                  },
                   "points": { "type": "integer" },
-                  "url": { "type": "string" }
+                  "url": { "type": "string" },
+                  "radius": {
+                    "type": "number",
+                    "description": "Fixed-density tiers only: the point radius, in pixels, the cockpit should draw this variant at. Denser tiers ship a SMALLER dot so the cloud reads as structure rather than a solid mass, so this is per-variant and not a scene-wide constant."
+                  },
+                  "radiusMinPixels": {
+                    "type": "number",
+                    "description": "Fixed-density tiers only: the sub-pixel screen-space floor paired with `radius`."
+                  },
+                  "lod": {
+                    "type": "boolean",
+                    "description": "Present and true on the single additive-octree LOD variant (built with --lod): every return is materialized at ONE home zoom, so each level holds only its residual and the client loads the union of levels rather than swapping one whole fixed-density archive for another."
+                  },
+                  "minZoom": {
+                    "type": "integer",
+                    "description": "LOD variants (`lod: true`) only: the coarsest home zoom baked into the archive (--lod-min-zoom)."
+                  },
+                  "maxZoom": {
+                    "type": "integer",
+                    "description": "LOD variants (`lod: true`) only: the finest home zoom, where the full-density residual lands (--lod-max-zoom)."
+                  }
                 }
               }
             }
@@ -171,7 +197,10 @@
             "points": { "type": "integer" },
             "colored": { "type": "boolean" },
             "splat": { "type": "string" },
-            "style": { "type": "string" },
+            "style": {
+              "type": "string",
+              "description": "Always 'stage' on this stream — see streams.lidar.style for the vocabulary."
+            },
             "static": {
               "type": "boolean",
               "description": "Always true — the stream is temporally constant."

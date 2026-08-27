@@ -2,8 +2,8 @@
 
 Data flows _into_ the packed format from GeoParquet, PostGIS and DuckDB.
 `stt-optimize export` is the way back out: it reads a built archive and writes
-**GeoParquet 1.1**, so a `.stt` is a render tier over your lakehouse rather than
-a place data goes to die.
+**GeoParquet 1.1**, so an archive is a render tier over your lakehouse rather
+than a place data goes to die.
 
 ```bash
 stt-optimize export --archive my-dataset/ --output my-dataset.parquet
@@ -71,7 +71,7 @@ and pinned by a test: an export whose time column arrives as an anonymous
 integer is the one round-trip failure that silently ruins the artifact, because
 nothing downstream reads it as time.
 
-Two classes of column are reconstructed on the way out, because their at-rest
+Three classes of column are reconstructed on the way out, because their at-rest
 form is meaningless outside this format:
 
 - **Quantized coordinates.** An archive built with `--quantize-coords` stores
@@ -80,13 +80,17 @@ form is meaningless outside this format:
   precision you asked for at build time.)
 - **Quantized attributes.** `--quantize-attr` / `--quantize-attrs-auto` columns
   are stored as integer indices and come back as `DOUBLE`.
-- **Per-vertex times.** `vertex_time` ships as `u16` deltas against a baked
-  origin/step; it is exported as absolute Unix-ms `LIST<INT64>`.
+- **Per-vertex times.** `vertex_time` ships as `u16` or `u32` deltas — against
+  either a tile-wide origin/step or each feature's own `start_time` — and is
+  exported as absolute Unix-ms `LIST<INT64>`. A `LIST<INT64>` vertex_time is
+  already absolute and passes through.
 
-One column is deliberately dropped: `triangles`, the pre-baked earcut
-tessellation of the polygon in the same row. It is derived renderer state that
-any tessellator regenerates, and no GeoParquet reader can use it. Dropped
-columns are named in the run report.
+Two columns are deliberately dropped: `triangles`, the pre-baked earcut
+tessellation of the polygon in the same row — derived renderer state that any
+tessellator regenerates, and no GeoParquet reader can use it — and
+`part_offsets`, the multi-part ring index, whose numbers would name nothing a
+Parquet consumer can address because the WKB written here flattens the parts.
+Dropped columns are named in the run report.
 
 ## Filtering
 
@@ -177,17 +181,9 @@ across every tile) rather than let the exporter guess.
 
 ## Flags
 
-| Flag                           | Description                                                                      |
-| ------------------------------ | -------------------------------------------------------------------------------- |
-| `-a, --archive <DIR>`          | Packed dataset directory or its `manifest.json`                                  |
-| `-o, --output <FILE>`          | Output `.parquet`; the stem when several layers are written                      |
-| `--zoom <Z>`                   | Zoom to export (default: the deepest present)                                    |
-| `--layer <NAME>`               | Layer to export (default: every layer, one file each)                            |
-| `--bbox <MINX,MINY,MAXX,MAXY>` | Keep only features intersecting this WGS84 box                                   |
-| `--start <TIME>`               | Keep features whose span reaches this instant or later (ISO-8601 or Unix ms)     |
-| `--end <TIME>`                 | Keep features whose span starts at this instant or earlier (ISO-8601 or Unix ms) |
-| `--geometry-encoding <ENC>`    | `wkb` (default) or `native`                                                      |
-| `--format <FMT>`               | Run report as `text` (default) or `json`                                         |
+The flag surface is documented once, in the
+[CLI reference](../api/cli-reference.md#stt-optimize-export) — that copy is
+gated against the binary's own `--help`, so it cannot drift.
 
 ## See also
 

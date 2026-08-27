@@ -4,15 +4,6 @@ STT adds time to a spatial tile pyramid. A traditional vector tile is addressed
 by `(zoom, x, y)`; an STT tile adds a fixed-width time bucket:
 `(zoom, x, y, time-bucket)`.
 
-```mermaid
-flowchart LR
-  D["vector source"] --> S["spatial pyramid<br/>zoom, x, y"]
-  D --> T["temporal buckets"]
-  S --> A["STT tile address"]
-  T --> A
-  A --> P["Arrow IPC payload<br/>with GeoArrow geometry"]
-```
-
 This lets a reader request only the features relevant to the current viewport
 and time window. The [time model](../spec/time-model.md) defines bucket
 boundaries and interval semantics; the
@@ -46,10 +37,11 @@ CDN layout.
 
 ## Tile payloads
 
-Each tile contains one or more layer frames encoded as Apache Arrow IPC.
-Geometry uses GeoArrow layouts, so decoded columnar buffers can move efficiently
-into analysis tools and GPU renderers. Compression, integrity checks, geometry
-encodings, and optional quantization are defined in the
+Each tile decompresses to one layer frame carrying one or more layers, whose
+columns are encoded as Apache Arrow IPC. Geometry uses GeoArrow layouts, so
+decoded columnar buffers can move efficiently into analysis tools and GPU
+renderers. Compression, integrity checks, geometry encodings, and optional
+quantization are defined in the
 [tile-payload specification](../architecture/data-format.md).
 
 The manifest is always the dataset contract. Applications should use its
@@ -73,16 +65,19 @@ for long-range views. Applications can select a coarser temporal level at low
 zoom or across a long window, then return to the base tier for detailed
 playback.
 
-### Summary and raster tiers
+### Summary tiers
 
-Very large datasets may add H3, Quadbin, or rasterized overview variants for
-coarse zooms. These are explicit build options. They supplement the raw feature
-tier and never authorize silent thinning, sampling, or aggregation of that raw
-tier.
+Very large datasets may add an H3 or Quadbin summary variant for coarse zooms
+(`stt-build --summary-tier h3|quadbin`). These are explicit build options. They
+supplement the raw feature tier and never authorize silent thinning, sampling,
+or aggregation of that raw tier.
 
-Default and `--auto` builds preserve every usable feature. To control archive
-size, first keep the zoom range honest and choose an appropriate temporal
-bucket. Expert per-tile budgets remain opt-in and must report what they remove.
+Default and `--auto` builds preserve every usable feature. To build to a size,
+pass `stt-build --target-size 250MiB` — it solves for a recipe using only
+reversible levers (zoom clamp, bucket width, temporal-LOD tiers, zstd level,
+blob ordering, pack size) and never drops a feature to hit the number; see
+[budget builds](../api/cli-reference.md#budget-builds-target-size). Expert
+per-tile budgets remain opt-in and must report what they remove.
 
 ## Streaming and playback
 
@@ -92,11 +87,8 @@ configured, caches results, and prefetches a bounded runway ahead of playback.
 Tiles already on the GPU are filtered by time uniforms rather than decoded and
 uploaded on every animation frame.
 
-[`SttPlayer`](../api/stt-player.md) is the recommended playback entry point. It
-connects the clock to the loader's buffered runway, pausing when data is not
-ready instead of advancing through empty frames. The lower-level
-[`TimeController`](../api/time-controller.md) is available when another system
-owns the clock.
+See [Choosing STT](./choosing.md#playback-choice) for the player-vs-clock
+decision.
 
 ## Build, serve, and render
 

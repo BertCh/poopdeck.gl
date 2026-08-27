@@ -39,6 +39,8 @@ at the same pending signature must not postpone it, or a playhead tick every
 
 Because the control points are seeded from each feature's **full polyline**, a 2-vertex OD pair bundles as a straight edge while an N-vertex routed trip / trajectory keeps its curve.
 
+The kernel/smoothing/resampling math (`epanechnikovWeight`, `laplacianStep`, `resampleInto`, `subdivide`, `annealRadius`, plus the reference CPU `bundleEdges`) is defined **once** in `@poopdeck.gl/core/edge-bundling` and shared by all four renderer backends; the GLSL kernel here mirrors it and is pinned to it on the CPU by `edge-bundler.test.ts`. `EdgeBundler` re-exports those helpers, so the `@poopdeck.gl/layers` surface is unchanged.
+
 ## Installation
 
 ```typescript

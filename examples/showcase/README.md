@@ -74,8 +74,29 @@ pnpm install
 pnpm dev
 ```
 
-Datasets must be present under `public/data/`. They are NOT committed —
-regenerate locally with `stt-generate`.
+### Dataset data in dev
+
+Every dataset's `url` is an origin-relative `/data/<stem>/manifest.json`, so in
+dev the archives must be reachable under `public/data/`. They are NOT committed
+(the fleet is ~76 GB), and since the 2026-08-26 split they are built in the STT
+repository at `data-fleet/`. Point `public/data` at that tree:
+
+```bash
+# from examples/showcase, with BertCh/spatiotemporal-tiles checked out beside
+# this repository
+ln -sfn ../../../../spatiotemporal-tiles/data-fleet public/data
+```
+
+Vite serves through the symlink, Range requests included (the archive reader
+needs `206`), and the build never copies it: `copyPublicDir` is off and
+`scripts/finalize-static-assets.ts` skips any top-level `data`/`data-*` tree.
+
+Without a local fleet, set `VITE_DATA_BASE_URL=https://tiles.poopdeck.gl` in
+`.env.local` to read the published archives from R2 instead — the same rewrite
+`.env.production` uses. Only published stems resolve that way, so the demos
+gated on local-only archives (`/atlas`) go dark.
+
+Missing stems can be rebuilt with `stt-generate` (below).
 
 ## Regenerating Datasets
 
@@ -84,29 +105,29 @@ separately from the published CLI bundle; building the root Cargo workspace
 does not build the generator.
 
 ```bash
-# From the repository root, install the published CLIs (including stt-build)
-# and the repo-only showcase generator.
-cargo install --path stt:crates/spatiotemporal-tiles
-cargo install --path stt:tools/stt-generate
+# From the STT repository root — that is where the generator, and the
+# `data-fleet/` tree `public/data` points at, both live.
+cargo install --path crates/spatiotemporal-tiles
+cargo install --path tools/stt-generate
 
 # Each dataset is generated explicitly; there is no `all` subcommand.
 stt-generate earthquakes \
-  --output examples/showcase/public/data/earthquakes.stt
+  --output data-fleet/earthquakes.stt
 stt-generate hurricanes \
-  --output examples/showcase/public/data/hurricanes.stt
+  --output data-fleet/hurricanes.stt
 stt-generate wildfires \
-  --output examples/showcase/public/data/wildfires.stt
+  --output data-fleet/wildfires.stt
 
 # Other generators need per-run parameters, for example:
 stt-generate ais --date 2024-01-01 \
-  --output examples/showcase/public/data/ais-traffic.stt
+  --output data-fleet/ais-traffic.stt
 stt-generate flights --date 2020-01-06 \
-  --output examples/showcase/public/data/flights.stt
+  --output data-fleet/flights.stt
 stt-generate nyc-rideshare --synthetic \
   --osrm-url http://localhost:5000 \
-  --output examples/showcase/public/data/nyc-rideshare.stt
+  --output data-fleet/nyc-rideshare.stt
 stt-generate satellites \
-  --output examples/showcase/public/data/satellites.stt
+  --output data-fleet/satellites.stt
 ```
 
 Per-dataset flags vary — run `stt-generate <subcommand> --help`. See the

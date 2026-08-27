@@ -102,23 +102,40 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `wakeTailScale` | `number`  | `0.15`  | Trailing-edge size multiplier in wake mode (0..1).                                                                                                                                                                                                                                                                                                                 |
 | `cumulative`    | `boolean` | `false` | "Draw and persist" mode: each point appears at its `startTime` and stays visible for the rest of playback. `fadeInDuration` doubles as the appear ramp. Widen the tile loader's window so revealed tiles stay resident.                                                                                                                                            |
 
+### Glide (motion interpolation)
+
+Point archives carry one row per entity **per sample**, so a GPU time-window
+filter shows every sample in the window at once and a moving entity POPS between
+them. Glide instead pools the loaded samples by `idProperty` and emits one
+CPU-interpolated pose per active entity per frame.
+
+| Property              | Type             | Default    | Description                                                                                                                                                                                                                        |
+| :-------------------- | :--------------- | :--------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interpolate`         | `boolean`        | `false`    | Opt into the glide path. Active only when `interpolate && !reducedMotion &&` a resolvable `idProperty && !cumulative && wakeLength === 0`; any condition unmet leaves the GPU window/wake/cumulative path unchanged, at zero cost. |
+| `idProperty`          | `string \| null` | `null`     | Per-entity id column name grouping samples into one track (e.g. aircraft `icao24`). Reads a categorical column; a numeric one is stringified. Must be an EXACT id — a lossy or quantized id fuses distinct tracks.                 |
+| `maxInterpolationGap` | `number`         | `Infinity` | Largest gap (ms) glide interpolates across. A wider gap is a data hole: the entity HOLDS its last known position rather than gliding a straight line it never travelled.                                                           |
+| `reducedMotion`       | `boolean`        | `false`    | Honor the viewer's reduced-motion preference: disables glide and degrades to the discrete GPU window path.                                                                                                                         |
+
 ### Data Accessors
 
-| Property              | Type                               | Default              | Description                                                                                                                                                                                                       |
-| :-------------------- | :--------------------------------- | :------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill: constant RGBA, or a property name for categorical coloring. **Drifts from upstream** — see below.                                                                                                           |
-| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. When set, it wins. Unset here, so `fillColor` wins unless you opt in; with neither set the effective constant is `[255, 128, 0, 255]`, not upstream's `[0, 0, 0, 255]`. |
-| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name. **Drifts from upstream** — see below.                                                                                                                         |
-| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius`. Unset here, so `radius` wins unless you opt in; with neither set the effective constant is `5`, not upstream's `1`.                                                        |
-| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                                                                                                                                                       |
-| `strokeWidth`         | `number \| string`                 | `1`                  | Outline width: constant, or a numeric property name.                                                                                                                                                              |
-| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth`.                                                                                                                                                                       |
-| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).                                                                                                                                               |
-| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. Forces the CPU palette path.                                                                                                                                                |
-| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent).                                                                                                                                                 |
-| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB from three numeric columns (each 0–255).                                                                                                                                                            |
-| `colorVectorColumn`   | `string \| null`                   | `null`               | Per-point RGBA from one interleaved `FixedSizeList<UInt8,4>` column.                                                                                                                                              |
-| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Transform applied to the `radius` value before GPU upload.                                                                                                                                                        |
+| Property              | Type                               | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                  |
+| :-------------------- | :--------------------------------- | :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fillColor`           | `Color \| string`                  | `[255, 128, 0, 255]` | Fill: constant RGBA, or a property name for categorical coloring. **Drifts from upstream** — see below.                                                                                                                                                                                                                                                                                      |
+| `getFillColor`        | `Color \| string \| null`          | `null`               | Upstream-vocabulary alias of `fillColor`. When set, it wins. Unset here, so `fillColor` wins unless you opt in; with neither set the effective constant is `[255, 128, 0, 255]`, not upstream's `[0, 0, 0, 255]`.                                                                                                                                                                            |
+| `radius`              | `number \| string`                 | `5`                  | Point radius: constant, or a numeric property name. **Drifts from upstream** — see below.                                                                                                                                                                                                                                                                                                    |
+| `getRadius`           | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `radius`. Unset here, so `radius` wins unless you opt in; with neither set the effective constant is `5`, not upstream's `1`.                                                                                                                                                                                                                                   |
+| `getLineColor`        | `Color \| null`                    | `null`               | Upstream-vocabulary alias of `strokeColor` (constant only).                                                                                                                                                                                                                                                                                                                                  |
+| `strokeWidth`         | `number \| string`                 | `1`                  | Outline width: constant, or a numeric property name.                                                                                                                                                                                                                                                                                                                                         |
+| `getLineWidth`        | `number \| string \| null`         | `null`               | Upstream-vocabulary alias of `strokeWidth`.                                                                                                                                                                                                                                                                                                                                                  |
+| `colorPalette`        | `Color[]`                          | 10-color palette     | Palette for categorical `fillColor` (GPU path, up to 4096 entries).                                                                                                                                                                                                                                                                                                                          |
+| `colorMapping`        | `Record<string, Color> \| null`    | `null`               | Explicit category-string → color map. Forces the CPU palette path.                                                                                                                                                                                                                                                                                                                           |
+| `colorMappingDefault` | `Color`                            | `[0, 0, 0, 0]`       | Fallback for categories absent from `colorMapping` (transparent).                                                                                                                                                                                                                                                                                                                            |
+| `rgbColorColumns`     | `[string, string, string] \| null` | `null`               | Per-point RGB from three numeric columns (each 0–255).                                                                                                                                                                                                                                                                                                                                       |
+| `colorVectorColumn`   | `string \| null`                   | `null`               | Per-point RGBA from one interleaved `FixedSizeList<UInt8,4>` column.                                                                                                                                                                                                                                                                                                                         |
+| `radiusTransform`     | `(v: number) => number \| null`    | `null`               | Transform applied to the `radius` value before GPU upload.                                                                                                                                                                                                                                                                                                                                   |
+| `rampProperty`        | `string \| null`                   | `null`               | Continuous ramp: name of a baked NUMERIC column to color each point by. Each point's fill is `rampColorRamp` sampled at its value mapped through `rampDomain` (clamped). Expanded once per tile at prepare time and uploaded as a u8 RGBA attribute — zero per-frame cost. A tile lacking the column falls through to the normal color path; a categorical column warns once and is ignored. |
+| `rampDomain`          | `[number, number]`                 | `[0, 1]`             | Value range mapped to the ramp's ends; values outside it clamp. No effect unless `rampProperty` is set.                                                                                                                                                                                                                                                                                      |
+| `rampColorRamp`       | `Color[]`                          | `[]`                 | Low→high stops, evenly spaced across `rampDomain`. Empty leaves the ramp inert even when `rampProperty` is set (warns once).                                                                                                                                                                                                                                                                 |
 
 **Accessor aliases.** The upstream `get*` names accept a constant or a
 property-column **name** — not a function accessor, since binary tiles cannot run
@@ -140,9 +157,11 @@ Note that `lineWidthUnits` does **not** drift — it keeps deck's `'meters'`,
 which is why it differs from `radiusUnits` in this same layer.
 
 **Color precedence.** `colorVectorColumn` wins over everything, then
-`rgbColorColumns`, then `colorMapping`/`colorPalette`, then a constant
-`fillColor`. Both column paths fall through to the next when their columns are
-absent from a tile.
+`rgbColorColumns`, then `rampProperty` (the continuous ramp), then
+`colorMapping`/`colorPalette` (categorical), then a constant `fillColor`. Every
+column path falls through to the next when its column is absent from a tile. The
+ramp is not applied on the CPU glide (`interpolate`) path, which colors
+per-track.
 
 `colorMapping` is the only way to get stable colors across tiles whose
 categorical column contains different category subsets — the GPU palette texture
@@ -216,34 +235,10 @@ positions in the first place.
   of a flattened vertex run as one position per feature: no error, no blank map,
   just points silently bunched along the first few paths. Tiles predating the
   geometry-kind tag are trusted, not rejected.
-- **Per-tile binary sublayers**: each visible (tile, layer) pair produces one
-  `ScatterplotLayer` using deck.gl's binary `data: { length, attributes }`
-  shape, with positions/times referenced DIRECTLY from the tile's Arrow
-  buffers (zero copy). A new tile adds exactly one sublayer and one GPU
-  upload — existing tiles' buffers are untouched.
-- **Sublayer + prepared-data caches**: the same layer instance and `data`
-  reference come back across `renderLayers()` calls, so deck.gl
-  short-circuits prop diffing and re-uploads when only time changes.
-- **Per-tile `timeOffset`**: each sublayer rebases time independently via
-  its [`TimeFilterExtension`](./time-filter-extension.md) — see the
-  timeOffset contract there.
-- **Cumulative slabs**: in cumulative mode the per-tile-sublayer model
-  would climb into thousands of draw calls by end of playback, so points
-  are instead packed append-only into consolidated ~250k-point slabs —
-  frozen slabs keep a stable `data` ref (zero re-upload); only the single
-  open slab grows. Picking resolves through per-tile provenance ranges.
-- **Picking**: `getPickingInfo` enriches hits with `info.tile` and decodes
-  the picked feature's columns into `info.object` at event rate.
-- **Splat rendering** (`splat: true`): installs [`SplatExtension`](./splat-extension.md), a
-  fragment-only effect with no extra attributes or uniforms. It multiplies
-  each fragment's alpha by a radial gaussian falloff from the point's
-  center (`geometry.uv`, the disk's unit position) out to its rim, turning
-  the hard antialiased disk into a soft blob. It always runs last in the
-  sublayer's extension list — after [`TimeFilterExtension`](./time-filter-extension.md)
-  and [`CategoryColorExtension`](./category-color-extension.md) — and
-  multiplies into the alpha those extensions already wrote rather than
-  replacing it, so temporal fades and categorical colors still apply
-  underneath the splat shaping.
+- **Cumulative slabs**: in cumulative mode points pack append-only into
+  consolidated slabs rather than one sublayer per tile, which is why a
+  property-column `strokeWidth` and `filterProperty` are ignored there (see
+  [Data Accessors](#data-accessors) and [Column filter](#column-filter)).
 
 The sublayer short id for `_subLayerProps` overrides is **`points`** (covers both per-tile and slab sublayers): `_subLayerProps: { points: { type: MyLayer, ... } }`.
 

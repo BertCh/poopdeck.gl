@@ -1,9 +1,9 @@
 /**
  * Shared types + tiny client-side readers for the AV "scene bundle" sidecars
- * the cockpit consumes by path (stt:docs/roadmap/av-cockpit.md §2). Everything the
- * deck layers need rides the STT archives; these are the small JSON sidecars the
- * cockpit chrome reads directly — the scene manifest, the CAN-bus gauge series,
- * and the camera keyframes.
+ * the cockpit consumes by path (stt:docs/roadmap/av-cockpit.md §1.2).
+ * Everything the deck layers need rides the STT archives; these are the small
+ * JSON sidecars the cockpit chrome reads directly — the scene manifest, the
+ * CAN-bus gauge series, and the camera keyframes.
  *
  * All timestamps are Unix-ms in the dataset's own clock (the same clock the
  * TimeController + STT layers animate on), so binary-searching at the playhead
@@ -11,7 +11,7 @@
  */
 import type { ColorRGBA } from '../../types';
 
-/** `scene.json` — the cockpit's source of truth (§2f). */
+/** `scene.json` — the cockpit's source of truth (§1.2). */
 export interface AvScene {
   id: string;
   name: string;
@@ -81,7 +81,7 @@ export type AvStreamKey =
   | 'telemetry'
   | 'camera';
 
-/** `telemetry.json` — CAN-bus gauges sidecar (§2d). */
+/** `telemetry.json` — CAN-bus gauges sidecar (§1.2). */
 export interface AvTelemetry {
   t0: number;
   hz?: number;
@@ -95,7 +95,7 @@ export interface AvTelemetryField {
   samples: [number, number][];
 }
 
-/** `cameras.json` — camera inset sidecar (§2e). */
+/** `cameras.json` — camera inset sidecar (§1.2). */
 export interface AvCameras {
   camera: string;
   /** url is relative to the scene dir (e.g. "cam/0001.jpg"). */

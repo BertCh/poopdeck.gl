@@ -52,6 +52,57 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `colorPalette`                                                | `Color[]`                                          | 10-stop             | Palette for a categorical `color` column.                                                                                                                                                                                                                                                                                              |
 | `fadeInDuration` / `fadeOutDuration`                          | `number`                                           | `300`               | Window fade ramps (ms).                                                                                                                                                                                                                                                                                                                |
 
+### Stable categorical color
+
+| Property              | Type                            | Default        | Description                                                                                                                                                                                                              |
+| :-------------------- | :------------------------------ | :------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `colorMapping`        | `Record<string, Color> \| null` | `null`         | Explicit category-string → color map. Forces the CPU per-feature RGBA path, which is the only way to get colors that stay stable across tiles carrying different category subsets. Takes precedence over `colorPalette`. |
+| `colorMappingDefault` | `Color`                         | `[0, 0, 0, 0]` | Fallback for categories absent from `colorMapping` — transparent, so an unmapped category disappears rather than rendering a misleading color.                                                                           |
+
+### Wake mode
+
+| Property        | Type     | Default | Description                                                                                                                                                                                                                                                                                                                                                                 |
+| :-------------- | :------- | :------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wakeLength`    | `number` | `0`     | When > 0, switches the [`TimeFilterExtension`](./time-filter-extension.md) into one-sided "ship wake" mode: an icon is visible only while `0 <= currentTime - startTime <= wakeLength`, its alpha fading to 0 at the trailing edge. Takes precedence over the symmetric window filter. The layer widens its own load window to `2 × wakeLength` so the tail stays resident. |
+| `wakeTailScale` | `number` | `0.15`  | Trailing-edge size multiplier, forwarded for parity with [`AnimatedPointLayer`](./animated-point-layer.md). **No visible effect on icons** — the size-shrink shader hook is `ScatterplotLayer`-only, so the icon wake is alpha alone.                                                                                                                                       |
+
+### Column range filter
+
+Wires a baked numeric column into
+[`STTDataFilterExtension`](./data-filter-extension.md). Icons whose value falls
+inside `filterRange` render; the rest are hidden, or soft-faded via
+`filterSoftRange`. It composes with the time filter — an icon must pass both.
+
+| Property          | Type                       | Default | Description                                                    |
+| :---------------- | :------------------------- | :------ | :------------------------------------------------------------- |
+| `filterProperty`  | `string \| null`           | `null`  | Name of the baked numeric column to filter by.                 |
+| `filterRange`     | `[number, number] \| null` | `null`  | Inclusive `[min, max]` bounds.                                 |
+| `filterSoftRange` | `[number, number] \| null` | `null`  | Soft bounds inside `filterRange`; values between the two fade. |
+| `filterEnabled`   | `boolean`                  | `true`  | Toggle the filter without dropping the bound attribute.        |
+
+`filterProperty` is the accessor-alias of deck's `getFilterValue`: pass a column
+NAME, not a function (a function warns once and is ignored). Leaving it unset
+means the extension is not installed at all — zero attribute, zero uniform, zero
+shader change. A tile lacking the named column renders unfiltered; a tile where
+the column is _categorical_ warns once and idles (v1 range-filters numeric
+columns only). The filter applies to the discrete window path — the glide path
+below filters by activity instead.
+
+### Motion interpolation (glide)
+
+Icon archives carry one row per entity **per sample**, so a GPU time-window
+filter shows every sample in the window at once and a moving marker pops. Glide
+pools the loaded tiles' samples by `idProperty` and emits **one** icon per
+active entity per frame, with position _and_ heading CPU-interpolated between
+the samples bracketing the playhead.
+
+| Property              | Type             | Default    | Description                                                                                                                                                                                      |
+| :-------------------- | :--------------- | :--------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interpolate`         | `boolean`        | `false`    | Opt into the glide path. Used only when `interpolate && !reducedMotion &&` a resolvable `idProperty && wakeLength === 0`; any unmet condition leaves the GPU window path byte-identical.         |
+| `idProperty`          | `string \| null` | `null`     | Categorical column NAME grouping samples into one track (AIS vessel id, aircraft `icao24`). Must be an EXACT per-entity id — a lossy or quantized id fuses distinct entities.                    |
+| `maxInterpolationGap` | `number`         | `Infinity` | Largest gap (ms) between two of an entity's samples that glide interpolates across. A wider gap HOLDS the last sample (position and heading) rather than fabricating motion through a data hole. |
+| `reducedMotion`       | `boolean`        | `false`    | Honor the viewer's reduced-motion preference: disables glide and degrades to the GPU window path.                                                                                                |
+
 ## Per-category icons
 
 Set `iconProperty` to a categorical column name and each feature gets its own
@@ -70,9 +121,11 @@ const layer = new AnimatedIconLayer({
 - The column value is resolved to an icon name through `iconCategoryMapping`
   when set; otherwise the category value **is** the icon name (a key of
   `iconMapping`).
-- Categories absent from `iconCategoryMapping` fall back to `icon`. An icon name
-  absent from `iconMapping` renders a zero-size (invisible) sprite, matching
-  deck's own `MISSING_ICON` behaviour.
+- Categories absent from `iconCategoryMapping` fall back to `icon`. A resolved
+  icon name absent from `iconMapping` falls back to `iconMapping[icon]`; only
+  when that is missing too does the feature render a zero-size (invisible)
+  sprite, matching deck's own `MISSING_ICON` behaviour — and the layer warns
+  once, naming the unmapped icon.
 - Requires an **object** `iconMapping` (a URL string warns once and falls back).
 - Ignored on the glide (`interpolate`) path, which re-emits one pose per entity
   and has no per-sample category to read.

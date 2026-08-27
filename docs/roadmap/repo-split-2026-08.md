@@ -1,10 +1,11 @@
 # The great divide — splitting STT and poopdeck.gl into two repositories
 
-> **Status:** in progress, started 2026-08-26, from `0e34c76` (the 0.7.0
-> release commit). This record is the split's **contract**: what each
-> repository owns, what crosses the seam and how, and what was deliberately
-> left duplicated. It is written before the move so both repositories inherit
-> it through history.
+> **Status:** landed 2026-08-26 as `71a1ef3` here and `18a4f7c`/`68466a2` in
+> poopdeck.gl, from `0e34c76` (the 0.7.0 release commit). §§1–7 are the contract
+> as planned; §8 is as built. This record is the split's **contract**: what each
+> repository owns, what crosses the seam and how, and what was deliberately left
+> duplicated. §§1–7 were written before the move so both repositories inherit it
+> through history.
 
 ## 1. Why
 
@@ -44,20 +45,20 @@ than enforced with a dependency edge.
 
 ### 2.1 `spatiotemporal-tiles` (this repository) — the format and the tiler
 
-| Keeps                           | What it is                                                           |
-| ------------------------------- | -------------------------------------------------------------------- |
-| `crates/stt-core`               | Format reader/writer, packs, directory codec, Arrow tile encode      |
-| `crates/stt-build`              | The tiler; GeoParquet / PostGIS / DuckDB inputs                      |
-| `crates/stt-optimize`           | `inspect` / `doctor` / `diff` / `order-audit` / `recommend`          |
-| `crates/spatiotemporal-tiles`   | The published facade + five CLIs, incl. `stt-serve`                  |
-| `crates/stt-wasm`               | The Rust reader compiled to WASM (`publish = false`)                 |
-| `tools/stt-generate`            | Reference-dataset generator (own cargo workspace)                    |
-| `conformance/`                  | **New.** The vectors and generator behind `docs/spec/conformance.md` |
-| `docs/spec/`, format docs       | The normative contract (§3.1 for the exact list)                     |
-| `scripts/data-generation/`      | The dataset production pipeline (Python/bash → `stt-build`)          |
-| `scripts/{postgis,duckdb}/`     | DB-source benchmarks and fixtures                                    |
-| `scripts/r2-sync.sh` + friends  | Publishing built archives to object storage                          |
-| `.github/workflows/release.yml` | cargo-dist                                                           |
+| Keeps                           | What it is                                                             |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| `crates/stt-core`               | Format reader/writer, packs, directory codec, Arrow tile encode        |
+| `crates/stt-build`              | The tiler; GeoParquet / PostGIS / DuckDB inputs                        |
+| `crates/stt-optimize`           | `inspect` / `doctor` / `diff` / `export` / `order-audit` / `recommend` |
+| `crates/spatiotemporal-tiles`   | The published facade + five CLIs, incl. `stt-serve`                    |
+| `crates/stt-wasm`               | The Rust reader compiled to WASM (`publish = false`)                   |
+| `tools/stt-generate`            | Reference-dataset generator (own cargo workspace)                      |
+| `conformance/`                  | **New.** The vectors and generator behind `docs/spec/conformance.md`   |
+| `docs/spec/`, format docs       | The normative contract (§3.1 for the exact list)                       |
+| `scripts/data-generation/`      | The dataset production pipeline (Python/bash → `stt-build`)            |
+| `scripts/{postgis,duckdb}/`     | DB-source benchmarks and fixtures                                      |
+| `scripts/r2-sync.sh` + friends  | Publishing built archives to object storage                            |
+| `.github/workflows/release.yml` | cargo-dist                                                             |
 
 ### 2.2 `poopdeck` (new repository) — the renderer
 
@@ -133,12 +134,17 @@ cross-linked at the top. Records go where their subject went:
 
 - **STT:** `stt-packed-format-decisions.md`, the four `optimization-*.md`,
   `db-input-adaptors.md`, `formal-semantics-2026-08.md`, `demos-and-datasets.md`
-  (the licence register and build recipes), `shipping.md` (cargo half).
-- **poopdeck:** `renderer-architecture.md`, `playback-and-loading.md`,
-  `av-cockpit.md`, `neural-atlas-2026-07.md`, both `measurements-*.md`,
-  `tile-loading-3d-2026-07.md`, both `tile-loading-audit-2026-08*.md`,
-  `storm-4d-greenfield-2026-07.md`, `ai-suite.md`, `launch-readiness-2026-08.md`,
+  (the licence register and build recipes), `av-cockpit.md`,
+  `storm-4d-greenfield-2026-07.md`, `neural-atlas-2026-07.md`, `shipping.md`
+  (cargo half).
+- **poopdeck:** `renderer-architecture.md`, `playback-and-loading.md`, both
+  `measurements-*.md`, `tile-loading-3d-2026-07.md`, both
+  `tile-loading-audit-2026-08*.md`, `ai-suite.md`, `launch-readiness-2026-08.md`,
   `openusd-integration-2026-07.md`, `shipping.md` (npm half).
+
+The three demo contracts in the STT list are there because the code that cites
+them as normative is the Python dataset-generation pipeline, which stays with the
+tiler; §8.1 records the correction.
 
 `shipping.md` is the one record that is genuinely two documents wearing one
 name; it is split rather than duplicated.
@@ -154,7 +160,7 @@ and exits non-zero on drift, and that is the CI gate.
 
 ### 4.1 Documentation
 
-The 21 files of §3.1, copied to their existing paths under `poopdeck/docs/`.
+The files of §3.1, copied to their existing paths under `poopdeck/docs/`.
 A synced file carries no marker in its body (it would corrupt the byte
 comparison); `.stt-sync.json` is the list, and `CONTRIBUTING.md` on both sides
 says which side to edit.
@@ -237,8 +243,9 @@ The pre-split commit is tagged `pre-split-0.7.0` on both sides.
 - **Two-repo changes.** A format change that needs a reader change is now two
   PRs. Mitigated by §4.2: the vectors land in STT first, and poopdeck's sync
   gate goes red until it catches up — which is the correct order anyway.
-- **The vendored corpus.** poopdeck's `docs/` contains 21 files it must not
-  edit. The gate makes an accidental edit fail loudly rather than silently win.
+- **The vendored corpus.** poopdeck's `docs/` contains files it must not edit
+  (§8.1 has the as-built count). The gate makes an accidental edit fail loudly
+  rather than silently win.
 - **`stt-wasm` and the showcase.** The WASM decoder is built in STT and
   consumed (optionally, behind a flag) by the showcase. It is published as a
   release artifact rather than vendored; the showcase's Vite config already
@@ -259,10 +266,24 @@ What follows is where reality differed from §§1–7, and what the work turned 
 - **The repository is `poopdeck.gl`, not `poopdeck`.** The obvious name was
   already taken locally by an unrelated project. The chosen name matches the npm
   scope and the domain, and follows the deck.gl/luma.gl precedent.
-- **24 vendored pages, not 21.** Two generated contracts joined the set (§8.2),
-  and `docs/guides/deploying.md` stayed upstream with the publishing scripts.
+- **25 vendored artifacts, not the 23 listed in §3.1** — 20 pages and 5
+  generated JSON contracts. `docs/spec/stt-generate-datasets.json` joined the set
+  (§8.2), and this record itself is the 25th (last bullet below).
   `docs/spec/backend-capabilities.md` went the other way: it is generated from
   the TypeScript `BackendDescriptor`s, so it cannot live upstream of them.
+  `poopdeck/.stt-sync.json` is the authoritative list.
+- **Three demo contracts stayed upstream.** §3.3 as first written assigned
+  `av-cockpit.md`, `storm-4d-greenfield-2026-07.md` and
+  `neural-atlas-2026-07.md` to poopdeck. The code that cites their numbered
+  sections as normative is the Python dataset-generation pipeline, which stayed
+  with the tiler — 41 and 13 citations for the first two remain in the STT tree —
+  so the records stayed with it. §3.3 now lists them under STT, and
+  `.stt-sync.json`'s `upstreamOnly` names all three.
+- **`shipping.md` was duplicated, not split.** §3.3 called it two documents
+  wearing one name. Both copies landed carrying both halves — the npm release
+  machinery and the cargo one. The upstream copy has since been pruned to the
+  cargo half it owns; pruning the downstream copy to the npm half is
+  poopdeck.gl's to do.
 - **The ledgers are duplicated, not split.** §3.3 said the roadmap divides by
   subject. The open backlog does. The _discharged_ and _consolidation_ ledgers
   are kept verbatim in both repositories instead: the work they record was done
@@ -293,6 +314,25 @@ Both cross-language tests therefore ended the same way, and it is the pattern to
 reach for again: **replace a test that reads two trees with an artifact one tree
 publishes and the other asserts against.** The invariant survives intact, and it
 becomes a file a third party can read instead of a check only we can run.
+
+### 8.2b `choosing.md` split in two — 2026-08-26
+
+§3.1 assigned `docs/intro/choosing.md` here on the strength of its first two
+sections. Its other three — which renderer, which layer, which playback API —
+were renderer material, and 26 of the page's 30 relative links resolved only
+downstream. §4.1's vendored-page-may-link-downstream rule made that legal, not
+correct: the page's owner and its subject had come apart.
+
+The page is now two. `docs/intro/choosing.md` keeps "Should I use STT?" and
+"Static archive or live service?" and stays vendored; the renderer half became
+`poopdeck:docs/intro/choosing-a-renderer.md`, owned downstream and declared in
+`docs/.corpus.json` as `downstreamOnly`. The published corpus is unchanged —
+both pages are served from the same site — but each half now sits with the code
+it describes.
+
+The general rule, worth applying to the next page that drifts: **ownership
+follows subject, and a page whose links mostly leave its own repository is the
+symptom.**
 
 ### 8.3 What the gates caught
 
@@ -328,3 +368,11 @@ Tracked as S1–S3 in the backlog above: the vendor pin has never been exercised
 without a sibling checkout, the first independent releases are uncut, and the
 rehomed fleet has been repointed by rewrite rather than by running the scripts.
 Neither repository exists on the remote yet (T1).
+
+**Status — later on 2026-08-26.** All of the above closed except one check. Both
+repositories are public; `.stt-sync.json` pins `f4c4a95` and the downstream sync
+gate ran green with no sibling checkout; `0.8.0` was cut independently on
+crates.io and on npm; and `r2-sync.sh` has been run for real, with credentials,
+against the `data-fleet/` root. What remains is the read half of S3: one
+`stt-optimize inspect --sample 0` over a stem under the new root, from a clean
+checkout.

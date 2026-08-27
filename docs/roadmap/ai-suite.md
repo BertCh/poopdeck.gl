@@ -93,7 +93,7 @@ not a distributed artifact.)_
   `building-stt-datasets`, `generating-stt-datasets`, `tuning-stt-tiles`,
   `wiring-deckgl-layers`, `choosing-a-renderer`, `adding-playback`,
   `serving-and-publishing`, `debugging-blank-renders`.
-- **Distribution:** `@poopdeck.gl/mcp` **published on npm at 0.5.0** (`bin: stt-mcp`);
+- **Distribution:** `@poopdeck.gl/mcp` **published on npm at 0.8.0** (`bin: stt-mcp`);
   `poopdeck-ai` plugin + repo-root `.claude-plugin/marketplace.json`; `llms.txt`
   static tier.
 - **Verified end-to-end** over real stdio against the real `stt-optimize` /
@@ -129,7 +129,7 @@ release, and none of it has a forcing consumer yet.
 - Remote hosting: OAuth 2.1 Resource Server (RFC 8707 audience validation, no token
   passthrough) in front of the HTTP transport. Not started; the transport ships.
 - Migration to the `2026-07-28` MCP revision (stateless, MCP Apps, Tasks for async
-  builds). Target today is `2025-11-25` on `@modelcontextprotocol/sdk ^1.29.0`.
+  builds). Target today is `2025-11-25` on `@modelcontextprotocol/sdk ^1.30.0`.
 - No evals exist for any skill; the intended bar was ≥3 per skill, without-skill
   baseline vs with-skill.
 - Token-budget measurement of the 13-tool surface; adopt Tool Search if it grows.

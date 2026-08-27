@@ -85,6 +85,29 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `gradientDomain`    | `[number, number]` | `[0, 1]` | Value range mapped onto the ramp.                                                                                                                                                                                                                                                                                           |
 | `gradientColorRamp` | `Color[]`          | `[]`     | Low→high color stops (piecewise-lerped).                                                                                                                                                                                                                                                                                    |
 
+### Column range filter
+
+Wires a baked numeric column into
+[`STTDataFilterExtension`](./data-filter-extension.md). Trips whose value falls
+inside `filterRange` render; the rest are hidden, or soft-faded via
+`filterSoftRange`. It composes with the trail-mode time filter — a trip must
+pass both. The value is per-**feature** (all vertices of a trip share it),
+splatted per-vertex to match `PathLayer`'s segment-instanced attribute layout.
+
+| Property          | Type                       | Default | Description                                                   |
+| :---------------- | :------------------------- | :------ | :------------------------------------------------------------ |
+| `filterProperty`  | `string \| null`           | `null`  | Name of the baked numeric column to filter by.                |
+| `filterRange`     | `[number, number] \| null` | `null`  | Inclusive `[min, max]` bounds.                                |
+| `filterSoftRange` | `[number, number] \| null` | `null`  | Soft bounds inside `filterRange`; trips between the two fade. |
+| `filterEnabled`   | `boolean`                  | `true`  | Toggle the filter without dropping the bound attribute.       |
+
+`filterProperty` is the accessor-alias of deck's `getFilterValue`: pass a column
+NAME, not a function (a function warns once and is ignored). Leaving it unset
+means the extension is not installed at all — zero attribute, zero uniform, zero
+shader change. Setting it costs one attribute slot, so the layer drops the idle
+`CategoryColorExtension` (categorical color is CPU-expanded here, so it was
+never coloring anything) to stay inside WebGL2's guaranteed 16-attribute floor.
+
 ## Trail semantics: `fadeTrail` diverges from upstream
 
 Upstream `TripsLayer` discards a vertex only when
@@ -121,38 +144,22 @@ warns once.
 
 ## Per-segment trail time
 
-Upstream `TripsLayer` registers its `timestamps` attribute with **two** shader
-views of the same buffer (`instanceTimestamps {vertexOffset: 0}` and
-`instanceNextTimestamps {vertexOffset: 1}`) and interpolates the trail time
-along each segment quad. Without the second view, a segment instance reads only
-its start vertex's time, the alpha is constant across the quad, and the head
-advances one whole segment at a time — a staircase, not a glide. On sparse
-geometry (bridges, highways, coarse-sampled trips) that reads as popping, and
-when `trailLength` is shorter than the gap between shape points a trip goes
-fully dark between vertices.
-
-STT gets the interpolation **without** a second attribute. The WebGL2 budget has
-no slot free (`NoPickingPathLayer` 12 + `TimeFilterExtension` 3 +
-`CategoryColorExtension` 1 = 16, the guaranteed floor), so instead the layer
-re-points a slot it already owns: `instanceEndTime` is dead weight in trail mode
+The trail time is interpolated along each segment and the fade runs per
+**fragment**, so the head glides instead of stepping vertex to vertex. It gets
+that without a second attribute: `instanceEndTime` is dead weight in trail mode
 — the trail branch never reads it — so it is loaded with the **next vertex's**
-time and `TimeFilterExtension` interpolates between the two. The trail fade then
-runs per **fragment** rather than per segment, which is what makes it
-continuous. Window-mode users of the same extension (notably
-`FlowCorridorLayer`, which feeds real feature bounds through those attributes)
-opt out and are unaffected.
-
-Two consequences worth knowing:
+time and [`TimeFilterExtension`](./time-filter-extension.md) interpolates
+between the two.
 
 - **Size `trailLength` above the archive's vertex spacing.** The interpolation
   removes the blinking, but a trail shorter than one segment is still just a
   short dash.
-- Off-trail segments are now collapsed in the **vertex** stage (they can be:
-  visibility is decided from both endpoints), so a long trail over a dense tile
-  no longer pays fragment cost for the parts of the route that are dark.
+- Off-trail segments are collapsed in the **vertex** stage (visibility is
+  decided from both endpoints), so a long trail over a dense tile pays no
+  fragment cost for the dark parts of the route.
 
-[`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md) remains the layer for
-a "one dot per vehicle" read; it is no longer the only way to avoid popping.
+For a "one dot per vehicle" read, use
+[`AnimatedTripHeadsLayer`](./animated-trip-heads-layer.md).
 
 ## Tile loading window
 

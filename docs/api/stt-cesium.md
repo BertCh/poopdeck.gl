@@ -14,39 +14,39 @@ derivation are not reimplemented here — they come straight from
 `@poopdeck.gl/core/{geo,style,time-filter,trips,geometry}`, the same modules
 the deck.gl, Three.js, and MapLibre backends use.
 
-**Current scope: the movement catalog** — `point`, `path` (+ OD `line`),
-`arc`, `trips`, `tripHeads`. Aggregation/summary kinds (heatmap, H3/quadbin,
-the flowmap family) and surfels are declared unsupported with typed fallbacks
-— see [Limitations](#limitations).
+**It renders all 23 frozen `LayerKind`s natively** — the movement catalog,
+core geometry, the AV kinds, the summary tiers and the flow family alike;
+`cesiumBackend.layerKinds` declares no fallback and no unsupported kind. The
+deviations that remain are behavioural, not catalog gaps — see
+[Limitations](#limitations).
 
 ## Install
 
-```bash
-pnpm add @poopdeck.gl/cesium cesium
-# or
-npm i @poopdeck.gl/cesium cesium
-```
+**`@poopdeck.gl/cesium` is not published to npm.** The package is
+`private: true` in the workspace and there is no registry release to install;
+consume it from a checkout of this repo (`"@poopdeck.gl/cesium":
+"workspace:*"`), as `examples/showcase` does.
 
 `cesium` is a peer dependency, pinned **`^1`** (developed and tested against
-`1.142.0`). Rendering STT tiles needs no Cesium ion access token, but CesiumJS
+`1.144.0`). Rendering STT tiles needs no Cesium ion access token, but CesiumJS
 still needs its static asset bundle (workers, widget CSS) reachable at
 runtime — point `window.CESIUM_BASE_URL` at the npm package's
 `Build/Cesium/` output or a CDN copy before constructing a `Viewer`:
 
 ```ts
 window.CESIUM_BASE_URL =
-  'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
+  'https://cdn.jsdelivr.net/npm/cesium@1.144.0/Build/Cesium/';
 ```
 
 ## Exports
 
-> **Renamed in 0.6.0.** The layer classes were `Cesium*Layer` through 0.5.x and
-> are now `STT*Layer` — the same prefix `@poopdeck.gl/maplibre` and
-> `@poopdeck.gl/three` use, so one layer kind has one spelling on every backend
-> and the import path (not a word inside the symbol) says which renderer you
-> are on. The old `Cesium*Layer` names have been removed. The camera and
-> clock bridges (`viewStateToCesiumView`, `attachCesiumClock`, `CesiumView`) are
-> unchanged — they are named after CesiumJS concepts, not STT layer kinds.
+Every layer class carries the `STT` prefix, matching `@poopdeck.gl/maplibre`
+and `@poopdeck.gl/three`, so one layer kind has one spelling on every backend
+and the import path (not a word inside the symbol) says which renderer you are
+on. The camera and clock bridges (`viewStateToCesiumView`, `attachCesiumClock`,
+`CesiumView`) are named after CesiumJS concepts, not STT layer kinds. The class
+rows below run in family order — core geometry, motion, AV, summary tiers,
+flow — and cover all 23 `LayerKind`s between them.
 
 | Export                                                                                       | Kind                | Description                                                                                                                                                            |
 | -------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -55,6 +55,23 @@ window.CESIUM_BASE_URL =
 | `STTArcLayer`                                                                                | class               | OD flow arcs — endpoints via the kernel's `deriveSourceTargetPositions`, swept into raised great-circle polylines (same parametrization as three's globe arc material) |
 | `STTTripsLayer`                                                                              | class               | Vehicle trails — per-frame CPU trail trim (`core/trips` `trimTrail`) into a `PolylineCollection`, arc-length tail fade material                                        |
 | `STTTripHeadsLayer`                                                                          | class               | Moving head-dots — per-frame `sampleHead` interpolation (`core/trips`) onto `PointPrimitive`s                                                                          |
+| `STTPolygonLayer`                                                                            | class               | Filled — optionally extruded — `polygon` areas on the ellipsoid; per-feature window fade, height from a numeric column                                                 |
+| `STTIconLayer`                                                                               | class               | Billboard sprites cut from one caller-supplied atlas texture (`icon`), per-feature heading/size/tint                                                                   |
+| `STTColumnLayer`                                                                             | class               | One extruded n-sided prism per point (`column`), radius in true metres; carries the space-time-cube lift (`lib/columns.ts` `timeHeightLiftMeters`)                     |
+| `STTMeshLayer`                                                                               | class               | One posed glTF model per tracked object at the playhead (`mesh`) — the thing the detection cuboid is around                                                            |
+| `STTIsoLayer`                                                                                | class               | Iso-contour polylines (`isoLines`) with a level ramp over `STTPathLayer`'s polyline machinery                                                                          |
+| `STTBoundingBoxLayer`                                                                        | class               | One oriented 3-D cuboid per tracked object at the playhead (`boundingBox`), interpolated between keyframes                                                             |
+| `STTPointCloudLayer`                                                                         | class               | Lit 3-D point clouds (`pointCloud`) — per-point elevation plus an optional surface normal (`lambertShade`)                                                             |
+| `STTSurfelLayer`                                                                             | class               | Oriented anisotropic surface elements (`surfel`) from baked quaternion/scale/rgba columns                                                                              |
+| `STTTextLayer`                                                                               | class               | One screen-space `Label` per feature (`text`), anchored at the feature's absolute f64 ECEF position                                                                    |
+| `STTEgoLayer`                                                                                | class               | The single ego-vehicle cuboid + its full trajectory (`ego`), sampled from a one-track pose stream                                                                      |
+| `STTH3SummaryLayer`                                                                          | class               | Summary-tier H3 cells (`h3Summary`) as ramp-coloured, optionally extruded plates; takes an injected `cellToBoundary`                                                   |
+| `STTQuadbinSummaryLayer`                                                                     | class               | Summary-tier CARTO Quadbin cells (`quadbinSummary`), same ramp/extrusion path as H3                                                                                    |
+| `STTHexbinLayer`                                                                             | class               | Runtime hexbin (`hexbin`) over the raw point tier — binned in the browser over the playhead's slice                                                                    |
+| `STTHeatmapLayer`                                                                            | class               | A geodetic `RectangleGeometry` textured with a CPU-computed density raster (`heatmap`; see `lib/heatmap-field.ts`)                                                     |
+| `STTFlowCorridorLayer`                                                                       | class               | Static route network whose per-segment colour breathes off a per-vertex x per-bucket volume matrix (`flowCorridor`)                                                    |
+| `STTFlowStrokeLayer`                                                                         | class               | The twin-ribbon sibling of the corridor — the same matrix drives WIDTH rather than colour (`flowStroke`)                                                               |
+| `STTFlowmapLayer`                                                                            | class               | flowmap.gl-style tapered OD arrows with heads (`flowmap`); runtime KDEEB bundling via core's shared `bundleEdges`                                                      |
 | `STTBatchedPolylineLayer`                                                                    | class               | The shared batched-`Primitive` machinery behind the path/arc layers (advanced use)                                                                                     |
 | `buildPathPolylines` / `buildArcPolylines` / `sampleGreatCircleArc` / `lineStringTimeOrigin` | functions           | The pure (Cesium-free, unit-tested) geometry builders behind the polyline layers (`lineStringTimeOrigin` = their shared scene-wide time origin)                        |
 | `buildPointEntries` / `collectPointLayers`                                                   | functions           | The pure (Cesium-free, unit-tested) point builders behind `STTPointLayer` — CPU assembly of per-feature ECEF points                                                    |
@@ -133,7 +150,7 @@ import { makeTilesetCallbacks } from '@poopdeck.gl/core/tileset-adapter';
 import { STTPointLayer, applyViewStateToCamera } from '@poopdeck.gl/cesium';
 
 window.CESIUM_BASE_URL =
-  'https://cdn.jsdelivr.net/npm/cesium@1.142.0/Build/Cesium/';
+  'https://cdn.jsdelivr.net/npm/cesium@1.144.0/Build/Cesium/';
 
 const viewer = new Viewer(document.getElementById('cesiumContainer')!, {
   baseLayer: false, // no imagery provider — no ion token needed
@@ -239,14 +256,16 @@ are drawn until `setTiles` is called.
 `setViewState` hook — camera control goes through the camera bridge
 functions below, not through the layer.
 
-## The movement catalog
+## The layer catalog
 
-The four other layers share `STTPointLayer`'s lifecycle (`setTiles` →
+Every other layer class shares `STTPointLayer`'s lifecycle (`setTiles` →
 `setTime` per drawn frame → `pick` → `dispose`) and its scene-wide
 `timeOrigin` rebasing. All colour options take a `FeatureColorMode` —
 `{ type: 'constant', color }`, `{ type: 'categorical', property,
 colorMapping?, fallback }`, or `{ type: 'ramp', property, domain, range,
-fallback }` — resolved per feature through `core/style`.
+fallback }` — resolved per feature through `core/style`. The four movement
+kinds are detailed below; the rest are listed in [Exports](#exports), each
+with the `LayerKind` it backs.
 
 ### `STTPathLayer` (`path` + `line`)
 
@@ -399,52 +418,30 @@ animation, because nothing else will ask Cesium to redraw a new frame.
 ## Backend descriptor
 
 `cesiumBackend` is a `BackendDescriptor` (from `@poopdeck.gl/core/capabilities`)
-describing what the Cesium _engine_ can do and what this _package_ currently
-implements — the two are called out separately, since Cesium natively has a
-WGS84 globe, GPU picking, 3D extrusion, metric sizing, and camera roll well
-beyond the one layer kind wired up so far:
+declaring what this backend supports:
 
-| Trait / capability   | Value                                                           |
-| -------------------- | --------------------------------------------------------------- |
-| `globe`              | `true` — Cesium's native frame is a WGS84 globe                 |
-| `picking`            | `true` — `scene.pick`                                           |
-| `extrude3d`          | `true`                                                          |
-| `metricSizing`       | `true` — ECEF metres                                            |
-| `gpuHeatmap`         | `false`                                                         |
-| `liveBundling`       | `false`                                                         |
-| `timeAsHeight`       | `false`                                                         |
-| `interleavedBasemap` | `true` — STT primitives share Cesium's scene + depth buffer     |
-| `userExtensions`     | `false`                                                         |
-| `cameraRoll`         | `true` — Cesium's camera has heading/pitch/roll                 |
-| `projectsOnCpu`      | `true` — via `core/geo` `GlobeProjection(wgs84)` → `Cartesian3` |
-| `tilesetOwnership`   | `shared`                                                        |
-| `pickMechanism`      | `host` — `scene.pick`                                           |
-| `basemapProjection`  | `globe`                                                         |
+| Trait / capability   | Value                                                                                                                                                                   |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `globe`              | `true` — Cesium's native frame is a WGS84 globe                                                                                                                         |
+| `picking`            | `true` — `scene.pick`                                                                                                                                                   |
+| `extrude3d`          | `true`                                                                                                                                                                  |
+| `metricSizing`       | `true` — ECEF metres                                                                                                                                                    |
+| `gpuHeatmap`         | `false` — `STTHeatmapLayer`'s density field is computed on the CPU                                                                                                      |
+| `liveBundling`       | `true` — KDEEB at runtime through core's shared `bundleEdges`, on the CPU schedule (a bundle is static geometry, recomputed when the edge set changes, never per frame) |
+| `timeAsHeight`       | `true` — `lib/columns.ts` `timeHeightLiftMeters` raises each prism's base along local up                                                                                |
+| `interleavedBasemap` | `true` — STT primitives share Cesium's scene + depth buffer                                                                                                             |
+| `userExtensions`     | `true` — `lib/extensions.ts` per-frame value hooks over the oracle's RESOLVED alpha/colour                                                                              |
+| `cameraRoll`         | `true` — Cesium's camera has heading/pitch/roll                                                                                                                         |
+| `projectsOnCpu`      | `true` — via `core/geo` `GlobeProjection(wgs84)` → `Cartesian3`                                                                                                         |
+| `tilesetOwnership`   | `shared`                                                                                                                                                                |
+| `pickMechanism`      | `host` — `scene.pick`                                                                                                                                                   |
+| `basemapProjection`  | `globe`                                                                                                                                                                 |
 
-`layerKinds()` marks `point`, `path`, `line`, `arc`, `trips`, and `tripHeads`
-as `{ supported: true }`; `surfel` falls back to `point`, the flowmap family
-(`flowmap`/`flowCorridor`/`flowStroke`) to `line`, `isoLines` to `path`, and
-every remaining `LayerKind` is unsupported with an explicit reason. See the
-generated [`docs/spec/backend-capabilities.md`](../spec/backend-capabilities.md)
-for the full cross-backend matrix (regenerated by
-`scripts/gen-capabilities-doc.mjs` — don't hand-edit it).
-
-## No GLSL emitter
-
-This package used to export `timeFilterAlphaGlsl`, a ready-made GLSL ES 3.00
-snippet emitted from `@poopdeck.gl/core`'s `ALPHA_EXPR` AST for a future
-GPU-`Appearance` path. **It was removed at the 0.6.0 cut**, together with
-core's `emitGLSL300` that it wrapped, because no Cesium layer ever called it —
-every layer CPU-filters through `timeFilterAlpha` in `setTime` (see
-[Limitations](#limitations)).
-
-Note what its absence is _not_ evidence of: no backend compiles from
-`ALPHA_EXPR`. deck's `TimeFilterExtension` (GLSL ES 3.00), maplibre's
-`time-window.glsl.ts` (GLSL ES 1.00), and three's TSL node graph are each
-hand-written, and are held to the shared math by conformance tests rather than
-by code generation. The AST and its CPU evaluator remain exported from core as
-the second oracle those tests use. See
-[Render kernel § `core/shader-codegen`](./render-kernel.md#coreshader-codegen).
+`layerKinds()` marks every one of the 23 `LayerKind`s `{ supported: true }` —
+there is no fallback and no unsupported kind to declare. See the generated
+[`docs/spec/backend-capabilities.md`](../spec/backend-capabilities.md) for the
+full cross-backend matrix (regenerated by `scripts/gen-capabilities-doc.mjs` —
+don't hand-edit it).
 
 ## How it works
 
@@ -479,12 +476,6 @@ the second oracle those tests use. See
 
 ## Limitations
 
-- **Aggregation/summary kinds aren't implemented.** `heatmap`, `h3Summary`,
-  `quadbinSummary`, the flowmap family, `isoLines`, `polygon`, `column`,
-  `icon`, `boundingBox`, `surfel`, and `ego` are declared unsupported in
-  `cesiumBackend` (with typed fallbacks where one makes sense) rather than
-  silently dropped. The movement catalog — `point`/`path`/`line`/`arc`/
-  `trips`/`tripHeads` — is real parity; the rest is demand-driven.
 - **One colour per feature.** The batch-table animation path has no
   per-vertex colour, so deck's OD endpoint gradients
   (`getSourceColor`/`getTargetColor`) collapse to the source colour, per-vertex
@@ -500,10 +491,13 @@ the second oracle those tests use. See
   `setTime` loops every feature on the CPU and writes a colour per changed
   feature (point `Color`s, polyline batch-table texels), so large feature
   counts pay a per-frame JS loop (mitigated by the unchanged-alpha skip, not
-  eliminated). A GPU-`Appearance` path would fix this; the unused GLSL
-  emitter that anticipated one was removed at 0.6.0 rather than kept warm, so
-  wiring it starts from the AST. Trips additionally rewrite active
-  polylines' positions each frame (the trail trim).
+  eliminated). A GPU-`Appearance` path would fix this, and would start from
+  the AST: no backend compiles from `ALPHA_EXPR` — deck, maplibre and three
+  each hand-write their shader and are pinned to the shared oracle by
+  conformance tests (see
+  [Render kernel § `core/shader-codegen`](./render-kernel.md#coreshader-codegen)).
+  Trips additionally rewrite active polylines' positions each frame (the trail
+  trim).
 - **One constant pixel size / width per layer.** There is no per-feature
   radius or width property (`radiusProperty`, property-name `pathWidth`) —
   `pixelSize`/`width` apply to every feature in a layer.
@@ -530,5 +524,7 @@ The showcase app has a dedicated Cesium route,
 `buildCesiumLayer`), which streams a dataset through the matching Cesium
 layer on a real globe using the same playback clock as the other renderer
 demos. Run `pnpm dev` from `examples/showcase` and navigate to
-`/cesium/<datasetId>` for any `point` / `path` / `trips` / `trip-heads` /
-`arc` dataset (other types redirect home).
+`/cesium/<datasetId>` for any dataset whose kind `cesiumBackend` declares —
+the route gates on `CESIUM_SUPPORTED_TYPES`, read straight from the
+descriptor, so adding a layer class moves the route without a showcase edit
+(other types redirect home).

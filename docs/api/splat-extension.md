@@ -48,6 +48,7 @@ It is stateless — a single shared instance can serve every sublayer of a famil
 
 - Relies on `geometry.uv` semantics, so it only applies to `ScatterplotLayer` (and layers built on it, like `AnimatedPointLayer`'s point sublayers) — not path, polygon, or arc layers.
 - The gaussian falloff constant is fixed at build time; there is no prop to tune softness per layer instance.
+- Adding a second `SplatExtension` to a layer that already has one (e.g. passing it via `extensions` to an `AnimatedPointLayer` with `splat: true`) does not error — deck concatenates same-hook injections with no dedup, and the injection body is braced so it stays idempotent, so the falloff simply squares to `exp(-6.0 · r²)`: a tighter, dimmer dot. Install it once.
 
 ## Source
 

@@ -15,19 +15,22 @@ the request scheduling problem, not just the tile address.
 
 ## Prop mapping
 
-| `SpatioTemporalLayer` prop                    | `TileLayer` analog                   | Notes                                                                                                                                                                                                                         |
-| --------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `data` (a `manifest.json` URL)                | `data` (URL template)                | One manifest per dataset, not a `{z}/{x}/{y}` template; tiles are range-read out of packs.                                                                                                                                    |
-| `maxRequests` (default **24**)                | `maxRequests` (default 6)            | Same meaning. The single concurrency knob, threaded into the range-request pool.                                                                                                                                              |
-| `maxCacheSize` (default 2000 tiles)           | `maxCacheSize`                       | Same meaning (tile-count LRU cap).                                                                                                                                                                                            |
-| `maxCacheByteSize` (default 2 GiB)            | `maxCacheByteSize`                   | Same meaning; a persistent OPFS cache sits below the memory LRU.                                                                                                                                                              |
-| `onTileLoad` / `onTileUnload`                 | `onTileLoad` / `onTileUnload`        | Same contract. `onTileLoad`-driven re-renders are coalesced via rAF.                                                                                                                                                          |
-| `onViewportLoad`                              | `onViewportLoad`                     | Same contract: fired once per viewport×window selection settle, with the loaded tiles. Re-fires only after the selection changes and re-settles.                                                                              |
-| `onTileError`                                 | `onTileError`                        | Same contract, plus the failing tile's id. Default logs to `console.error`, like TileLayer.                                                                                                                                   |
-| —                                             | `refinementStrategy`                 | No equivalent prop. The tileset pins a low-zoom overview tier and renders best-available data while finer tiles stream — closest in spirit to `'best-available'`, but not configurable.                                       |
-| `loadOptions`                                 | `loadOptions`                        | loaders.gl-style: `loadOptions.fetch` as a `RequestInit` object is merged into every archive request (manifest, directory, pack ranges); a fetch-like function replaces the transport. Other keys are ignored.                |
-| `_subLayerProps`                              | `renderSubLayers` / `_subLayerProps` | Class swapping + prop overrides via `_subLayerProps` (incl. `type`), deck's CompositeLayer contract. No `renderSubLayers` callback — each animated layer class owns its (cache-gated) sublayer stack; see "Known departures". |
-| `currentTime`, `timeWindow`, `timeController` | —                                    | The temporal axis; no TileLayer analog exists.                                                                                                                                                                                |
+| `SpatioTemporalLayer` prop                        | `TileLayer` analog                                                                   | Notes                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data` (a `manifest.json` URL)                    | `data` (URL template)                                                                | One manifest per dataset, not a `{z}/{x}/{y}` template; tiles are range-read out of packs.                                                                                                                                                                                                                                    |
+| `maxRequests` (default **24**)                    | `maxRequests` (default 6)                                                            | Same meaning. The single concurrency knob, threaded into the range-request pool.                                                                                                                                                                                                                                              |
+| `maxCacheSize` (default 2000 tiles)               | `maxCacheSize`                                                                       | Same meaning (tile-count LRU cap).                                                                                                                                                                                                                                                                                            |
+| `maxCacheByteSize` (default 2 GiB)                | `maxCacheByteSize`                                                                   | Same meaning; a persistent OPFS cache sits below the memory LRU.                                                                                                                                                                                                                                                              |
+| `onTileLoad` / `onTileUnload`                     | `onTileLoad` / `onTileUnload`                                                        | Same contract. `onTileLoad`-driven re-renders are coalesced via rAF.                                                                                                                                                                                                                                                          |
+| `onViewportLoad`                                  | `onViewportLoad`                                                                     | Same contract: fired once per viewport×window selection settle, with the loaded tiles. Re-fires only after the selection changes and re-settles.                                                                                                                                                                              |
+| `onTileError`                                     | `onTileError`                                                                        | Same contract, plus the failing tile's id. Default logs to `console.error`, like TileLayer.                                                                                                                                                                                                                                   |
+| `refinementStrategy` (default `'best-available'`) | `refinementStrategy`                                                                 | Same vocabulary, two of deck's values. `'best-available'` also fetches parent tiles up to 4 zooms back so coarse data shows while primaries stream. `'no-overlap'` fetches exactly the viewport zoom — the right setting for full-duplication archives, where each parent level is a complete extra copy of the visible data. |
+| `zRange`                                          | `zRange`                                                                             | Same meaning; needed for extruded, volumetric or time-as-height content under pitch.                                                                                                                                                                                                                                          |
+| `debounceTime` (default 0)                        | `debounceTime` (default 0)                                                           | Same meaning.                                                                                                                                                                                                                                                                                                                 |
+| `loadOptions`                                     | `loadOptions`                                                                        | loaders.gl-style; only `loadOptions.fetch` is consumed — see the [layer reference](../api/spatiotemporal-layer.md#advanced-options).                                                                                                                                                                                          |
+| `_subLayerProps`                                  | `renderSubLayers` / `_subLayerProps`                                                 | Class swapping + prop overrides via `_subLayerProps` (incl. `type`), deck's CompositeLayer contract. No `renderSubLayers` callback — each animated layer class owns its (cache-gated) sublayer stack; see "Known departures".                                                                                                 |
+| `currentTime`, `timeWindow`, `timeController`     | —                                                                                    | The temporal axis; no TileLayer analog exists.                                                                                                                                                                                                                                                                                |
+| —                                                 | `getTileData`, `tileSize`, `extent`, `zoomOffset`, `visibleMinZoom`/`visibleMaxZoom` | No analog: tiles are byte ranges resolved from the manifest, not fetched per address. `minZoom`/`maxZoom` are tileset options, set by a subclass through `getTilesetOptionOverrides`.                                                                                                                                         |
 
 ## Why the tileset is custom
 
@@ -101,15 +104,23 @@ Differences a deck.gl user will notice, beyond the tileset:
   props take a constant _or a property-column name_ (e.g.
   `pathColor: 'speed'`) instead of deck's `getFillColor`-style
   `Accessor<DataT>` functions. The upstream accessor _names_ also exist as
-  aliases with the same constant-or-column-name semantics — point
+  aliases with the same constant-or-column-name semantics — every upstream
+  accessor name the wrapped deck layer exposes, e.g. point
   `getFillColor`/`getRadius`/`getLineColor`, path/trips `getColor`/`getWidth`,
-  polygon `getFillColor`/`getElevation`, heatmap `getWeight` — and take
+  polygon `getFillColor`/`getElevation`, arc
+  `getSourceColor`/`getTargetColor`/`getHeight`/`getTilt`, icon
+  `getSize`/`getAngle`, hexbin `getColorWeight`/`getElevationWeight`, heatmap
+  `getWeight`; the per-layer reference pages list each layer's set — and take
   precedence over the column-name prop when set. Passing a function accessor
   warns once and falls back to the column-name prop (it cannot run against
   binary tiles).
   User-supplied `updateTriggers` ARE honored: a trigger bump invalidates the
   cached prepared tiles and sublayer instances and the triggers forward into
-  sublayers. `H3SummaryLayer` uses real accessors throughout.
+  sublayers. `H3SummaryLayer` drives its wrapped `H3HexagonLayer` with real
+  per-row accessors internally (its cells are CPU rows, not binary columns),
+  but its own public props follow the same rule as everything else —
+  `getLineColor`/`getLineWidth` take a constant only, and a function value
+  warns once and is ignored.
 - **No `DataT` generic on the layer classes.** The family follows upstream's
   extension pattern (`class My extends AnimatedPathLayer<MyExtraProps>` types
   `this.props` with the extra props plus the `Required<>`-typed defaults)
@@ -135,10 +146,10 @@ Differences a deck.gl user will notice, beyond the tileset:
   `coordinateSystem`, `modelMatrix`, `autoHighlight`, `highlightColor`,
   `wrapLongitude` etc. inherit into sublayers, and the CompositeLayer-native
   `_subLayerProps` override map works — including `type` substitution, which
-  is the `renderSubLayers`-equivalent class-swapping point. Sublayer short
-  ids: `points` (AnimatedPointLayer, incl. cumulative slabs), `paths`,
-  `trips`, `polygons`, `heads` (AnimatedTripHeadsLayer), `heatmap` (per
-  channel), `hexagons` (H3SummaryLayer). A TileLayer-style `renderSubLayers`
+  is the `renderSubLayers`-equivalent class-swapping point. The short ids are
+  listed per owning layer in the
+  [layer reference](../api/spatiotemporal-layer.md#custom-deckgl-extensions).
+  A TileLayer-style `renderSubLayers`
   _callback_ is still not offered — per-tile sublayer construction is
   cache-gated for perf, and `_subLayerProps` covers the class/props
   customization upstream users reach for.

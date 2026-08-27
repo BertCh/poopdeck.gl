@@ -1,5 +1,7 @@
 /**
- * Ego-vehicle deck layers for the AV cockpit (av-cockpit.md §2 R1.6).
+ * Ego-vehicle deck layers for the AV cockpit
+ * (stt:docs/roadmap/av-cockpit.md §2 — Round 1, "ego footprint +
+ * predicted-path ribbon"; that doc numbers only the Round 2 items).
  *
  * Builds two plain deck layers from the lightweight `scene.streams.ego.path`
  * (`[{ t, lon, lat }]`, already shipped) — NOT tile layers; the Lead appends

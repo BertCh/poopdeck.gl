@@ -9,7 +9,7 @@ It extends [`AnimatedTripsLayer`](./animated-trips-layer.md), keeping all of its
 A flow-corridor tile stores its geometry once and carries a per-vertex × per-time-bucket value matrix (`BinaryFeatures.vertexValueMatrix`, `vertexValueBuckets` columns). The geometry never re-uploads as time advances — only the per-vertex color changes:
 
 - For the current playhead the layer finds the continuous bucket position, selects the two adjacent bucket columns, and **linearly blends** them into a per-vertex scalar (or, with `persistenceMs`, takes a trailing-window **max**). The base class maps that scalar through the gradient ramp into per-vertex RGBA.
-- The cross-fade is quantized to a sub-step grid (`STEP = 0.5`, i.e. 2 sub-steps per bucket), so the CPU re-expansion fires only when the playhead crosses a sub-step — between sub-steps the prepared-tile cache hits and nothing re-uploads. The fine (1-minute) buckets `chevronPerTripLight` targets are why the step is this coarse: a smaller one would re-expand the two per-vertex signals ~24× per bucket.
+- The cross-fade is quantized to a sub-step grid (`STEP = 0.5`, i.e. 2 sub-steps per bucket). That quantized sub-step is the prepared tile's `dynamicKey`, kept **separate** from the structural `styleKey`: between sub-steps the cache hits and nothing happens at all, and on a crossing the layer re-expands only the per-vertex colour (and chevron-direction) buffers and swaps those attribute wrappers in place. The tile's `data` object stays reference-identical, so deck sees no data change and skips both path re-tessellation and the fp64 hi/lo re-upload of the position buffer — only the swapped attributes are invalidated, via `updateTriggers`. `AnimatedTripsLayer` additionally memoizes the purely geometry-derived arrays (`synthesizeVertexTimes`, the static-width expansion) on the tile's `binary` identity, so they are computed once per tile **load** rather than once per sub-step. The fine (1-minute) buckets `chevronPerTripLight` targets are why the step is this coarse: a smaller one would re-expand the two per-vertex signals ~24× per bucket.
 - Corridors are **timeless**: each feature's `[start, end]` spans the whole range, so the window-mode time filter never hides the network.
 
 ### `trailLength` is pinned to `0`
@@ -19,11 +19,10 @@ default with **`0`**. A corridor is static geometry animated by colour: it runs
 the time filter in **window** mode and repurposes the `instanceVertexTime` slot
 to carry the chevron direction sign. Any `trailLength > 0` switches the shader
 into trail mode (precedence: cumulative > wake > trail > window), where that
-slot is read as a relative vertex time — so once the relative playhead passed
-`trailLength`, every vertex satisfied `vertexTime < trailStart` and the **entire
-corridor network went blank** for the rest of playback, silently. With
-`signedFlow` on it also misreads the direction signs as timestamps. Overriding
-it warns once; leave it at `0`.
+slot is read as a relative vertex time — blanking the **entire corridor
+network**, silently, once the relative playhead passes it (and, under
+`signedFlow`, misreading the direction signs as timestamps). Overriding it
+warns once; leave it at `0`.
 
 ## Installation
 

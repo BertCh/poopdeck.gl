@@ -161,7 +161,7 @@ Cost scales with the number of _active_ tracks over the visible tiles — a bina
 
 ## Picking
 
-`pickable` is **inherited** like any other deck layer — pass `pickable: true` on the composite (it is no longer hardcoded on the sublayers, so `pickable: false` now genuinely disables hit-testing and stops paying for the picking attribute). A hit's `info.index` maps into that sublayer's per-instance active-track rows (stride 1) and `info.object` is set to that track's flat decoded props — `track_id`, `category`, `heading`, `length`, `width`, `height`, `speed` — the same AV-inspector shape `AnimatedBoundingBoxLayer` emits. The sublayer short id for `_subLayerProps` overrides is **`mesh`**.
+`pickable` is **inherited** like any other deck layer — pass `pickable: true` on the composite. `pickable: false` disables hit-testing and skips the picking attribute entirely. A hit's `info.index` maps into that sublayer's per-instance active-track rows (stride 1) and `info.object` is set to that track's flat decoded props — `track_id`, `category`, `heading`, `length`, `width`, `height`, `speed` — the same AV-inspector shape `AnimatedBoundingBoxLayer` emits. The sublayer short id for `_subLayerProps` overrides is **`mesh`**.
 
 ## Source
 

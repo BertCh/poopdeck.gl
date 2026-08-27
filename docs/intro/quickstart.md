@@ -14,10 +14,11 @@ choice follows you across the docs.
 
 ## 1. Install
 
-`@poopdeck.gl/*` packages peer-depend on deck.gl. They are **not** installed for
-you, and a missing or out-of-range peer is the most common cause of a build
-error or a silently blank map. Install the poopdeck package plus the peers in
-one go:
+`@poopdeck.gl/layers` peer-depends on eight deck.gl and luma.gl packages, and
+`@poopdeck.gl/react` optionally on `@deck.gl/core` + `@deck.gl/react`. They are
+**not** installed for you, and a missing or out-of-range peer is the most common
+cause of a build error or a silently blank map. Install the poopdeck package
+plus the peers in one go:
 
 <!--tabs-->
 
@@ -25,35 +26,35 @@ one go:
 
 ```bash
 npm install @poopdeck.gl/layers @poopdeck.gl/react \
-  @deck.gl/core@^9.3 @deck.gl/layers@^9.3 @deck.gl/geo-layers@^9.3 \
-  @deck.gl/mesh-layers@^9.3 @deck.gl/aggregation-layers@^9.3 \
-  @deck.gl/extensions@^9.3 @deck.gl/react@^9.3 \
-  @luma.gl/core@^9.3 @luma.gl/engine@^9.3
+  @deck.gl/core@~9.3 @deck.gl/layers@~9.3 @deck.gl/geo-layers@~9.3 \
+  @deck.gl/mesh-layers@~9.3 @deck.gl/aggregation-layers@~9.3 \
+  @deck.gl/extensions@~9.3 @deck.gl/react@~9.3 \
+  @luma.gl/core@~9.3 @luma.gl/engine@~9.3
 ```
 
 **Vanilla JS**
 
 ```bash
 npm install @poopdeck.gl/layers @poopdeck.gl/playback \
-  @deck.gl/core@^9.3 @deck.gl/layers@^9.3 @deck.gl/geo-layers@^9.3 \
-  @deck.gl/mesh-layers@^9.3 @deck.gl/aggregation-layers@^9.3 \
-  @deck.gl/extensions@^9.3 \
-  @luma.gl/core@^9.3 @luma.gl/engine@^9.3
+  @deck.gl/core@~9.3 @deck.gl/layers@~9.3 @deck.gl/geo-layers@~9.3 \
+  @deck.gl/mesh-layers@~9.3 @deck.gl/aggregation-layers@~9.3 \
+  @deck.gl/extensions@~9.3 \
+  @luma.gl/core@~9.3 @luma.gl/engine@~9.3
 ```
 
 <!--/tabs-->
 
 Budget for about **1.2 MB / 350 KB gzipped** of JavaScript for a points-only
 map, and ~1.26 MB / 363 KB with playback and the React transport bar. Most of
-that is deck.gl, not this project. The tile decoder is a further ~477 KB and
-loads as its own Web Worker chunk, off the critical path and off the main
-thread.
+that is deck.gl, not this project. The tile decoder is a further ~530 KB / 99 KB
+gzipped and loads as its own Web Worker chunk, off the critical path and off
+the main thread.
 
 Two rules that save an afternoon:
 
 - **Pin the whole deck.gl + luma.gl graph to one 9.3.x minor.** Mixing
-  `@deck.gl/core@9.3` with `@deck.gl/layers@9.2` breaks at runtime, not at
-  install time.
+  `@deck.gl/core@9.3.10` with `@deck.gl/layers@9.4.0` breaks at runtime, not at
+  install time — the peer range spans all of 9.x, so npm will not stop you.
 - In a monorepo, install the deck.gl set in the **app** package — peers resolve
   from there, not from a shared library.
 
@@ -147,11 +148,13 @@ new Deck({
 You should now see a month of global seismicity — the Ring of Fire, the
 mid-Atlantic ridge — as a static frame. Nothing moves yet; that is next.
 
-Any prop that takes a constant also takes a **column name**, resolved on the
-GPU: `radius: 'magnitude'` above sizes each quake by its magnitude, and
-`fillColor: 'mag_band'` would color it by the archive's magnitude-band category
-(add `colorMapping` to choose the colors per category). See
-[AnimatedPointLayer](../api/animated-point-layer.md) for the full prop set.
+Every styling **accessor** — `radius`, `fillColor`, `elevationProperty` and
+friends — takes either a constant or a **column name**, resolved on the GPU.
+(Clamps like `radiusMinPixels` are constants only.) `radius: 'magnitude'` above
+sizes each quake by its magnitude, and `fillColor: 'mag_band'` would color it by
+the archive's magnitude-band category (add `colorMapping` to choose the colors
+per category). See [AnimatedPointLayer](../api/animated-point-layer.md) for the
+full prop set.
 
 ### Which columns does a dataset have?
 
@@ -294,18 +297,6 @@ export default function App() {
 play/pause, loop, speed presets and Auto. `usePlayback`'s return spreads
 straight into it.
 
-Two things about placing it, both visible in the snippet above:
-
-- **Give it a positioned box.** A full-viewport `position: fixed` canvas paints
-  over every later sibling in normal flow, so the bar renders but the play
-  button cannot be clicked — the canvas is the hit target and the map pans
-  under your cursor.
-- **Tell it which palette to use.** The bar ships light and dark token sets and
-  follows `prefers-color-scheme` by default. A dark map inside an otherwise
-  light page is exactly the case that needs `data-stt-theme="dark"` pinned on
-  an ancestor. See [theming](../api/stt-react.md#light-and-dark) for the token
-  list if you want your own colors.
-
 **Vanilla JS**
 
 ```js
@@ -432,10 +423,9 @@ serves it, Vite's dev server included; no tile server is involved.
   React never mounts, and the root element stays empty. Single-entry Vite 8 is
   fine, `React.lazy` routes are fine, and Vite 7 is fine — so the workarounds
   are to build one entry, or to pin `vite@^7` until it is fixed upstream.
-- **A `[stt/time-filter]` precision warning.** It only fires now when the
-  Float32 quantization step is actually large enough to move something you can
-  see, which almost always means a `timeOffset` that does not match the tile
-  data. It is no longer emitted for an ordinary wide `timeWindow`.
+- **A `[stt/time-filter]` precision warning.** It fires only when the Float32
+  quantization step is large enough to move something you can see, which almost
+  always means a `timeOffset` that does not match the tile data.
 
 ## Next steps
 

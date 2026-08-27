@@ -137,7 +137,7 @@ Per-zoom feature counts decoded from the shipped paged directories:
   `feature_out_of_band` (`stt:crates/stt-build/src/tiler.rs`) confirms the cumulative-floor
   semantics (`if zoom < mz { skip }`).
 - Why the stale comment existed: the LOD build and the "full-duplication pyramid / 4 fps /
-  2.7 s stalls" comment landed in the **same** commit (`9f52804`). The measurement was
+  2.7 s stalls" comment landed in the **same** commit (`stt:9f52804`). The measurement was
   taken on the legacy `--no-lod` build, which no longer ships.
   `maxPitch: 85` appears on exactly the four volumetric demos plus `DemoViewer`'s `?? 85`
   default for any `timeHeight` dataset; deck's default of 60 is what keeps every other demo
@@ -258,8 +258,12 @@ beats a fast wrong one).
 ### 4.4 Tile counts will rise — that is correct
 
 The corrected footprint fetches **more** tiles under pitch, because today's is a
-36%-coverage under-selection. Do not "fix" that back. `maxParentTileBytes` (2 MiB default
-against a ~42 KB average tile) already bounds the parent-fallback downside.
+36%-coverage under-selection. Do not "fix" that back. `maxParentTileBytes` (2 MiB) bounded
+the downside under the flat rule; since the default became
+`placeholderPolicy: 'expected-value'`
+(`packages/core/src/spatiotemporal-tileset.ts:1493`, with `:1323-1326` naming the flat rule as
+the unpriceable-throughput fallback) it is only that fallback, and the fleet's parent tiles
+average 631 KB–1.35 MB at `gtfs-ch` z7/z6, not ~42 KB.
 
 **Erratum (the pitch band this holds over).** The ruling above stands, and it is measured to
 roughly **pitch 65**: up to there the extra tiles are tiles that were always on screen and
@@ -287,13 +291,15 @@ planes.
 
 ## 5. Waves
 
-**Status (2026-08-03): Waves 1, 2 and 4 have LANDED; Wave 3 has not.** The tables
+**Status: Waves 1, 2 and 4 landed 2026-08-03; Wave 3 / A1 landed 2026-08-11 behind a
+default-off `selectionMode: 'frustum'`, enabled on no demo and not wired for the non-deck
+backends; FS-3 was repaired 2026-08-24
+([tile-loading-audit-2026-08.md](./tile-loading-audit-2026-08.md) §9.1 E3).** The tables
 below stay as written because the `F*` / `A*` identifiers are the citation targets
 for 35 source and test files — they are a change register, not a plan. What is
 still open from this record is the manual half: the four volumetric demos at their
-shipped cameras, carried as **L2** in the [roadmap README](./README.md). Two
-per-item exceptions to "landed": **F11** (RC8 interval-aware ranking) was gated
-measure-first and was never measured, and **A7** shipped as `tileKey` in
+shipped cameras, carried as **L2** in the [roadmap README](./README.md). One
+per-item exception to "landed": **A7** shipped as `tileKey` in
 `packages/core/src/tile-key.ts` rather than the proposed `tileIdToKey` name.
 
 ### Wave 1 — correctness (no format change, no rebuild, no republish)
@@ -310,7 +316,7 @@ measure-first and was never measured, and **A7** shipped as `tileKey` in
 | F8  | `layers/…/spatiotemporal-layer.ts`                  | `_pushTilesetOptions` must re-apply subclass overrides                                                                                                                                                                     |
 | F9  | `core/spatiotemporal-tileset.ts`                    | guard `activeRequests.delete` with an ownership check                                                                                                                                                                      |
 | F10 | `core/archive.ts`                                   | sort coalesced groups by priority **before** the runner loop                                                                                                                                                               |
-| F11 | `core/archive.ts`                                   | RC8 interval-aware ranking — **measure first**, gated                                                                                                                                                                      |
+| F11 | `core/archive.ts`                                   | RC8 interval-aware ranking — **measure first**, gated — landed 2026-08-24 as audit B3 (`archive.ts:4452-4460`)                                                                                                             |
 
 #### 5b. F5 as shipped — why the cap became readiness-only
 
@@ -344,7 +350,7 @@ The shipped design separates the two jobs the one counter was doing:
 | A6  | maplibre: route per-layer mode through the **visible** set (today `render()` walks the resident map ⇒ up to 5 zoom levels composited); add `tileLoadTimeWindow`.                                                                                                                                           |
 | A7  | export core's `tileIdToKey` and use it in all ten layer `makeTileKey` helpers, maplibre's `tileKey`, three's `residentSetEqual`.                                                                                                                                                                           |
 
-### Wave 3 — architectural (staged, not blocking; NOT built)
+### Wave 3 — architectural (staged, not blocking; A1 built 2026-08-11, default-off)
 
 **A1. Replace the AABB with a frustum-quadtree selection primitive.** Port the shape of
 deck's `getOSMTileIndices`: `viewport.getFrustumPlanes()` + `@math.gl/culling` CullingVolume
@@ -392,10 +398,13 @@ blob-ordering and `maxPitch` assertions.
    next rebuild of each volumetric archive.
 4. **Only if wanted fleet-wide at once:** ~1.5 GB to R2 across the ten storm4d archives +
    `mrms-storm3d-volume` + `earthquake-columns` + `flights`, plus `v2-golden` hash churn.
-   ⚠️ **The B2 republish this was meant to ride shipped on 2026-07-31 WITHOUT it** — step 1
-   never landed (there is no `z_range` on `Metadata`) and neither did step 3. Carried as
-   **K11** in the [roadmap README](./README.md); it now needs the next rebuild window rather
-   than a dedicated one.
+   ⚠️ **LANDED since** — `z_range` is on `Metadata`
+   (`stt:crates/stt-core/src/metadata.rs:357`, `:1235`) and step 3 shipped as
+   `--point-elevation-column` (`stt:crates/spatiotemporal-tiles/src/bin/stt-build.rs:716-717`).
+   The B2 republish of 2026-07-31 shipped without either, so the published fleet still
+   carries no `z_range`; that remainder is **K11** in the
+   [STT roadmap register](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/README.md),
+   and it needs the next rebuild window rather than a dedicated one.
 5. **Do NOT change the tile address.** Build-side 2-D assignment — a tile is a full vertical
    column — is correct by design. A 3-D tile address would be a genuine breaking change with
    no demonstrated payoff; every altitude fix identified here is renderer-side selection.
@@ -406,12 +415,14 @@ An attempt to fix the enumeration blow-up by intersecting the query box with the
 declared extent was **reverted as unsound**, and the reason is a defect worth fixing on its
 own:
 
-- `stt-build.rs` fills the manifest bounds from `input::calculate_bounds`.
+- `stt:crates/spatiotemporal-tiles/src/bin/stt-build.rs` fills the manifest bounds from
+  `input::calculate_bounds`.
 - `calculate_bounds` takes the min/max of each `ParsedFeature.lon` / `.lat`.
-- `ParsedFeature.lon`/`.lat` is the geometry's **CENTROID** (`input.rs` — "Parse a WKB/EWKB
-  blob into a GeoJSON geometry and its centroid").
-- But the tiler addresses tiles by **VERTEX**: `tiler.rs` places each point of a
-  multi-point/line geometry with `lonlat_to_tile(p[0], p[1], zoom)`, and polygons are
+- `ParsedFeature.lon`/`.lat` is the geometry's **CENTROID**
+  (`stt:crates/stt-build/src/input.rs` — "Parse a WKB/EWKB blob into a GeoJSON geometry and
+  its centroid").
+- But the tiler addresses tiles by **VERTEX**: `stt:crates/stt-build/src/tiler.rs` places
+  each point of a multi-point/line geometry with `lonlat_to_tile(p[0], p[1], zoom)`, and polygons are
   clipped across every tile they cross.
 
 So the declared bounds are the bbox of **centroids** while tiles are laid out by
@@ -424,10 +435,13 @@ bounds, and `stt-validate` and the MCP `describe_dataset` both report them as th
 bbox. All three understate the true extent today.
 
 **Fix belongs in the builder** (compute the real geometry bbox, not the centroid bbox) and
-only takes effect on a rebuild. ⚠️ **It was slated to ride the B2 republish and did not** —
-`calculate_bounds` still reads `f.lon`/`f.lat` as of 2026-08-03, and B2 shipped on 2026-07-31.
-Carried as **K11** in the [roadmap README](./README.md). Until then a query box is honoured as
-given, and the oversized-scan threshold **warns without truncating**: a slow correct frame
+only takes effect on a rebuild. ⚠️ **LANDED since** — `calculate_bounds` now delegates to
+`profile_features` and `BoundsMode::Vertex` is the default
+(`stt:crates/stt-build/src/input.rs:867`, `:896-906`, `:959`; `--bounds-mode centroid` is the
+documented rollback). B2 shipped on 2026-07-31 without it, so every published manifest still
+declares centroid bounds; that remainder is **K11** in the
+[STT roadmap register](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/README.md).
+Until the fleet is rebuilt a query box is honoured as given, and the oversized-scan threshold **warns without truncating**: a slow correct frame
 beats a fast wrong one.
 
 ## 7. Verified correct — do not re-investigate
@@ -472,6 +486,12 @@ beats a fast wrong one.
   bounds path is the antimeridian `west > east` fallback to the archive's full extent.
 
 ## 8. Unconfirmed — measure before acting
+
+**Settled 2026-08-24** ([tile-loading-audit-2026-08.md](./tile-loading-audit-2026-08.md)
+§2 A1/B1/B3, §9.1): the pinned-overview count gate, RC8's scheduler interval and the
+coverage-index quantisation staleness were all confirmed and fixed;
+`getCacheStats().pinnedCount` now exists
+(`packages/core/src/spatiotemporal-tileset.ts:6963`). The remaining two stand.
 
 The pinned-overview count gate (**check `getCacheStats().pinnedCount` first — one-line
 measurement**; if real it is critical for `hurricanes` at 17,899 pins and `earthquakes-v2`

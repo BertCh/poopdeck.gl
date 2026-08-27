@@ -14,10 +14,8 @@ AIS vessel positions); every step below is something that run needed.
 cargo install spatiotemporal-tiles
 ```
 
-That installs `stt-build`, `stt-validate`, `stt-optimize`, and `stt-serve`.
-(Upgrading from a pre-0.1.0 source checkout? `cargo uninstall stt-build
-stt-optimize stt-validate` once, or pass `--force` — those binary names are
-now owned by this crate.)
+That installs five binaries: `stt-build`, `stt-optimize`, `stt-validate`,
+`stt-bundle`, and `stt-serve`.
 
 ## 2. CSV → GeoParquet (one DuckDB command)
 
@@ -44,9 +42,11 @@ duckdb -c "
 Notes that save real time:
 
 - **Timestamps:** `epoch_ms(...)` + `--time-format unix-ms` below is the
-  most robust route. ISO 8601 strings also work (`--time-format iso8601`,
-  the default for string columns) — zone-less values like
-  `2024-09-28T12:00:00` are read as UTC.
+  most robust route. `--time-format` is read only for Int64 columns: a String
+  column is always parsed as ISO 8601 (zone-less values like
+  `2024-09-28T12:00:00` are read as UTC), and an Arrow Timestamp column is
+  self-describing — so leaving the DuckDB column as `TIMESTAMPTZ` instead of
+  `epoch_ms(...)` lets you drop the flag entirely.
 - **Types come from the Parquet schema.** Cast each column to what you mean
   (`DOUBLE` for numbers you'll style by, `VARCHAR` for categories). Columns
   with nulls are fine — the tile schema follows the file's schema, not the
@@ -70,9 +70,10 @@ stt-validate public/tiles/my-dataset
 ```
 
 `--auto` runs the analyzer first and picks a zoom range and temporal bucket
-to fit the data; any flag you pass explicitly still wins. (Compression is
-not auto-tuned — the packed format is zstd-only; set the level with
-`--zstd-level` or `--publish`.)
+to fit the data; any flag you pass explicitly still wins. (Bare `--auto` tunes
+only those two — compression stays at the default, and the packed format is
+zstd-only; set the level with `--zstd-level` or `--publish`, or use
+`--auto encode` to let the advisor pick it.)
 
 **Mind the zoom range** if you set it yourself: the default is `0–14`, and
 dense point data at z14 can explode into 100k+ tiles and a long build. For
@@ -91,7 +92,10 @@ reads `/tiles/my-dataset/manifest.json` directly. For production, sync to
 R2 / S3 / GCS / nginx ([deploying guide](./deploying.md)).
 
 `stt-serve` exists for the _database_ workflow (tiles generated per-request
-from PostGIS/DuckDB); a prebuilt dataset never needs it.
+from PostGIS or DuckDB — the default install ships the PostGIS backend only,
+and `cargo install spatiotemporal-tiles --features serve-duckdb` adds the
+embedded-DuckDB one, a heavy bundled C++ compile); a prebuilt dataset never
+needs it.
 
 ## 5. Render it
 

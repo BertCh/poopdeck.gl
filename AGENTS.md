@@ -3,8 +3,9 @@
 Orientation for any AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, …)
 dropped into this checkout. `AGENTS.md` is the cross-harness convention that
 Cursor, Codex, and Gemini CLI read automatically; Claude Code users additionally
-get the `poopdeck-ai` plugin (see [How agents get help](#how-agents-get-help)).
-Read this first, then follow the routing table to the canonical docs.
+get the `poopdeck-ai` plugin (see [How agents get help](#how-agents-get-help)),
+which this file complements rather than replaces. Read this first, then follow
+the routing table to the canonical docs.
 
 ## What this repo is
 
@@ -28,9 +29,9 @@ are out of scope.
 > `docs/roadmap/repo-split-2026-08.md` is the contract.
 >
 > **Some `docs/` pages are vendored, not authored here.** `.stt-sync.json` lists
-> them (the whole `docs/spec/` normative set, `cli-reference.md`, the format
-> architecture pages, and several guides). Editing one locally makes
-> `pnpm stt:check` red. Land the change upstream and re-sync.
+> them (the normative `docs/spec/` pages, `cli-reference.md`, the format
+> architecture pages, and most of `docs/intro/` and `docs/guides/`). Editing one
+> locally makes `pnpm stt:check` red. Land the change upstream and re-sync.
 
 [stt-repo]: https://github.com/BertCh/spatiotemporal-tiles
 
@@ -43,7 +44,7 @@ GeoParquet / PostGIS / DuckDB          ─── upstream: BertCh/spatiotemporal
         │  stt-serve      → dynamic per-request tile server (or publish the static dir to R2/CDN)
         ▼                                  ─── this repository ───────────────
   @poopdeck.gl/core       → STTArchive reader (HTTP Range) + decoder pool + tileset + render kernel
-  @poopdeck.gl/layers     → SpatioTemporalLayer (deck.gl)   ← the primary renderer
+  @poopdeck.gl/layers     → SpatioTemporalLayer (deck.gl)   ← the default backend
   @poopdeck.gl/{three,maplibre,cesium}                       ← alternate backends
   @poopdeck.gl/playback + /react                             ← scrub / play clock + UI
 ```
@@ -51,6 +52,17 @@ GeoParquet / PostGIS / DuckDB          ─── upstream: BertCh/spatiotemporal
 A cold client load is 1 `manifest.json` + 1 directory object + N pack Range
 requests; warm is served entirely from edge cache. Tile payloads are Apache
 Arrow IPC with GeoArrow-encoded geometry.
+
+**deck.gl is the default backend, not the most complete one.** Of the 23
+`LayerKind`s in core's frozen vocabulary, three, maplibre and cesium render all
+23 natively; deck renders 21 (`isoLines` degrades to `path`, `ego` is
+unsupported). On the 10 capabilities, maplibre has all 10 and the other three
+have 9 each — deck lacks `cameraRoll`, three lacks `interleavedBasemap`
+(structural), cesium lacks `gpuHeatmap`. Never answer a "can backend X do Y"
+question from this paragraph: each backend declares itself in a
+`BackendDescriptor` (`packages/*/src/backend-descriptor.ts`), and
+`docs/spec/backend-capabilities.md` is generated from those descriptors and
+CI-gated against them.
 
 ## Ground rules (read before recommending anything)
 
@@ -60,8 +72,8 @@ Arrow IPC with GeoArrow-encoded geometry.
   `--max-zoom` honest) and use **temporal bucketing** (`--temporal-bucket`).
   Expert users may explicitly opt into the documented per-tile budget controls,
   but those controls must remain off by default and report what they remove.
-  The **summary** (H3/Quadbin) and **raster** tiers are _opt-in coarse-zoom aids_
-  for very large datasets, **not** a substitute for the raw tier.
+  The **summary** (H3/Quadbin) tier is an _opt-in coarse-zoom aid_ for very
+  large datasets, **not** a substitute for the raw tier.
 - **The archive/manifest is the contract.** `manifest.json` carries capabilities,
   the temporal block, the pack table, and (if built with `--style-hints`)
   per-property percentiles. Read it before guessing (`describe_dataset`, or open
@@ -79,7 +91,7 @@ Arrow IPC with GeoArrow-encoded geometry.
 | Get build knobs recommended from a source file                            | `stt-optimize` (powers `stt-build --auto`)                      | `docs/api/cli-reference.md`, `docs/guides/tuning-tiles.md`                    |
 | Shrink / lint / diff / audit a **built** archive                          | `stt-optimize inspect`/`doctor`/`diff`/`order-audit`            | `docs/guides/tuning-tiles.md`                                                 |
 | Serve tiles dynamically off a live DB                                     | `stt-serve` (PostGIS/DuckDB, axum)                              | `docs/api/cli-reference.md`, `docs/spec/stt-serve-protocol.md`                |
-| Publish a static archive to a CDN/R2                                      | upstream `scripts/r2-sync.sh` sets the cache headers            | `docs/guides/deploying.md`                                                    |
+| Publish a static archive to a CDN/R2                                      | `stt:scripts/r2-sync.sh` sets the cache headers                 | `docs/guides/deploying.md`                                                    |
 | Check integrity / decode / schema / temporal consistency                  | `stt-validate` (CI-suitable)                                    | `docs/api/cli-reference.md`                                                   |
 | Pack/unpack a single-file `.sttb` interchange bundle                      | `stt-bundle`                                                    | `docs/api/cli-reference.md`                                                   |
 | Generate a **bundled reference** dataset (earthquakes, drifters, GTFS, …) | `stt-generate`                                                  | `docs/guides/data-generation.md`                                              |
@@ -89,23 +101,22 @@ Arrow IPC with GeoArrow-encoded geometry.
 | Add a shader extension (TimeFilter, DataFilter, CategoryColor, …)         | `@poopdeck.gl/layers` extensions                                | `docs/api/extensions.md`                                                      |
 | Wire the play/scrub clock + React UI                                      | `@poopdeck.gl/playback` + `@poopdeck.gl/react`                  | `docs/api/stt-player.md`, `docs/api/stt-react.md`                             |
 
-The `stt-*` CLIs are the workhorses (think `wrangler`), and they are a
-**separate install from a separate repository** — `cargo install
-spatiotemporal-tiles`. Their canonical flag surface is
-**`docs/api/cli-reference.md`**, vendored here. This table intentionally mirrors
-the routing in `poopdeck-ai/skills/poopdeck-overview/SKILL.md` and `llms.txt` —
-keep them consistent.
+The `stt-*` CLIs are the workhorses (think `wrangler`); their canonical flag
+surface is **`docs/api/cli-reference.md`**, vendored here. This table
+intentionally mirrors the routing in
+`poopdeck-ai/skills/poopdeck-overview/SKILL.md` and `llms.txt` — keep them
+consistent.
 
 ## Where the code lives
 
 ```
 packages/               # TypeScript (@poopdeck.gl/*)
   core/                 # STTArchive reader, decoder pool, OPFS cache, render kernel
-  layers/               # deck.gl backend (primary)
+  layers/               # deck.gl backend (default)
   three/ maplibre/ cesium/   # alternate renderer backends
   playback/ react/      # clock + governor + React UI
   mcp/                  # MCP server (@poopdeck.gl/mcp)
-examples/showcase/      # interactive demo app (deck.gl + MapLibre + Three)
+examples/showcase/      # interactive demo app (deck.gl + MapLibre + Three + Cesium)
 examples/minimal/       # the published packages, installed from npm — the smoke test
 tools/                  # bench (frame cost, policy replay), perf, render-test (pixels)
 docs/                   # API reference + guides + the VENDORED spec (see .stt-sync.json)
@@ -113,15 +124,17 @@ poopdeck-ai/            # Claude Code plugin (Agent Skills + MCP server wiring)
 scripts/sync-stt.mjs    # vendors docs + conformance vectors + status from upstream
 ```
 
-Not here, and upstream instead: `crates/` (stt-core, stt-build, stt-optimize,
+Not here, and upstream instead: `stt:crates/` (stt-core, stt-build, stt-optimize,
 stt-wasm, the `spatiotemporal-tiles` facade), `stt:tools/stt-generate/`,
 `stt:scripts/data-generation/` (the Python extractors), and the R2 publishing
 scripts.
 
 ## Where the docs live — key entry points
 
+- `docs/README.md` — the corpus index; it covers both repositories.
+- `docs/intro/quickstart.md` — a hosted dataset animating in five minutes.
 - `docs/intro/concepts.md` — the space×time tile model, packed archives, playback.
-- `docs/intro/choosing.md` — static vs served; which renderer.
+- `docs/intro/choosing.md` — static vs served; which renderer; which layer.
 - `docs/intro/status-and-support.md` — maturity tiers, compatibility window, and
   support expectations; `project-status.json` is the machine-readable summary.
 - `docs/intro/glossary.md` — canonical product, format, archive, and API names.
@@ -129,9 +142,14 @@ scripts.
 - `docs/api/cli-reference.md` — canonical flags for every `stt-*` CLI.
 - `docs/spec/stt-packed-format.md` — the on-disk format (manifest + packs +
   directory v6; machine-checkable schema: `docs/spec/manifest.schema.json`).
+- `docs/spec/backend-capabilities.md` — generated backend × capability × layer-kind
+  matrix; the only correct answer to "does backend X support Y".
 - `docs/architecture/data-format.md` — the per-tile Arrow layer-frame encoding.
 - `docs/guides/` — task guides (`csv-quickstart`, `tuning-tiles`, `deploying`,
   `export`, `python`, `data-generation`, `wasm`, `ai-suite`).
+- `docs/roadmap/README.md` — decision records and the **only** backlog of open
+  renderer work. Not published to the site; the format/tiler backlog is the
+  upstream register.
 
 ## Build / test basics
 
@@ -151,16 +169,18 @@ pnpm --filter @poopdeck.gl/showcase dev
 pnpm project:check      # project-status.json vs the manifests
 pnpm stt:check          # vendored artifacts vs upstream
 pnpm docs:links
+pnpm docs:snippets      # typechecks the docs' TS samples (needs a build first)
+node scripts/sync-versions.mjs --check       # the Claude Code plugin surface
+node scripts/gen-capabilities-doc.mjs --check  # backend-capabilities.md (after a build)
 ```
 
-The CLIs install separately via `cargo install spatiotemporal-tiles`. Only run
-commands you can verify from the manifests — do not invent scripts.
+Only run commands you can verify from the manifests — do not invent scripts.
 
 ## How agents get help
 
 - **Claude Code:** install the **`poopdeck-ai` plugin** from this repo root — it
   wires an **MCP server** (`@poopdeck.gl/mcp`, live dataset discovery / analysis /
-  `@deck.gl/json` map composition / gated build+validate) _and_ a set of **Agent
+  `@deck.gl/json` map composition / gated build+validate) _and_ ten **Agent
   Skills** that route between the CLIs and MCP tools. Start with the
   `poopdeck-overview` skill (the router). See `poopdeck-ai/README.md`.
 - **Other harnesses (Cursor / Codex / Gemini CLI):** the Skills are authored to
@@ -170,8 +190,6 @@ commands you can verify from the manifests — do not invent scripts.
 - **Published docs for retrieval:** <https://poopdeck.gl/llms.txt> (index) and
   <https://poopdeck.gl/llms-full.txt> (full corpus). The in-repo `llms.txt`
   mirrors the index.
-- This `AGENTS.md` is the cross-harness entry point; it complements the plugin
-  rather than replacing it.
 
 ## Working conventions
 

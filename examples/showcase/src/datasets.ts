@@ -3651,7 +3651,7 @@ const rawDatasets: Dataset[] = [
     // The render window now spans two buckets, so tile SELECTION has to reach
     // at least as far or the incoming frame's tiles arrive after it should
     // already be fading in — the same failure the iso-lines cut documents in
-    // storm-4d-greenfield-2026-07.md §10.3.
+    // stt:docs/roadmap/storm-4d-greenfield-2026-07.md §10.3.
     tileLoadTimeWindow: 600000,
     // 9.5 h over ~120 s (~285×), matching both Greenfield cuts so switching
     // between the three reads as the same event at the same speed.
@@ -3689,11 +3689,11 @@ const rawDatasets: Dataset[] = [
     filterProperty: 'dbz',
     // Floor is 30 dBZ, not Greenfield's 10: a national 9.5 h window at every
     // detectable echo is 411 M points, which no machine here can tile (see
-    // stt-packed-format-decisions.md §11). 30 dBZ is the convective-core
-    // threshold — it keeps every thunderstorm in the country and drops the
-    // light-rain shield, which at a continental framing was a flat grey haze
-    // over the structure anyway. Re-flooring is a 5-minute rebuild from the
-    // cached master parquet (mrms_refloor.py), NOT a re-decode.
+    // stt:docs/roadmap/stt-packed-format-decisions.md §11). 30 dBZ is the
+    // convective-core threshold — it keeps every thunderstorm in the country
+    // and drops the light-rain shield, which at a continental framing was a
+    // flat grey haze over the structure anyway. Re-flooring is a 5-minute
+    // rebuild from the cached master parquet (mrms_refloor.py), NOT a re-decode.
     filterRange: [30, 95],
     // National cells: 2 km grid, so a small world-space billboard with a pixel
     // floor reads as a continental cloud at z4 and resolves to cells on the

@@ -1,53 +1,58 @@
 # poopdeck.gl / SpatioTemporal Tiles (STT)
 
 > Time-aware vector tiles. STT packs large spatiotemporal datasets (points, paths,
-> polygons, trips, flows, events) into streamable, animated `.stt` archives and
-> renders them with deck.gl (or Three.js/WebGPU, MapLibre, Cesium). Rust CLIs
-> build / optimize / serve the archives; TypeScript packages read and render them.
-> An MCP server + Agent Skills (the `poopdeck-ai` plugin) provide the AI surface.
+> polygons, trips, flows, events) into streamable, animated `.stt` archives;
+> poopdeck.gl reads them in TypeScript and renders them with deck.gl (or
+> Three.js/WebGPU, MapLibre, Cesium) on a playback clock. An MCP server + Agent
+> Skills (the `poopdeck-ai` plugin) are the AI surface.
 
-> **Two repositories.** The format and the Rust toolchain live in
-> <https://github.com/BertCh/spatiotemporal-tiles>; the renderers, the playback
-> engine and this site live in <https://github.com/BertCh/poopdeck.gl>. The
-> documentation below is one corpus regardless — the format pages are authored
-> upstream and vendored into the site.
+> **Two repositories, one corpus.** poopdeck.gl owns the renderers, the playback
+> engine and this site (<https://github.com/BertCh/poopdeck.gl>). The archive
+> format and the Rust CLIs that build, optimize and serve archives are NOT here —
+> they live in <https://github.com/BertCh/spatiotemporal-tiles>, and their pages
+> below are authored there and vendored into this site.
 
 > **For AI agents:** the entire published documentation corpus is available as a
-> single plain-text document at https://poopdeck.gl/llms-full.txt, and each doc
-> below is mirrored under https://poopdeck.gl/llms/.
+> single plain-text document at https://poopdeck.gl/llms-full.txt, and every page
+> under `docs/{intro,architecture,spec,api,guides}` is mirrored under
+> https://poopdeck.gl/llms/. Entries outside that corpus — the roadmap records
+> and repo-root files — link to GitHub instead.
 
 ## Start here
 - [Agent guide (AGENTS.md)](https://github.com/BertCh/poopdeck.gl/blob/main/AGENTS.md): how coding agents should work in this repo.
 - [Quickstart](docs/intro/quickstart.md): install, render a hosted dataset, add playback — React or vanilla JS.
 - [Concepts](docs/intro/concepts.md): the space×time tile model, packed archives, playback.
-- [Choosing an approach](docs/intro/choosing.md): static vs served; which renderer.
+- [Choosing an approach](docs/intro/choosing.md): does STT fit; static vs served.
+- [Choosing a renderer](docs/intro/choosing-a-renderer.md): which backend, which layer, which playback API.
 - [Status and support](docs/intro/status-and-support.md): maturity tiers, compatibility window, and support expectations.
 - [Glossary and naming](docs/intro/glossary.md): canonical project, archive, format, and API terminology.
 - [CSV quickstart](docs/guides/csv-quickstart.md): fastest path from a table to a map.
 - [System overview](docs/architecture/system-overview.md): how the pieces fit.
 
-## Command-line tools
+## Command-line tools (the upstream Rust toolchain)
 - [CLI reference](docs/api/cli-reference.md): canonical flags for the five installed binaries — `stt-build`, `stt-optimize`, `stt-validate`, `stt-bundle`, `stt-serve` — plus the repo-only `stt-generate`.
-- [Build a dataset](docs/guides/csv-quickstart.md): `stt-build` from GeoParquet / PostGIS / DuckDB.
-- [Tune & lint tiles](docs/guides/tuning-tiles.md): `stt-optimize` inspect/doctor/diff/order-audit; publish encoding.
+- [Tune & lint tiles](docs/guides/tuning-tiles.md): `stt-optimize` analyze/recommend/inspect/doctor/diff/order-audit; publish encoding.
+- [Export an archive](docs/guides/export.md): `stt-optimize export` back to GeoParquet 1.1.
 - [Serve & deploy](docs/guides/deploying.md): `stt-serve` and static publishing to a CDN/R2.
+- [Data generation](docs/guides/data-generation.md): the reference `stt-generate` datasets, buildable only from the upstream checkout.
 
 ## Rendering
 - [SpatioTemporalLayer](docs/api/spatiotemporal-layer.md): the deck.gl chassis (time/tier/scrubLod/prefetch props).
-- [deck.gl integration](docs/architecture/deckgl-integration.md): the layer families and how they compose.
+- [deck.gl integration](docs/architecture/deckgl-integration.md): how `SpatioTemporalLayer` maps onto `TileLayer`, why the tileset is custom, and where it departs from stock deck.gl.
 - [Extensions](docs/api/extensions.md): TimeFilter, DataFilter, CategoryColor, CollisionFilter, ChevronFlow, Splat.
-- [Playback](docs/api/stt-player.md): `SttPlayer` / `PlaybackGovernor` and the React bindings.
+- [Tileset](docs/api/spatiotemporal-tileset.md): `(z, x, y, t)` selection, request scheduling, prefetch, and the buffer model in `@poopdeck.gl/core`.
+- [Playback](docs/api/stt-player.md): `SttPlayer`, the facade over the rAF clock and the buffering `PlaybackGovernor`; [React bindings](docs/api/stt-react.md) wrap it in hooks and controls.
+- Alternate backends — [Three.js/WebGPU](docs/api/stt-three.md), [MapLibre](docs/api/stt-maplibre.md), [Cesium](docs/api/stt-cesium.md): the non-deck renderers, same decoded tiles.
+- [Backend capability matrix](docs/spec/backend-capabilities.md): generated from each backend's `BackendDescriptor` — which capability and layer kind each one implements.
 
 ## Format & protocol
 - [Packed format spec](docs/spec/stt-packed-format.md): manifest + content-addressed packs, directory v6, quant/zstd.
 - [Serve protocol](docs/spec/stt-serve-protocol.md): dynamic tile routes.
 - [Time model](docs/spec/time-model.md): buckets, LOD pyramid, temporal bounds.
+- [Conformance](docs/spec/conformance.md): what a conformant writer/reader must do, plus the golden fixtures and validator to test against.
 
 ## AI-assisted suite
-- [AI Suite guide](docs/guides/ai-suite.md): what the suite is (MCP + Agent Skills), install the `poopdeck-ai` plugin, the skills, worked flows, and the security model.
+- [AI Suite guide](docs/guides/ai-suite.md): what the suite is (MCP + ten Agent Skills), install the `poopdeck-ai` plugin, worked flows, and the security model.
 - [MCP server reference](docs/api/stt-mcp.md): `@poopdeck.gl/mcp` (`stt-mcp`) — dataset discovery, analysis, `@deck.gl/json` map composition, gated build/validate; tools, resources, `--allow-cli`.
 - [Plugin](poopdeck-ai/README.md): the `poopdeck-ai` Claude Code plugin bundling the MCP server + Agent Skills.
 - [Skills + MCP design record](docs/roadmap/ai-suite.md): the MCP-vs-Skills complementarity verdict, the security model, and the as-built tool/skill inventory.
-
-## Optional
-- [Data generation](docs/guides/data-generation.md): the reference `stt-generate` datasets (upstream repository).

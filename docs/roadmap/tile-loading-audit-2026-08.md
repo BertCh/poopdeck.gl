@@ -519,7 +519,7 @@ likely to re-suspect:
 
 ## 4. Doc ↔ code drift (consolidated)
 
-- `optimization-conformance-2026-08.md:28` "FS-1…FS-3 3/3" vs six `it.fails('PENDING FS-3 REPAIR')`;
+- `stt:docs/roadmap/optimization-conformance-2026-08.md:28` "FS-1…FS-3 3/3" vs six `it.fails('PENDING FS-3 REPAIR')`;
   `tile-loading-3d-2026-07.md:290,347` "Wave 3 NOT built" vs FS-1/FS-2 landed 2026-08-11 (behind a
   default-off `selectionMode`, enabled nowhere, not wired for non-deck backends). Stale in opposite
   directions. Same doc counts M5/CO-3/CO-4 as landed; no consumer wires them.
@@ -547,11 +547,11 @@ governor.md` + `playback-and-loading.md` document a `configureSharedScheduler({e
   the two demos it measured; §8.4 R1 and the bench README "standing blocker" describe a v2/v3 skew
   that is resolved (reader accepts 2..3, local + deployed fleet v3, cold-start harness runs today).
 - `how/DecodePipeline.tsx` pool size / least-pending / "OPFS skips workers" / "cancelled mid-pool"
-  — none match the code; `optimization-implementation-plan-2026-08.md:426` names BH-7 "loop-aware
+  — none match the code; `stt:docs/roadmap/optimization-implementation-plan-2026-08.md:426` names BH-7 "loop-aware
   eviction rotation" while the tree uses BH-7 for decode batching (ID collision);
   `compression.ts:60-65` "performance-neutral streaming" — D1.
 - `datasets.ts` `animal-migration` "single z0 tile per bucket" — 139 tiles per one-day window;
-  `demos-and-datasets.md` claims the time-major build path landed for `nwm-rivers-2019` (hilbert3
+  `stt:docs/roadmap/demos-and-datasets.md` claims the time-major build path landed for `nwm-rivers-2019` (hilbert3
   in the tree); README B4 body vs its discharge commit; `index.mjs` "no worker pool";
   `policy-record.mjs` "no package publishes `tileset.viewport`"; `tile-decoder.ts:12-14` inline
   timing range (measured 0.46–1.3 ms typical, 23 ms storm4d-volume).
@@ -669,7 +669,7 @@ gate works; the count gate is the missing half.
 
 ## 8. Method, caveats, reusable pieces
 
-- Ten auditors, each given the same brief (`brief-common.md` in the evidence appendix), the
+- Ten auditors, each given the same brief, the
   architecture map, the known-and-fixed list (so nothing already closed was re-reported), and the
   instruction to refute before reporting. ~3.3 M tokens; ~4 h wall.
 - Consolidator re-verification: A1 (code + live + the pin warning in console), A3, A4, A5, B2, B3,

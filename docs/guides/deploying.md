@@ -30,19 +30,32 @@ Two rules follow from the immutable half:
 
 ## Cloudflare R2 (the reference deploy)
 
-`scripts/r2-sync.sh` implements all of the above with rclone: an immutable
-pass for `packs/**` + `index/**`, a manifest pass, and a retention-aware GC
-pass. Credentials go in `.env` at the repo root (see `.env.r2.example`).
+`scripts/r2-sync.sh` implements all of the above with rclone: a grace-rule read
+of the deployed manifests, an immutable pass for `packs/**` + `index/**`, a
+manifest pass, three sidecar passes (AV scene bundles, `/worlds` bundles, and
+root-level `*.meta.json` / `*.bin`) that ride the short-TTL regime because their
+filenames are stable while their bytes change, and a retention-aware GC pass
+that touches only `packs/` and `index/`. Credentials go in `.env` at the repo
+root (see `.env.r2.example`).
 
 ```bash
 cp .env.r2.example .env          # fill in R2 account / token / bucket
 scripts/r2-sync.sh --dry-run     # review what would change
-scripts/r2-sync.sh               # sync everything under public/data + GC
+scripts/r2-sync.sh               # sync everything under data-fleet/ + GC
 scripts/r2-sync.sh flights       # one dataset, e.g. after a rebuild
 scripts/r2-sync.sh --no-prune    # upload only, defer GC — use for major republishes
 scripts/r2-sync.sh --prune-now   # GC without the retention window (disaster cleanup)
-STT_DATA_DIR=path/to/staging scripts/r2-sync.sh   # deploy a staging tree
+STT_DATA_DIR=path/to/staging scripts/r2-sync.sh   # deploy a COMPLETE staging tree
 ```
+
+An R2 bucket serves nothing publicly until a domain is attached to it (R2 →
+Settings → Public access → Custom domain). That hostname is what the viewer and
+the probes below use; it goes in `.env` as `R2_PUBLIC_BASE_URL`.
+
+`STT_DATA_DIR` must point at a **complete** tree: GC judges "unreferenced"
+against the local manifests it can see, so a partial staging tree marks every
+dataset it omits for deletion. Pair a partial tree with `--no-prune`, or pass
+the single stem instead.
 
 ### GC, the grace rule, and major republishes
 
@@ -81,7 +94,7 @@ sufficient**: the whole "a warm load is served entirely from edge cache" claim
 lives or dies on what the CDN in front of the bucket decides to do with those
 headers, and both halves of the two-regime table can be silently defeated by
 zone configuration. Sync uploads the bytes; only a probe tells you the edge
-agreed. Two checks, both cheap enough to run on every deploy.
+agreed — two checks, both cheap enough to run on every deploy.
 
 ### 1. Immutable objects must actually be cached
 
@@ -89,17 +102,8 @@ agreed. Two checks, both cheap enough to run on every deploy.
 `application/octet-stream`. Cloudflare's default cache behavior on a **generic
 proxied origin** is extension-driven, so unknown extensions come back
 `cf-cache-status: DYNAMIC` — never cached, every viewport range request going
-to origin — no matter how long the origin's `max-age` is. Setting the headers
-correctly at the origin is necessary but **not sufficient**, and nothing in the
+to origin — no matter how long the origin's `max-age` is, and nothing in the
 archive tells you the edge ignored them.
-
-> **Known defect on `tiles.poopdeck.gl` (verified 2026-07-24):** the probe below
-> currently returns **`DYNAMIC`** — on `bytes=0-1023`, on `bytes=0-65535`, and on
-> a full-object GET, repeated. The origin side is correct (`r2-sync.sh` uploads
-> `public, max-age=31536000, immutable` and that header survives to the client);
-> the edge simply never considered the object cacheable. Until a Cache Rule is
-> added, **every viewport range request is a full origin round-trip**, which is
-> exactly what the content-addressed-immutable-pack design exists to avoid.
 
 Probe with a **repeated ranged** request, because ranges are how the reader
 actually fetches tiles — a cacheable whole-object GET proves nothing about
@@ -144,12 +148,12 @@ curl -sS -o /dev/null -D - "$BASE/manifest.json" | grep -i '^cache-control:'
 # want: cache-control: public, max-age=60, must-revalidate
 ```
 
-On `tiles.poopdeck.gl` this probe **passes** as of 2026-07-24 — the manifest
-returns exactly the `max-age=60, must-revalidate` that `r2-sync.sh` uploads. Keep
-the check anyway: a zone-level Browser Cache TTL is a single dashboard setting
-away, it silently raises only the values _below_ it, and the symptom (a
-republish that stays invisible for hours to browsers that already hold a
-manifest) looks like a sync failure rather than a cache setting.
+`r2-sync.sh` uploads `max-age=60, must-revalidate`; a larger `max-age` on the
+response means a zone-level Browser Cache TTL is overriding it. Set the tiles
+hostname's Browser Cache TTL to "Respect existing headers", or fold it into the
+same Cache Rule. The symptom — a republish that stays invisible for hours to
+browsers already holding a manifest — reads as a sync failure rather than a
+cache setting, which is why the probe is worth running every deploy.
 
 Neither probe needs credentials — run them against the public hostname from
 anywhere, including from a CI job after `scripts/r2-sync.sh`.
@@ -179,7 +183,7 @@ from-source build is deploy-ready as written, with no separate repack step.
 Validate before syncing:
 
 ```bash
-target/release/stt-validate path/to/dataset/manifest.json
+stt-validate path/to/dataset
 ```
 
 ## When static isn't enough

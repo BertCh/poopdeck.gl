@@ -81,10 +81,15 @@ comments here cite them as `stt:docs/roadmap/<file>.md §N`.
 
 ### Measurements
 
-- [**measurements-2026-07.md**](./measurements-2026-07.md) — cold start:
-  requests and bytes to first frame across three archive shapes, with the
-  harness, the hardware, and the caveats. Four to five requests whether the
-  archive is 46 MB or 807 MB.
+- [**measurements-2026-07.md**](./measurements-2026-07.md) — the cold-start
+  method, the three archives at rest, and the caveats. Its headline, byte split,
+  wall times and probed-and-dropped list were superseded by the eight-dataset
+  run in measurements-2026-08.md §9 and are now pointers; the headings stay
+  because other records cite them by number.
+- [**measurements-2026-08.md**](./measurements-2026-08.md) — steady-state browser
+  frame cost (§1–§7, 2026-08-03) plus the optimization program's instrument table
+  and Phase-0 baselines (§8 onward, 2026-08-10). The harness is
+  `tools/bench/src/frame-cost.mjs`, and `ROUTE=` reaches `/drive` and `/worlds`.
 
 ---
 
@@ -98,11 +103,12 @@ them. Ordered by what blocks what, not by size.
 2026-08-26 covered both stacks; on 2026-08-26 it was split along with the
 repositories. What stayed here is the renderer's queue, and it is dominated by
 **manual verification** rather than library code: browser sign-off has been
-accumulating since 2026-07-22 (L2), and the two ecosystem claims (T1, T2) are
-unchanged by the split except that there are now two repositories making them.
-Items about the archive format, the tiler, the optimizer, the published data
-fleet and the generation scripts moved upstream — including the whole B4 fleet
-rebuild record, K2, K9, K11, K12, L1 and DX2/DX3.
+accumulating since 2026-07-22 (L2). The split's own tail closed on 2026-08-26 —
+both repositories are public, the vendor pin is exercised on GitHub's runners,
+and 0.8.0 shipped independently on npm and crates.io — leaving one ecosystem
+residual (T3, npm provenance). Items about the archive format, the tiler, the
+optimizer, the published data fleet and the generation scripts moved upstream —
+including the whole B4 fleet rebuild record, K2, K9, K11, K12, L1 and DX2/DX3.
 
 The last whole-repo green baseline recorded here (2026-07-31) covered both
 stacks: **45 Rust test targets at `--all-features` (1,264 tests), the six
@@ -114,26 +120,6 @@ repository's half; the Rust and Python halves are now upstream's. The 2026-07-31
 lesson behind that phrasing — that `cargo test --workspace` alone was hiding
 four red jobs — is recorded in T2 and in
 [db-input-adaptors.md §5](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/db-input-adaptors.md).
-
-### S — The split's own tail
-
-**S1. The vendored seam is unpinned and unproven end to end.** The split landed
-with `.stt-sync.json` at `"ref": "UNPINNED"`: `pnpm stt:check` therefore refuses
-to report success without `STT_REPO` set to a local checkout, which is correct
-(a gate that cannot verify must not pass) but means the CI half has never
-executed. Three vendored artifacts ride on it — the 23 doc pages, the six
-conformance vector trees under `packages/core/test/fixtures/`, and the `stt`
-block of `project-status.json`. **Accept:** the STT repository's split commit is
-pushed, `pnpm stt:sync --ref <sha>` records it, and one CI run of `pnpm
-stt:check` passes without a sibling checkout.
-
-**S2. The first post-split release has not been cut.** npm and crates.io both
-read 0.7.0, which is now a coincidence rather than a promise. The two stacks
-release independently from here and are related by the archive's `formatVersion`
-([repo-split-2026-08.md §2.3](./repo-split-2026-08.md)). **Accept:** `0.8.0` is
-cut here on its own changeset, with a CHANGELOG entry that states the new
-relationship explicitly so a consumer reading two version numbers does not infer
-lockstep that no longer exists.
 
 ### L — Live defects on poopdeck.gl today
 
@@ -225,46 +211,41 @@ either.
 
 ### T — Claims the repo makes that the world does not back
 
-**T1. The published repository URL 404s — and the split doubled the problem.**
-`https://github.com/BertCh/spatiotemporal-tiles` returns **404** (re-verified
-2026-08-24; the repo is private), and it is still the `repository`/`homepage`/
-`bugs` on all eight published npm packages plus the `GITHUB_BLOB_BASE` the docs
-site uses for source links. Since 2026-08-26 there is a **second** URL in the
-same state: this repository's own `https://github.com/BertCh/poopdeck.gl`, which
-does not exist on the remote at all yet, and which every package manifest here
-now names. npm provenance requires a public repo, so this gates the next
-release. **Accept:** both repositories exist and are public, every manifest
-names the right one of the two, and `.stt-sync.json`'s fetch path resolves
-without credentials.
+**T3. Published packages carry no provenance, and the trusted-publisher target
+names the wrong repository.** The 0.8.0 publish ran on the bootstrap
+`NPM_TOKEN`. `.github/workflows/release-npm.yml` already requests
+`id-token: write` (:11), but its own instructions (:46–50) still say to
+configure the Trusted Publisher against repo `BertCh/spatiotemporal-tiles` —
+the packages live in `BertCh/poopdeck.gl` — and still defer
+`NPM_CONFIG_PROVENANCE: 'true'` until "the repository is public", which it has
+been since 2026-08-26. **Accept:** each of the seven public packages has a
+Trusted Publisher on `BertCh/poopdeck.gl` / `release-npm.yml`,
+`NPM_CONFIG_PROVENANCE` is set, `NPM_TOKEN` is revoked, and one release shows a
+provenance attestation on the registry.
 
-**T2. GitHub Actions has never run; the CI gates are config that only ever
-executed by hand.** Zero bot commits across the repo's history and no release PR.
-_(Not re-verifiable here: no `gh` CLI in this environment. Last verified
-2026-07-24.)_ `ci.yml` now carries `cargo fmt --check`, the curated clippy deny
-set, `oxlint` and `oxfmt --check` — the older claim that the gates were
-"deliberately absent" no longer describes the file. Running every job locally on
-2026-07-31 found **four red**, each invisible to `cargo test --workspace`:
-`rust-feature-lanes` (3 of 6), `rust-all-features`, `rust-lint` (2 files) and
-`ts-lint` (11 files). All are fixed. The durable half of that finding — that two
-DB input adaptors sit behind non-default features where the default suite will
-never report a shared-type change — lives in
-[db-input-adaptors.md §5](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/db-input-adaptors.md). **Accept:** one green run on
-GitHub's own runners.
+_(Verification note: `curl https://api.github.com/repos/<owner>/<repo>/actions/runs`
+answers "did CI run" with no credentials and no `gh` CLI.)_
 
 ### K — Known defects with a named fix
 
 Each is small, real, and has its analysis written down where it belongs. None
 blocked the completed 0.6.0 release. K2, K9, K11 and K12 are archive-format and
-tiler defects and moved upstream; the numbering is left alone so existing
-references keep resolving.
+tiler defects and moved upstream, and K5 is discharged below; the numbering is
+left alone so existing references keep resolving.
 
-**K3. The capability matrix cannot distinguish native from fallback.** The
-generated matrix lets three auditors read three different coverage numbers for
-the same descriptor; `gen-capabilities-doc.mjs` should render native /
-declared-with-fallback / bare-referral as distinct columns. _(The other half of
-this entry is closed: Cesium no longer declares `mesh → boundingBox`,
-`text → icon` or `hexbin → h3Summary`, the three fallbacks it could not render,
-and gate (c) keeps the copy from coming back.)_
+**K3. The `## Capabilities` table cannot say "declared, but CPU-emulated".** The
+layer-kinds half of this entry is closed: `layerCell`
+(`packages/core/src/render/capabilities-doc.ts:33`) renders `✅` native,
+`↳ <kind>` fallback and `—` unsupported, and the generated matrix is legended
+that way (`docs/spec/backend-capabilities.md:41`, one fallback left in the whole
+table). What is still boolean is the **capabilities** table
+(`capabilities-doc.ts:94`, `d.capabilities[cap] ? '✅' : '—'`), which forces an
+emulated capability to be declared outright false — cesium's `gpuHeatmap` is a
+CPU field and so declares `false`
+(`packages/cesium/src/backend-descriptor.ts:97`), reading identically to "cannot
+do this at all". Fix site is `capabilities-doc.ts`, not the generator script,
+which only imports `renderCapabilitiesMarkdown`
+(`scripts/gen-capabilities-doc.mjs:20`).
 ([renderer §4.1](./renderer-architecture.md))
 
 **K4. Capability resolution is not host-aware.** maplibre declares
@@ -276,15 +257,6 @@ express "true on v5+", and `hostApiRange` remains absent from the tree (grep,
 structurally cannot see this class: it checks claims against evidence inside the
 package, and the package tests run against a mock.
 ([renderer §4.2](./renderer-architecture.md))
-
-**K5. Two reader-side seams the byte break left open.** `toGeoArrowTable()` leaks
-the wire shape (a GeoArrow consumer sees a `UInt32` `start_time` and a `UInt16`
-`vertex_value`, because the re-inflation lives in `tableToBinaryFeatures` where
-the CPU win is); and `partIndices` is published by the TS reader but consumed by
-no renderer — `layers`, `three` and `maplibre` still treat every polygon feature
-as single-part. Closing the first means materializing the very columns the change
-removed, so it needs a decision, not a patch.
-([format §10.4](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/stt-packed-format-decisions.md))
 
 **K6. The AV render-mode set is declared in four-plus drifting places** — the
 `renderModes` existence-probe memo in `AvCockpitImpl.tsx`, the `datasets.ts` regex
@@ -350,6 +322,35 @@ the peer session's BH-7 decoder change; the overview storyboard on the three
 long-sparse archives is now rejected `over-count` by design). Not yet:
 browser sign-off of the fixed demos (L2), and a re-measure on a low-memory
 device for A4.
+
+### Discharged (post-split)
+
+- **S1 — the vendored seam is pinned and proven.** `.stt-sync.json` records
+  `f4c4a95` (upstream's 0.8.0 release commit) and `pnpm stt:check` passes on
+  GitHub's runners with no sibling checkout. The vendored set is 25 entries, not
+  the 23 the split record and `ci.yml` still say — 20 `.md` pages and 5 `.json`
+  contracts; `.stt-sync.json` is the count.
+- **S2 — 0.8.0 was cut independently** on npm (seven packages) and crates.io on
+  2026-08-26, and `CHANGELOG.md` states the end of lockstep in as many words. The
+  two stacks are now related only by the archive's `formatVersion`
+  ([repo-split-2026-08.md §2.3](./repo-split-2026-08.md)).
+- **T1 — both repositories are public.** `BertCh/poopdeck.gl` and
+  `BertCh/spatiotemporal-tiles` both resolve, every package manifest names the
+  first, and `.stt-sync.json`'s fetch path needs no credentials. The provenance
+  half of the old entry is still open as T3.
+- **T2 — GitHub Actions runs, and is green.** The `CI` and `Release npm`
+  workflows both completed `success` on `main` at `027e2f6`
+  (2026-08-26T22:33:34Z), across 14 runs including three dependabot branches.
+  The durable half of the finding — that a default-feature suite cannot see a
+  shared-type change behind a non-default feature — is upstream in
+  [db-input-adaptors.md §5](https://github.com/BertCh/spatiotemporal-tiles/blob/main/docs/roadmap/db-input-adaptors.md).
+- **K5 — both reader-side seams are closed.** The compact-time and
+  quantized-vertex re-inflation moved to `reinflateCoreTable`
+  (`packages/core/src/tile.ts`), which runs on the core table before properties
+  are appended so `toGeoArrowTable()` and `tableToBinaryFeatures` hand out the
+  same classic shape; and `partIndices` is now read by the shared tessellation
+  dispatch (`packages/core/src/render/geometry.ts`, which all three backends
+  consume) and by cesium's polygon builder (`packages/cesium/src/lib/polygons.ts`).
 
 ### Discharged (pre-split)
 

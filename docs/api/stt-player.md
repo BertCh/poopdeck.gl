@@ -88,15 +88,13 @@ new SttPlayer(options: SttPlayerOptions)
 
 ### Playback
 
-| Member                                          | Description                                                                                |
-| :---------------------------------------------- | :----------------------------------------------------------------------------------------- |
-| `play()` / `pause()`                            | Gated play / sticky pause (see mapping table).                                             |
-| `paused` / `ended` / `state` / `isCreeping`     | Intent, boundary-parked flag, governor machine state, degraded-creep flag.                 |
-| `currentTime` get/set                           | Playhead; setter is a committed seek.                                                      |
-| `duration` / `seekable` / `setTimeRange(range)` | Range span / window / replacement (dataset switch).                                        |
-| `playbackRate` get/set                          | Multiplier; setter applies `baseRate × rate` to the clock and fires `'ratechange'`.        |
-| `baseRate` get/set                              | The per-dataset "1×"; setter re-applies the effective speed without firing `'ratechange'`. |
-| `buffered`                                      | Loaded time ranges (`[]` before the source arrives).                                       |
+Everything in the mapping table above, plus:
+
+| Member                | Description                                                                                |
+| :-------------------- | :----------------------------------------------------------------------------------------- |
+| `isCreeping`          | Degraded-creep flag: playing, pinned to the buffered frontier at data-arrival rate.        |
+| `baseRate` get/set    | The per-dataset "1×"; setter re-applies the effective speed without firing `'ratechange'`. |
+| `setTimeRange(range)` | Replace the range (a dataset switch) — re-bases `duration` and `seekable`.                 |
 
 ### Scrubbing
 

@@ -24,33 +24,58 @@ import {
 } from '@poopdeck.gl/core';
 
 interface TileDecoder {
-  decode(args: {
-    id: TileId;
-    timeRange: TimeRange;
-    compressed: ArrayBuffer;
-    compression: Compression;
-    expectedUncompressedSize: number;
-  }): Promise<Tile>;
+  decode(args: DecodeArgs): Promise<Tile>;
 
   /** Release worker resources, if any. */
   finalize(): void;
+
+  /**
+   * OPTIONAL: install the dataset's schema-template registry (built and
+   * blake3-validated from `manifest.schemas` at archive open).
+   *
+   * Distribution contract (NORMATIVE): the archive calls this once per
+   * decoder; a pool implementation MUST (re)send the registry to every worker
+   * on EVERY spawn AND respawn, BEFORE dispatching decodes to it. A decode
+   * that reaches a hash reference without the registry rejects descriptively
+   * — never a silently empty tile.
+   */
+  setTemplates?(templates: TemplateRegistry): void;
 }
 ```
+
+`DecodeArgs`:
+
+| Field                      | Type                            | Description                                                                                                                                                                                                                           |
+| :------------------------- | :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                       | `TileId`                        | The tile identity.                                                                                                                                                                                                                    |
+| `timeRange`                | `TimeRange`                     | The tile's temporal span, from the directory.                                                                                                                                                                                         |
+| `compressed`               | `ArrayBuffer`                   | The compressed blob bytes.                                                                                                                                                                                                            |
+| `compression`              | `Compression`                   | Its codec.                                                                                                                                                                                                                            |
+| `expectedUncompressedSize` | `number`                        | Directory-declared decompressed length. MANDATORY — it is both the decompression-bomb output cap and the authority checked after decode. Callers starting from an already-decompressed payload pass the same directory-declared size. |
+| `expectedCrc32c`           | `number`                        | Directory CRC-32C of `compressed`, verified BEFORE decompression (off the main thread on the worker path). Omitted when the directory recorded no checksum, or when the input is already decompressed (OPFS warm hits).               |
+| `onPayload`                | `(payload: Uint8Array) => void` | Hand-back of the DECOMPRESSED bytes, invoked before the decode promise resolves, so a following OPFS write reuses them instead of re-decompressing. Decoders that skip it just cost one extra decompress.                             |
+| `signal`                   | `AbortSignal`                   | Abort. `WorkerTileDecoder` keeps queued work on the host, so an abort before worker dispatch spends no decode CPU and copies no payload.                                                                                              |
+| `formatVersion`            | `number`                        | The manifest's declared packed version, threaded through for the spec §5.2 authority check. Accepted and forwarded, but `decodeTile` does not currently read it — the frame escape is what discriminates.                             |
+| `priority`                 | `number`                        | Decode priority, LOWER = more urgent. Defaults to `DEFAULT_DECODE_PRIORITY` (`0`, the most urgent class — the uninstrumented callers are the warm/interactive paths). `InlineTileDecoder` ignores it.                                 |
 
 Implementations:
 
 - **`InlineTileDecoder`** — synchronous decode on the calling thread.
   Used in Node tests and as the fallback in browsers when module workers
   fail to construct.
-- **`WorkerTileDecoder`** — pool of 1–4 module workers (sized from
-  `navigator.hardwareConcurrency - 1`, capped at 4; override via the
-  constructor's `{ poolSize?, workerUrl? }`) that runs
-  decompression, Arrow IPC parsing, and binary-feature extraction off the
-  main thread. Each worker receives one active request while later work stays
-  in a host-side queue, so an aborted queued tile is removed before it consumes
-  worker CPU or copies its compressed payload. Decoded typed-array buffers
-  transfer (zero copy) back to the main thread.
-  Workers that crash are replaced; their in-flight requests are rejected.
+- **`WorkerTileDecoder`** — pool of module workers running decompression,
+  Arrow IPC parsing, and binary-feature extraction off the main thread. The
+  pool STARTS at `min(4, cores − 1)` and adapts upward to a hard ceiling of
+  `cores − 1` (cores read from `navigator.hardwareConcurrency`, clamped to
+  1..64; one core stays reserved for the render loop). Pass `poolSize` to the
+  constructor's `{ poolSize?, workerUrl? }` to pin it and disable adaptation.
+  There is ONE pool-wide host queue, served by decode priority
+  (`DecodeArgs.priority`, lower = more urgent), so a slow decode never strands
+  work behind it and the fetch stage's priority survives into decode. Payloads
+  stay on the host until a worker is free, so an aborted queued tile costs no
+  worker CPU and no payload copy. Decoded typed-array buffers transfer (zero
+  copy) back to the main thread. Workers that crash are replaced; their
+  in-flight requests are rejected.
 - **`createDefaultTileDecoder()`** — picks `WorkerTileDecoder` when the
   environment supports module workers, otherwise falls back to inline. Browser
   archives receive lightweight leases over one process-shared pool; the pool is
@@ -76,30 +101,24 @@ Decodes an **uncompressed** tile payload (the layer frame) into a `Tile`.
 `timeRange` is optional — when omitted it defaults to a zero-width range at
 the tile's own `t` (the worker / loaders.gl paths have no directory at hand).
 
-The current archive reader opens only packed `formatVersion: 3`, whose tile
-payload uses the v2 sectioned layer frame. The standalone decoder can also
-sniff the historical v1 layer-frame shape when no archive manifest is involved:
+`decodeTile` requires a v2 sectioned layer frame — the payload MUST open with
+the `0xFFFF` escape or it throws
+`payload is not a layer frame (missing the frame escape)`.
 
-- **v1** — `[u16 layerCount | flags]` followed by, per layer,
-  `[u16 nameLen][name][u32 ipcLen][pad][Arrow IPC stream]`. The leading u16's
-  top bit marks the _aligned_ frame (every IPC stream starts 8-byte aligned,
-  which is what lets apache-arrow wrap its buffers zero-copy); frames without
-  the flag carry no padding and parse identically. Needs no `options`.
-- **v2** — the sectioned, template-referencing frame (leading `0xFFFF`
-  escape). Each layer references a shared Arrow schema template by 16-byte
-  blake3-128 hash and carries only the IPC stream _tail_; the reader splices
-  `concat(template, tail)` back into a stock stream. Decoding a v2 frame that
-  references a template by hash **requires** the dataset's template registry
-  via `options.templates` — so a v2 dataset MUST be opened through its
-  manifest (where the registry is built and validated). Calling `decodeTile`
-  on a raw v2 payload without it throws a descriptive error.
+Inside that frame each layer references a shared Arrow schema template by
+16-byte blake3-128 hash and carries only the IPC stream _tail_; the reader
+splices `concat(template, tail)` back into a stock stream. Decoding a frame
+that references a template by hash **requires** the dataset's template registry
+via `options.templates` — so such a dataset MUST be opened through its manifest
+(where the registry is built and validated). Calling `decodeTile` on a raw
+payload without it throws a descriptive error.
 
-`options` is `DecodeTileOptions` (both fields optional for standalone decoding):
+`options` is `DecodeTileOptions` (both fields optional):
 
-| Field           | Type               | Description                                                                                                                                                                                                       |
-| :-------------- | :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `templates`     | `TemplateRegistry` | The `hash → template bytes` map built from `manifest.schemas` at archive open. Required to decode v2 frames that reference a template by hash; v1 and self-contained (inline-schema) v2 frames decode without it. |
-| `formatVersion` | `number`           | The manifest's declared packed version. Current archives pass `3`, which requires the v2 sectioned frame. Omit it only for standalone frame sniffing.                                                             |
+| Field           | Type               | Description                                                                                                                                                                                          |
+| :-------------- | :----------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `templates`     | `TemplateRegistry` | The `hash → template bytes` map built from `manifest.schemas` at archive open. Required to decode frames that reference a template by hash; self-contained (inline-schema) frames decode without it. |
+| `formatVersion` | `number`           | The manifest's declared packed version, accepted and threaded through for the spec §5.2 authority check. `decodeTile` does not currently read it — the frame escape is what discriminates.           |
 
 `TemplateRegistry` is `Map<string, Uint8Array>`.
 
@@ -107,33 +126,38 @@ sniff the historical v1 layer-frame shape when no archive manifest is involved:
 
 ```typescript
 interface Tile {
-  id: TileId; // { z, x, y, t }
+  id: TileId; // { z, x, y, t, variantId?, bucketMs? }
   timeRange: TimeRange; // { start, end } in Unix ms
-  layers: Layer[];
+  layers: STTTileLayer[];
 }
 
-interface Layer {
+interface STTTileLayer {
   name: string;
   extent: number; // always 0 — coordinates are real lon/lat, no quantization
   features: BinaryFeatures; // GPU-ready typed arrays
   geometryExtensionName: string; // 'geoarrow.point' | 'geoarrow.linestring' | 'geoarrow.polygon'
-  // ('' only for pre-v2 archives — treat as unknown)
+  // ('' means UNKNOWN — never default it to 'point')
   arrowTable?: Table; // the decoded GeoArrow record batch (absent after a worker hop)
   arrowIpc?: Uint8Array; // raw per-layer Arrow IPC bytes (cloneable; survives workers)
-  arrowIpcProps?: Uint8Array; // v2 only: the spliced PROPS IPC stream (present iff the layer has property columns)
-  tileMeta?: TileMetaJson; // v2 only: parsed TILE_META (plain JSON; survives workers; re-injected on rehydrate)
+  arrowIpcProps?: Uint8Array; // the spliced PROPS IPC stream (present iff the layer has property columns)
+  tileMeta?: TileMetaJson; // parsed TILE_META (plain JSON; survives workers; re-injected on rehydrate)
   arrowIpcDropped?: boolean; // set when retainArrowIpc dropped the IPC bytes — toGeoArrowTable() then throws
   coordinatesQuantized?: boolean; // true when the geometry leaf is stt:quant Int32 grid indices, not lon/lat
 }
 ```
 
+The decoded-layer type is `STTTileLayer`, not `Layer` — `@deck.gl/core` exports
+a `Layer` class, and the two cannot be imported into one module. `variantId`
+and `bucketMs` are part of tile IDENTITY (raw vs. summary payload; temporal-LOD
+tier), so derive registry keys with `tileKey()` rather than from `z/x/y/t`.
+
 `BinaryFeatures` is described in [Binary Features](./binary-features.md) —
 including numeric properties as `Float32Array` and categorical properties as
 a `{ indices: Uint16Array; categories: string[] }` dictionary ready for
-`CategoryColorExtension`. v2 tiles may additionally set `features.timesSorted`
+`CategoryColorExtension`. A tile may additionally set `features.timesSorted`
 when the frame's `TILE_META.sorted` flag declares the rows are stable-sorted
-by `start_time` (`undefined` for v1 tiles and synthetic fixtures — per the
-spec, readers MUST NOT assume sortedness without the flag).
+by `start_time` (`undefined` for synthetic fixtures — per the spec, readers
+MUST NOT assume sortedness without the flag).
 
 ## GeoArrow hand-off
 
@@ -151,16 +175,24 @@ new GeoArrowPathLayer({
 
 `toGeoArrowTable(layer)` returns an Arrow `Table` whose `geometry` field
 carries the standard `ARROW:extension:name` GeoArrow metadata — a valid
-input for `@geoarrow/deck.gl-layers` or Lonboard. It works on
-worker-decoded tiles too: the worker strips the non-cloneable `Table`
-before postMessage but ships the raw `arrowIpc` bytes, and
+input for `@geoarrow/deck.gl-layers` or Lonboard. Every time column
+(`start_time`, `end_time`, `vertex_time`) also carries the vis.gl
+`visgl:temporal-*` descriptor — the luma.gl vocabulary — completed here at
+hand-off for EVERY archive, including ones written before the encoder emitted
+any of it, and only here, because the compact time forms are not absolute
+until `mergeV2Layer` re-inflates them. Read it back with
+`readTemporalColumnInfo(table, column) → TemporalColumnInfo | null`.
+
+It works on worker-decoded tiles too: the worker strips the non-cloneable
+`Table` before postMessage but ships the raw `arrowIpc` bytes, and
 `toGeoArrowTable()` rehydrates (and memoizes) the Table lazily on first
-call — re-merging the spliced core/props streams for v2 layers. The returned
-Table shares buffers with the decoded tile — don't mutate it or hold it past
-the tile's lifetime.
+call — re-merging the spliced core/props streams for layers with property
+columns. Repeat calls return an IDENTICAL instance (deck.gl's shallow
+`data`-prop comparison depends on it). The returned Table shares buffers with
+the decoded tile — don't mutate it or hold it past the tile's lifetime.
 
 Whether those raw bytes are retained at all is governed by
-[`ArchiveOptions.retainArrowIpc`](#archive-options-integrity--memory) (default
+[`ArchiveOptions.retainArrowIpc`](#archive-options) (default
 `'auto'`, which drops them for coordinate-quantized layers). Calling
 `toGeoArrowTable()` on a layer whose bytes were dropped throws an error naming
 the option.
@@ -183,10 +215,14 @@ to its `currentTime` shader uniform. If you build a custom layer, pass
 
 ## Packed archive version
 
-The archive reader accepts exactly **`formatVersion: 3`** with directory v6.
-There is no legacy archive-reader branch; earlier archives must be rebuilt
-from source. A v3 dataset MUST be opened through its `manifest.json` — both the schema
-template registry (built from `manifest.schemas`) and the declared
+The archive reader OPENS `formatVersion` 2..3
+(`MIN_PACKED_FORMAT_VERSION..PACKED_FORMAT_VERSION`) and decodes directory
+codec 5..6; every writer emits 3 / 6, and `formatVersion: 1` is refused. The v2
+window is read-only and exists because several published archives have no
+reproducible source: v2 differs in the CONTAINER only (no `variants` registry,
+directory v5 with no per-entry `variantId`), and the tile payload is the same
+layer frame. A dataset MUST be opened through its `manifest.json` — both the
+schema template registry (built from `manifest.schemas`) and the declared
 `formatVersion` live there, and every decode forwards them (see
 [`decodeTile`'s options](#decodetile)). At open the reader:
 
@@ -198,24 +234,38 @@ template registry (built from `manifest.schemas`) and the declared
   unimplemented one would silently misdecode rather than fail — the reader
   rejects at open instead. The implemented set is exported as
   `KNOWN_MANIFEST_CAPABILITIES` (currently `'coord-quant'`, `'attr-quant'`,
-  `'elevation-fold'`, `'time-delta'`, and `'vertex-value-quant'`).
+  `'elevation-fold'`, `'time-delta'`, `'vertex-value-quant'`,
+  `'triangles-partial'`, and `'vertex-time-feature-anchor'`).
 - rejects any unrecognized `formatVersion` or `directoryVersion`.
 
-## Archive options: integrity & memory
+## Archive options
 
-`STTArchive` (constructed from a manifest URL, or `new STTArchive(options)`)
-accepts these `ArchiveOptions` fields governing checksum verification and the
-raw-IPC memory trade-off. All are optional.
+`STTArchive` is constructed from a manifest URL, or from an `ArchiveOptions`
+object whose only required field is `url`.
 
-| Option            | Type                | Default                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| :---------------- | :------------------ | :----------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `verifyChecksums` | `boolean`           | `true`                               | Verify each fetched blob's CRC-32C (from the directory) over its **compressed** bytes BEFORE decompression, on both the worker and inline decode paths. A mismatch rejects that tile's decode with a distinctive `crc32c mismatch` error through the normal per-tile error surface. Entries whose directory CRC is `0`/absent (synthetic archives) and OPFS-decompressed warm hits (no compressed bytes to check) skip verification. Pass `false` as a kill switch (the CRC cost is trivial next to zstd). |
-| `retainArrowIpc`  | `boolean \| 'auto'` | `'auto'`                             | Whether decoded layers keep their raw Arrow IPC bytes (`arrowIpc` / `arrowTable`) for lazy `toGeoArrowTable()`. `'auto'` drops the reference only for coordinate-quantized (`stt:quant`) layers — whose tables are not literal GeoArrow anyway — and keeps it everywhere `toGeoArrowTable()` is valid. `true` always keeps; `false` always drops (smallest memory). `toGeoArrowTable()` on a dropped layer throws an error naming this option.                                                             |
-| `maxCacheTiles`   | `number`            | 2,000 desktop / 1,000 low-memory     | Maximum compressed tile entries retained by this archive. The cache is insertion-ordered LRU; pass `0` to disable it.                                                                                                                                                                                                                                                                                                                                                                                      |
-| `maxCacheBytes`   | `number`            | 512 MiB desktop / 256 MiB low-memory | Maximum compressed bytes retained by this archive. A process-wide LRU applies the same device-aware byte ceiling across all archives, so multi-source maps cannot multiply it. Pass `0` to disable the compressed cache.                                                                                                                                                                                                                                                                                   |
-| `opfsCache`       | `boolean`           | `false`                              | Enable the OPFS-backed persistent tile cache. **Now defaults to `false` everywhere** (including browsers exposing `navigator.storage.getDirectory`) — persistence is strictly opt-in. On the cold path it costs a duplicate main-thread zstd decompress per tile, so leave it off unless the archive fits in `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.                                                                                                                       |
-| `cache`           | `boolean`           | —                                    | **Deprecated, never read.** Use `maxCacheTiles: 0` or `maxCacheBytes: 0` to disable the in-memory compressed cache.                                                                                                                                                                                                                                                                                                                                                                                        |
-| `maxCacheSize`    | `number`            | —                                    | **Deprecated, never read.** Use `maxCacheTiles` and `maxCacheBytes`.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+Every fetched blob's CRC-32C (from the directory) is verified over its
+**compressed** bytes BEFORE decompression, on both the worker and inline decode
+paths — unconditionally, with no opt-out. A mismatch rejects that tile's decode
+with a distinctive `crc32c mismatch` error through the normal per-tile error
+surface. Entries whose directory CRC is `0`/absent (synthetic archives) and
+OPFS-decompressed warm hits have no compressed bytes to check and skip it.
+
+| Option                        | Type                | Default                                                 | Description                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| :---------------------------- | :------------------ | :------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retainArrowIpc`              | `boolean \| 'auto'` | `'auto'`                                                | Whether decoded layers keep their raw Arrow IPC bytes (`arrowIpc` / `arrowTable`) for lazy `toGeoArrowTable()`. `'auto'` drops the reference only for coordinate-quantized (`stt:quant`) layers — whose tables are not literal GeoArrow anyway — and keeps it everywhere `toGeoArrowTable()` is valid. `true` always keeps; `false` always drops (smallest memory). `toGeoArrowTable()` on a dropped layer throws an error naming this option. |
+| `maxCacheTiles`               | `number`            | 500 desktop / 250 at `deviceMemory ≤ 4 GB` / 100 mobile | Maximum compressed tile entries retained by this archive. The cache is insertion-ordered LRU; pass `0` to disable it.                                                                                                                                                                                                                                                                                                                          |
+| `maxCacheBytes`               | `number`            | 512 MiB desktop / 256 MiB low-memory                    | Maximum compressed bytes retained by this archive. A process-wide LRU applies the same device-aware byte ceiling across all archives, so multi-source maps cannot multiply it. Pass `0` to disable the compressed cache.                                                                                                                                                                                                                       |
+| `opfsCache`                   | `boolean`           | `false`                                                 | Enable the OPFS-backed persistent tile cache. **`false` everywhere**, including browsers exposing `navigator.storage.getDirectory` — persistence is strictly opt-in. On the cold path it costs a duplicate main-thread zstd decompress per tile, so leave it off unless the archive fits in `opfsCacheMaxBytes` AND users revisit the same viewport across reloads.                                                                            |
+| `opfsCacheMaxBytes`           | `number`            | 512 MB                                                  | Soft byte budget for the OPFS cache.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `opfsCacheDirectory`          | `string`            | `'stt-cache'`                                           | Subdirectory name under the OPFS root.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `coalesceGapBytes`            | `number`            | 2 MiB                                                   | Max gap between two tile byte-ranges that `getTiles` still bridges into ONE coalesced HTTP range request. On free-egress storage (R2) the gap bytes are free, so a wider gap fuses more neighbours into fewer billed GETs; lower it on metered-egress hosts or very sparse archives. Supplying it PINS the gap (no adaptation).                                                                                                                |
+| `maxConcurrentRequests`       | `number`            | `24`                                                    | Concurrent HTTP range requests kept in flight for one batch, after coalescing. Bounds the pathological sparse case so it cannot exceed an object store's per-connection stream cap (R2 closes at ~75).                                                                                                                                                                                                                                         |
+| `transferTimeoutMs`           | `number`            | `20000`                                                 | Per-transfer stall watchdog on every fetch (manifest, directory, pack ranges). A response that neither completes nor errors in the window is aborted with a `TimeoutError` and retried as a TRANSIENT failure; caller aborts propagate immediately and are never retried. `0` disables the watchdog.                                                                                                                                           |
+| `retryDelaysMs`               | `number[]`          | `[250, 1000]`                                           | Backoff schedule for a failed range request; the array length IS the retry count and each delay is jittered ±50%. `[]` disables retries.                                                                                                                                                                                                                                                                                                       |
+| `directoryPageThresholdBytes` | `number`            | `262144`                                                | Paged-directory whole-load cutoff. A paged `.sttd` at or under this size is fetched in one GET and fully decoded; above it only the root page is fetched up front and leaf pages stream in on demand. `0` always pages. No effect on single directories.                                                                                                                                                                                       |
+| `schedulerWeight`             | `number`            | `1`                                                     | Relative weight of this archive in the process-shared request scheduler's weighted-fair (DRR) slot share when several archives composite into one scene. Work-conserving — a single archive gets the whole budget regardless of weight.                                                                                                                                                                                                        |
+| `decoder`                     | `TileDecoder`       | worker pool where module workers work                   | Override the tile decoder; pass `new InlineTileDecoder()` to force inline decoding.                                                                                                                                                                                                                                                                                                                                                            |
+| `fetch`                       | `typeof fetch`      | `globalThis.fetch`                                      | Custom fetch (auth headers, instrumentation).                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ## Integrity & content-addressing primitives
 
@@ -234,8 +284,8 @@ import { crc32c, verifyCrc32c, blake3, blake3Hex128 } from '@poopdeck.gl/core';
 | `blake3Hex128` | `(input: Uint8Array) => string`                      | blake3-128 as 32 lowercase hex chars — the content-address form (`manifest.schemas[].hash`, `index/<hash>.sttd`, `packs/<hash>.sttp`).                                 |
 
 Related exported types: `DecodeTileOptions`, `TemplateRegistry`,
-`ManifestSchemaTemplate` (a `{ hash, data }` entry of a v2 manifest's `schemas`
-table), and `TileMetaJson` (the parsed v2 `TILE_META` section).
+`ManifestSchemaTemplate` (a `{ hash, data }` entry of a manifest's `schemas`
+table), and `TileMetaJson` (the parsed `TILE_META` section).
 
 ## Source
 

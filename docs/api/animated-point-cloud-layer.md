@@ -90,7 +90,7 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `elevationProperty` | `string \| null` | `null`     | Property name to source per-point elevation (z) from a numeric tile column when the geometry is 2D (lon/lat). Each point is placed at `z = column[i] × elevationScale`. Unset (the common case) ⇒ z comes from 3D tile geometry directly, or stays 0 on a 2D tile. |
 | `elevationScale`    | `number`         | `1`        | Multiplier applied to each `elevationProperty` value before it becomes the point's z. No effect when `elevationProperty` is unset. Unconstrained — negative scales are allowed (z values themselves may be negative).                                              |
 
-## 3D, lighting & colour resolution
+## Colour resolution & behaviour
 
 - **Colour precedence** — colour resolves in a fixed order and the first
   applicable path wins: (1) `colorVectorColumn` (one interleaved RGBA column,
@@ -103,25 +103,11 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
   colouring rides `instanceColors` (Gouraud-lit `getColor`) rather than a
   GPU fragment-stage replacement, keeping categorical points shaded like every
   other colour path.
-- **Normals** — a `[nx, ny, nz]` normal column is bound to `getNormal`
-  zero-copy when present; otherwise deck's default `[0, 0, 1]` gives uniform
-  lighting across the cloud.
 - **Point tiles only** — the layer checks each tile layer's `geometryType` and
   skips any layer that is not `Point`, emitting one named console warning. A
   linestring tile would otherwise be read as one position per feature over the
   flattened vertex run: no error, no blank map, just points silently bunched
   along the first few paths.
-- **Window mode only** — there is no wake or cumulative ("draws itself") path;
-  point clouds animate whole features on and off through the
-  [`TimeFilterExtension`](./time-filter-extension.md) window (with fade ramps),
-  as an overview/scan primitive.
-- **Per-tile binary sublayers** — each visible (tile, layer) pair produces one
-  `PointCloudLayer` using deck.gl's binary `data: { length, attributes }` shape,
-  with positions and start/end times referenced directly from the tile's Arrow
-  buffers (zero copy). A new tile adds exactly one sublayer and one GPU upload;
-  existing tiles' buffers are untouched. Prepared-data and sublayer caches keep
-  the `data` reference stable across `renderLayers()` calls so deck.gl
-  short-circuits GPU re-uploads when only time changes.
 
 The sublayer short id for `_subLayerProps` overrides is **`pointCloud`**: `_subLayerProps: { pointCloud: { type: MyLayer, ... } }` swaps the sublayer class (default `PointCloudLayer`) or overrides sublayer props.
 

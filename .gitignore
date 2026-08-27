@@ -83,7 +83,11 @@ test-data/*.geojson
 pkg/
 
 # Local dataset trees. The showcase reads from R2 in production; a local
-# `public/data` is a developer convenience and is never committed.
+# `public/data` is a developer convenience and is never committed. Since the
+# 2026-08-26 split the fleet lives in the STT repo, so `public/data` is usually
+# a SYMLINK to `../spatiotemporal-tiles/data-fleet` — and a trailing-slash
+# pattern does not match a symlink, hence both forms below.
+examples/showcase/public/data
 examples/showcase/public/data/
 examples/showcase/public/data-publish/
 examples/showcase/public/data-v2/

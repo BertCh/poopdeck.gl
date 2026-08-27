@@ -80,7 +80,7 @@ new AnimatedScenegraphLayer(props); // ScenegraphLayer, same pose
 
 ## Four constraints on authored assets
 
-These are properties of deck's `ScenegraphLayer`, not of this wrapper, and each was verified against the installed deck 9.3.2 / luma.gl 9.3.3 / loaders.gl 4.4.2. Each one silently changes what an asset looks like in the browser versus in the DCC it came from.
+These are properties of deck's `ScenegraphLayer`, not of this wrapper, and each was verified against the installed deck.gl 9.3 / luma.gl 9.3 / loaders.gl 4.4. Each one silently changes what an asset looks like in the browser versus in the DCC it came from.
 
 1. **Skinned geometry does not deform.** deck's `scenegraph-layer-vertex.glsl` declares `positions`, `texCoords` and `normals` only — no `JOINTS_0` / `WEIGHTS_0` — and `_getModelOptions()` injects deck's own shaders into every glTF model (`modelOptions: {...this.getShaders()}`), replacing the one luma would have generated. luma.gl itself _has_ skinning; deck's instanced path does not reach it. **A rigged pedestrian renders in bind pose.** Bake deformation into per-node transforms, or use separate meshes per state.
 2. **Rigid per-node animation does work.** `draw()` traverses the scenegraph with `worldMatrix` into a per-model `sceneModelMatrix` uniform and `GLTFAnimator` drives node TRS. Wheels spin, doors open, booms swing.
@@ -131,7 +131,7 @@ Inherits all properties from [`AnimatedMeshLayer`](./animated-mesh-layer.md) (an
 
 ### Inherited props with no effect here
 
-`ScenegraphLayer` has no equivalent for these `SimpleMeshLayer` props, so they are **not forwarded** and setting one warns once: `texture`, `textureParameters`, `wireframe`, `_instanced`, `material`. A glTF carries its own materials and textures — use `_lighting: 'pbr'` for material fidelity, or `AnimatedMeshLayer` for a flat mesh plus a separate texture.
+`ScenegraphLayer` has no equivalent for these `SimpleMeshLayer` props, so none of them is forwarded: `texture`, `textureParameters`, `wireframe`, `_instanced`, `material`. Setting `texture`, `textureParameters`, `wireframe`, or `_instanced: false` warns once; `material` is dropped silently (it defaults to `true`, so a warning would fire for every caller). A glTF carries its own materials and textures — use `_lighting: 'pbr'` for material fidelity, or `AnimatedMeshLayer` for a flat mesh plus a separate texture.
 
 ## How it works
 

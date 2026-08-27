@@ -31,9 +31,14 @@ them is a product.
 | Tier                   | Backend                 | What it is for                                                                                                                                                                                                 | Verified state                                                                                                                         |
 | ---------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Supported**          | `@poopdeck.gl/layers`   | The product. Every layer kind has an answer; the reference semantics every other backend is measured against.                                                                                                  | 21 of the 23 frozen `LayerKind`s implemented natively; `isoLines` declared → `path`, `ego` composed at the app layer. All 23 answered. |
-| **Research**           | `@poopdeck.gl/three`    | WebGPU/TSL. Exists to do something deck cannot, not to duplicate it.                                                                                                                                           | **23/23 native.** **Time-correct GPU id-picking on WebGPU across nine pick kinds / ten layer classes** (§0.1).                         |
+| **Research**           | `@poopdeck.gl/three`    | WebGPU/TSL. Exists to do something deck cannot, not to duplicate it.                                                                                                                                           | **23/23 native.** **Time-correct GPU id-picking on WebGPU across thirteen pick kinds / thirteen layer classes** (§0.1).                |
 | **Independence proof** | `@poopdeck.gl/maplibre` | Proves the format is not deck-shaped: a native `CustomLayerInterface` backend with **zero** deck/luma dependency, for the large population of apps that already have a maplibre map and will never adopt deck. | **23/23 native.** The fifteen-kind freeze was a scope decision and has been re-made — see the superseded routing rule above.           |
 | **Cost proof**         | `@poopdeck.gl/cesium`   | Measures what a green-field backend costs once the kernel exists (§2.8).                                                                                                                                       | **23/23 native**, from 6 at the campaign's start.                                                                                      |
+
+The **Verified state** counts are read from the generated matrix,
+[`docs/spec/backend-capabilities.md`](../spec/backend-capabilities.md) — that
+file is the authority (§4), not this table. Re-read it rather than trusting a
+count here.
 
 #### Routing rule — SUPERSEDED 2026-08-25
 
@@ -112,11 +117,16 @@ WebGPU **and** WebGL2, and does it time-correctly:
   colour material**. Picking therefore cannot disagree with what is on screen —
   an out-of-window or filtered-out feature is unpickable by construction rather
   than by a parallel CPU predicate that can drift.
-- Verified in tree: nine `STTIdPickKind` values (`point`, `column`, `arc`, `line`,
-  `trips`, `polygon`, `path`, `icon`, `iso`) across ten layer classes
-  (`WideLineLayer` + its `PathGeoLayer` subclass, `OdLineLayer`, `PointCloudLayer`,
-  `ColumnLayer`, `ArcLayer`, `IconLayer`, `IsoLayer`, `PolygonLayer`,
-  `TripsLayer`).
+- Verified in tree: thirteen `STTIdPickKind` values (`point`, `column`, `arc`,
+  `line`, `trips`, `polygon`, `path`, `icon`, `iso`, and `text`, `mesh`,
+  `pointCloud`, `hexbin` added by the non-deck parity campaign) across thirteen
+  layer classes (`STTWideLineLayer`, `STTOdLineLayer`, `STTPointLayer`,
+  `STTPointCloudLayer`, `STTColumnLayer`, `STTArcLayer`, `STTIconLayer`,
+  `STTIsoLayer`, `STTPolygonLayer`, `STTTripsLayer`, `STTTextLayer`,
+  `STTMeshLayer`, `STTHexbinLayer`; `STTPathGeoLayer` and `STTStaticPolygonLayer`
+  inherit `pick()` from their bases). `pointCloud` is deliberately distinct from
+  `point` — the phong-lit 3D cloud, not flat billboards — so a consumer narrowing
+  on `point` does not silently also match it.
 - Declared deferral: the CPU **glide** path returns `null` from `pick()` rather
   than a wrong answer (icon glide, per-track trips glide). Honest null over
   plausible lie.
@@ -202,12 +212,10 @@ an AST + CPU evaluator only; its codegen half never shipped — see the note in
 **This section previously listed catalog parity as un-unifiable and recorded
 maplibre as an intentional 5-of-19 subset. That was wrong twice.** The vocabulary
 has been **23** frozen `LayerKind`s, not 19, since the kind-parity work; and the
-maplibre backend now ships **fifteen** native kinds (point, line, polygon, trips,
-heatmap, icon, column, arc, tripHeads, h3Summary, quadbinSummary, hexbin,
-flowCorridor, flowStroke, flowmap), all four time-filter modes, DataFilter on
-every kind, metric sizing, id-FBO picking on every kind with feature identity,
-native globe on v5+ hosts, a shared tileset source, and an `STTLayerGroup`
-composite host. Verify against `packages/maplibre/src/backend-descriptor.ts`.
+maplibre backend now ships **all 23** native kinds, all four time-filter modes,
+DataFilter on every kind, metric sizing, id-FBO picking on every kind with
+feature identity, native globe on v5+ hosts, a shared tileset source, and an
+`STTLayerGroup` composite host. Verify against `packages/maplibre/src/backend-descriptor.ts`.
 
 **Why the reversal was right.** The claim being defended was not "a thin backend
 cannot render fifteen kinds" — it was "the shader source cannot be unified", and
@@ -217,8 +225,10 @@ precisely because none of it could be shared. What the subset posture actually
 encoded was a scope guess about demand, dressed as an architectural limit.
 **"We chose not to" is a scope decision a campaign can reverse; "it cannot be
 unified" is a structural fact a campaign cannot.** Only the second belongs in this
-section. The scope decision has been re-made in the other direction and re-frozen
-at fifteen (§0). The globe half of the reversal has a live defect attached (§4.2).
+section. The scope decision has been re-made in the other direction — and the
+fifteen-kind freeze that replaced it was itself re-made by the 2026-08-26
+completion pass, which took maplibre to all 23 native kinds (§0). The globe half
+of the reversal has a live defect attached (§4.2).
 
 ---
 
@@ -290,7 +300,7 @@ it returns `worldPoint`-only picks.
 ### 2.6 Frozen op-set = linear alpha only (surfel excluded)
 
 The adversarial critic's highest-impact confirmed hole: `surfel-material.ts`
-computes `exp(dt·dt·-0.5)` (:149), `exp(-falloff·r²)` (:181) and `sqrt` (:89)
+computes `exp(dt·dt·-0.5)` (:164), `exp(-falloff·r²)` (:198) and `sqrt` (:90)
 — and `exp/pow/sqrt/smoothstep` are **not** in the `Expr` op-set.
 **Decision:** `ALPHA_EXPR` covers **linear alpha only**
 (window/wake/cumulative/trail); the surfel/splat Gaussian temporal weight and
@@ -328,10 +338,15 @@ gradients collapse to source colour; trips tail fade is arc-length, not
 vertex-time), constant width/size per layer. Aggregation kinds stay
 demand-driven with typed fallbacks.
 
-**Measured cost:** `packages/cesium/src` is ~2,000 lines total, with ~830 lines of
-tests. That number is the whole point of the tier — it is what a fourth rendering
-backend costs once the kernel exists, and it is why "add a backend" is not treated
-as a strategic decision in this project.
+**Measured cost:** the number the tier was proved with is the GREEN-FIELD one —
+at 2026-07-02, a descriptor + a camera bridge + the movement catalog came to
+~2,000 lines of `packages/cesium/src` with ~830 lines of tests. That is what a
+fourth rendering backend costs once the kernel exists, and it is why "add a
+backend" is not treated as a strategic decision in this project. Do not confuse it
+with today's total: the 2026-08-25/26 parity passes took cesium to all 23 kinds
+(22 `cesium-*-layer.ts` files) and the package now measures ~18.7k lines of `src`
+and ~20.7k of `test`. Full catalog parity is the expensive part; standing a
+backend up is not.
 
 ### 2.9 Five-tier enforcement ladder + its honest ceiling
 
@@ -633,12 +648,12 @@ world view.
   **cannot restore custom layers after WebGL context loss** — we must invalidate
   and rebuild the tile GPU cache and programs. Read `fov` from the render args
   (v4.6+/v5+) rather than assuming 36.87° for any CPU matrix math.
-- **Declared fallbacks, deliberate and conformance-tested:** `liveBundling` is a
-  **permanent** fallback (`STTFlowmapLayer` draws static bundles; porting the GPU
-  KDEEB bundler off luma transform-feedback is not worth it); `text → icon` (only
-  when the caller supplies `iconAtlas` + `iconMapping`); `pointCloud → point`
-  (flat billboards, per-point elevation lost). The proposal to implement real
-  `boundingBox` + `pointCloud` was **not taken**.
+- **No declared fallbacks left.** The 2026-08-26 completion pass emptied
+  `FALLBACK_KINDS` (`packages/maplibre/src/backend-descriptor.ts`): `text`,
+  `pointCloud` and `boundingBox` are native, and `liveBundling: true` runs the
+  shared `bundleEdges` from `@poopdeck.gl/core/edge-bundling` — the same function
+  three and cesium call, with no luma dependency. §0's `liveBundling`-on-all-four
+  statement is the current one.
 
 ---
 
@@ -703,26 +718,23 @@ than forwarded to sublayers.
 
 ### 3.4 Extension posture
 
-- **`DataFilterExtension` — FLAGSHIP port-adapt.** "Filter by any baked column":
-  register a `filterValue` attribute from a tile column via the accessor-alias
-  convention, exactly like `TimeFilterExtension` (a hand-built descendant of it);
-  `filterRange`/`filterSoftRange`/`filterEnabled` stay constant uniforms. Passing
-  deck's raw extension via `extensions` does **not** work — deck would source
-  `getFilterValue` by running a JS accessor over binary features.
-  `onFilteredItemsChange`/`countItems` are n/a (no CPU rows). `filterSize` is fixed
-  at **1**; multi-column (2–4, `vec4` range, min-reduce) and fp64 remain deferred.
-- **`CollisionFilterExtension`** — the constants case works via passthrough;
-  data-driven `getCollisionPriority` from a baked priority column is deferred.
-- **Already-have via passthrough (documented + tested):** `PathStyleExtension`,
-  `BrushingExtension` (reads the layer's own baked position attributes; only
-  `brushingTarget:'custom'` diverges), `MaskExtension` (`operation` is forwarded,
-  so mask + `maskId` geofences an STT layer today), `ClipExtension`.
-- **Skipped:** `FillStyleExtension` (decorative; per-feature needs a baked
-  pattern-index column for little payoff); `_TerrainExtension` (experimental
-  upstream, and the vertical axis is already claimed by `timeHeightScale`'s
-  space-time-cube lift — draping and time-as-height fight over z); `Fp64Extension`
-  (deprecated upstream; per-tile `timeOffset` relativization + deck's built-in fp64
-  position split already cover it — adding it is counterproductive).
+**The decision.** A deck extension's constant props pass through to STT layers
+untouched; a data-driven one cannot. deck sources `getFilterValue`,
+`getCollisionPriority` and their siblings by running a JS accessor over per-row
+objects, and a pre-baked binary tile materializes none — so passing deck's raw
+`DataFilterExtension` via `extensions` does **not** work, and no amount of prop
+forwarding fixes it. **The answer is §3.1's accessor-alias convention applied to
+extensions:** the per-feature value comes from a baked column named by an alias
+prop and bound as a vertex attribute, exactly as the internal
+`TimeFilterExtension` binds time, while every scalar stays a constant uniform.
+That is what `STTDataFilterExtension` is, and why a port exists where a
+passthrough would have done. Attribute-registering extensions are then budgeted
+against the WebGL2 16-slot floor (§2.13).
+
+The catalog — which extensions pass through as-is, which two are ported, which
+three are skipped, and each one's attribute cost and documented limit — is
+[`extensions.md`](../api/extensions.md); the per-extension deferrals live on the
+individual `docs/api/*-extension.md` pages.
 
 ### 3.5 Latent bugs the parity work found in _shipped_ layers
 
@@ -752,11 +764,14 @@ walks each layer's real merged `defaultProps`:
 | `stableColorMapping`  | `colorMapping`    | arc, line, column, icon                 |
 | `pathReveal`          | `revealTrail`     | path                                    |
 
-Both other backends declare the same six. three declares all six `supported: true`;
-maplibre declares all six with **honestly narrower `kinds` sets** than deck's —
-`motionInterpolation` on `{icon, tripHeads}` (not `point`), `timeHeightScale` on
-`{column}` only, `pathReveal` on `{line}` because it has no separate `path` kind.
-Naming a kind a backend does not render fails its gate, which is the entire point.
+The two other backends that declare features — three and maplibre — declare the
+same six (cesium exports no `LAYER_FEATURES` table at all). three declares all six
+`supported: true`. maplibre's six are narrower than deck's in two places and
+**wider in three**: `motionInterpolation` on `{icon, tripHeads}` (not `point`) and
+`timeHeightScale` on `{column}` only are the genuinely narrower sets, while
+`dataFilter` covers all 23 kinds (deck: 6), `stableColorMapping` 11 (deck: 4), and
+`pathReveal` `{line, path}` (deck: `{path}`). Naming a kind a backend does not
+render fails its gate, which is the entire point.
 
 ---
 
@@ -778,32 +793,29 @@ a permanent standoff with the gate; keep that entry if the path ever moves.)_
 Three separate auditors hand-counted the cesium backend's coverage and reported
 **three different numbers (6, 8, and 12 of 23)**. None of them was lying; the
 descriptor shape admits several defensible readings, and nothing in the rendered
-table forces the reader to pick one. The tree-verified breakdown for cesium is:
+table forces the reader to pick one. Any of "6", "15", or "23" was a true sentence
+about that data, which is exactly the problem. **This was a reporting defect in the
+generated doc, not a backend defect.**
 
-- **13 native** — the movement family (`point`, `path`, `line`, `arc`, `trips`,
-  `tripHeads`) plus the seven the 2026-08-25 parity campaign added
-  (`boundingBox`, `column`, `pointCloud`, `surfel`, `text`, `h3Summary`, `ego`),
-- **9 declared with a `fallbackKind`** (`surfel`→point, `flowmap`/`flowCorridor`/
-  `flowStroke`→line, `isoLines`→path, `text`→icon, `mesh`→boundingBox,
-  `pointCloud`→point, `hexbin`→h3Summary),
-- **8 bare deck referrals** with a reason and no fallback.
+**The defect is now cosmetic.** The generator prints the legend
+`(✅ native · ↳ fallback · — unsupported)`, so the three classes are distinguished
+at a glance; and the 2026-08-26 completion pass collapsed the ambiguity at the
+source — cesium is **23 native / 0 declared-with-fallback / 0 bare referrals**
+(`packages/cesium/src/backend-descriptor.ts`; the `fallbackKind` branches that
+remain are unreachable). The single fallback left anywhere in the matrix is deck's
+`isoLines ↳ path`.
 
-Any of "6", "15", or "23" is a true sentence about that data, which is exactly the
-problem. **This is a reporting defect in the generated doc, not a backend defect.**
-The fix is for the generator to render the three classes as distinct columns with
-their counts, so a reader cannot construct a number by choosing a definition. Until
-it does, quote the breakdown, never a single figure.
-
-**A second-order consequence, already real:** three of cesium's nine declared
-fallbacks name a target cesium does not itself render — `mesh → boundingBox`,
-`text → icon`, `hexbin → h3Summary`. They were copied from the three descriptor,
-where those targets ARE supported. `degradeRequest` therefore hands the caller a
-second unrenderable answer instead of the honest "skip, go to deck" the `reason`
-intends. maplibre's conformance suite has the gate that catches exactly this —
-_"(c) every declared `fallbackKind` is itself a kind this backend renders"_ — and
-cesium's suite does not. **Port gate (c) to the cesium and three suites, then fix
-the three cesium entries.** (three's own fallbacks are all currently valid, so it
-would pass today; the gate is there to keep it that way.)
+**A second-order consequence, since fixed:** three of cesium's declared fallbacks
+named a target cesium did not itself render — `mesh → boundingBox`, `text → icon`,
+`hexbin → h3Summary` — copied from the three descriptor, where those targets ARE
+supported. `degradeRequest` therefore handed the caller a second unrenderable
+answer instead of the honest "skip, go to deck" the `reason` intends. The action
+was _"port maplibre's gate (c) — every declared `fallbackKind` is itself a kind
+this backend renders — to the cesium and three suites, then fix the cesium
+entries"_. **DONE:** the gate is live in both
+(`packages/cesium/test/backend-descriptor.test.ts:100`,
+`packages/three/test/backend-descriptor.test.ts:108-114`), and the three offending
+entries are gone — `text` became native, `mesh` and `hexbin` now name no fallback.
 
 ### 4.2 maplibre `globe: true` — deployment half fixed, structural half open
 
@@ -879,13 +891,16 @@ that is actually load-bearing.
 ### 5.2 three backend — integration tail
 
 _(Anchor `#52-three-backend--integration-tail` is linked from
-`docs/api/stt-three.md:384`. Keep this heading text and number, or fix that link in
+`docs/api/stt-three.md`. Keep this heading text and number, or fix that link in
 the same change.)_
 
 - **`SttThreeGeoViewer` wiring: landed, verification open.** The component exists
   and `DemoPageImpl.tsx` ships the `deck | maplibre | three` selector. _(Earlier
-  drafts listed the selector itself as unbuilt — stale.)_ What remains is the
-  maplibre camera-sync basemap under the transparent three canvas.
+  drafts listed the selector itself as unbuilt — stale.)_ The maplibre camera-sync
+  basemap under the transparent three canvas has also landed: a maplibre-gl `Map`
+  stacked under `<STTCanvas>`, driven each frame by `BasemapOverlay.sync()` off
+  the SAME `MercatorProjection` instance, with an on/off toggle exposed. What
+  remains is browser sign-off, tracked as L2 in [`./README.md`](./README.md).
 - **3D-tiles integration:** `createSTT3DTiles` + `createSTTGlobeControls` are built
   and tested in isolation and are still zero-consumer exports — §2.12's moral
   applies.
@@ -971,11 +986,11 @@ were already wired.
 | Cross-package regenerate-and-diff meta-test for `backend-capabilities.md`                                                                                                                          | Superseded by the CI `--check` gate (§4). Only revive if a test home that may import all four backends is wanted for other reasons.                                                                                                                                                                                                                                                                                                                                     |
 | Constructor-level capability assertions (`degrade()` only fires via the optional registry)                                                                                                         | Fold into whichever of registry/publish lands first.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | maplibre expression-alias vocabulary layer                                                                                                                                                         | A maplibre-idiom consumer demands one (the deck-shaped canon stands).                                                                                                                                                                                                                                                                                                                                                                                                   |
-| maplibre catalog beyond fifteen kinds                                                                                                                                                              | **Routed away by policy** (§0), not by a trigger. New kinds go to deck, then three.                                                                                                                                                                                                                                                                                                                                                                                     |
+| maplibre catalog beyond fifteen kinds                                                                                                                                                              | **DISCHARGED** by the 2026-08-26 completion pass — maplibre renders all 23 frozen kinds natively (§0). The routing rule it rested on is superseded.                                                                                                                                                                                                                                                                                                                     |
 | Cesium catalog beyond MOVEMENT (heatmap/summary/flow family)                                                                                                                                       | Demand-driven with typed fallbacks — a Cesium consumer asks for it.                                                                                                                                                                                                                                                                                                                                                                                                     |
-| three `AnimatedHeatmapLayer` GPU aggregation                                                                                                                                                       | 1 demo; the descriptor declares the honest fallback. A TSL compute-aggregation experiment is the sanctioned shape if it revives.                                                                                                                                                                                                                                                                                                                                        |
-| three `BundledFlowmapLayer` (`StaticBundle`/`preBundled` port)                                                                                                                                     | Showcase wiring surfaces a bundled demo on the three backend (`edge-bundler.ts` math reuses).                                                                                                                                                                                                                                                                                                                                                                           |
-| Live KDEEB bundling (5-pass ping-pong float compute)                                                                                                                                               | Explicitly "later/never"; `liveBundling: false` is permanent on maplibre and three.                                                                                                                                                                                                                                                                                                                                                                                     |
+| three `AnimatedHeatmapLayer` GPU aggregation                                                                                                                                                       | **DISCHARGED** — `heatmap` is native on three and the descriptor declares `gpuHeatmap: true` (`packages/three/src/backend-descriptor.ts:78`); the fallback is gone.                                                                                                                                                                                                                                                                                                     |
+| three `BundledFlowmapLayer` (`StaticBundle`/`preBundled` port)                                                                                                                                     | **DISCHARGED** — `lib/edge-bundler.ts` maps each OD flow into core's work box and `STTFlowmapLayer` draws the bundled ribbons; a bundle is static geometry, recomputed on edge-set change, never per frame.                                                                                                                                                                                                                                                             |
+| Live KDEEB bundling (5-pass ping-pong float compute)                                                                                                                                               | **DISCHARGED** — `liveBundling: true` on all four backends, all running core's single `bundleEdges` (§0). Hoisting the schedule out of the deck package is what made it reachable without luma.                                                                                                                                                                                                                                                                         |
 | three `CategoryColorExtension` palette DataTexture                                                                                                                                                 | A demo needs better palette stability than CPU expansion.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `SurfelLayer` globe port                                                                                                                                                                           | Stays ENU-only — deepest coupling (build-time quaternions in ENU metres).                                                                                                                                                                                                                                                                                                                                                                                               |
 | Spark Gaussian splatting for the AV/point-cloud path                                                                                                                                               | Deferred; WebGPU path exists upstream.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -990,7 +1005,7 @@ were already wired.
 | Terrain vector draping                                                                                                                                                                             | Build-it-yourself territory (nothing adoptable exists). Trigger: the first demo that needs vectors ON terrain, not at height 0.                                                                                                                                                                                                                                                                                                                                         |
 | Compute software-rasterized points (Schütz-style)                                                                                                                                                  | 10–100× on huge clouds, but WebGPU lacks 64-bit atomics (hi/lo workaround) at real cost. Trigger: a >50M-point demo that misses budget.                                                                                                                                                                                                                                                                                                                                 |
 | Indirect compute dispatch                                                                                                                                                                          | Not exposed in three core; revisit when it lands.                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `userExtensions` seam for three                                                                                                                                                                    | TSL materials have no injection contract. Trigger: a real external consumer asks.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `userExtensions` seam for three                                                                                                                                                                    | **DISCHARGED** — `tsl/extensions.ts` is a real TSL node-hook surface at a declared seam matrix; `userExtensions: true` (`packages/three/src/backend-descriptor.ts:96`).                                                                                                                                                                                                                                                                                                 |
 | OffscreenCanvas whole-renderer-in-worker                                                                                                                                                           | Wrong trade for a UI-heavy showcase.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Elevation metres→world-units reconciliation across backends                                                                                                                                        | maplibre is now correct (§2.16). What remains is reconciling deck true-metre vs three world-Z: `metersPerWorldUnit()` exists in `core/geo` — wire three through it plus a column-height golden vector with the next three pixel-verified change, not standalone.                                                                                                                                                                                                        |
 | `AnimatedTripHeadsLayer` aligned picking via `instanceFeatureIndex`                                                                                                                                | Demand.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -1042,19 +1057,19 @@ were already wired.
 ## Appendix: canonical concept map (deck ↔ three ↔ maplibre)
 
 The parity-targeted renderers fork vocabulary for shared concepts. The per-ecosystem
-_prefix_ schemes are **intentional idiom** and stay: deck `Animated*Layer`, three
-bare `*Layer`, maplibre `STT*Layer`. This table is the canonical map (empty cell =
+_prefix_ schemes are **intentional idiom** and stay: deck `Animated*Layer`; three
+and maplibre both `STT*Layer`. This table is the canonical map (empty cell =
 not ported to that renderer); it is referenced by
 [`docs/api/stt-three.md`](../api/stt-three.md).
 
-| concept                 | deck (`@poopdeck.gl/layers`)                                                                              | three (`@poopdeck.gl/three`)                                             | maplibre (`@poopdeck.gl/maplibre`)         | notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| points                  | `AnimatedPointLayer`                                                                                      | `PointCloudLayer`                                                        | `STTPointLayer`                            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| trips / trails          | `AnimatedTripsLayer`                                                                                      | `TripsLayer`                                                             | `STTTripsLayer`                            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| line / path             | `AnimatedPathLayer`, `AnimatedLineLayer`                                                                  | `PathGeoLayer` / `StaticPathLayer`, `OdLineLayer`                        | `STTLineLayer`                             | maplibre has no separate `path` kind — `pathReveal` lives on the line layer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| polygon                 | `AnimatedPolygonLayer`                                                                                    | `PolygonLayer` / `StaticPolygonLayer`                                    | `STTPolygonLayer`                          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| heatmap                 | `AnimatedHeatmapLayer`                                                                                    | _(deferred — declared fallback to `point`)_                              | `STTHeatmapLayer`                          | three's GPU-aggregation parity is counted out, not missing by accident.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| surface-splat primitive | `SplatLayer` / `SplatPrimitiveLayer`                                                                      | `SurfelLayer`                                                            | _(none)_                                   | **One primitive, two names** — three's `SurfelLayer` is "the Three analogue of deck's `SplatLayer`", reading the same `--surfel` columns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **time-filter window**  | `timeWindow` (**full** width, ms)                                                                         | `timeWindow` (**full**) **or** `windowHalf` (**half**)                   | `timeWindow` (**full** width, ms)          | **Bridged** by `resolveTimeWindow` (`packages/three/src/lib/time-window.ts`): every three layer ALSO accepts the deck/maplibre full-width `timeWindow` (→ `windowHalf = timeWindow / 2`). The three-native `windowHalf` stays a lower-level alias and **wins when both are set**. This alias is a HARD INVARIANT: dropping it, or halving incorrectly, silently gives existing three users a **2×-wider window** — the trap this bridge exists to close. `PointCloudLayer`'s historical `defaultWindowHalf` is 250 ms, so an unbridged `timeWindow: 86_400_000` copied from a deck demo would have collapsed to a 250 ms window. |
-| fade-in / fade-out ramp | `fadeInDuration` / `fadeOutDuration`                                                                      | `fadeInDuration`/`fadeOutDuration` (parity) or native `fadeIn`/`fadeOut` | `fadeInDuration` / `fadeOutDuration`       | Same bridge, same precedence rule: the native name wins when both are set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| categorical color       | `fillColor` / `getFillColor` + keyed `colorMapping` + `colorMappingDefault` (+ positional `colorPalette`) | `colorProperty` + keyed `colorMapping` + `colorMappingDefault`           | `colorProperty` + **keyed `colorMapping`** | All three now express stable category→colour **by name**. _(This row previously said maplibre was positional-palette-only, which would mean a tile-local category reorder silently recolours — that was fixed and the row was stale.)_ The colour **accessor** still forks by design: deck `getFillColor` vs three/maplibre `colorProperty`, counted out permanently in §3.1.                                                                                                                                                                                                                                                    |
+| concept                 | deck (`@poopdeck.gl/layers`)                                                                              | three (`@poopdeck.gl/three`)                                             | maplibre (`@poopdeck.gl/maplibre`)         | notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| points                  | `AnimatedPointLayer`                                                                                      | `STTPointLayer`                                                          | `STTPointLayer`                            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| trips / trails          | `AnimatedTripsLayer`                                                                                      | `STTTripsLayer`                                                          | `STTTripsLayer`                            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| line / path             | `AnimatedPathLayer`, `AnimatedLineLayer`                                                                  | `STTPathGeoLayer` / `STTStaticPathLayer`, `STTOdLineLayer`               | `STTLineLayer`, `STTPathLayer`             |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| polygon                 | `AnimatedPolygonLayer`                                                                                    | `STTPolygonLayer` / `STTStaticPolygonLayer`                              | `STTPolygonLayer`                          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| heatmap                 | `AnimatedHeatmapLayer`                                                                                    | `STTHeatmapLayer`                                                        | `STTHeatmapLayer`                          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| surface-splat primitive | `SplatLayer` / `SplatPrimitiveLayer`                                                                      | `STTSurfelLayer`                                                         | `STTSurfelLayer`                           | **One primitive, two names** — three's `STTSurfelLayer` is "the Three analogue of deck's `SplatLayer`", reading the same `--surfel` columns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **time-filter window**  | `timeWindow` (**full** width, ms)                                                                         | `timeWindow` (**full**) **or** `windowHalf` (**half**)                   | `timeWindow` (**full** width, ms)          | **Bridged** by `resolveTimeWindow` (`packages/three/src/lib/time-window.ts`): every three layer ALSO accepts the deck/maplibre full-width `timeWindow` (→ `windowHalf = timeWindow / 2`). The three-native `windowHalf` stays a lower-level alias and **wins when both are set**. This alias is a HARD INVARIANT: dropping it, or halving incorrectly, silently gives existing three users a **2×-wider window** — the trap this bridge exists to close. `STTPointLayer`'s historical `defaultWindowHalf` is 250 ms, so an unbridged `timeWindow: 86_400_000` copied from a deck demo would have collapsed to a 250 ms window. |
+| fade-in / fade-out ramp | `fadeInDuration` / `fadeOutDuration`                                                                      | `fadeInDuration`/`fadeOutDuration` (parity) or native `fadeIn`/`fadeOut` | `fadeInDuration` / `fadeOutDuration`       | Same bridge, same precedence rule: the native name wins when both are set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| categorical color       | `fillColor` / `getFillColor` + keyed `colorMapping` + `colorMappingDefault` (+ positional `colorPalette`) | `colorProperty` + keyed `colorMapping` + `colorMappingDefault`           | `colorProperty` + **keyed `colorMapping`** | All three now express stable category→colour **by name**. _(This row previously said maplibre was positional-palette-only, which would mean a tile-local category reorder silently recolours — that was fixed and the row was stale.)_ The colour **accessor** still forks by design: deck `getFillColor` vs three/maplibre `colorProperty`, counted out permanently in §3.1.                                                                                                                                                                                                                                                  |

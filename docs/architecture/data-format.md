@@ -1,122 +1,39 @@
 # STT tile payload format
 
 > **Scope:** this page is the normative spec for the **tile payload** (Apache
-> Arrow IPC + GeoArrow), which is identical regardless of container. The
-> **container** is the packed format —
-> [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md), which also
-> specifies the v6 directory codec (§4 there). The single-file layout under
-> "Top-level layout" below documents the **retired single-file container** —
-> removed from the Rust toolchain (no writer, reader, or transcode), read by
-> neither reference reader, and no longer represented by any committed
-> fixture. It is a **paper record** so an archived `.stt` file can still be
-> identified and hand-parsed; nothing in this document depends on it.
+> Arrow IPC + GeoArrow) — what one tile's bytes decode to. The **container**
+> that stores those bytes is the packed format,
+> [`docs/spec/stt-packed-format.md`](../spec/stt-packed-format.md), which owns
+> the manifest, the v6 directory codec (§4 there), and the layer-frame
+> envelope (§5.2 there). One payload shape is current; this page describes
+> only that shape.
 
 An STT dataset combines a spatial tile pyramid with a temporal axis. Tile
 payloads are **Apache Arrow IPC** record batches with **GeoArrow**-encoded
 geometry, so a browser can decode a tile with one library (`apache-arrow`) and
 feed the resulting columnar buffers directly to deck.gl.
 
-**This document is the normative spec for the tile payload.** The reference
-implementations are `crates/stt-core/src/arrow_tile/` (payload),
+The reference implementations are `crates/stt-core/src/arrow_tile/` (payload),
 `crates/stt-core/src/pack/` (packed container) and
-`crates/stt-core/src/directory.rs` (the tile index codec) on the Rust side,
+`crates/stt-core/src/directory.rs` (the directory codec) on the Rust side,
 and `packages/core/src/archive.ts` / `tile.ts` on the TypeScript side. If an
 implementation and this document disagree, that divergence is a **bug in one
 of them** — resolved by an erratum to whichever is wrong, never by silently
 redefining the spec to match the code. Spec revisions follow the stability
-promise and changelog in the
-[packed spec §9.1/§9.3](../spec/stt-packed-format.md#91-stability--versioning-promise).
+promise in
+[packed spec §9.1](../spec/stt-packed-format.md#91-stability--versioning-promise).
 (This spec page is CC-BY-4.0 alongside `docs/spec/` — see the license note in
 the packed spec's header.)
 
-## Legacy single-file envelope (non-normative)
-
-> The container below is the **single-file** archive. The primary
-> container is the packed format (`manifest.json` + content-addressed
-> `packs/*.sttp` + `index/*.sttd`); see
-> [`stt-packed-format.md`](../spec/stt-packed-format.md). The single-file
-> container has been **removed** from the Rust toolchain — `stt-build` emits the
-> packed format directly (the non-arrow `--streaming` path streams into the
-> `PackWriter`). Neither reference reader decodes it anymore (the TypeScript
-> reader is packed-only), and the last `sample.stt` fixture was deleted with
-> the v1 expunge. The layout below is retained purely as a paper record.
-
-```
-┌─────────────────────────┐  offset 0
-│ Header (64 bytes)       │  fixed-size, little-endian
-├─────────────────────────┤
-│ Tile blobs              │  compressed Arrow IPC layer frames
-│ ...                     │  back to back, no padding
-├─────────────────────────┤
-│ Dictionary (optional)   │  shared zstd dictionary — no shipped producer
-├─────────────────────────┤
-│ Index (directory codec) │  the directory — one entry per tile
-├─────────────────────────┤
-│ Metadata (UTF-8 JSON)   │  human-inspectable; serde-versioned
-└─────────────────────────┘  offset = file length
-```
-
-Every byte after the header is addressable by `(offset, length)` pairs that
-live in the header itself, so a reader can fetch the header, then the
-dictionary (if present), index and metadata, then each tile, with O(1) range
-requests per addressable unit.
-
-### Magic and version
-
-The first four bytes are the magic number; the trailing byte is the format
-version.
-
-| Magic     | Version | Status                                                                                                                                              |
-| --------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STT\x01` | 1       | retired (pre-Arrow protobuf tiles)                                                                                                                  |
-| `STT\x02` | 2       | retired (gzip + BLAKE3-64 dedup)                                                                                                                    |
-| `STT\x03` | 3       | retired (zstd + CRC32C, no dedup)                                                                                                                   |
-| `STT\x04` | 4       | single-file container (dedup + run-length directory); retired — read by neither reference reader and no longer represented by any committed fixture |
-
-> The **current container is the packed format**, which has no single-file magic
-> — a dataset is identified by `manifest.json` with `"format": "stt-packed"`. The
-> magic table above applies only to single-file archives, which neither reference
-> reader decodes anymore: the Rust in-repo reader has been removed, and the
-> TypeScript reader is packed-only (`packages/core/src/directory.ts` rejects any
-> non-v6 directory). A v4-parsing test helper (`parseV4` in
-> `packages/core/test/helpers/packed-fixture.ts`) still exists but has no
-> fixture left to read and no caller. Readers MUST refuse archives whose
-> version they do not understand.
-
-### Header (64 bytes, little-endian)
-
-```rust
-struct ArchiveHeader {
-    magic: [u8; 4],             // "STT\x04" (4th byte doubles as the version)
-    version: u8,                // 4
-    compression: u8,            // 0 = none, 2 = zstd (1 = gzip: RETIRED/reserved)
-    index_offset: u64,          // start of Index, bytes from file start
-    index_length: u64,
-    metadata_offset: u64,       // start of Metadata
-    metadata_length: u64,
-    dictionary_offset: u64,     // 0 if no dictionary present
-    dictionary_length: u64,     // 0 if no dictionary present
-    reserved: [u8; 10],         // MUST be zero, RESERVED for future use
-}
-```
-
-Total: 4 + 1 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 10 = **64 bytes**.
-
-`compression` is the algorithm applied to every tile blob; the header itself,
-the index, the metadata, and the dictionary are always uncompressed.
-
 ## Tile blobs
 
-Tile blobs are written immediately after the header, back to back, with no
-padding. The directory tells a reader where each one starts and how long it
-is.
+Tile blobs are written back to back inside a `packs/*.sttp` object, with no
+padding. The directory tells a reader which pack each one lives in, where it
+starts, and how long it is.
 
-Each blob is **zstd(layer frame)** (the default — `stt-build` is zstd-only)
-or the raw layer frame, depending on the header's `compression` byte.
-Compression **byte 1 (gzip) is retired**: it was the codec of the `STT\x02`
-archive (row 2 of the table above), which no reference reader accepts, so byte 1
-is never observed on a v4 blob. No v4 or packed writer has ever emitted it, and
-no released build can read or write it.
+Each blob is **zstd(layer frame)** — `stt-build` is zstd-only, and each blob
+is an independent frame with no shared dictionary, so a browser decoder can
+decompress any one tile on its own.
 
 **Deduplication.** The packed `PackWriter` blake3-hashes each compressed blob
 and writes byte-identical blobs once — a static cell repeated across time
@@ -136,24 +53,64 @@ in its directory entry. Verification status:
 ### Layer frame
 
 A tile may carry several named layers (e.g. one for points and one for
-linestrings). The blob payload is a frame around one Arrow IPC stream per
-layer. **The current frame is the sectioned v2 frame** — normatively
-specified in the
-[packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing)
-and summarized under "Layer frame v2" below.
+linestrings). The blob payload is the **sectioned, template-referencing layer
+frame**, whose byte layout is normative in
+[packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
+This page specifies what that frame's sections decode to.
 
-The v1 frame it replaced is retained here as a **historical** record only
-(no writer emits it, no reference reader decodes it — see
-[packed spec §5.1](../spec/stt-packed-format.md#51-tile-payload-layer-frame-v1--historical-non-normative)):
+The whole payload, unwrapped:
 
+```mermaid
+flowchart TD
+  B["tile blob — one per (z, x, y, t)"] --> Z["zstd frame"]
+  Z --> LF["layer frame\n0xFFFF escape, frame_version 2, layer_count,\nthen per layer: name + ref kinds + section TOC"]
+  LF --> TM["TILE_META section (canonical JSON)\net · qa · sorted · st · t0 · vb · vq · vt · vtf"]
+  LF --> IPC["CORE / PROPS Arrow IPC streams\nschema template + tail, one RecordBatch each"]
+  IPC --> SM["template schema metadata\nstt:layer · stt:geometry · stt:has_triangles\nstt:quant (on quantized geometry)\nGeoArrow ARROW:extension:*"]
+  IPC --> COL["columns\nCORE: id · start_time · end_time · geometry (GeoArrow)\nvertex_time · vertex_value(_matrix) · triangles · part_offsets\nPROPS: property columns · vector groups"]
 ```
-[u16 layer_count]            // high bit = ALIGNED_FRAME_FLAG (0x8000)   HISTORICAL
-  repeated layer_count times:
-    [u16 name_len][name utf8][u32 ipc_len][pad?][ipc stream bytes]
-```
 
-All integers are little-endian. `ipc stream bytes` is the output of an Arrow
-`StreamWriter` containing exactly one `RecordBatch`.
+Three properties of the frame shape the decode, and every one of them is
+specified in packed spec §5.2:
+
+- The layer's Arrow IPC **schema message** is hoisted into a per-dataset
+  **template** (referenced by blake3-128 hash, resolved through
+  `manifest.schemas`) rather than repeated in every tile. A section carries
+  only the stream **tail** — dictionary batches, record batch,
+  end-of-stream — and the reader splices `concat(template, tail)` back into a
+  stock Arrow stream. Dictionary batches ride in the per-tile tail whenever
+  any dictionary in the stream is tile-local; when **every** dictionary in a
+  PROPS stream was built against a dataset-global pinned category list the
+  messages are byte-identical across tiles and move into the template
+  instead. The split is all-or-nothing per stream, because the
+  template/tail cut is a single byte offset into one IPC stream.
+- Reserved columns form a **CORE** batch and property columns a **PROPS**
+  batch, each with its own template and its own TOC section, so properties
+  can be decoded lazily and unknown future sections are skippable.
+- **Per-tile-varying** metadata lives in the frame's canonical-JSON
+  `TILE_META` section (`et` · `qa` · `sorted` · `st` · `t0` · `vb` · `vq` ·
+  `vt` · `vtf`), not in the Arrow schema — the schema is dataset-constant,
+  which is what makes the template shareable. Dataset-constant keys (`stt:layer`,
+  `stt:geometry`, `stt:quant`, `stt:has_triangles`, the GeoArrow extension
+  metadata) stay in the template. Reference decoders **re-inject** the
+  `TILE_META` values into the decoded batch's schema and field metadata, so
+  everything downstream of decode sees one flat, absolute shape — the one
+  this document specifies. Decode also stamps the `visgl:temporal-*`
+  vocabulary onto the time columns — a decode-side contract, never on the
+  wire; normative in
+  [packed spec §10.7](../spec/stt-packed-format.md#107-visgl-temporal-column-metadata).
+
+Rows are stable-sorted by `start_time` at encode (after feature-id
+assignment), declared by `TILE_META.sorted`.
+
+`st`, `et` and `vq` are **re-typings** rather than relocations: they change a
+column's wire type (compact feature times and per-vertex value
+quantization). Each is declared in `manifest.capabilities` (`time-delta`,
+`vertex-value-quant`) so a reader that lacks it refuses the dataset at open
+instead of misdecoding it. Reference decoders **re-inflate** them at decode,
+so consumers still see the absolute `Int64` times and `Float32` vertex values
+specified below. Wire shapes: the sections below, and normatively packed spec
+§5.2.4 / §5.2.6.
 
 **Arrow IPC envelope (normative):**
 
@@ -180,84 +137,21 @@ All integers are little-endian. `ipc stream bytes` is the output of an Arrow
   by 19–39% across the reference fleet. Rationale and measurements:
   [packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
 
-**Size ceilings (normative):** `ipc_len` is `u32`, capping one layer's IPC
-stream at 4 GiB − 1; the directory likewise caps a tile's compressed blob
-length, uncompressed payload size, and `feature_count` at `u32` — see the
+**Size ceilings (normative):** each frame section's TOC `length` is `u32`,
+capping one layer's IPC stream at 4 GiB − 1; the directory likewise caps a
+tile's compressed blob length, uncompressed payload size, and `feature_count`
+at `u32` — see the
 [packed spec §12 (Container limits)](../spec/stt-packed-format.md#12-container-limits).
 A writer MUST fail loudly at these ceilings, never wrap or clamp.
 
-In that historical frame, when the leading `u16`'s `ALIGNED_FRAME_FLAG`
-(`0x8000`) bit was set the writer inserted `(8 - pos % 8) % 8` zero bytes
-after each `ipc_len` so every IPC stream started 8-byte aligned relative to
-the payload start — the alignment Arrow requires for zero-copy buffer views.
-`ipc_len` was the exact IPC byte length (padding excluded); the pad was
-never stored, readers derived it from the same alignment math. Layer count
-was therefore capped at `0x7fff`. The v2 frame keeps the derived-pad rule
-verbatim and carries `layer_count` in its own field, so its ceiling is the
-full `u16::MAX`. See the packed spec §5.1/§5.2.
-
-The whole payload, unwrapped:
-
-```mermaid
-flowchart TD
-  B["tile blob — one per (z, x, y, t)"] --> Z["zstd frame"]
-  Z --> LF["layer frame v2\n0xFFFF escape, frame_version 2, layer_count,\nthen per layer: name + ref kinds + section TOC"]
-  LF --> TM["TILE_META section (canonical JSON)\net · qa · sorted · st · t0 · vb · vq · vt"]
-  LF --> IPC["CORE / PROPS Arrow IPC streams\nschema template + tail, one RecordBatch each"]
-  IPC --> SM["template schema metadata\nstt:layer · stt:geometry · stt:has_triangles\nstt:quant (on quantized geometry)\nGeoArrow ARROW:extension:*"]
-  IPC --> COL["columns\nCORE: id · start_time · end_time · geometry (GeoArrow)\nvertex_time · vertex_value(_matrix) · triangles · part_offsets\nPROPS: property columns · vector groups"]
-```
-
-### Layer frame v2 (packed formatVersion 3)
-
-The current frame is the **sectioned, template-referencing** frame —
-normatively specified in the
-[packed spec §5.2](../spec/stt-packed-format.md#52-tile-payload-layer-frame-v2-sectioned-template-referencing).
-The Arrow envelope rules above (stream format, one `RecordBatch` per layer,
-no IPC body compression, no delta dictionaries, 8-byte buffer alignment, u32
-size ceilings) are unchanged; what moves is _where_ the schema and the
-per-tile metadata live:
-
-- The layer's Arrow IPC **schema message** is hoisted into a per-dataset
-  **template** (referenced by blake3-128 hash, resolved through
-  `manifest.schemas`) instead of being repeated in every tile — the frame
-  carries only the stream **tail** (dictionary batches + record batch +
-  end-of-stream), and the reader splices `concat(template, tail)` back into
-  a stock Arrow stream. Dictionary batches stay per-tile (categories vary);
-  an empty tile still carries one DictionaryBatch per dictionary column.
-- Reserved columns form a **CORE** batch and property columns a **PROPS**
-  batch (own schema/template), each in its own TOC section, so properties
-  can be decoded lazily and unknown future sections are skippable.
-- The **per-tile-varying** schema-metadata keys of the diagram above —
-  `stt:qa` (per property field), `stt:time_offset_ms`,
-  `stt:vertex_time_origin_ms`/`stt:vertex_time_step_ms`,
-  `stt:vertex_value_buckets` — move into the frame's canonical-JSON
-  `TILE_META` section (`qa` / `t0` / `vt` / `vb`, plus `sorted`). The
-  dataset-constant keys (`stt:layer`, `stt:geometry`, `stt:quant`,
-  `stt:has_triangles`, the GeoArrow extension metadata) stay in the
-  template. Reference decoders **re-inject** the TILE_META values into the
-  decoded batch's schema/field metadata, so every consumer downstream of
-  decode sees the v1-shaped layer of this document, unchanged.
-- Three `TILE_META` keys have **no v1 counterpart** and are re-typings, not
-  relocations — `st` / `et` (compact feature times) and `vq` (per-vertex
-  value quantization). Each is declared in `manifest.capabilities`
-  (`time-delta`, `vertex-value-quant`) so a reader that lacks it refuses at
-  open. Reference decoders **re-inflate** them at decode, so — exactly as
-  with the relocated keys — every consumer downstream sees the absolute
-  `Int64` times and `Float32` vertex values this document specifies. The
-  wire shapes are in the sections below and normatively in packed spec
-  §5.2.4 / §5.2.6.
-- v2 rows are stable-sorted by `start_time` at encode (after feature-id
-  assignment), declared by `TILE_META.sorted`.
-
-`stt-serve` emits **self-contained v2 frames** (every layer inlines its own
+`stt-serve` emits **self-contained** frames — every layer inlines its own
 schema section, since a live server has no manifest to carry a `schemas`
-registry) and advertises the frame version as `formatVersion` on
-`/metadata.json`. It has **no `capabilities` channel**, so a served tile
-using compact times (the default) declares nothing — a client decoder is
-assumed to be the one shipped alongside. See the
-[serve protocol](../spec/stt-serve-protocol.md), whose §3.4.3 still
-describes the retired v1 behaviour.
+registry. Its `/metadata.json` carries an **advisory** `capabilities` array,
+derived from the same `required_capabilities()` the offline build declares
+with — but nothing makes a client read it before fetching a tile, so every
+re-typing lever is **opt-in** there: `--compact-times` and
+`--partial-triangles` are off by default even though the offline build has
+both on. See the [serve protocol](../spec/stt-serve-protocol.md).
 
 ### Per-layer Arrow schema
 
@@ -276,7 +170,7 @@ this order; `<prop>` / `<vector-group>` columns form the PROPS batch.
 | `vertex_value_matrix` | `List<Float32>`, or `List<UInt16>` when quantized                                                                              | nullable    | per-vertex × per-bucket value matrix (vertex-major) for static-geometry overview animation; bucket count in schema metadata `stt:vertex_value_buckets`                                                                                                                                                                   |
 | `triangles`           | `List<UInt16>` or `List<UInt32>`                                                                                               | non-null    | feature-local earcut indices (Polygon); `UInt16` when the feature-local max index fits, else `UInt32` — see below for when it is emitted                                                                                                                                                                                 |
 | `part_offsets`        | `List<UInt32>`                                                                                                                 | non-null    | per-feature MultiPolygon part boundaries as feature-local ring indices (Polygon only). **Absent ⇒ every feature is single-part** — see below                                                                                                                                                                             |
-| `<prop>`              | `Float64` (numeric); `Utf8` or `Dictionary<UInt16, Utf8>` (categorical); `UInt16`/`Int32` fixed-point when attribute-quantized | nullable    | one column per property, by name — categorical representation is chosen per tile from actual byte cost; see below                                                                                                                                                                                                        |
+| `<prop>`              | `Float64` (numeric); `Utf8` or `Dictionary<UInt16, Utf8>` (categorical); `UInt16`/`Int32` fixed-point when attribute-quantized | nullable    | one column per property, by name — the affine, the integer leaf and the `Utf8`-vs-dictionary verdict are pinned from the column's dataset domain; see below                                                                                                                                                              |
 | `<vector-group>`      | `FixedSizeList<Float32 \| UInt8, N>`                                                                                           | nullable    | interleaved GPU-ready vector column fused from N scalar properties (`--vector-group NAME=col1,col2,…[:f32\|u8]`, e.g. `surfel_quat=qx,qy,qz,qw` or `point_rgba=r,g,b,a:u8`); decoded to `BinaryFeatures.vectorProps` and bound zero-copy to an instanced attribute. The source scalar columns are removed from the tile. |
 
 The three re-typed shapes in that table (`start_time`/`end_time`,
@@ -296,8 +190,10 @@ IPC bytes does the work (the writer is zstd-only). A layer built with
 coordinate quantization ships the identical List/FixedSizeList nesting with
 an `Int32` leaf instead — see below.
 
-Layers within one tile MUST agree on feature count for the rows they each
-cover, but they MAY carry different property columns.
+Each layer holds exactly one geometry kind and so has its own row count;
+layers in one tile need **not** agree on it, and the directory entry's
+`feature_count` is the **sum** of the layers' row counts (what `stt-validate`
+checks). Layers MAY carry different property columns.
 
 #### Coordinate quantization
 
@@ -335,9 +231,14 @@ Because the step is uniform in degrees, ground precision in meters is
 `meters_precision` at the equator and `meters_precision * cos(lat)`
 elsewhere — always at or finer than the requested precision, never coarser.
 Worst-case reconstruction error is half a quantum (`~meters_precision / 2`).
-Quantized indices are clamped to the `Int32` range.
 
-> Quantized geometry is no longer literal GeoArrow — see the callout in
+Lon/lat indices are clamped into the `Int32` range; an **altitude** index
+outside `Int32` is a hard encode error naming the offending value, because
+clamping would silently relocate the point instead. Precisions finer than
+≈0.0187 m (~19 mm) are rejected at config time, since at that step the world
+grid's ±180° longitude index would itself overflow `Int32`.
+
+> Quantized geometry is not literal GeoArrow — see the callout in
 > [GeoArrow interop](#geoarrow-interop).
 
 #### Point-elevation fold (3D points)
@@ -371,26 +272,11 @@ A feature with no value for the folded property encodes `z = 0`
 
 #### Compact feature times (`start_time` / `end_time`)
 
-Absolute `Int64` Unix ms per feature is the historical shape and remains the
-**canonical decoded shape** — every reader reconstructs it, and every
-consumer downstream of decode sees it. On the wire, a layer MAY instead ship
-either column in a compact form, declared by `TILE_META`:
-
-| `TILE_META`   | wire column                                                   | reconstruction                  |
-| ------------- | ------------------------------------------------------------- | ------------------------------- |
-| `st: "u32"`   | `start_time`: non-null `UInt32`, ms offset from `t0`          | `start = t0 + offset`           |
-| `st` absent   | `start_time`: non-null `Int64`, absolute                      | `start = value`                 |
-| `et: "dur32"` | `end_time`: non-null `UInt32`, ms duration from its OWN start | `end = start + dur`             |
-| `et: "zero"`  | `end_time` column **omitted** from the batch                  | `end = start` for every feature |
-| `et` absent   | `end_time`: non-null `Int64`, absolute                        | `end = value`                   |
-
-The two forms are chosen **per layer, independently of each other**, from
-that layer's own data, so they can differ from tile to tile. A reader MUST
-branch on the keys, MUST treat `st: "u32"` without a finite `t0` as
-malformed, and — for `et: "zero"` — MUST synthesize the `end_time` column
-back at the index immediately after `start_time`, restoring the canonical
-column order. An empty layer always takes the absolute pair. Full normative
-rules, including the writer's fits-in-`u32` selection test: [packed spec
+Absolute `Int64` Unix ms per feature is the **canonical decoded shape** —
+every reader reconstructs it, and every consumer downstream of decode sees
+it. On the wire, a layer MAY instead ship either column in a compact form
+keyed by `TILE_META.st` / `.et` against the layer's `t0` anchor, whose wire
+types, reconstructions and reader obligations are normative in [packed spec
 §5.2.4](../spec/stt-packed-format.md#524-compact-feature-times-st--et--capability-time-delta).
 
 This is a re-typing, so a writer using it declares the **`time-delta`**
@@ -401,34 +287,46 @@ the first capability a default build emits.
 #### `vertex_time` (per-vertex timestamps)
 
 LineString layers built with `--end-time-field` carry a per-vertex time
-column. The writer encodes it as integer **deltas** relative to a per-layer
-`(origin, step)`: the absolute time of a vertex is
-`origin + delta * step`. The origin and step are recorded in the layer's
-**schema-level** Arrow metadata under the keys (hoisted to `TILE_META.vt`
-in the v2 frame, and re-injected under these names at decode):
+column. The writer encodes it as integer **deltas** against an anchor and a
+`step`: the absolute time of a vertex is `anchor + delta * step`. The anchor
+is either a per-layer origin (`TILE_META.vt`) or **each feature's own
+`start_time`** (`TILE_META.vtf`) — the two are mutually exclusive, never both
+on one layer. Both keys vary per tile and are re-injected into the decoded
+layer's **schema-level** Arrow metadata under these names:
 
-| schema metadata key         | meaning                                   |
-| --------------------------- | ----------------------------------------- |
-| `stt:vertex_time_origin_ms` | absolute Unix-ms origin (`i64` as string) |
-| `stt:vertex_time_step_ms`   | ms per delta unit (`u32` as string)       |
+| schema metadata key               | meaning                                                                                                                                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stt:vertex_time_origin_ms`       | absolute Unix-ms origin (`i64` as string) — layer-anchored form only                                                                                                                     |
+| `stt:vertex_time_step_ms`         | ms per delta unit (`u32` as string) — layer-anchored form only                                                                                                                           |
+| `stt:vertex_time_feature_step_ms` | ms per delta unit (`u32` as string) — feature-anchored form. There is no companion origin key: the deltas are measured from each feature's own `start_time`, which already ships in CORE |
 
-The encoder walks a **width ladder** — `List<UInt16>`, then `List<UInt32>` —
-taking the first width at whose smallest sufficient `step` (≥ 1, chosen so
-every `t - origin` fits that width) the step is still within the precision
-ceiling (`DEFAULT_VERTEX_TIME_MAX_STEP_MS` = 1000 ms, configurable via
-`stt-build --vertex-time-precision`). Concretely, at the default ceiling:
-spans up to ~18.2 h take `UInt16`; spans up to ~49.7 days take `UInt32`;
-anything wider falls back to the exact absolute `List<Int64>` shape, which
-omits the two metadata keys. Quantization error is therefore always bounded
-by the ceiling regardless of which rung is used.
+The encoder walks a **tier ladder**, taking the first tier whose smallest
+sufficient `step` (≥ 1, chosen so every delta fits the width) is still within
+the precision ceiling (`DEFAULT_VERTEX_TIME_MAX_STEP_MS` = 1000 ms,
+configurable via `stt-build --vertex-time-precision`). At that default
+ceiling:
 
-**A reader MUST key "is this a delta column?" off the origin/step metadata
-(v2: `TILE_META.vt`) and "how wide is the leaf?" off the Arrow type.** Both
-delta widths carry the metadata and reconstruct identically; the absolute
-`List<Int64>` shape carries neither key. Keying the delta path off the
-metadata and then assuming a `UInt16` leaf is the specific bug the `UInt32`
-rung introduces — it is why this document states the two decisions
-separately.
+1. **layer-anchored `List<UInt16>`** — spans up to ~18.2 h;
+2. **feature-anchored `List<UInt16>`** (`vtf`), tried next because a
+   trip-shaped layer has a wide _layer_ span but a narrow _per-feature_ one.
+   It **declines** rather than wrapping when any vertex time precedes its
+   feature's `start_time`, which would need a signed delta;
+3. **layer-anchored `List<UInt32>`** — exact ms out to ~49.7 days, and
+   reachable at coarser steps out to ~136 years at the 1 s ceiling;
+4. the exact absolute **`List<Int64>`** shape, only past that; it omits every
+   metadata key above.
+
+Quantization error is therefore always bounded by the ceiling regardless of
+which rung is used. The feature-anchored tier re-anchors the deltas against
+something an older reader cannot guess, so emitting it declares the
+**`vertex-time-feature-anchor`** capability.
+
+**A reader MUST key "is this a delta column, and against what?" off
+`TILE_META.vt` / `.vtf` and "how wide is the leaf?" off the Arrow type — they
+are independent decisions.** Every delta tier carries one of the two keys and
+reconstructs identically; the absolute `List<Int64>` shape carries neither.
+Taking the delta path from `vt` and then assuming a `UInt16` leaf silently
+misreads every `UInt32` tile.
 
 #### `triangles` (pre-tessellated polygon meshes)
 
@@ -446,16 +344,22 @@ Two independent triggers turn it on, **either** of which suffices:
    — because the renderers cannot derive the correct mesh from the ring list
    alone.
 
-**Per-layer, all-or-nothing (normative).** Once a layer carries `triangles`,
-**every** feature in it carries a non-empty index list, including
-single-ring polygons whose triangulation a renderer could have derived
-itself. This is a reader contract, not an encoder accident: all three
-reference renderers bind `triangles` as one whole-layer index buffer and
-trust each feature's slice with no fallback, so a feature with an empty
-slice would silently disappear. A writer MUST NOT mix empty and non-empty
-lists within a triangle-bearing layer. (The alternative — omit the trivial
-cases and have readers backfill — measures ~40–45% of the column's bytes and
-is deliberately not taken until the reader side gains that backfill.)
+**Per-feature emission (normative).** A triangle-bearing layer bakes indices
+only for the features a renderer's own single-boundary earcut cannot
+reproduce — the ones with holes or with multiple parts — and ships an
+**empty** index list for every other feature. A reader MUST backfill an empty
+run by earcutting that feature's single ring; a reader that instead trusts
+each feature's slice verbatim draws nothing for it, so every single-ring
+polygon silently vanishes.
+
+Mixing empty and non-empty lists therefore obliges the **`triangles-partial`**
+capability, and it is declared from what the encoder actually **observed**: a
+layer in which every feature needs baking mixes nothing, stays byte-identical
+to the all-baked shape, and declares nothing.
+`stt-build --no-partial-triangles` restores bake-everything (so does
+`--pre-tessellate`, which additionally adds the column to layers that would
+carry none), and `stt-serve` defaults per-feature emission off behind
+`--partial-triangles`.
 
 The Rust writer stores feature-LOCAL indices, narrowed to `List<UInt16>`
 when every feature-local index fits in 16 bits (the common case) and
@@ -465,34 +369,17 @@ on `BinaryFeatures` so the renderer can hand it straight to deck.gl / WebGL.
 
 #### `part_offsets` (MultiPolygon part boundaries)
 
-`geoarrow.polygon` is `List<List<FixedSizeList>>` — one flat ring list per
-feature, exterior first then holes. A MultiPolygon's parts are flattened
-part-major into that same ring list, and **GeoArrow has no part level**, so
-part-vs-hole is unrecoverable from the geometry column alone: a generic
-GeoArrow consumer (GeoPandas, lonboard, geoarrow-rs,
-`@geoarrow/deck.gl-layers`) reads parts 2..n as holes of part 1. This is not
-exotic input — the tiler emits a MultiPolygon whenever clipping cuts one
-source polygon into several pieces inside a tile.
+**GeoArrow has no part level**, so part-vs-hole is unrecoverable from the
+geometry column alone and `part_offsets` carries the boundary out of band.
+This is not exotic input — the tiler emits a MultiPolygon whenever clipping
+cuts one source polygon into several pieces inside a tile. The column's
+type, units, presence rule and purely-additive status are normative in
+[packed spec §5.2.5](../spec/stt-packed-format.md#525-part_offsets-additive--no-capability).
 
-`part_offsets` restores the boundary:
-
-- **Type** `List<UInt32>`, non-null, one list per feature; last among the
-  reserved columns.
-- **Units** ring indices relative to that feature's **own first ring**. Part
-  0 always starts at `0`, so a single-part feature's list is `[0]`. Values
-  are strictly increasing and the last start is inside that feature's ring
-  count.
-- **Presence** emitted iff at least one feature in the layer has more than
-  one part, and only on polygon layers. **Absence means every feature is
-  single-part**, not "unknown". Holes do not make a feature multi-part; the
-  nesting is feature ⊇ part ⊇ ring.
-- **Purely additive** — no `manifest.capabilities` entry, no
-  `formatVersion` bump. An older reader ignores the column and is exactly as
-  correct (or as wrong) as it was before.
-- The TS decoder republishes it as `BinaryFeatures.partIndices`: global
-  layer-rebased **vertex** indices, `totalParts + 1` long, terminator = the
-  total position count — the identical convention to `ringIndices`.
-  `partIndices === undefined` is the single-part case.
+The TS decoder republishes it as `BinaryFeatures.partIndices`: global
+layer-rebased **vertex** indices, `totalParts + 1` long, terminator = the
+total position count — the identical convention to `ringIndices`.
+`partIndices === undefined` is the single-part case.
 
 #### Geometry admission (what reaches a tile)
 
@@ -505,13 +392,10 @@ column stays index-aligned with `geometry`.
 
 Two real classes hit this: `GeometryCollection` features (member extraction
 is not implemented), and polygons whose only rings have fewer than four
-positions. Before 2026-07-26 both were silently replaced with fabricated
-placeholders — a single-point "line", a one-vertex "ring" — which rendered
-as nothing anyway but inflated `metadata.feature_count`. **Consequence for
-consumers: `metadata.feature_count` for such sources drops on rebuild.** It
-is now honest, not regressed. If a polygon _part_ has no usable exterior
-ring the whole part is dropped rather than promoting one of its holes to
-exterior; individual unusable holes are dropped alone.
+positions. `metadata.feature_count` counts exactly the surviving rows, so it
+is what the archive actually holds. If a polygon _part_ has no usable
+exterior ring the whole part is dropped rather than promoting one of its
+holes to exterior; individual unusable holes are dropped alone.
 
 #### Space-time cube payload (`vertex_value_matrix`)
 
@@ -551,9 +435,7 @@ the value into the _time-as-height_ "squash" cube with a single uniform.
 
 `vertex_value_matrix` is the payload substrate any build-time analytic would
 sit on: a pass that produces a per-cell, per-bucket scalar field lands in
-exactly this column. (A full preprocessing framework — cube / aggregation /
-trend recipes — was designed and deliberately counted out; see the counted-out
-register in `docs/roadmap/stt-packed-format-decisions.md`.)
+exactly this column.
 
 ##### Per-vertex value quantization (`TILE_META.vq`)
 
@@ -628,69 +510,43 @@ for a _coarser_ precision can never make the column _bigger_: past 65 535
 quanta the requested precision stands verbatim rather than snapping to 1.0
 and widening the leaf to `Int32`.
 
-The auto mode has exactly **one** refusal, and the threshold is derived, not
-tuned. At `i32::MAX` both encodings stop being defensible at once: the
-step-1 exact path can no longer index the column into even the `Int32` leaf,
-and the range-adaptive path's step is ≥ ~32 000 — under five significant
-digits of the _leading_ value, and far worse for the body. For an identifier
-domain lossy is silent corruption (every distinct value matters and
-interpolating between them is meaningless), which is what this catches: both
-64-bit hashes (`nyc-taxi-points.trip_id`, measured shipping at `o = 2.35e18`,
-`s = 2.3e14`) and mid-magnitude ids like OSM node ids (≈ 1.2e10), which sit
-well inside `f64`'s exact-integer range yet would otherwise decode off by tens
-of thousands. `f64` represents every such integer exactly, so "leave it
-`Float64`" is lossless, not a punt.
+The auto mode's single refusal is a **magnitude** test at `i32::MAX`, keyed
+off magnitude rather than span or distribution so the verdict is a property of
+the column's _domain_ and cannot drift between tiles — a column whose Arrow
+type depends on which rows a tile caught is structural schema drift, which
+`stt-validate` hard-fails. Identifier domains therefore stay `Float64`, which
+is lossless up to 2^53, instead of being spread across a lossy affine that
+makes every distinct id wrong. A small-magnitude column whose span is inflated
+by a rare outlier still quantizes, coarsely, by design: detecting that needs a
+distribution test, which is irreducibly a property of the tile's own sample.
 
-Keying the refusal off value **magnitude** rather than span or distribution is
-what makes it **stable across tiles**: magnitude is a property of the column's
-domain, whereas span and outlier-conditioning are properties of whichever rows
-a tile happened to catch. A tile holding a single hash-like `trip_id` (span 0)
-refuses exactly like every other tile of that column. This matters beyond
-tidiness — a column that is `Float64` in one tile and an integer leaf in
-another is structural schema drift, which `stt-validate` hard-fails.
+By default those rules are evaluated **once per column over the dataset's own
+domain**, not per tile: `stt-build`'s pass 1 resolves each numeric column's
+affine origin — and, on the auto path, its step and integer leaf — plus each
+categorical column's dictionary-vs-`Utf8` verdict, and pins them for every
+tile. One source value then decodes identically everywhere, an auto-quantized
+column has one Arrow type dataset-wide, and it forks exactly one PROPS schema
+template ([packed spec §3.2](../spec/stt-packed-format.md#32-schema-templates-schemas--formatversion-3)).
+A tile value that escapes its pin is a **hard encode error**, never a clamp:
+the pin describes the whole dataset, so an out-of-range index is evidence the
+pins are stale. Under an explicit `--quantize-attr` precision only the origin
+is dataset-wide — the requested step stands and the leaf still narrows to that
+tile's widest index.
 
-**Not covered, deliberately:** a small-magnitude column whose span is inflated
-by a rare outlier (body 0–10 with an occasional 1e6 → step ≈ 15, so the body
-collapses onto index 0) still quantizes, coarsely. Detecting that needs a
-distribution test, which is irreducibly a property of the tile's sample and so
-reintroduces the drift above. Coarseness is the advertised cost of an opt-in
-lossy lever; a column whose Arrow type depends on its rows is a broken archive.
-The correct fix is a dataset-wide range pre-pass that makes the affine — and
-this decision — global rather than per tile; it is on the deferred register in
-[`stt-packed-format-decisions.md`](../roadmap/stt-packed-format-decisions.md).
-
-Unlike the [coordinate-quantization](#coordinate-quantization) affine, whose
-`x0`/`y0`/`sx`/`sy` are fixed dataset-wide constants, `o` and `s` here are
-derived from **that tile's own** column values, so the same property's
-`stt:qa` affine — and its leaf type — can differ from tile to tile in
-**both** modes. A reader decodes `stt:qa` fresh from each tile's schema
-(v2: from that tile's `TILE_META.qa`) rather than caching it across tiles of
-the same property, and MUST accept `UInt16` and `Int32` interchangeably.
-
-> **Erratum (2026-07-26).** This table previously stated that the
-> range-adaptive mode "fixes the leaf to `UInt16` in every tile (it never
-> falls back to `Int32`), so a reader need not branch on leaf width in that
-> mode." **That guarantee is withdrawn** — the exact-integer regime above
-> emits `Int32` for wide integer spans and no quantized column at all for
-> the two refusal cases. Readers were already required to handle both leaf
-> widths for the explicit mode, and both reference readers were verified to
-> be leaf-agnostic before the change shipped, so no reader change was needed;
-> but a third-party reader that took the withdrawn sentence literally must
-> now branch. Consequences worth naming: (a) the _set_ of quantized columns
-> in a layer is stable tile to tile — the sole refusal keys off value
-> magnitude, a property of the column's domain, precisely so it cannot flip
-> on which rows a tile caught (an earlier revision of this change did have a
-> sample-dependent refusal, and `stt-validate` hard-failed on it); (b) each
-> distinct width combination mints one
-> extra PROPS schema template; (c) archives published before this date carry
-> the old mode's **wrong values** for integer columns and are not
-> retroactively fixed — rebuild to correct them.
+`stt-build --single-pass`, and any caller that supplies no pins (a one-shot
+external encoder, `stt-serve`), restores the per-tile affine; only there can a
+property's `stt:qa` affine or its leaf type differ from tile to tile. Either
+way a reader decodes the affine fresh from each tile's own `TILE_META.qa`
+(re-injected as `stt:qa` field metadata at decode) rather than caching it
+across tiles of the same property, and MUST accept `UInt16` and `Int32`
+interchangeably.
 
 ### Summary-tier layers
 
 An archive built with `--summary-tier` carries pre-aggregated cell tiles at
 low zooms, declared by `metadata.summary_tier` (see
-[Metadata](#metadata-utf-8-json)). A summary tile is an ordinary tile — same
+[The `metadata` block](#the-metadata-block)). A summary tile is an ordinary
+tile — same
 layer frame, same Arrow envelope, same required columns — with these
 additional normative constraints:
 
@@ -702,19 +558,22 @@ additional normative constraints:
   index (`"quadbin"`) — at the resolution
   `summary_tier.cell_resolution_per_zoom[z - summary_tier.min_zoom]` for the
   tile's zoom `z` (clamped to the table's ends outside
-  `[min_zoom, max_zoom]`). Renderers derive the cell polygon from the id and
-  any `u64` decodes without error, so a wrong id fails silently: three shipped
-  archives once carried sequential row numbers here, decoded cleanly, passed
-  validation, and rendered blank. `stt-validate` now checks cell-id validity
-  per scheme/resolution.
+  `[min_zoom, max_zoom]`). Renderers derive the cell polygon from the id, and
+  any `u64` decodes without error — so a wrong id (a sequential row number,
+  say) renders blank rather than erroring. `stt-validate` checks cell-id
+  validity per scheme and resolution.
 - **Geometry.** The `geometry` column is a GeoArrow **Point at the cell's
   centroid** — a representative lon/lat for picking and fallbacks; the cell
   outline is reconstructed client-side from the id (h3-js for H3, the
   quadbin→tile math for quadbin).
 - **Aggregate columns.** The layer always carries a `count` `Float64`
-  property (features aggregated into the cell). Each `summary_tier.columns[]`
-  entry with a non-`count` `agg` ships as one additional `Float64` property
-  column; a cell with no source values for a column is `null`, never `0`.
+  property (features aggregated into the cell) — the `count` aggregation is
+  emitted once, under that bare name, never as `count__count`. Each
+  `summary_tier.columns[]` entry with a non-`count` `agg` ships as one
+  additional `Float64` column named **`<agg>_<name>`**, so
+  `{"name": "magnitude", "agg": "mean"}` produces `mean_magnitude`
+  (`--summary-columns magnitude:mean,…`). A cell with no source values for a
+  column is `null`, never `0`.
 - **`sub_buckets` contract.** When `summary_tier.sub_buckets = N > 1`
   (`--summary-sub-buckets N`, keep ≤ 32), the layer carries N additional
   `Float64` columns named `bucket_0 … bucket_<N-1>`: `bucket_i` counts the
@@ -730,7 +589,7 @@ additional normative constraints:
 ### GeoArrow interop
 
 An STT tile layer **is** a valid [GeoArrow](https://geoarrow.org/format.html)
-record batch. The Rust writer (`crates/stt-core/src/arrow_tile.rs`) tags
+record batch. The Rust writer (`crates/stt-core/src/arrow_tile/encode.rs`) tags
 the `geometry` field's Arrow metadata with the standard extension keys:
 
 | field metadata key         | values                                                        |
@@ -744,8 +603,12 @@ order, matching the interleaved `[lon, lat]` storage — _not_ `EPSG:4326`, whos
 strict (lat/lon) axis order would mislabel the data. Carrying it makes every
 tile self-describing to GDAL / GeoPandas / lonboard / QGIS; a reader that wants
 the CRS reads this key, and a reader that ignores it is unaffected (the key is
-additive). Archives that carry only `ARROW:extension:name` (no CRS metadata)
-should be treated as OGC:CRS84.
+additive). `ARROW:extension:name` is always written; `ARROW:extension:metadata`
+is written only on **unquantized** geometry — a coordinate-quantized layer
+carries `stt:quant` in its place, because a CRS does not describe `Int32` grid
+indices. Coordinates are OGC:CRS84 by definition here, so a reader that finds
+`ARROW:extension:name` without the metadata key MAY assume it rather than
+treating the CRS as unknown.
 
 > **Anchored-local frames.** Coordinates are _always_ CRS84 lon/lat at the
 > payload level, but the [scene-bundle profile](../spec/sidecar-assets.md#4-georeferencing-georeferenced-vs-anchored-local)
@@ -763,17 +626,11 @@ default. Polygons are encoded as `List<List<FixedSizeList<Float64, 2>>>`
 This is the default shape only — see the callout immediately below for the
 two encoder features that depart from it.
 
-> **MultiPolygon parts are not representable in `geoarrow.polygon`.** A
-> multi-part feature's rings are flattened part-major into the one ring list,
-> and the ring offsets do **not** keep the parts separable: GeoArrow's
-> polygon type has no part level, so a generic consumer reads parts 2..n as
-> holes of part 1. STT ships the part boundary out-of-band in the additive
-> [`part_offsets`](#part_offsets-multipolygon-part-boundaries) column, which
-> a generic GeoArrow consumer will not look at. A tile whose polygon layer
-> carries `part_offsets` is still a valid GeoArrow record batch — it is just
-> one whose multi-part features a GeoArrow-only reader will render wrong.
-> A native `geoarrow.multipolygon` geometry type is the real fix and is on
-> the deferred list (`docs/roadmap/stt-packed-format-decisions.md` §10).
+> **MultiPolygon parts are not representable in `geoarrow.polygon`.** STT
+> ships the boundary out-of-band in
+> [`part_offsets`](#part_offsets-multipolygon-part-boundaries), which a
+> GeoArrow-only reader will not look at — the tile is still a valid GeoArrow
+> record batch, just one whose multi-part features such a reader renders wrong.
 
 > **Quantized / elevation-folded tiles are not literal GeoArrow.** The
 > "is a valid GeoArrow record batch" guarantee above assumes the default
@@ -782,18 +639,19 @@ two encoder features that depart from it.
 > [point-elevation fold](#point-elevation-fold-3d-points) (3-wide leaf) no
 > longer matches what a generic GeoArrow consumer
 > (`@geoarrow/deck.gl-layers`, Lonboard, geoarrow-rs) expects, and such a
-> consumer will misread the coordinates. A reader MUST check the `geometry`
-> field for `stt:quant` (and inspect the `FixedSizeList` width) before
-> treating a tile as vanilla GeoArrow; the STT decoder
+> consumer will misread the coordinates. On a quantized layer the missing
+> `ARROW:extension:metadata` key is itself part of that signal. A reader MUST
+> check the `geometry` field for `stt:quant` (and inspect the `FixedSizeList`
+> width) before treating a tile as vanilla GeoArrow; the STT decoder
 > (`packages/core/src/tile.ts`) always does.
 
 The schema-level metadata also carries `stt:layer` (the layer name),
 `stt:time_offset_ms` (the layer's minimum `start_time`, baked at encode time
 so a reader can relativize times against a Float32-safe offset without a
 min-scan over the column — written whenever a start-time column exists), and
-a legacy `stt:geometry` key for back-compat; readers SHOULD prefer the
-standard field-level key and fall back to `stt:geometry` only when it is
-absent.
+a redundant `stt:geometry` key that the writer still emits alongside the
+GeoArrow extension metadata; readers SHOULD prefer the standard field-level
+key and fall back to `stt:geometry` only when it is absent.
 
 In TypeScript, the decoded `Layer` exposes both surfaces:
 
@@ -817,11 +675,17 @@ STT tiles as-is — no per-tile conversion step.
 
 ### Naming conventions
 
-Layer name `default` is the conventional "everything" layer. The build
-pipeline may emit a `default_originals` companion layer containing
-unsimplified geometry when `--simplify` is used; clients can pick the
-appropriate one based on zoom. Summary-tier tiles use the layer name
-`summary` by default (overridable via `--summary-layer`).
+Layer name `default` is the conventional "everything" layer (`--layer`
+renames it). Within a single tile the builder may also emit a
+`<layer>_originals` companion: when a tile holds **both** features clipped at
+its edges and features carried whole, the clipped ones keep the base name and
+the whole ones take the `_originals` suffix, purely so the two layer names
+stay unique inside that tile. A tile with only one of the two kinds emits
+only the base name. A single layer holds exactly one geometry kind, so when a
+tile holds features of more than one kind every layer there takes a kind
+suffix — `<layer>_points`, `<layer>_lines`, `<layer>_polygons`; a tile with a
+single kind keeps the bare name. The two suffixes compose. Summary-tier tiles
+use the layer name `summary` by default (overridable via `--summary-layer`).
 
 #### Per-vertex column names across the pipeline
 
@@ -843,62 +707,59 @@ case changes). The input reader matches the plural column name exactly, with no
 singular fallback: a singular `vertex_time` / `vertex_value` _input_ column is
 not recognized and its data decodes to a silent `null`.
 
-## Legacy dictionary slot (non-normative)
-
-The single-file header reserves a slot (`dictionary_offset` /
-`dictionary_length`) for a single shared zstd dictionary that would apply to
-every tile blob, but **no producer ever shipped one** — the Rust single-file
-writer and reader that trained and loaded it have been removed, and `stt-build`
-writes packed datasets via `PackWriter` (explicitly dictionary-less so the
-browser's `fzstd` decoder works). The packed format has **no dictionary slot at
-all** — every blob is an independent zstd frame. `dictionary_offset == 0` means
-no dictionary.
-
-## Index (the directory)
+## The directory
 
 The directory is **not** Arrow IPC — it is a compact columnar binary codec
 (`crates/stt-core/src/directory.rs`): delta + zig-zag LEB128 varint key
-columns plus blob-run RLE, sorted by `(zoom, hilbert, time_start)` so every
-column delta-codes to ~1 byte per entry. The wire encoding is specified in
-[the packed format spec §4](../spec/stt-packed-format.md); the
-single-file container embeds the same codec at the header's
-`index_offset` (its variant has no per-run `pack_id` column —
-whole-file offsets, decoded as `pack_id = 0`).
+columns plus blob-run RLE, sorted by
+`(zoom, hilbert, time_start, variant_id)` so every column delta-codes to ~1
+byte per entry. The wire encoding is normative in
+[the packed format spec §4](../spec/stt-packed-format.md#4-directory-format-v6);
+this section lists only what an entry decodes to.
 
 Each entry decodes to these logical fields (`stt_core::TileEntry`, defined in
 `directory.rs`):
 
-| field                | type          | description                                                                   |
-| -------------------- | ------------- | ----------------------------------------------------------------------------- |
-| `zoom`               | `u8`          | zoom level                                                                    |
-| `x`                  | `u32`         | tile x                                                                        |
-| `y`                  | `u32`         | tile y                                                                        |
-| `time_start`         | `i64`         | inclusive temporal start, Unix ms (bucket boundary)                           |
-| `time_end`           | `i64`         | inclusive temporal end, Unix ms                                               |
-| `pack_id`            | `u32`         | pack object index (always 0 in a single-file archive)                         |
-| `offset`             | `u64`         | byte offset of the compressed blob (pack-relative; whole-file in single-file) |
-| `length`             | `u32`         | compressed blob length                                                        |
-| `uncompressed_size`  | `u32`         | uncompressed payload length                                                   |
-| `feature_count`      | `u32`         | total features across the tile's layers                                       |
-| `hilbert`            | `u64`         | Hilbert index of `(zoom, x, y)` — directory sort key                          |
-| `crc32c`             | `u32`         | CRC32C of the compressed blob (integrity tag)                                 |
-| `temporal_bucket_ms` | `Option<u64>` | bucket size this tile covers (base vs temporal-LOD tier)                      |
-| `cover_t_min`        | `Option<i64>` | tight lower covering bound — earliest feature start actually in the tile      |
+| field                | type          | description                                                                                               |
+| -------------------- | ------------- | --------------------------------------------------------------------------------------------------------- |
+| `zoom`               | `u8`          | zoom level                                                                                                |
+| `x`                  | `u32`         | tile x                                                                                                    |
+| `y`                  | `u32`         | tile y                                                                                                    |
+| `time_start`         | `i64`         | inclusive temporal start, Unix ms (bucket boundary)                                                       |
+| `time_end`           | `i64`         | inclusive temporal end, Unix ms                                                                           |
+| `variant_id`         | `u32`         | logical payload variant — part of the address, so raw and summary tiles may share `(z, x, y, time_start)` |
+| `pack_id`            | `u32`         | index into the manifest's `packs[]` table                                                                 |
+| `offset`             | `u64`         | byte offset of the compressed blob, absolute within its pack object                                       |
+| `length`             | `u32`         | compressed blob length                                                                                    |
+| `uncompressed_size`  | `u32`         | uncompressed payload length                                                                               |
+| `feature_count`      | `u32`         | total features across the tile's layers                                                                   |
+| `hilbert`            | `u64`         | Hilbert index of `(zoom, x, y)` — directory sort key                                                      |
+| `crc32c`             | `u32`         | CRC32C of the compressed blob (integrity tag)                                                             |
+| `temporal_bucket_ms` | `Option<u64>` | bucket size this tile covers (base vs temporal-LOD tier)                                                  |
+| `cover_t_min`        | `Option<i64>` | tight lower covering bound — earliest feature start actually in the tile                                  |
 
 The Hilbert ordering is what makes range coalescing work: viewport tiles at
 the same zoom level tend to be contiguous in blob order, so a reader can
 issue one HTTP Range request that covers several tiles.
 
-`temporal_bucket_ms` is `None` on archives without a temporal-LOD pyramid
-(readers fall back to the archive-level `Metadata::temporal_bucket_ms`);
-`cover_t_min` is `None` on pre-covering builds (readers fall back to
-`time_start`).
+A pre-v6 (v5) directory buffer has no `variant_id` column, so a reader decodes
+every entry of one as the raw variant.
 
-## Legacy metadata block (non-normative)
+`temporal_bucket_ms` is `None` on archives without a temporal-LOD pyramid;
+readers fall back to the archive-level `Metadata::temporal_bucket_ms`.
+`cover_t_min` rides in an optional trailing covering section that the writer
+emits only when **every** entry has one, so it is `None` for all entries or
+for none; readers fall back to `time_start`.
 
-The retired single-file container stored a `serde_json::Value` with the shape
-below. Current packed archives use `manifest.json`; its normative schema is
-[`manifest.schema.json`](../spec/manifest.schema.json).
+## The `metadata` block
+
+The packed manifest folds the full `stt-core` `Metadata` object into
+`manifest.metadata` verbatim, in **snake_case**, so a cold reader needs no
+second request to learn what the dataset is. The
+[manifest schema](../spec/manifest.schema.json) treats the block as opaque
+except for the optional `style_hints`, `ordering_workload`, `z_range` and
+`content_fingerprint` sub-blocks it pins; the reference definition is
+`stt_core::metadata::Metadata`. Its shape:
 
 ```jsonc
 {
@@ -917,10 +778,15 @@ below. Current packed archives use `manifest.json`; its normative schema is
   "tile_count": 1234,
   "feature_count": 56789,
   "layers": ["default"],
-  "properties": {},
+  "properties": {}, // free-form string→string attestations about the build,
+  // NOT the tile's column list — read `manifest.schemas` for that
   "temporal_bucket_ms": 3600000,
 
-  // Optional — present when the archive was built with --summary-tier;
+  // Optional — omitted entirely when unset, never null-filled.
+  "z_range": [0.0, 8848.0], // elevation extent, when the source carries z
+  "distinct_feature_count": 41002, // features before cross-tile replication
+
+  // Present when the archive was built with --summary-tier;
   // the layer-level contract is in "Summary-tier layers" above
   "summary_tier": {
     "scheme": "h3", // "h3" (Uber H3 hexes) or "quadbin" (CARTO quadbin)
@@ -936,7 +802,7 @@ below. Current packed archives use `manifest.json`; its normative schema is
     // bucket_0..bucket_<N-1> per-cell count columns
   },
 
-  // Optional — present when the archive was built with --temporal-lod.
+  // Present when the archive was built with --temporal-lod.
   // Each level's bucket_ms is a strict multiple of temporal_bucket_ms,
   // sorted ascending. Readers pick the coarsest level whose
   // max_zoom_level >= current zoom.
@@ -945,7 +811,13 @@ below. Current packed archives use `manifest.json`; its normative schema is
     { "bucket_ms": 2592000000, "max_zoom_level": 4 },
   ],
 
-  // Optional — present when built with --heatmap-weight / --heatmap-class.
+  // How base-tier features are distributed across zooms.
+  // Absent = "replicated" = every feature appears at every zoom in its band.
+  // "home-zoom" puts each feature at exactly one zoom and REQUIRES the
+  // must-understand capability `additive-partition` (packed spec §3.1).
+  "partition": "replicated",
+
+  // Present when built with --heatmap-weight / --heatmap-class.
   // HeatmapLayer pins colorDomain to [min, max] (95p of weight, not absolute
   // max) instead of doing a runtime GPU readback.
   "heatmap_domain": {
@@ -953,6 +825,11 @@ below. Current packed archives use `manifest.json`; its normative schema is
       { "id": "default", "min": 4.0, "max": 6.2, "property": "magnitude" },
     ],
   },
+
+  // Pinned by the manifest schema — see it for the full shapes.
+  "style_hints": { "version": 1, "properties": [] },
+  "ordering_workload": { "coalesce_gap_bytes": 2097152 },
+  "content_fingerprint": { "version": 1 },
 }
 ```
 
@@ -962,65 +839,56 @@ cache-hit rate high during animation.
 
 ## Read order
 
-**Packed (current):** `GET manifest.json` → `GET` the directory object →
-per visible tile, a Range request into the right pack — see
-[the packed format spec §6](../spec/stt-packed-format.md). The TypeScript
-reader coalesces ranges within a pack when their gap is under 2 MiB
-(`DEFAULT_RANGE_COALESCE_GAP` in `packages/core/src/archive.ts`,
-overridable via `ArchiveOptions.coalesceGapBytes`) — tuned for HTTP/2
-against edge caches, where re-fetching a small gap is cheaper than an
-extra request.
+`GET manifest.json` → `GET` the directory object (or, on a paged directory,
+the root plus the leaves the viewport needs) → per visible tile, a Range
+request into the right pack. The full reader flow is normative in
+[the packed format spec §6](../spec/stt-packed-format.md#6-reader-flow-identical-contract-rust--ts).
 
-**Single-file container** (historical; no reference implementation reads it):
-
-1. Bytes `[0, 64)` → header. Verify magic and version.
-2. If `dictionary_length > 0`: read the dictionary slot and construct a
-   shared zstd decompressor with it.
-3. `[index_offset, index_offset + index_length)` → index. Decode the
-   directory codec; build in-memory secondary indices.
-4. `[metadata_offset, metadata_offset + metadata_length)` → metadata.
-5. Per tile: `[entry.offset, entry.offset + entry.length)` → blob. Verify
-   the CRC32C, decompress, decode the layer frame, hand the resulting Arrow
-   `RecordBatch`es to the consumer.
+The TypeScript reader coalesces ranges within a pack when their gap is under
+2 MiB (`DEFAULT_RANGE_COALESCE_GAP` in `packages/core/src/archive.ts`,
+overridable via `ArchiveOptions.coalesceGapBytes`) — tuned for HTTP/2 against
+edge caches, where re-fetching a small gap is cheaper than an extra request.
 
 ## Forward and backward compatibility
 
-- The `compression` byte is the only place new compression algorithms are
-  added; readers MUST reject values they do not understand.
-- The directory codec carries its own version byte. Current packed writers use
-  v6; readers also accept packed v5 read-only. The retired single-file layout
-  used v4. This axis evolves independently of the container.
+- The directory codec carries its own version byte and evolves independently
+  of both the container and this payload; writers emit **v6** (packed spec
+  §4).
 - New per-layer columns are tolerated automatically — they appear in the
   Arrow schema and a property-aware client passes them through to the
   renderer.
-- **Re-typings of existing columns are the dangerous class.** Unlike a new
-  column, a reader that doesn't check the discriminating key won't skip the
-  data — it will silently misdecode it. The full set, each with the
+- **Re-typings and re-shapings of existing columns are the dangerous class.**
+  Unlike a new column, a reader that doesn't check the discriminating key
+  won't skip the data — it will silently misdecode it. The full set, each with
+  the
   `manifest.capabilities` entry that makes a lacking reader refuse at open
   instead (packed spec §3.1):
 
-  | re-typing                         | key to check                 | capability           | misdecode if ignored                              |
-  | --------------------------------- | ---------------------------- | -------------------- | ------------------------------------------------- |
-  | quantized `geometry`              | `stt:quant` (field metadata) | `coord-quant`        | `Int32` grid indices read as tiny lon/lat degrees |
-  | quantized numeric `<prop>`        | `stt:qa` / `TILE_META.qa`    | `attr-quant`         | a raw index read as an enormous property value    |
-  | 3-wide POINT leaf                 | `FixedSizeList` width        | `elevation-fold`     | `[x,y,z]` read as `[x,y]` pairs                   |
-  | compact `start_time` / `end_time` | `TILE_META.st` / `.et`       | `time-delta`         | ms offsets read as absolute Unix ms → 1970        |
-  | quantized `vertex_value(_matrix)` | `TILE_META.vq`               | `vertex-value-quant` | 0..65534 indices rendered as physical values      |
+  | re-typing / re-shaping            | key to check                                                | capability                   | misdecode if ignored                                                                 |
+  | --------------------------------- | ----------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ |
+  | quantized `geometry`              | `stt:quant` (field metadata)                                | `coord-quant`                | `Int32` grid indices read as tiny lon/lat degrees                                    |
+  | quantized numeric `<prop>`        | `stt:qa` / `TILE_META.qa`                                   | `attr-quant`                 | a raw index read as an enormous property value                                       |
+  | 3-wide POINT leaf                 | `FixedSizeList` width                                       | `elevation-fold`             | `[x,y,z]` read as `[x,y]` pairs                                                      |
+  | compact `start_time` / `end_time` | `TILE_META.st` / `.et`                                      | `time-delta`                 | ms offsets read as absolute Unix ms → 1970                                           |
+  | quantized `vertex_value(_matrix)` | `TILE_META.vq`                                              | `vertex-value-quant`         | 0..65534 indices rendered as physical values                                         |
+  | feature-anchored `vertex_time`    | `TILE_META.vtf`                                             | `vertex-time-feature-anchor` | deltas resolved against an invented layer origin — every vertex at the wrong instant |
+  | partial `triangles`               | an empty per-feature index list in a triangle-bearing layer | `triangles-partial`          | every single-ring polygon silently vanishes                                          |
 
   A reader MUST check the key, never infer from the Arrow `DataType` alone.
 
 - **Additive columns never get a capability**, because ignoring them is
-  safe: `triangles`, `part_offsets`, vector groups, summary-tier columns.
+  safe: `part_offsets`, vector groups, summary-tier columns.
 - New metadata fields use serde defaults so old archives decode under new
   readers; new fields are skipped when unset so new archives decode under
   old readers that ignore them.
-- The 10 reserved header bytes (single-file) are reserved for additive
-  features. They MUST be zero on write.
+- Unknown `TILE_META` **keys** and unknown frame **section tags** are
+  skippable by design, which is what makes additive frame evolution possible
+  without a version bump (packed spec §5.2).
 
 ## Validating an archive
 
 `stt-validate <dataset>` accepts a packed dataset directory or its
-`manifest.json` (the single-file `.stt` container has been removed). It first
+`manifest.json`. It first
 verifies the content-addressing contract (every pack/directory object
 blake3-hashes to its filename, declared lengths match, no out-of-range
 `pack_id`), then verifies every tile's CRC32C, decodes each payload, and

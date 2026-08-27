@@ -88,6 +88,18 @@ Browsers suspend `requestAnimationFrame` in background tabs, so without protecti
 | `seek(time: number)`    | Jump to a specific time (alias of `setTime`).                                |
 | `seekBy(delta: number)` | Seek by a relative offset.                                                   |
 
+### External clock (host-driven frames)
+
+| Method                  | Description                                                                                                                                                                                                                   |
+| :---------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attachExternalClock()` | Hand the per-frame advance to a host render loop (deck.gl's `onBeforeRender`). Suppresses the internal rAF — one frame clock, no skew between "time advanced" and "scene drawn" — and re-anchors the frame clock. Idempotent. |
+| `detachExternalClock()` | Restore the self-owned rAF loop, resuming it if mid-playback. Idempotent.                                                                                                                                                     |
+| `advanceFrame()`        | Advance the playhead by one host frame. No-op unless an external clock is attached, and the underlying step no-ops while paused — safe to call every frame regardless of play state.                                          |
+
+The advance is **coalesced per animation frame** on `document.timeline.currentTime`, which the browser holds constant for every task between two rendering opportunities, so every draw in one frame reads the same token regardless of callback ORDER (an rAF-callback counter cannot promise that — whether the host schedules its next frame before or after drawing would decide it). The coalesce is load-bearing: deck.gl's React wrapper redraws SYNCHRONOUSLY from a dependency-less layout effect, so `onBeforeRender` fires once per React _commit_, not once per frame; without it the clock ticks per render and any playback state a tick produces (a stall freezing the clock, a gate opening it) re-enters React from inside its own commit → render → draw → tick chain — which React reports as "Maximum update depth exceeded". No sim-time is lost by skipping a draw: the step integrates `performance.now() - lastUpdateTime`, so the next accepted advance covers the whole elapsed span. Where no document timeline exists (workers, Node, headless hosts) every call advances.
+
+The deck.gl wiring is packaged as [`useDeckClock`](./stt-react.md#usedeckclock).
+
 ### State Access
 
 | Method                    | Returns                       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                             |

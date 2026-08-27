@@ -41,14 +41,16 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 ### Flow arrows
 
-| Prop             | Type     | Default            | Description                                                                                                                   |
-| ---------------- | -------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `widthScale`     | `number` | `1.1`              | Arrow width in pixels per `sqrt(currentBucketFlow)`. `sqrt` keeps a wide dynamic range legible.                               |
-| `widthMinPixels` | `number` | `1`                | Minimum width for **active** arrows (zero-flow arrows stay at width 0).                                                       |
-| `widthMaxPixels` | `number` | `12`               | Maximum arrow width in pixels.                                                                                                |
-| `sourceColor`    | `Color`  | `[56,196,232,235]` | Origin / tail color (the arrow interpolates source→target along its length).                                                  |
-| `targetColor`    | `Color`  | `[255,142,64,245]` | Destination / arrowhead color.                                                                                                |
-| `gap`            | `number` | `0.5`              | Perpendicular separation between the two directions of a pair, in units of the arrow width — so A→B and B→A sit side-by-side. |
+| Prop             | Type            | Default            | Description                                                                                                                                           |
+| ---------------- | --------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `widthScale`     | `number`        | `1.1`              | Arrow width in pixels per `sqrt(currentBucketFlow)`. `sqrt` keeps a wide dynamic range legible.                                                       |
+| `widthMinPixels` | `number`        | `1`                | Minimum width for **active** arrows (zero-flow arrows stay at width 0).                                                                               |
+| `widthMaxPixels` | `number`        | `12`               | Maximum arrow width in pixels.                                                                                                                        |
+| `sourceColor`    | `Color`         | `[56,196,232,235]` | Origin / tail color (the arrow interpolates source→target along its length).                                                                          |
+| `getSourceColor` | `Color \| null` | `null`             | Upstream-vocabulary alias of `sourceColor` (constant `Color` only — a function accessor warns once and falls back). Wins over `sourceColor` when set. |
+| `targetColor`    | `Color`         | `[255,142,64,245]` | Destination / arrowhead color.                                                                                                                        |
+| `getTargetColor` | `Color \| null` | `null`             | Upstream-vocabulary alias of `targetColor` (constant `Color` only — a function accessor warns once and falls back). Wins over `targetColor` when set. |
+| `gap`            | `number`        | `0.5`              | Perpendicular separation between the two directions of a pair, in units of the arrow width — so A→B and B→A sit side-by-side.                         |
 
 ### Node circles
 
@@ -72,10 +74,8 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 
 The per-bucket `vertexValueMatrix` is the animated source of truth, and
 `flowProperty` is **ignored** whenever a tile carries one. An archive built
-without the matrix used to render every corridor at width 0 — a blank map
-indistinguishable from a load failure. It now falls back to a per-feature
-magnitude column and renders a **static** flowmap (every corridor keeps one
-constant width):
+without the matrix falls back to a per-feature magnitude column and renders a
+**static** flowmap (every corridor keeps one constant width):
 
 - `flowProperty` unset (the default) auto-detects the first column present out
   of `flow`, `count`, `volume`, `trips`, `value`, `weight`.

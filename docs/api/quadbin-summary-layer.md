@@ -25,23 +25,29 @@ const layer = new QuadbinSummaryLayer({
 });
 ```
 
+Pair it with a raw-tier layer for a zoom-dependent stack, or simply use any animated layer with `tier: 'auto'` (the base default) — the tileset dispatches to the summary tier inside its zoom band and back to the raw tier above it, and has no effect at all on an archive with no summary tier.
+
 ## Cell encoding
 
 The Quadbin cell id is a **CARTO Quadbin u64** (header `0b100`, mode bit, 5-bit zoom at bits 56–52, 52-bit left-aligned Morton x/y). ⚠️ Because the header and zoom bits live in the **high half**, [`BinaryFeatures.featureIds`](./binary-features.md#feature-identity-read-featureids64-not-featureids) — a masked low 32 bits — is meaningless for **every** Quadbin id; `featureIds64` is the only correct source, which is what this layer reads. The Rust aggregator (`stt-build`) encodes it and the TS [`quadbin-cell`](../../packages/layers/src/lib/quadbin-cell.ts) helper decodes it to `(z, x, y)` → Bing quadkey string. The encode/decode are exact mirror-images, validated against CARTO's reference value `(0,0,0) → 0x480fffffffffffff`.
+
+## Time inside a tile (sub-buckets)
+
+Identical to the H3 tier in every respect except the flag spelling — build with `--summary-tier quadbin --summary-sub-buckets N` and see [Time inside a tile](./h3-summary-layer.md#time-inside-a-tile-sub-buckets) for what N bakes, how the active `bucket_<k>` column is selected, and what it costs.
 
 ## Properties
 
 Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md). One base default changes: `maxCacheSize` is **500** (summary tiles are few but row-heavy).
 
-| Property         | Type                              | Default   | Description                                                                                 |
-| :--------------- | :-------------------------------- | :-------- | :------------------------------------------------------------------------------------------ |
-| `weightProperty` | `string`                          | `'count'` | Numeric column the color ramp + extrusion height are driven by.                             |
-| `colorRange`     | `Color[]`                         | 6-stop    | Low→high color ramp; `weightProperty` is quantised into its buckets.                        |
-| `colorDomain`    | `[number, number] \| null`        | `null`    | `[min, max]` for the ramp. Pin it for a stable legend across streaming tiles (recommended). |
-| `extruded`       | `boolean`                         | `false`   | 3D extrusion.                                                                               |
-| `elevationScale` | `number`                          | `1`       | Meters per weight unit (only when `extruded`).                                              |
-| `coverage`       | `number`                          | `0.92`    | Cell coverage (0..1); lower values leave gaps between cells.                                |
-| `onMetadataLoad` | `(meta: ArchiveMetadata) => void` | `null`    | Fired once per archive init with the decoded metadata.                                      |
+| Property         | Type                              | Default   | Description                                                                                                                                                                                                                          |
+| :--------------- | :-------------------------------- | :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `weightProperty` | `string`                          | `'count'` | Numeric column the color ramp + extrusion height are driven by. On a sub-bucketed archive the default `'count'` is replaced per frame by the active `bucket_<k>` column — see [Time inside a tile](#time-inside-a-tile-sub-buckets). |
+| `colorRange`     | `Color[]`                         | 6-stop    | Low→high color ramp; `weightProperty` is quantised into its buckets.                                                                                                                                                                 |
+| `colorDomain`    | `[number, number] \| null`        | `null`    | `[min, max]` for the ramp. Pin it for a stable legend across streaming tiles (recommended).                                                                                                                                          |
+| `extruded`       | `boolean`                         | `false`   | 3D extrusion.                                                                                                                                                                                                                        |
+| `elevationScale` | `number`                          | `1`       | Meters per weight unit (only when `extruded`).                                                                                                                                                                                       |
+| `coverage`       | `number`                          | `0.92`    | Cell coverage (0..1); lower values leave gaps between cells.                                                                                                                                                                         |
+| `onMetadataLoad` | `(meta: ArchiveMetadata) => void` | `null`    | Fired once per archive init with the decoded metadata.                                                                                                                                                                               |
 
 ### Stroke & material
 
@@ -69,6 +75,7 @@ Pass-throughs to deck.gl's `QuadkeyLayer` (→ `GeoCellLayer` → `PolygonLayer`
 
 - **No tier, no render**: archives without a Quadbin summary tier render nothing; the layer warns once ("rebuild with `stt-build --summary-tier quadbin`").
 - **Zoom band**: clamps tile zoom to the summary tier's `[minZoom, maxZoom]` with `'no-overlap'` refinement, identical to `H3SummaryLayer`.
+- **Picking**: hits arrive with `info.object` swapped for the cell's FULL aggregated columns plus `cell` / `quadkey` (the Bing quadkey string) and `weight`; the u64 `id` is decimal-stringified so `JSON.stringify` on it doesn't throw. `info.tile` / `info.sourceTile` carry the source tile.
 - deck.gl 9.x ships no Quadbin-native layer, so `QuadkeyLayer` + the u64→quadkey decode is the path; a future deck/`@deck.gl/carto` upgrade could swap it without touching the renderer.
 - The sublayer short id for `_subLayerProps` overrides is **`quadbins`**.
 

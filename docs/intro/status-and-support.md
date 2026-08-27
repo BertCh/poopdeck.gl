@@ -1,9 +1,12 @@
 # Status, support, and compatibility
 
-STT and poopdeck.gl are actively developed and currently on the **0.7.0**
-release line. They are pre-1.0: production use is possible, but public APIs can
-still change between minor releases. Read package changelogs and release notes
-before upgrading.
+The npm packages are on **0.8.0** and the Rust crate `spatiotemporal-tiles` is
+on **0.8.0**; since the 2026-08-26 repository split the two version numbers move
+independently and agree only by history. What relates them is the archive's
+`formatVersion`, declared in `project-status.json` on both sides. Both stacks
+are pre-1.0: production use is possible, but public APIs can still change
+between minor releases. Read package changelogs and release notes before
+upgrading.
 
 ## What is current
 
@@ -11,11 +14,12 @@ before upgrading.
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Packed archive writer     | `formatVersion: 3`, directory codec v6                                                                                    |
 | Packed archive reader     | Format v3/v6 plus read-only compatibility for published format v2/v5 archives                                             |
-| Rust distribution         | `spatiotemporal-tiles` 0.7.0; five installed CLIs                                                                         |
-| Public npm packages       | Seven packages at 0.7.0: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `mcp`                                |
+| Layer frame               | v2 — the tile payload's own version, independent of the container `formatVersion`                                         |
+| Rust distribution         | `spatiotemporal-tiles` 0.8.0; five installed CLIs                                                                         |
+| Public npm packages       | Seven packages at 0.8.0: `core`, `layers`, `playback`, `react`, `three`, `maplibre`, `mcp`                                |
 | Primary renderer          | `@poopdeck.gl/layers` on the repository-pinned deck.gl 9.3.x line                                                         |
 | Cesium renderer           | Private workspace package, version-frozen at 0.5.0, source-only and experimental                                          |
-| Showcase generator        | Repository-only `tools/stt-generate` workspace; not installed with the public Rust crate                                  |
+| Showcase generator        | STT-repository-only `stt:tools/stt-generate` workspace; not installed with the public Rust crate                          |
 | Local JS toolchain        | Node 24+ and pnpm 11.23.0 (building THIS repository)                                                                      |
 | Published package runtime | Node 20+ — the browser packages' `dist` never executes under Node; `@poopdeck.gl/mcp` is the exception and needs Node 24+ |
 
@@ -51,10 +55,13 @@ without a compatibility expectation. `@poopdeck.gl/cesium`, `stt-wasm`,
 
 ## Format compatibility
 
-Format, directory, and tile-frame versions are independent axes. Current
-writers create packed format v3 and directory v6. Reference readers accept v3
-and the published v2 compatibility window; v2 uses directory v5 and is opened
-read-only. Unknown or unsupported format and directory versions fail loudly.
+Format, directory, and layer-frame versions are independent axes. Current
+writers create packed format v3, directory v6, and layer frame v2. Reference
+readers accept v3 and the published v2 compatibility window; v2 uses directory
+v5 and is opened read-only. Unknown or unsupported format and directory versions
+fail loudly. Note that `stt-serve`'s `/metadata.json` reports
+`formatVersion: 2` — that is the layer-frame version, not the container
+version; a live server has no container.
 
 Packs and directories are immutable and content-addressed. A publisher must
 write new objects under their new hashes and update `manifest.json` last; it
@@ -70,10 +77,11 @@ and the [deployment guide](../guides/deploying.md) for publication order.
   dependency line. Do not infer compatibility with deck.gl 10.
 - A renderer's presence in the workspace does not imply feature parity. Use the
   generated capability matrix.
-- The canonical minimum Rust version is `workspace.package.rust-version` in the
-  root `Cargo.toml`. `.node-version`, root/package engines, and the root
-  `packageManager` define the JavaScript toolchain and are checked against
-  `project-status.json` in CI.
+- The canonical minimum Rust version is `workspace.package.rust-version` in
+  `stt:Cargo.toml`; it reaches this repository as `stt.toolchain.rust` in
+  `project-status.json`, byte-gated by `pnpm stt:check`. `.node-version`,
+  root/package engines, and the root `packageManager` define the JavaScript
+  toolchain and are checked against `project-status.json` in CI.
 
 ## Getting help
 

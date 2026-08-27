@@ -56,7 +56,7 @@ coupling is the genuinely novel piece for a data player.
 
 **Where a data player deliberately differs from video:**
 
-1. **Cost is knowable in advance.** The v5 directory stores every tile's
+1. **Cost is knowable in advance.** The tile directory stores every tile's
    `(timeStart, timeEnd, length)`, so we compute _exactly_ the bytes the next N
    playback-seconds cost for the current viewport, ÷ measured throughput = an
    honest ETA — MPC-style lookahead for free; deadlines are _exact_, not estimated.
@@ -157,8 +157,34 @@ tolerance band** — `runwayToleranceMs`, default 200 ms (= the tick-probe
 interval): a required source within tolerance of the leading required frontier is
 lifted before the min, absorbing cadence jitter (W3C Bug 26436) without lowering
 genuine stall protection; `tolerance=0` ⇒ exact raw-min; optional sources never
-gate — they continue-and-degrade. **One scheduler is the authority** — EDF on
-exact time-to-playhead, laggard required sources promoted (rank-and-redistribute),
+gate — they continue-and-degrade.
+
+**Band precedence (BH-4).** Authoring `runwayToleranceMs` pins the band GLOBALLY
+at `runwayToleranceMs × |speed|` for every source, and `0` still reproduces the
+raw min/AND fold bit-for-bit. Leaving it UNSET is not a flat 200 ms: the band is
+derived per source as `τ_i = max(Δ_i, Δ_L) + 200 ms × |speed|` against the leading
+source _L_, where Δ are the temporal buckets sources declare through
+`BufferSource.getTemporalBucketMs`. A source that declares nothing keeps the
+default, so the derivation can only ever widen the band, never narrow it. The
+widening is skipped when the leader is not MEASURABLE — a probe capped at the
+watermark or gate window reports a healthy leader _at that cap_, which says
+nothing about how far ahead it really is, and a bucket-sized band measured against
+it lifted a starved laggard past the watermark on every bucket-coarse composite
+(audit B7). Against a capped leader the band is the wall default.
+
+**Inert sources are pruned, not gated on.** A source may implement
+`isInert(): boolean`; reporting `true` means it is permanently unable to buffer
+another byte, and the governor drops it from the registry before the fold rather
+than letting it hold the min at zero. Without this, one leaked REQUIRED source
+jams the shared clock for the rest of the session: a finalized tileset keeps its
+coverage index and answers "runway 0, not complete" forever, which the min-gate
+reads as a laggard that never catches up. A layer whose id changes with the
+dataset finalizes its old tileset with no callback the app can hook, so the prune
+is the safety net for the registration contract — not a substitute for
+`unregisterSource`. Anyone implementing a `BufferSource` must answer it
+(`packages/playback/src/playback-governor.ts:222`, `:2248-2270`).
+
+**One scheduler is the authority** — EDF on exact time-to-playhead, laggard required sources promoted (rank-and-redistribute),
 weighted-fair slots, optional = best-effort. Gate, tolerance band,
 `addSource`/`removeSource`, and the `SharedRequestScheduler` +
 `configureSharedScheduler({maxRequests})` budget (there is no kill-switch):
@@ -193,12 +219,20 @@ new timer, one probe per source per evaluation shared with the frontier fold):
   behind is unaffected — the cap only limits run-AHEAD). Loaders may keep an
   internal safety floor; degrading the prefetch horizon under pressure beats
   evicting the protected window.
-- **Dynamic weights** — incomplete required sources get
-  `base × clamp((slack + laggard) / (slack + runway_i), 0.25, 4)`: the laggard
-  lands exactly on base, leaders shed share, bounded both ways. DRR is
-  work-conserving, so this only matters while leaders still hold legitimate
-  queued work (e.g. refetching near-window evictions) — the cap does most of
-  the work. Optional sources stay at base.
+- **Dynamic weights** — byte-aware progressive fill. Each incomplete required
+  source gets a needy-bytes figure `N_i = β_i × max(0, (r_lead − slack) − r_i)`
+  (β = bytes still missing per sim-ms at that source's own frontier), and a
+  weight `base_i × clamp(4 × N_i / max_j N_j, 0.25, 4)`: the neediest source
+  lands on `4 × base`, a source whose need is already met falls to the
+  `0.25 × base` floor, and every degenerate case (no dispersion in need, a
+  bytes-free vector, a non-finite lead) collapses to base. β is exactly what a
+  runway-only rule could not see — that one source's deficit can cost ten times
+  the bytes of another's. DRR is work-conserving, so this only matters while
+  leaders still hold legitimate queued work (e.g. refetching near-window
+  evictions) — the cap does most of the work. Optional sources stay at base. The
+  incumbent `1/x` runway shed survives as `legacyRunwayShedWeight` /
+  `computeRunwayShedWeights`, reachable by flipping the `USE_PROGRESSIVE_FILL_WEIGHTS`
+  (BH-3) rollback constant.
 
 Writes are throttled (>20% change or a to/from-null transition); caps clear
 and base weights restore whenever fairness deactivates (pause, `setSource`,
@@ -233,6 +267,22 @@ its batch stays referenced by `deliverTile()` and resurrects as an orphan outsid
 the registry, inflating `currentCacheBytes`/`loadedTileCount` forever. With no
 coverage index or no playhead (consumers that never touch the buffer APIs) the
 plan degrades to the original LRU, byte-identical to before.
+
+**Loop rotation (BH-7a).** Under a declared `loopRange` whose span exceeds
+`protectedAhead + keepBehind`, "behind the playhead" stops meaning "done with" —
+the head comes back round — so distances are taken modulo the loop span. The
+incumbent rule classified the loop-start working set as tier B and evicted it
+first, the exact inverse of Belady, re-fetching it on every lap. The clamp is
+load-bearing: below it every tile lands inside the protected window and the pass
+cannot free the bytes it must free (and such a loop was already fully protected
+anyway). A tile whose whole bucket falls OUTSIDE the loop is never replayed, so it
+goes to the head of tier B, ahead of every in-loop candidate.
+
+**Byte-density banding (BH-7b).** Inside one tier, candidates are banded one
+temporal bucket wide and ordered by byte size within a band: distance still
+dominates ACROSS bands, size only decides INSIDE one. It never crosses a tier
+boundary, and tiers A and D keep their pure recency order. Unconditional — this
+half does not depend on a declared loop.
 
 **Pressure ladder.** Reaching tier C/D means the limits forced the pass into the
 protected runway, so instead of letting fetch→evict→refetch continue, the
@@ -296,10 +346,12 @@ lands, because "disappearing detail is worse than late-arriving detail."
 
 **The negative result that keeps it off (G5).** The temporal axis has no
 guaranteed payoff, because the coarse-time aggregator only re-buckets — it does
-**not** reduce feature count. `stt:crates/stt-build/src/tiler.rs`, still true today:
-"The scaffold _re-bucketes only_ — feature-level simplification (collapse 1000
-points per cell into 50 means) is left as a follow-up." A coarse-time tile can
-therefore hold every feature in the cell: coarser in time, **not guaranteed
+**not** reduce feature count. `stt:crates/stt-build/src/tiler.rs:415-418`, on
+`generate_lod_level`: "Features are placed onto the same spatial tile grid and
+re-bucketed by the LOD bucket size. Every usable feature and property is
+preserved; this tier reduces the number of tile requests needed for a long-range
+scrub, not the archive's raw feature count. Spatial summaries are a separate
+opt-in tier." A coarse-time tile can therefore hold every feature in the cell: coarser in time, **not guaranteed
 cheaper to fetch or decode**. A tier that isn't cheaper cannot make scrubbing
 faster.
 

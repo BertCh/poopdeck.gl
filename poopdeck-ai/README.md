@@ -21,7 +21,7 @@ the live surface, and the skills route between them. Design record:
 From a checkout of this repo (the repo root is the plugin marketplace):
 
 ```
-/plugin marketplace add /path/to/spatiotemporal-tiles
+/plugin marketplace add /path/to/poopdeck.gl
 /plugin install poopdeck-ai
 ```
 

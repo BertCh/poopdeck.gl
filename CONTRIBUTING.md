@@ -12,31 +12,27 @@ it.
 One pnpm workspace. The Rust toolchain that BUILDS archives lives in a separate
 repository, [BertCh/spatiotemporal-tiles][stt-repo]; this one renders them.
 
-```
-packages/               # pnpm workspace — 7 published packages + Cesium preview
-  core/                 #   reader, decoder pool, cache, render kernel
-  layers/               #   deck.gl backend (primary)
-  three/ maplibre/       #   published alternate renderer backends
-  cesium/                #   experimental workspace-only backend (private)
-  playback/ react/      #   clock + governor + React UI
-  mcp/                  #   published MCP server (`stt-mcp`)
-examples/showcase/      # React Router demo site (dozens of real datasets)
-examples/minimal/       # the PUBLISHED packages from npm — the smoke example
-tools/                  # bench, perf, render-test harnesses
-docs/                   # API reference, guides, architecture + the vendored spec
-poopdeck-ai/            # Claude Code plugin (MCP server + Agent Skills)
-```
+[`AGENTS.md`](AGENTS.md#where-the-code-lives) has the directory tree. Two things
+it does not spell out:
+
+- `packages/` holds the **7 published** packages — `core`, `layers`, `three`,
+  `maplibre`, `playback`, `react`, `mcp` — plus `cesium`, an **experimental**
+  workspace-only backend that is private and not published.
+- `examples/minimal/` installs those packages **from npm**, not from the
+  workspace. That is the whole point of it (see Releasing, below).
 
 [stt-repo]: https://github.com/BertCh/spatiotemporal-tiles
 
 ### The vendored half of `docs/`
 
-Twenty-three pages under `docs/` — the whole normative `docs/spec/` set, the
-CLI reference, the format architecture pages, and several guides — are
-**authored upstream and copied here** so poopdeck.gl serves one complete
-corpus. `.stt-sync.json` is the list. They carry no banner in their bodies (it
-would break the byte comparison), so check that file before editing a doc that
-describes the _format_ rather than the _renderer_.
+Twenty-five files under `docs/` — twenty Markdown pages (the whole normative
+`docs/spec/` set, the CLI reference, the format architecture pages, and several
+guides) plus five machine-readable contracts (the manifest and scene JSON
+Schemas, the tile-matrix-set, the AV palettes, and the `stt-generate` dataset
+inventory) — are **authored upstream and copied here** so poopdeck.gl serves one
+complete corpus. `.stt-sync.json` is the list. They carry no banner in their
+bodies (it would break the byte comparison), so check that file before editing a
+doc that describes the _format_ rather than the _renderer_.
 
 ```bash
 pnpm stt:check                                     # CI gate: vendored == upstream
@@ -87,6 +83,22 @@ package's `exports`, `files`, or build output.
 The showcase consumes the packages' **built `dist/`**, which is git-ignored — if
 you edit e.g. `packages/playback/src` and the showcase does not change, rebuild
 that package.
+
+### Repo gates
+
+CI runs these on every PR, and the last two only work against a built `dist/`:
+
+```bash
+pnpm project:check                        # project-status.json vs the manifests
+pnpm docs:links                           # relative Markdown links resolve
+node scripts/sync-versions.mjs --check    # the Claude Code plugin surface
+pnpm docs:snippets                        # typechecks the docs' TS samples
+node scripts/gen-capabilities-doc.mjs --check   # backend-capabilities.md
+```
+
+`gen-capabilities-doc.mjs` re-renders `docs/spec/backend-capabilities.md` from
+the four `BackendDescriptor`s and byte-compares it, so editing a descriptor
+without re-running it (drop `--check` to write) fails here.
 
 ## Archives to develop against
 
@@ -157,30 +169,22 @@ hand-edit them.
 ## Invariants — do not break these
 
 These are load-bearing design decisions, not style preferences. A change that
-violates one will be sent back regardless of how well it is implemented.
+violates one will be sent back regardless of how well it is implemented. The
+canonical list is
+[AGENTS.md § Ground rules](AGENTS.md#ground-rules-read-before-recommending-anything):
+no default thinning, the manifest is the contract, packs and the directory are
+immutable and content-addressed, deck.gl is pinned to `9.3.x` (via `overrides`
+in `pnpm-workspace.yaml` — pnpm 11 no longer reads `pnpm.overrides` from
+`package.json`), and the showcase honors `prefers-reduced-motion`.
 
-- **No thinning.** Never thin, sample, or aggregate features to hit a byte
-  budget — comprehensive data is the whole point of the format. Shrink by
-  clamping the zoom range and using temporal bucketing. The H3/Quadbin
-  **summary** tier is an opt-in coarse-zoom aid, never a replacement for the
-  base tier.
-- **The manifest/archive is the contract**, and since the split it is the
-  contract _between two repositories_. `manifest.json` carries capabilities, the
-  temporal block, the pack table, and optional per-property style hints. Readers
-  and renderers negotiate through it. `docs/spec/manifest.schema.json` is
-  vendored: a reader change that needs a schema change is an upstream change
-  first.
-- **Packs and the directory are immutable and content-addressed** (the hash is
-  the filename). Only the small `manifest.json` is mutable. Never rewrite a pack
-  in place — write a new one and update the manifest.
-- **deck.gl is pinned to the `9.3.x` line** across the repo (see `overrides` in
-  `pnpm-workspace.yaml` — pnpm 11 no longer reads `pnpm.overrides` from
-  `package.json`). Do not bump it.
+Two more are specific to this checkout:
+
+- **`docs/spec/manifest.schema.json` is vendored.** The manifest is the contract
+  _between two repositories_ now, so a reader change that needs a schema change
+  is an upstream change first.
 - **The luma.gl patch in `patches/` is load-bearing.** It is the `UniformBlock`
   UBO re-upload fix, worth 44.6 → 86.8 fps on storm-4d; losing it is a silent
   2× frame-time regression.
-- The showcase honors `prefers-reduced-motion`; any new animated surface must
-  gate on it.
 
 ## Pull requests
 

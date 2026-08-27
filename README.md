@@ -16,9 +16,11 @@ playback engine, the React bindings, and the [live showcase](https://poopdeck.gl
 The two live apart on purpose. The seam between them is the archive on disk —
 a `manifest.json`, a compact directory, and immutable packs — which means a
 renderer change never needs a format release, and a format change reaches every
-backend at once. See
-[the split record](./docs/roadmap/repo-split-2026-08.md) for what that costs and
-what it bought.
+backend at once. The format pages under `docs/` are authored upstream and
+vendored here — `.stt-sync.json` is the list, and `pnpm stt:check` fails if a
+copy is edited locally — so this repository still serves one complete corpus.
+See [the split record](./docs/roadmap/repo-split-2026-08.md) for what that costs
+and what it bought.
 
 ## Quick start
 
@@ -30,8 +32,8 @@ vanilla-JS variants.
 
 ### Render a hosted dataset
 
-`@poopdeck.gl/*` peer-depends on deck.gl and does **not** install it for you.
-Pin the whole deck.gl + luma.gl graph to one 9.3.x minor:
+`@poopdeck.gl/layers` peer-depends on deck.gl and does **not** install it for
+you. Pin the whole deck.gl + luma.gl graph to one 9.3.x minor:
 
 ```bash
 npm install @poopdeck.gl/layers @poopdeck.gl/playback \
@@ -100,8 +102,7 @@ stt-validate tiles
 
 [From CSV to an Animated Map](./docs/guides/csv-quickstart.md) is the complete
 tutorial, and the [CLI reference](./docs/api/cli-reference.md) covers all five
-commands. Both pages are authored upstream and vendored here (§ below), so the
-docs site serves one corpus even though the code lives in two places.
+commands (both authored upstream — see [Documentation](#documentation)).
 
 ## The packages
 
@@ -141,9 +142,12 @@ never rewritten in place.
 
 ## Project status
 
-The current release line is **0.7.0** and remains pre-1.0. Readers open packed
+The current release line is **0.8.0** and remains pre-1.0. Readers open packed
 format v3 with directory codec v6, and published format-v2/directory-v5 archives
-read-only. The deck.gl integration targets the pinned 9.3.x line.
+read-only. The deck.gl integration targets the pinned 9.3.x line. Since the
+2026-08-26 split, npm and crates.io are **not** in lockstep: they agree at 0.8.0
+by history, not by promise, and what relates the two stacks is the archive's
+`formatVersion`, declared in `project-status.json` on both sides.
 
 Seven `@poopdeck.gl/*` packages are published: `core`, `layers`, `playback`,
 `react`, `three`, `maplibre`, and `mcp`. The Cesium backend is private,
@@ -151,11 +155,6 @@ source-only, and experimental. See
 [Status, support, and compatibility](./docs/intro/status-and-support.md) before
 depending on a pre-1.0 API or alternate renderer, and the
 [project changelog](./CHANGELOG.md) before upgrading.
-
-> Since the 2026-08-26 split, the npm and crates.io version numbers are **not**
-> in lockstep. They agree at 0.7.0 by history, not by promise. What relates the
-> two stacks is the archive's `formatVersion`, declared in `project-status.json`
-> on both sides.
 
 ## Documentation
 
@@ -168,10 +167,8 @@ depending on a pre-1.0 API or alternate renderer, and the
 - [Deployment guide](./docs/guides/deploying.md)
 - [Live demos](https://poopdeck.gl/demos)
 
-Some of those pages are **authored in the STT repository** and vendored here so
-poopdeck.gl serves one complete corpus; `.stt-sync.json` is the list, and
-`pnpm stt:check` fails if a vendored copy is edited locally. Change them
-upstream.
+Some of those pages are **authored in the STT repository** and vendored here
+(above); change them upstream, not in this checkout.
 
 AI coding agents should start with [`AGENTS.md`](./AGENTS.md). It contains the
 repository map, invariant rules, and routing table to canonical documentation.

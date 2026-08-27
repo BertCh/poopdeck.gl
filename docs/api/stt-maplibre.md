@@ -10,14 +10,15 @@ loading path (one range-coalesced request per viewport fill, incremental
 per-tile delivery, giant-parent-tile gating, throughput-driven ETAs).
 
 If you can take a deck.gl dependency, [`@poopdeck.gl/layers`](./spatiotemporal-layer.md)
-still has a few advantages — rounded joints/dashes, GPU-side category-color
-extension, cross-tile consolidation, GPU flow live-bundling, and the full
-23-kind catalog. The MapLibre adapter trades those off for a much smaller bundle
-and the ability to interleave between native MapLibre style layers. It covers
-fifteen layer kinds across the point/line/polygon, trips, icon/column/arc,
-summary and flow families (see the table below); the remaining deck-only kinds
-(text, mesh, point cloud, bounding box, iso-lines, …) are listed in the
-[backend capability matrix](../spec/backend-capabilities.md).
+still has a few advantages — rounded joints/dashes, the GPU-side
+category-color extension, and cross-tile consolidation. The MapLibre adapter
+trades those off for a much smaller bundle and the ability to interleave
+between native MapLibre style layers, and it renders **all 23 frozen layer
+kinds natively** — the point/line/polygon, trips, icon/column/arc, summary,
+flow and AV/geometry families (see the tables below). deck is the backend at
+21/23: `isoLines` degrades to `path` there and `ego` has no deck layer at all.
+See the [backend capability matrix](../spec/backend-capabilities.md) for the
+cross-backend view.
 
 ## Install
 
@@ -50,10 +51,10 @@ so the same layer code runs on every version.
 
 ## Layer classes
 
-Fifteen classes across four families. Tiles whose geometry type doesn't match a
-given layer are skipped, so you can pile multiple layers onto the same archive
-URL (or one `SharedTilesetSource`) when a dataset has more than one geometry
-type.
+Twenty-three classes across five families. Tiles whose geometry type doesn't
+match a given layer are skipped, so you can pile multiple layers onto the same
+archive URL (or one `SharedTilesetSource`) when a dataset has more than one
+geometry type.
 
 **Core geometry**
 
@@ -84,11 +85,24 @@ type.
 
 **Flow**
 
-| Class                  | Renders    | Notes                                                                                        |
-| ---------------------- | ---------- | -------------------------------------------------------------------------------------------- |
-| `STTFlowCorridorLayer` | LineString | Value-matrix flow ribbon whose width breathes off a single per-frame scalar                  |
-| `STTFlowStrokeLayer`   | LineString | Constant-width flow-stroke variant of the corridor                                           |
-| `STTFlowmapLayer`      | LineString | One animated OD arrow per pair; static bundles (GPU live-bundling stays a declared fallback) |
+| Class                  | Renders    | Notes                                                                                                                                                |
+| ---------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STTFlowCorridorLayer` | LineString | Value-matrix flow ribbon whose width breathes off a single per-frame scalar                                                                          |
+| `STTFlowStrokeLayer`   | LineString | Constant-width flow-stroke variant of the corridor                                                                                                   |
+| `STTFlowmapLayer`      | LineString | One animated OD arrow per pair; runtime KDEEB bundling through core's shared `bundleEdges`, device-gated with a per-tile fallback to straight arrows |
+
+**AV & geometry**
+
+| Class                 | Renders    | Notes                                                                                                           |
+| --------------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
+| `STTPathLayer`        | LineString | `STTLineLayer` subclass giving the `path` kind its name, its deck-parity defaults, and reveal-aware tile sizing |
+| `STTIsoLayer`         | LineString | Contour polylines (`isoLines`) with level-ramped colour                                                         |
+| `STTPointCloudLayer`  | Point      | Lit 3-D points that stand off the ground plane — elevation plus an optional surface normal                      |
+| `STTTextLayer`        | Point      | Real glyph runs from an SDF/bitmap atlas, instead of the icon sprite `text` used to degrade to                  |
+| `STTBoundingBoxLayer` | Point      | Oriented detection cuboids, pooled per `track_id` and interpolated between keyframes at the playhead            |
+| `STTMeshLayer`        | Point      | The posed 3-D model inside the cuboid, from the same `objects/` snapshot stream                                 |
+| `STTEgoLayer`         | Point      | The single ego-vehicle box + trajectory from a one-track pose stream                                            |
+| `STTSurfelLayer`      | Point      | Oriented anisotropic Gaussian surfels from baked quaternion/scale/rgba columns                                  |
 
 All extend the abstract `STTBaseLayer`, which owns the archive read, tileset
 scheduling, viewport→tile resolution, and the GPU resource lifecycle. The two
@@ -361,27 +375,19 @@ all four).
 
 ### `STTPolygonLayer`
 
-| Field                                  | Type                              | Default                  | Description                                                                    |
-| -------------------------------------- | --------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
-| `color`                                | `[r, g, b, a]`                    | `[0.99, 0.55, 0.2, 0.7]` | Constant fill colour (range auto-detected)                                     |
-| `fillColorProperty`                    | `string`                          | —                        | Categorical fill property → palette lookup                                     |
-| `colorPalette`                         | `RGBA8[]`                         | 10-stop categorical      | Palette for `fillColorProperty`                                                |
-| `colorMapping` / `colorMappingDefault` | `Record<string, RGBA8>` / `RGBA8` | —                        | Keyed category-name → color map + fallback (same semantics as `STTPointLayer`) |
-| `filled`                               | `boolean`                         | `true`                   | Render the polygon fill                                                        |
-| `stroked`                              | `boolean`                         | `false`                  | Draw a stroked outline over each ring                                          |
-| `lineColor`                            | `[r, g, b, a]`                    | `[0, 0, 0, 1]`           | Outline colour (used with `stroked`)                                           |
-| `lineWidth`                            | `number`                          | `1`                      | Outline pixel width                                                            |
-| `extruded`                             | `boolean`                         | `false`                  | Raise the top of the polygon to `elevation` and draw side walls                |
-| `elevation`                            | `number \| string`                | `0`                      | Constant elevation, or numeric property name                                   |
-| `altitudeScale`                        | `number`                          | `1`                      | Dimensionless exaggeration on `elevation` (see the note below)                 |
-
-> **Breaking change (2026-07).** `elevation` is now interpreted in **metres**
-> and converted with a latitude-correct metres→mercator-z factor, matching the
-> conformal-z contract MapLibre documents for custom layers. `altitudeScale`
-> used to carry that conversion as a hardcoded `1e-7` (which rendered
-> extrusions roughly 4× too tall); it is now a plain exaggeration multiplier
-> defaulting to `1`. If you previously passed `altitudeScale` to correct the
-> height, drop it — pass `elevation` in real metres instead.
+| Field                                  | Type                              | Default                  | Description                                                                                                                                                                                       |
+| -------------------------------------- | --------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `color`                                | `[r, g, b, a]`                    | `[0.99, 0.55, 0.2, 0.7]` | Constant fill colour (range auto-detected)                                                                                                                                                        |
+| `fillColorProperty`                    | `string`                          | —                        | Categorical fill property → palette lookup                                                                                                                                                        |
+| `colorPalette`                         | `RGBA8[]`                         | 10-stop categorical      | Palette for `fillColorProperty`                                                                                                                                                                   |
+| `colorMapping` / `colorMappingDefault` | `Record<string, RGBA8>` / `RGBA8` | —                        | Keyed category-name → color map + fallback (same semantics as `STTPointLayer`)                                                                                                                    |
+| `filled`                               | `boolean`                         | `true`                   | Render the polygon fill                                                                                                                                                                           |
+| `stroked`                              | `boolean`                         | `false`                  | Draw a stroked outline over each ring                                                                                                                                                             |
+| `lineColor`                            | `[r, g, b, a]`                    | `[0, 0, 0, 1]`           | Outline colour (used with `stroked`)                                                                                                                                                              |
+| `lineWidth`                            | `number`                          | `1`                      | Outline pixel width                                                                                                                                                                               |
+| `extruded`                             | `boolean`                         | `false`                  | Raise the top of the polygon to `elevation` and draw side walls                                                                                                                                   |
+| `elevation`                            | `number \| string`                | `0`                      | Constant elevation in **metres** (or a numeric property name), converted with a latitude-correct metres→mercator-z factor, matching the conformal-z contract MapLibre documents for custom layers |
+| `altitudeScale`                        | `number`                          | `1`                      | Dimensionless exaggeration on `elevation`                                                                                                                                                         |
 
 ### `STTTripsLayer`
 
@@ -433,6 +439,34 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | `ready()`                    | `Promise<ArchiveMetadata>` resolved when the archive metadata is parsed                                                                                                                    |
 | `getTileset()`               | The live `SpatioTemporalTileset`, or `undefined` before metadata resolves (subscribe via `onTilesetReady` to avoid polling)                                                                |
 
+## Camera bridge
+
+The host map owns the camera here, so this is a seam rather than a rig: three
+functions from `lib/view-state.ts` read and write the host in the shared
+cross-renderer `ViewState` vocabulary (`@poopdeck.gl/core/geo`), so an app
+driving several backends from one `ViewState` can include this one. It is also
+what the matrix's `cameraRoll: true` claims — roll already reaches the shaders
+for free (it is inside the view matrix, and inside the injected projection
+prelude on a v5+ host); the seam is what was missing.
+
+| Function                  | Returns                | Description                                                                                                                     |
+| ------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `readViewState(host)`     | `ViewState`            | Host camera as a `ViewState`. `roll` is present only when the host has the DOF — an absent key means "no roll", not `roll: 0`   |
+| `applyViewState(host, v)` | `ViewStateApplyResult` | Drives the camera via `jumpTo` (a state apply, not an animated ease) and returns `{ dropped }` naming what it could not deliver |
+| `supportsRoll(host)`      | `boolean`              | Whether this host exposes camera roll                                                                                           |
+
+`ViewStateHost` is structurally typed (`getCenter`/`getZoom`/`getBearing`/
+`getPitch`/`jumpTo`, plus optional `getRoll`/`setRoll`) because the package
+must run against `^3 || ^4 || ^5 || ^6` from one build and `Map.getRoll()`
+arrived in v5 — support is detected as `typeof map.getRoll === 'function'`,
+never by naming a v5-only surface in a type position. **A ≤v4 (or Mapbox) host
+degrades honestly**: `applyViewState` reports the roll it dropped in
+`dropped: ['roll']` rather than pretending, and `readViewState` omits the key
+rather than reporting a fabricated `0`. Only a roll the caller actually asked
+for counts as dropped, so an ordinary 2.5D apply never cries wolf. The Cesium
+backend's [camera bridge](./stt-cesium.md#camera-bridge) speaks the same
+`ViewState` vocabulary.
+
 ## How it works
 
 1. The constructor opens an `STTArchive` against the URL. No fetches happen yet.
@@ -468,7 +502,7 @@ Each layer exposes lifecycle helpers in addition to `CustomLayerInterface`:
 | Arcs (3D / great-circle)                  | ✓ (`STTArcLayer`)                                  | ✓                                                 |
 | Summary tiers (H3 / Quadbin cells)        | ✓ (ramp-coloured, optionally extruded)             | ✓                                                 |
 | Runtime hexbin                            | ✓ (CPU bin + GPU aggregate)                        | ✓                                                 |
-| Flow ribbons / OD flowmap                 | ✓ (value-matrix; static bundles)                   | ✓ (+ GPU live-bundling)                           |
+| Flow ribbons / OD flowmap                 | ✓ (value-matrix; runtime KDEEB bundling)           | ✓ (`BundledFlowmapLayer`)                         |
 | Heatmaps                                  | ✓ (two-pass FBO)                                   | ✓ (`AnimatedHeatmapLayer`)                        |
 | Per-feature categorical colour            | ✓ (CPU-expanded RGBA attribute)                    | ✓ (`CategoryColorExtension`, GPU palette texture) |
 | Batched/coalesced tile loading            | ✓                                                  | ✓                                                 |

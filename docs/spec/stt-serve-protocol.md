@@ -26,9 +26,7 @@ instead of reading a pre-built [packed archive](./stt-packed-format.md):
 
 There is one binary with two mutually-exclusive backends (`--postgres` /
 `--duckdb`, §5) and two serving modes (single-dataset / multi-dataset, §2).
-Nothing is cached on the server: every response is generated fresh, so unlike
-the packed format's content-addressed packs, `stt-serve` responses are **not**
-edge-cacheable (§7).
+Nothing is cached server-side: every response is generated fresh (§7).
 
 ## 2. Serving modes
 
@@ -54,6 +52,9 @@ served at the root for backward compatibility.
 | `GET /metadata.json`             | `GET /{dataset}/metadata.json`             | 3.2 |
 | —                                | `GET /datasets`                            | 3.3 |
 | `GET /tiles/{z}/{x}/{y}/{t}.stt` | `GET /{dataset}/tiles/{z}/{x}/{y}/{t}.stt` | 3.4 |
+
+The protocol defines **no query parameters**. Every request is fully addressed
+by its path; any query string is ignored by every route.
 
 ### 3.1 `GET /health`
 
@@ -98,11 +99,11 @@ Generates and returns exactly one tile.
 
 **Path parameters:**
 
-| Param    | Type                                  | Meaning                                                                                                                                                                                                                                                                                                                      |
-| -------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `z`      | `u8`                                  | Zoom level (slippy-map convention). Hard-bounded: `z > 31` returns `400` (§3.4.5) — beyond 31 the `2^z` grid exceeds the `u32` x/y space. It is **not** range-checked against `--min-zoom`/`--max-zoom` — a request at an unconfigured (but in-bounds) zoom simply queries and, most likely, encodes an empty tile (§3.4.3). |
-| `x`, `y` | `u32`                                 | Tile column/row at `z` (slippy-map convention); must lie in the `2^z` grid — `x ≥ 2^z` or `y ≥ 2^z` returns `400` (§3.4.5).                                                                                                                                                                                                  |
-| `t`      | the whole final path segment, as text | A **Unix-ms integer**. A trailing `.stt` suffix (the convention `tileUrlTemplate` in `/metadata.json` advertises) is stripped before parsing, so it is accepted but not required — `.../1700000000000` and `.../1700000000000.stt` are equivalent requests.                                                                  |
+| Param    | Type                                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `z`      | `u8`                                  | Zoom level (slippy-map convention). Hard-bounded: `z > 31` returns `400` (§3.4.5) — beyond 31 the `2^z` grid exceeds the `u32` x/y space. It is **also** range-checked against the advertised `[--min-zoom, --max-zoom]` band: a zoom outside that band returns `404` (§3.4.5) before any source query — the guard that stops a `z = 0` request over a global source from becoming a full-table scan. |
+| `x`, `y` | `u32`                                 | Tile column/row at `z` (slippy-map convention); must lie in the `2^z` grid — `x ≥ 2^z` or `y ≥ 2^z` returns `400` (§3.4.5).                                                                                                                                                                                                                                                                           |
+| `t`      | the whole final path segment, as text | A **Unix-ms integer**. A trailing `.stt` suffix (the convention `tileUrlTemplate` in `/metadata.json` advertises) is stripped before parsing, so it is accepted but not required — `.../1700000000000` and `.../1700000000000.stt` are equivalent requests.                                                                                                                                           |
 
 `z`, `x`, and `y` are extracted by axum's typed path matching: a segment that
 doesn't parse as its declared integer type (non-numeric, or out of `u8`/`u32`
@@ -113,12 +114,15 @@ handler's own `t`-specific `400` below).
 #### 3.4.1 Bounding-box resolution
 
 `(z, x, y)` maps to a WGS84 `[min_lon, min_lat, max_lon, max_lat]` box via the
-standard Web Mercator slippy-tile formula, then **widened by 5% of the tile's
-own span on each side** (~10% wider total) before it is used as the SQL
+standard Web Mercator slippy-tile formula, then widened on each side by
+**`max(5% of the tile's span, 0.001°)`** before it is used as the SQL
 pre-filter. This buffer exists so a feature that straddles a tile edge is
-never missed by the bbox predicate; it is deliberately loose. The exact
-per-tile placement (which features actually belong in this tile, including
-trajectory clipping) is performed afterward by the same placement code
+never missed by the bbox predicate; it is deliberately loose. The floor takes
+over from about z 15 up, where 5% of a tile is narrower than the clipper's
+fixed 0.001° pad — without it the pre-filter would be tighter than the clip
+band and would drop edge features the encoder keeps. The exact per-tile
+placement (which features actually belong in this tile, including trajectory
+clipping) is performed afterward by the same placement code
 `stt-build` uses — the buffer only affects which rows the SQL query fetches as
 _candidates_, never which end up in the tile.
 
@@ -207,8 +211,13 @@ dataset's off-data tiles.
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400 Bad Request`           | `z > 31`, or `x`/`y` outside the `2^z` tile grid                                                                                    | `tile out of range: need z <= 31 and x, y < 2^z` (plain text)                                                                                                                               |
 | `400 Bad Request`           | `t` does not parse as an integer after stripping a trailing `.stt`                                                                  | `t must be an integer (ms since epoch)` (plain text)                                                                                                                                        |
+| `404 Not Found`             | `z` outside `[--min-zoom, --max-zoom]` (both modes)                                                                                 | `zoom <z> outside served range <min>..=<max>` (plain text)                                                                                                                                  |
 | `404 Not Found`             | (multi-dataset mode only) `{dataset}` does not match any configured dataset                                                         | `unknown dataset '<name>'` (plain text)                                                                                                                                                     |
 | `500 Internal Server Error` | the source query, row decode, or tile encode fails (connection error, malformed SQL from a bad `--sql`/`--where`, encoder error, …) | the fixed string `internal error generating tile` (plain text) — the full `anyhow` error chain (which can contain SQL and connection strings) goes to the server log only, never the client |
+
+Checks run in this order: grid bounds (`400`) → served zoom range (`404`) →
+`t` parse (`400`), so an out-of-range zoom with an unparseable `t` yields `404`,
+not `400`.
 
 Every `500` is also logged server-side (`tracing::error!`) with the failing
 `(z, x, y, t)` and the full error chain.
@@ -219,7 +228,7 @@ Every `500` is also logged server-side (`tracing::error!`) with the failing
 {
   "format": "stt-postgis-dynamic", // or "stt-duckdb-dynamic"
   "formatVersion": 2,
-  "capabilities": [], // e.g. ["coord-quant", "time-delta"]
+  "capabilities": [], // e.g. ["coord-quant", "time-delta", "triangles-partial"]
   "name": "hurricane_obs",
   "boundingBox": [
     [-179.9, -71.2],
@@ -240,20 +249,20 @@ Every `500` is also logged server-side (`tracing::error!`) with the failing
 }
 ```
 
-| Key                   | Type                                | Always present?                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------------- | ----------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `format`              | string                              | yes                                                    | `"stt-postgis-dynamic"` or `"stt-duckdb-dynamic"` — identifies the _live_ origin, distinct from the packed manifest's `format: "stt-packed"`.                                                                                                                                                                                                                                                                                                                                                                                  |
-| `formatVersion`       | `u32`                               | yes                                                    | The layer-frame version this server emits, mirroring the packed manifest's `formatVersion`. Frames are self-describing to `decode_tile`, but a client that pins a decoder needs to know **before** it fetches. Currently `2` (§8).                                                                                                                                                                                                                                                                                             |
-| `capabilities`        | `string[]`                          | yes                                                    | The protocol's **capability channel** — the twin of the packed manifest's `capabilities`, derived from the same `EncoderSettings::required_capabilities()` the offline build declares with. Each entry names an encoder feature that RE-TYPES a tile column, so a client lacking one would silently misdecode rather than error. **Always present**, empty when the server encodes the capability-free shape, so its ABSENCE unambiguously means "server predates this key" rather than "declares nothing". Advisory — see §8. |
-| `name`                | string                              | yes                                                    | Resolved dataset name: the `--name` override, else the table name (schema-qualified table's last segment) or `"query"` for a `--sql` source.                                                                                                                                                                                                                                                                                                                                                                                   |
-| `boundingBox`         | `[[minLon,minLat],[maxLon,maxLat]]` | yes                                                    | The whole source's spatial extent from a startup `ST_Extent`-style aggregate (reprojected to 4326 first when `--source-srid` is set). Falls back to `[[-180,-90],[180,90]]` if the source is empty.                                                                                                                                                                                                                                                                                                                            |
-| `timeRange`           | `{ start, end }` (Unix ms)          | yes                                                    | `MIN`/`MAX` of `--time-field` over the whole source, converted to ms per `--time-format` for an integer time column. Falls back to `{0, 0}` if the source is empty.                                                                                                                                                                                                                                                                                                                                                            |
-| `minZoom` / `maxZoom` | `u8`                                | yes                                                    | Echo `--min-zoom` / `--max-zoom`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `temporalBucketMs`    | `u64`                               | yes                                                    | The **base** bucket (`--temporal-bucket`, parsed to ms). Does not reflect per-request LOD widening (§3.4.2) — a client reads `temporalLod` for that.                                                                                                                                                                                                                                                                                                                                                                           |
-| `featureCount`        | `i64`                               | yes                                                    | `COUNT(*)` over the whole source at startup — a dataset-wide count, not a per-tile count.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `tileUrlTemplate`     | string                              | yes                                                    | Always the literal `"/tiles/{z}/{x}/{y}/{t}.stt"`, **even in multi-dataset mode** — it is not prefixed with `/{dataset}`. A multi-dataset client must prepend the dataset segment itself.                                                                                                                                                                                                                                                                                                                                      |
-| `heatmapDomain`       | `{ classes: HeatmapClassDomain[] }` | only if `--heatmap-weight` or `--heatmap-class` is set | See §4.1. Key is **absent** (not `null`) when neither flag is set.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `temporalLod`         | `TemporalLodLevel[]`                | only if `--temporal-lod` is set                        | The parsed LOD pyramid, so a client can discover which zooms get a coarser bucket. Key is **absent** when `--temporal-lod` is unset. Note: unlike every other key in this object, array elements keep their Rust field names verbatim — `bucket_ms` / `max_zoom_level`, snake_case — because `TemporalLodLevel` has no camelCase rename.                                                                                                                                                                                       |
+| Key                   | Type                                | Always present?                                        | Meaning                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------- | ----------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`              | string                              | yes                                                    | `"stt-postgis-dynamic"` or `"stt-duckdb-dynamic"` — identifies the _live_ origin, distinct from the packed manifest's `format: "stt-packed"`.                                                                                                                                                                                                                                                                     |
+| `formatVersion`       | `u32`                               | yes                                                    | The **layer-frame** version this server emits — currently `2` (§8), the only frame version there is. ⚠️ Despite the shared key name this is **not** the packed manifest's `formatVersion` (`3`, the container version); a live server has no container. Frames are self-describing to `decode_tile`, but a client that pins a decoder needs to know **before** it fetches.                                        |
+| `capabilities`        | `string[]`                          | yes                                                    | The protocol's **capability channel** — the twin of the packed manifest's `capabilities`, derived from `EncoderSettings::required_capabilities()`, plus `triangles-partial` when `--partial-triangles` is set without `--pre-tessellate`; sorted and de-duplicated. **Always present**, empty when the server declares nothing, so its ABSENCE unambiguously means "server predates this key". Advisory — see §8. |
+| `name`                | string                              | yes                                                    | Resolved dataset name: the `--name` override, else the table name (schema-qualified table's last segment) or `"query"` for a `--sql` source.                                                                                                                                                                                                                                                                      |
+| `boundingBox`         | `[[minLon,minLat],[maxLon,maxLat]]` | yes                                                    | The whole source's spatial extent from a startup `ST_Extent`-style aggregate (reprojected to 4326 first when `--source-srid` is set). Falls back to `[[-180,-90],[180,90]]` if the source is empty.                                                                                                                                                                                                               |
+| `timeRange`           | `{ start, end }` (Unix ms)          | yes                                                    | `MIN`/`MAX` of `--time-field` over the whole source, converted to ms per `--time-format` for an integer time column. Falls back to `{0, 0}` if the source is empty.                                                                                                                                                                                                                                               |
+| `minZoom` / `maxZoom` | `u8`                                | yes                                                    | Echo `--min-zoom` / `--max-zoom`.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `temporalBucketMs`    | `u64`                               | yes                                                    | The **base** bucket (`--temporal-bucket`, parsed to ms). Does not reflect per-request LOD widening (§3.4.2) — a client reads `temporalLod` for that.                                                                                                                                                                                                                                                              |
+| `featureCount`        | `i64`                               | yes                                                    | `COUNT(*)` over the whole source at startup — a dataset-wide count, not a per-tile count.                                                                                                                                                                                                                                                                                                                         |
+| `tileUrlTemplate`     | string                              | yes                                                    | Always the literal `"/tiles/{z}/{x}/{y}/{t}.stt"`, **even in multi-dataset mode** — it is not prefixed with `/{dataset}`. A multi-dataset client must prepend the dataset segment itself.                                                                                                                                                                                                                         |
+| `heatmapDomain`       | `{ classes: HeatmapClassDomain[] }` | only if a heatmap flag is set _and_ classes were found | See §4.1. Key is **absent** (not `null`) when neither `--heatmap-weight` nor `--heatmap-class` is set, and also when the startup aggregate found no classes at all (an all-NULL weight/class column, or an empty source).                                                                                                                                                                                         |
+| `temporalLod`         | `TemporalLodLevel[]`                | only if `--temporal-lod` is set                        | The parsed LOD pyramid, so a client can discover which zooms get a coarser bucket. Key is **absent** when `--temporal-lod` is unset. Note: unlike every other key in this object, array elements keep their Rust field names verbatim — `bucket_ms` / `max_zoom_level`, snake_case — because `TemporalLodLevel` has no camelCase rename.                                                                          |
 
 Every **top-level** key besides the `temporalLod` array's own field names is
 camelCase (the loaders.gl `TileSource`-style runtime-descriptor convention),
@@ -277,33 +286,44 @@ over the whole dataset — same shape, live source:
 }
 ```
 
-| `--heatmap-weight` | `--heatmap-class` | Aggregate                                                                                                         | `classes`                                                                                           |
-| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| set                | unset             | `min(weight)`, `percentile_cont(0.95)` (Postgres) / `quantile_cont(weight, 0.95)` (DuckDB), over the whole source | one entry, `id: "default"`                                                                          |
-| set                | set               | the same aggregate, `GROUP BY` class, `ORDER BY` class, capped at **8** groups                                    | one entry per distinct class value (as `id`), `property` set                                        |
-| unset              | set               | `DISTINCT` class values, capped at **8**, `ORDER BY` class                                                        | one entry per value, `min: 1.0, max: 1.0, property: null` (an enumeration, not an intensity domain) |
-| unset              | unset             | not computed                                                                                                      | key absent from `/metadata.json`                                                                    |
+| `--heatmap-weight` | `--heatmap-class` | Aggregate                                                                                                         | `classes`                                                                                                    |
+| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| set                | unset             | `min(weight)`, `percentile_cont(0.95)` (Postgres) / `quantile_cont(weight, 0.95)` (DuckDB), over the whole source | one entry, `id: "default"`, `property` = the `--heatmap-weight` column                                       |
+| set                | set               | the same aggregate, `GROUP BY` class, `ORDER BY` class, capped at **8** groups                                    | one entry per distinct class value (as `id`), `property` set                                                 |
+| unset              | set               | `DISTINCT` class values, capped at **8**, `ORDER BY` class                                                        | one entry per value, `min: 1.0`, `max: 1.0`, `property` **absent** (an enumeration, not an intensity domain) |
+| unset              | unset             | not computed                                                                                                      | key absent from `/metadata.json`                                                                             |
 
 The percentile is the **database's own continuous percentile function**, which
 may differ marginally from the offline build's floor-index percentile — this
 is a rendering style hint (the heatmap's color ramp domain), not tile payload
 bytes, so the two need not match exactly.
 
+If the aggregate yields no classes — an all-NULL weight column, an all-NULL
+class column, or an empty source — the `heatmapDomain` key is omitted entirely
+even though a heatmap flag was set.
+
 ## 5. Backends
 
-|                       | `--postgres <CONN>`                                                                                                                                     | `--duckdb <PATH>`                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Engine                | PostgreSQL/PostGIS, external server                                                                                                                     | DuckDB, embedded (statically bundled — no system lib, no server)                                                                                                                                                                                                                                                                                                                                         |
-| Pool                  | `deadpool_postgres`, async, `NoTls`, `RecyclingMethod::Fast`                                                                                            | `r2d2`, blocking (`duckdb::Connection` is `Send` but `!Sync`)                                                                                                                                                                                                                                                                                                                                            |
-| `--pool-size`         | `deadpool_postgres::Pool` `max_size`                                                                                                                    | `r2d2::Pool` `max_size`, with the CLI value itself clamped to a minimum of `1` before it reaches the pool builder                                                                                                                                                                                                                                                                                        |
-| Env fallback          | `STT_POSTGRES_URL`, then `DATABASE_URL`                                                                                                                 | `STT_DUCKDB_PATH`                                                                                                                                                                                                                                                                                                                                                                                        |
-| Per-request execution | runs on the async reactor for the query; row decode + tile encode are CPU-bound and run on `spawn_blocking`                                             | pool checkout, query, decode, **and** encode all run on one `spawn_blocking` worker (nothing about DuckDB is async)                                                                                                                                                                                                                                                                                      |
-| Extra setup           | none beyond the pool                                                                                                                                    | every **new physical connection** (not every checkout) runs `INSTALL spatial; LOAD spatial; SET TimeZone='UTC';` — a one-time network fetch for the extension, cached under `~/.duckdb`, and UTC pinning so `epoch_ms`/`ST_AsWKB` math is timezone-independent                                                                                                                                           |
-| File access           | n/a (server-managed)                                                                                                                                    | a real `.duckdb` file opens **read-only** (never mutates the source, coexists with another process holding it); `:memory:` (or an empty path) opens a **fresh in-memory database**, logged with a warning that pooled connections share one in-memory DB via `try_clone` starting empty — only a `--sql` that scans external files (e.g. `read_parquet(...)`) works there, not a pre-existing table name |
-| Malformed rows        | both backends decode with `InputStrictness::Warn` — a row that fails to parse is warned about and coerced/dropped rather than failing the whole request | (same)                                                                                                                                                                                                                                                                                                                                                                                                   |
+|                       | `--postgres <CONN>`                                                                                                                                                                                                                                                                                                                                                                                  | `--duckdb <PATH>`                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine                | PostgreSQL/PostGIS, external server                                                                                                                                                                                                                                                                                                                                                                  | DuckDB, embedded (statically bundled — no system lib, no server)                                                                                                                                                                                                                                                                                                                                         |
+| Pool                  | `deadpool_postgres`, async, `RecyclingMethod::Fast`; `NoTls` unless the connection string carries `sslmode=require` (or stricter), which selects a `native-tls` connector — available only in a build with the non-default `serve-postgres-tls` cargo feature, otherwise startup fails with an explicit rebuild-with-the-feature error. `sslmode=disable` and `prefer` both keep the plaintext path. | `r2d2`, blocking (`duckdb::Connection` is `Send` but `!Sync`)                                                                                                                                                                                                                                                                                                                                            |
+| `--pool-size`         | `deadpool_postgres::Pool` `max_size`                                                                                                                                                                                                                                                                                                                                                                 | `r2d2::Pool` `max_size`, with the CLI value itself clamped to a minimum of `1` before it reaches the pool builder                                                                                                                                                                                                                                                                                        |
+| Env fallback          | `STT_POSTGRES_URL`, then `DATABASE_URL`                                                                                                                                                                                                                                                                                                                                                              | `STT_DUCKDB_PATH`                                                                                                                                                                                                                                                                                                                                                                                        |
+| Per-request execution | runs on the async reactor for the query; row decode + tile encode are CPU-bound and run on `spawn_blocking`                                                                                                                                                                                                                                                                                          | pool checkout, query, decode, **and** encode all run on one `spawn_blocking` worker (nothing about DuckDB is async)                                                                                                                                                                                                                                                                                      |
+| Extra setup           | none beyond the pool                                                                                                                                                                                                                                                                                                                                                                                 | every **new physical connection** (not every checkout) runs `INSTALL spatial; LOAD spatial; SET TimeZone='UTC';` — a one-time network fetch for the extension, cached under `~/.duckdb`, and UTC pinning so `epoch_ms`/`ST_AsWKB` math is timezone-independent                                                                                                                                           |
+| File access           | n/a (server-managed)                                                                                                                                                                                                                                                                                                                                                                                 | a real `.duckdb` file opens **read-only** (never mutates the source, coexists with another process holding it); `:memory:` (or an empty path) opens a **fresh in-memory database**, logged with a warning that pooled connections share one in-memory DB via `try_clone` starting empty — only a `--sql` that scans external files (e.g. `read_parquet(...)`) works there, not a pre-existing table name |
+| Malformed rows        | both backends decode with `InputStrictness::Warn` — a row that fails to parse is warned about and coerced/dropped rather than failing the whole request                                                                                                                                                                                                                                              | (same)                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 `--postgres` and `--duckdb` are mutually exclusive; `stt-serve` refuses to
 start if both (or neither, with no env fallback resolving one) are given.
+
+Which backends exist in a given binary is a **build-time** choice. The default
+build (`cargo install spatiotemporal-tiles`) ships the PostGIS backend only;
+DuckDB is the non-default `serve-duckdb` cargo feature (`--features serve` for
+both backends, `--features cli` for everything). A flag for a compiled-out
+backend does not exist at all, and the matching `--config` key is rejected as
+an unknown field (§6).
 
 At startup, both backends additionally probe the source's **result schema**
 (DuckDB: a `LIMIT 0` execution of the tile projection; PostGIS: a statement
@@ -364,10 +384,11 @@ Tiles are **regenerated on every request**; there is no server-side response
 cache and no on-disk artifact analogous to a pack. This is the deliberate
 live-source trade-off: a pre-baked [packed archive](./stt-packed-format.md) is
 content-addressed and edge-cacheable forever, while `stt-serve` trades that
-away for always-current data. A reverse proxy or CDN placed in front of
-`stt-serve` can still cache individual `(z, x, y, t)` responses on its own
-terms (the explicit `no-store` only governs _this_ server's own intent, not
-what an intermediary is permitted to layer on top) — see
+away for always-current data. `no-store` instructs **every** cache, shared
+caches included, not to store the response (RFC 9111 §5.2.2.5), so a conformant
+CDN will not cache a served tile. Edge caching in front of `stt-serve`
+therefore requires deliberately overriding the origin header in the proxy's own
+configuration — it is not something the protocol permits by default. See
 [`db-input-adaptors.md` §6.3](../roadmap/db-input-adaptors.md#63-when-to-use-which)
 for when a pre-bake is the better fit than dynamic serving.
 
@@ -398,9 +419,11 @@ failure per request) because a single tile's rows cannot answer them:
 Both must be pre-baked with `stt-build` and served as a static archive
 instead.
 
-**Frame version: serve emits `formatVersion` 2** with **inline schemas**
-([data-format.md §Layer frame](../architecture/data-format.md#layer-frame)).
-Inline is the only v2 mode that makes sense for a manifest-less server — there
+**Frame version: serve emits `formatVersion` 2** — the layer-frame version,
+which is the only frame version there is (§4), not the packed container's `3`.
+Tiles use **inline schemas**
+([data-format.md §Layer frame](../architecture/data-format.md#layer-frame)):
+inline is the only mode that makes sense for a manifest-less server — there
 is nowhere to carry a `schemas` registry — and since responses are `no-store`
 (§7), the template amortization the registry buys would be dead weight anyway.
 The frame version is advertised as `formatVersion` on `/metadata.json` (§4), and
@@ -411,15 +434,18 @@ the bytes, so the declaration cannot drift from the tile.
 That channel is **advisory, not enforcing**: a packed archive lets an
 under-capable reader refuse the dataset at open, but nothing makes an HTTP
 client read `/metadata.json` before fetching a tile. This is why serve
-**inverts the offline default for every re-typing feature** — `--compact-times`
-is opt-in here and on by default in `stt-build` — so the out-of-the-box server
-emits the shape an older decoder reads correctly, and the byte-saving shape is
-something an operator turns on once they control their clients.
+**inverts the offline default for every re-typing feature**: `--compact-times`
+and `--partial-triangles` are both opt-in here and both on by default in
+`stt-build` (the latter via its `--no-partial-triangles` escape hatch) — so the
+out-of-the-box server emits the shape an older decoder reads correctly, and the
+byte-saving shape is something an operator turns on once they control their
+clients.
 
 Byte parity is therefore scoped by **encoder settings, not format version**: a
 served tile is byte-identical to the offline tile of a build carrying the same
-encoder flags. Out of the box that is a `--no-compact-times` build, because
-compact times are the one default the two sides disagree on.
+encoder flags. Out of the box that is a
+`stt-build --no-compact-times --no-partial-triangles` build — the two defaults
+the two sides disagree on.
 
 Non-4326 source geometry is served via `--source-srid <SRID>` (mirroring
 `stt-build --source-srid` at ingest): every per-tile query reprojects the
@@ -435,12 +461,10 @@ storing 4326 remains the fast path.
 
 ## 9. Relationship to the rest of the spec
 
-- The response body for `GET /tiles/…` is one instance of the
-  [tile payload](../architecture/data-format.md) format — the same
-  layer-frame bytes a [packed archive](./stt-packed-format.md) stores
-  zstd-compressed per tile. Nothing about the payload's Arrow/GeoArrow shape
-  differs between a dynamically-served tile and a pre-built pack's tile blob;
-  only the transport-level compression is absent here (§3.4.3).
+- The `GET /tiles/…` body is one uncompressed
+  [tile payload](../architecture/data-format.md) — the same layer-frame bytes a
+  [packed archive](./stt-packed-format.md) stores zstd-compressed per tile
+  (§3.4.3).
 - `stt-serve` produces no `manifest.json` and is out of scope for
   [`stt-validate`](./conformance.md) and the
   [directory/paging conformance requirements](./conformance.md) — those apply

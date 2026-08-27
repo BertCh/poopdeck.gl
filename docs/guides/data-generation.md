@@ -32,65 +32,25 @@ see [Custom Data](#custom-data-using-stt-build) below.
 
 ## Quick Start
 
-### Generate the no-setup datasets (`all`)
-
-`stt-generate all` builds **only the three datasets that need no extra
-parameters**: `earthquakes`, `hurricanes`, and `wildfires`. It writes
-`earthquakes.stt`, `hurricanes.stt`, and `wildfires.stt` into the output
-directory (default `examples/showcase/public/data`).
+Every dataset is its own subcommand — there is no batch mode. Three of them need
+no extra parameters and fetch everything they need:
 
 ```bash
-# Builds earthquakes.stt, hurricanes.stt, wildfires.stt only.
-stt-generate all --output-dir examples/showcase/public/data --skip-existing
+stt-generate earthquakes --output data-fleet/earthquakes.stt
+stt-generate hurricanes  --output data-fleet/hurricanes.stt
+stt-generate wildfires   --output data-fleet/wildfires.stt
 ```
 
-The remaining datasets (`ais`, `flights`, `nyc-rideshare`, `bixi`, `gtfs`,
-`nyc-taxi-points`, `satellites`, `drifters`, `drifters-hourly`, `animals`,
-`osm-edits`, `storms`, `nwm`) require per-run parameters (download dates, an
-OSRM server, a GTFS feed, an existing source archive, etc.) or long downloads
-and are NOT built by `all` — run them individually.
-
-### Generate Individual Datasets
-
-```bash
-# Earthquake data from USGS → earthquakes.stt
-stt-generate earthquakes --output earthquakes.stt
-
-# Hurricane tracks from NOAA IBTrACS → hurricanes.stt
-stt-generate hurricanes --output hurricanes.stt
-
-# Wildfire perimeters from NIFC → wildfires.stt
-stt-generate wildfires --output wildfires.stt
-
-# AIS maritime traffic from NOAA Marine Cadastre → ais-traffic.stt
-# (default output is ais-traffic.stt; pass --date or --input)
-stt-generate ais --date 2024-01-01 --output ais-traffic.stt
-
-# Flight traffic from OpenSky (Mondays 2017–2020) → flights.stt
-stt-generate flights --date 2020-01-06 --output flights.stt
-
-# NYC rideshare trajectories from TLC + OSRM → nyc-rideshare.stt
-# (needs an OSRM server; --synthetic routes random Manhattan trips)
-stt-generate nyc-rideshare --synthetic --num-trips 1000 \
-  --osrm-url http://localhost:5000 --output nyc-rideshare.stt
-
-# NYC taxi POINTS derived from an existing path dataset → nyc-taxi-points.stt
-# (--input defaults to examples/showcase/public/data/nyc-taxi-paths)
-stt-generate nyc-taxi-points \
-  --input examples/showcase/public/data/nyc-taxi-paths \
-  --output nyc-taxi-points.stt
-
-# Satellite orbits from CelesTrak TLE + SGP4 → satellites.stt
-stt-generate satellites --output satellites.stt
-
-# Ocean drifter trajectories from NOAA's Global Drifter Program → drifters.stt
-stt-generate drifters --start 2021-01-01 --end 2022-01-01 --output drifters.stt
-
-# Animal migration trajectories from GBIF tracking datasets → animals.stt
-stt-generate animals --output animals.stt
-```
+The rest need per-run parameters (a download date, an OSRM server, a GTFS feed,
+an existing source archive) or long downloads — see [Available
+Datasets](#available-datasets) below. The generated subcommand inventory lives
+in [`../spec/stt-generate-datasets.json`](../spec/stt-generate-datasets.json).
 
 ## Available Datasets
+
+Each section below carries the dataset's prose and its end-to-end recipe. For
+the per-dataset flag list, run `stt-generate <subcommand> --help` or see the
+[CLI reference](../api/cli-reference.md#stt-generate).
 
 ### Earthquakes (USGS)
 
@@ -103,13 +63,6 @@ stt-generate earthquakes \
   --min-magnitude 4.5 \
   --output earthquakes.stt
 ```
-
-**Options:**
-
-- `--start-date`: Start date (YYYY-MM-DD), default: 2020-01-01
-- `--end-date`: End date (YYYY-MM-DD), default: 2024-12-31
-- `--min-magnitude`: Minimum magnitude, default: 4.0
-- `--summary-tier`: Emit a server-aggregated H3 summary tier alongside the raw tier
 
 ### AIS Maritime Traffic (NOAA Marine Cadastre)
 
@@ -133,12 +86,8 @@ stt-generate ais \
   --bounds "25.0,-80.0,45.0,-65.0"
 ```
 
-**Options:**
-
-- `--input`: Input CSV file (or pass `--date` / `--start-date`+`--end-date` to download from NOAA directly)
-- `--sample-minutes`: Explicit temporal sampling (default `0`, disabled; every usable row is preserved)
-- `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
-- `--max-vessels`: Limit number of vessels (0 = unlimited)
+Temporal sampling is opt-in: `--sample-minutes` here (and `--sample-seconds` on
+`flights`) defaults to `0`, so every usable row is preserved.
 
 ### Flight Traffic (OpenSky Network)
 
@@ -154,16 +103,6 @@ stt-generate flights \
 
 **Note:** OpenSky data is only available for Mondays from 2017-2020.
 
-**Options:**
-
-- `--date`: Date to download (YYYY-MM-DD, must be a Monday)
-- `--hours`: Hours to download (e.g., "0-23" for full day)
-- `--bounds`: Geographic filter
-- `--sample-seconds`: Explicit temporal sampling interval (default `0`, disabled; every usable row is preserved)
-- `--paths`: Output LineString trajectories instead of points
-- `--min-points`: Path mode — drop flights with fewer points, default: 5
-- `--max-gap-seconds`: Path mode — split a track at gaps longer than this, default: 300
-
 ### Hurricane Tracks (NOAA IBTrACS)
 
 Downloads historical hurricane track data.
@@ -174,12 +113,6 @@ stt-generate hurricanes \
   --end-year 2024 \
   --output hurricanes.stt
 ```
-
-**Options:**
-
-- `--start-year`: Start year, default: 2020
-- `--end-year`: End year, default: 2024
-- `--synthetic`: Create synthetic year from multiple years
 
 ### Wildfire Perimeters (NIFC)
 
@@ -192,13 +125,6 @@ stt-generate wildfires \
   --min-acres 1000 \
   --output wildfires.stt
 ```
-
-**Options:**
-
-- `--start-year`: Start year, default: 2020
-- `--end-year`: End year, default: 2023
-- `--min-acres`: Minimum fire size in acres, default: 1000
-- `--wildfires-only`: Exclude prescribed burns (default: true)
 
 ### NYC Rideshare (TLC + OSRM)
 
@@ -225,19 +151,17 @@ stt-generate nyc-rideshare \
   --output nyc-rideshare.stt
 ```
 
-**Options:**
+The output geometry mode is chosen by flag: points by default, `--paths` for
+routed LineStrings, `--od` for one straight 2-vertex origin→destination arc per
+trip (no OSRM needed — the `AnimatedArcLayer`/`AnimatedLineLayer` overview
+geometry), and `--flows` for pre-aggregated corridor flows.
 
-- `--synthetic`: Generate synthetic trips
-- `--num-trips`: Number of synthetic trips
-- `--download`: Download TLC data for a month (YYYY-MM; pre-2017 months carry real lat/lon)
-- `--paths`: Output LineString paths instead of points
-- `--flows`: Output pre-aggregated corridor flows (segment counts per time bin)
-- `--flow-bin`: Time bin for `--flows` aggregation, default `15m`. Flows are binned onto intersection-to-intersection road segments from the OSRM route geometry
-- `--from-intermediate`: Re-build from a kept intermediate Parquet (e.g. re-bin `--flows` from a `--paths` intermediate without re-routing through OSRM)
-- `--od`: Output one straight origin→destination LineString per trip (2 vertices, no OSRM needed) — feeds the `AnimatedArcLayer` / `AnimatedLineLayer` flow layers, which read the first vertex as source and the last as target. Mutually exclusive with `--paths` / `--flows`
-- `--with-bearing`: Add a per-feature `bearing` numeric column (degrees, 0 = N, clockwise) — origin→destination initial azimuth in `--od` mode, heading toward the next point otherwise. Drives `AnimatedIconLayer` marker rotation
-- `--osrm-url`: OSRM server URL
-- `--skip-routing`: Skip OSRM routing (pickup/dropoff only)
+`--flows` aggregates the routed trips onto the **real OSM street network**, so
+it requires `--osm-pbf <file.osm.pbf>` — use the same extract OSRM was built
+from (e.g. `osrm-data/new-york-latest.osm.pbf`) so routed vertices land on its
+ways. Each corridor then traces exact street geometry and carries per-vertex
+`vertex_values` traversal counts per `--flow-bin` (default `15m`) plus a
+road-class `min_zoom` for vector-tile-style LOD.
 
 ### Montréal BIXI Flowmap (`bixi`)
 
@@ -254,25 +178,8 @@ stt-generate bixi \
   --input data/bixi-2024.zip \
   --from 2024-06-01 --to 2024-09-01 \
   --bin 1h \
-  --output examples/showcase/public/data/bixi-flowmap.stt
+  --output data-fleet/bixi-flowmap.stt
 ```
-
-**Options:**
-
-- `--input`: BIXI open-data input (required) — the downloaded `.zip`, an extracted `.csv`, or a directory of either (plus an optional `Stations_*.csv` for pre-2022 code-based files)
-- `--bin`: Time bucket for the flow matrix, default `1h` (e.g. `30m`, `3h`, `1d`)
-- `--from` / `--to`: Inclusive lower / exclusive upper date bound `YYYY-MM-DD` (UTC), default: unbounded
-- `--min-trips`: Drop OD pairs with fewer than this many total trips across the span (legibility threshold, not temporal thinning — kept pairs keep every bucket), default: 30
-- `--min-zoom` / `--max-zoom`: Build pyramid zoom range, default 10–13
-- `--cluster-radius`: Cluster merge radius in screen pixels at tile extent 512 (larger = coarser hubs), default 40. Build-time per-zoom station clustering is **on by default** (flowmap.gl-style)
-- `--no-cluster`: Disable clustering and fall back to a volume-based LOD (minor pairs dropped at low zoom)
-- `--bake-bundling`: Bake KDEEB edge bundling into the tile geometry (smooth multi-vertex "rivers" rendered with `BundledFlowmapLayer({ preBundled: true })`); requires clustering. Tuned with `--bundle-points` (default 24), `--bundle-kernel` (0.05), `--bundle-iterations` (15), `--bundle-smoothing` (0.5)
-- `--streets`: Route OD pairs onto the Montréal OSM **bicycle** network instead of straight arcs (per-segment street corridors, the BIXI counterpart of `nyc-rideshare --flows`). Requires `--osm-pbf <file.osm.pbf>` and a bicycle-profile `--osrm-url` (default `http://localhost:5001`). Incompatible with `--bake-bundling`/`--no-cluster`/`--cluster-radius`
-- `--directional`: `--streets` modifier — pre-orients every corridor's geometry toward its month-dominant travel direction so the client can march directional chevrons along each segment (`ChevronFlowExtension`). `--per-bucket-direction` additionally emits a signed per-bucket flow matrix so chevrons flip per time-step (morning inbound → evening outbound)
-- `--merged-paths`: Synthesize coherent **directed corridors**: route each OD pair on the bike network, accumulate directed per-edge ridership, then merge edges into long corridors with a per-vertex × per-hour volume matrix (rendered by `FlowStrokeLayer`; `--stroke-angle` tunes junction continuation, default 50°). Mutually exclusive with `--streets`/`--bake-bundling`
-- `--flow-graph`: Build an abstract Delaunay-bundled hub-to-hub flow network (no street routing; `--hub-radius` metres per hub, default 250). Mutually exclusive with the street/arc modes
-- `--paths`: Emit one OSRM-routed LineString **per individual trip** with per-vertex timestamps (moving-dots demos via `AnimatedTripHeadsLayer`), instead of aggregated flows
-- `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
 
 ### GTFS Transit Ballet (`gtfs`)
 
@@ -297,24 +204,16 @@ label (`bus`/`rail`/`tram`/…), not the numeric GTFS code, so categorical
 stt-generate gtfs \
   --feed data/gtfs-nl/feed \
   --date 20260703 \
-  --output examples/showcase/public/data/gtfs-nl
+  --output data-fleet/gtfs-nl
 ```
 
-**Options:**
-
-- `--feed`: Extracted GTFS feed directory (**required**) — needs `trips.txt`,
-  `stop_times.txt`, `routes.txt`, and `calendar_dates.txt` and/or
-  `calendar.txt`; `shapes.txt` and `stops.txt` are used when present
-- `--date`: Service date to expand, `YYYYMMDD` (**required**)
-- `--output` / `--out`: Output packed dataset directory (or a `*.parquet` path
-  to stop at the intermediate), default `examples/showcase/public/data/gtfs-transit`
-- `--bin`: Temporal bucket for the output archive's tile chunking, default `1h`
-- `--max-trips`: Cap the number of trips, evenly subsampled across the day for a
-  legible fleet (deterministic stride), default: every scheduled trip
-- `--headsign`: Also emit each trip's `trip_headsign` as a string property
-  (off by default — it is a high-cardinality categorical)
-- `--min-zoom` / `--max-zoom`: Build pyramid zoom range, default 6–14
-- `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
+`--bake-elevation` samples the AWS Terrarium DEM along each trip and bakes
+per-vertex terrain elevation (metres) into the archive's `vertex_values`
+channel, so the fleet rides a 3D terrain basemap with no runtime DEM queries
+(the renderer lifts each head dot via `elevationFromVertexValues`). Ground
+modes get a max-grade clamp so a base tunnel does not climb the massif; aerial
+modes (gondolas) span station-to-station. `--dem-zoom` (default 12) and
+`--dem-cache` (default `data/dem/terrarium`) tune and cache the sampling.
 
 ### NYC Taxi Points (`nyc-taxi-points`)
 
@@ -325,20 +224,10 @@ as-is.
 
 ```bash
 stt-generate nyc-taxi-points \
-  --input examples/showcase/public/data/nyc-taxi-paths \
+  --input data-fleet/nyc-taxi-paths \
   --interval-seconds 15 \
   --output nyc-taxi-points.stt
 ```
-
-**Options:**
-
-- `--input`: Source LineString packed dataset (a directory or its `manifest.json`), default `examples/showcase/public/data/nyc-taxi-paths`
-- `--interval-seconds`: Time spacing between interpolated points (smaller = smoother animation, larger output), default: 15
-- `--max-trips`: Cap on trips processed (for quick iteration), default: all
-- `--temporal-bucket`: Output archive tile bucket, default `30m`
-- `--min-zoom` / `--max-zoom`: Output archive zoom range, default 10–16
-- `--skip-build`: Emit the intermediate Parquet only
-- `--keep-intermediate`: Keep the intermediate Parquet after build
 
 ### Ocean Drifters (NOAA Global Drifter Program)
 
@@ -350,16 +239,6 @@ stt-generate drifters \
   --start 2021-01-01 --end 2022-01-01 \
   --output drifters.stt
 ```
-
-**Options:**
-
-- `--start` / `--end`: Time window (YYYY-MM-DD), default 2021-01-01 → 2022-01-01
-- `--bounds`: Geographic filter (min_lat,min_lon,max_lat,max_lon)
-- `--min-points`: Drop trajectories shorter than this, default: 4
-- `--max-gap-hours`: Split a trajectory at gaps longer than this, default: 120
-- `--max-zoom`: Max tile zoom, default: 6 (the globe demo only loads z0 — keep low for multi-decade pulls)
-- `--temporal-bucket`: Tile bucket size, default: `1d` (coarsen for long spans)
-- `--cache-dir`: Download cache, default: `data/gdp-cache`
 
 `drifters-hourly` is the EXPERIMENTAL hourly-product variant
 (`drifter_hourly_qc`) with the same flags (cache default
@@ -375,14 +254,22 @@ migration trajectories.
 stt-generate animals --output animals.stt
 ```
 
-**Options:**
+### Satellite Orbits (CelesTrak TLE + SGP4)
 
-- `--licenses`: Comma-separated license allowlist, default: `CC0_1_0,CC_BY_4_0,CC_BY_NC_4_0`
-- `--max-datasets`: Limit number of GBIF datasets (0 = unlimited)
-- `--ref-year`: Reference year every track is season-folded onto, default: 2024
-- `--min-points`: Drop trajectories shorter than this, default: 5
-- `--max-gap-days`: Split a trajectory at gaps longer than this, default: 21
-- `--cache-dir`: Download cache, default: `data/gbif-cache`
+Downloads the current CelesTrak "active satellites" TLE set and propagates every
+object with SGP4 into ground-track trajectories with per-vertex timestamps.
+
+```bash
+stt-generate satellites \
+  --duration-hours 24 \
+  --step-seconds 60 \
+  --orbit-type all \
+  --output satellites.stt
+```
+
+Those three flags are the propagation window: `--duration-hours` (default 24)
+and `--step-seconds` (default 60) set the span and its resolution, and
+`--orbit-type` (default `all`) narrows the set to `LEO`, `MEO` or `GEO`.
 
 ### OSM Editing History (`osm-edits`)
 
@@ -417,7 +304,7 @@ stt-generate osm-edits \
   --bounds 40.49,-74.27,40.92,-73.68 \
   --tagged-only \
   --summary-tier \
-  --output examples/showcase/public/data/osm-nyc-nodes.stt
+  --output data-fleet/osm-nyc-nodes.stt
 ```
 
 - `--tagged-only` keeps real features (buildings/POIs/roads) and drops untagged
@@ -446,27 +333,16 @@ stt-generate osm-edits \
   --bounds 40.49,-74.27,40.92,-73.68 \
   --max-bbox-deg 1.0 \
   --summary-tier \
-  --output examples/showcase/public/data/osm-nyc-changesets.stt
+  --output data-fleet/osm-nyc-changesets.stt
 ```
 
 - `--max-bbox-deg` drops planet-spanning import/bot changesets so their centroid
   doesn't smear onto Null Island. `0` disables the filter.
 
-**Options (both sources):**
-
-- `--source`: `nodes` or `changesets` (default `nodes`)
-- `--input`: source file (required)
-- `--bounds`: metro bbox `min_lat,min_lon,max_lat,max_lon` (default NYC)
-- `--start-date` / `--end-date`: clip the time range (YYYY-MM-DD)
-- `--summary-tier`: emit the server-aggregated H3 tier
-- `--tagged-only` (nodes): drop untagged geometry vertices
-- `--max-bbox-deg` (changesets): giant-bbox filter degrees (default 1.0)
-
 The archives are large and are **kept local** — they're git-ignored and not
-hosted. The matching showcase configs (`osm-nyc-draw`,
-`osm-nyc-changesets-summary`, `osm-nyc-changesets-editors` in
-`examples/showcase/src/datasets.ts`) expect them under
-`examples/showcase/public/data/`.
+hosted. They land under `data-fleet/`; the matching showcase configs
+(`osm-nyc-draw`, `osm-nyc-changesets-summary`, `osm-nyc-changesets-editors`)
+live in the separate poopdeck.gl repository.
 
 To target a different metro, swap `--bounds` (and pick the right region
 extract for `nodes`). For example, Berlin: `--bounds 52.34,13.09,52.68,13.76`.
@@ -494,26 +370,8 @@ stt-generate storms \
   --sites KOAX,KDMX,KDVN \
   --date 2020-08-10 \
   --start-hour 16 --end-hour 23 \
-  --output examples/showcase/public/data
+  --output data-fleet
 ```
-
-**Options:**
-
-- `--sites`: Radar sites (WSR-88D ICAO ids) along the derecho path, west→east, default `KOAX,KDMX,KDVN`
-- `--date`: UTC date of the event, default `2020-08-10`
-- `--start-hour` / `--end-hour`: Inclusive start / exclusive end hour (UTC), default 16–23
-- `--scan-stride`: Keep only every Nth volume per site (1 = every scan), default: 2
-- `--dbz-thresholds`: Ascending dBZ thresholds for the filled contour bands, default `20,25,…,65`
-- `--cell-dbz`: Storm-cell detection floor in dBZ, default: 50
-- `--min-cell-km2`: Drop storm cells smaller than this (km², removes speckle), default: 12
-- `--min-band-km2`: Drop contour-band polygons smaller than this (km²), default: 9
-- `--grid-km`: Analysis-grid spacing in km, default: 2.0
-- `--bounds`: Analysis bbox `min_lat,min_lon,max_lat,max_lon`, default = derecho corridor
-- `--max-cell-speed`: Max track-association speed (m/s) for nearest-centroid matching, default: 45
-- `--min-zoom` / `--max-zoom`: Build pyramid zoom range, default 4–9
-- `--cache-dir`: Cache directory for downloaded V06 volumes, default `radar-data`
-- `--no-download`: Use cached downloaded volumes only; never hit S3
-- `--skip-build`: Write only the intermediate parquet for each archive
 
 ### NWM River Discharge (`nwm`)
 
@@ -527,183 +385,31 @@ hourly window reuses the year's downloaded chunks and daily medians.
 ```bash
 # Demo 1 — full-year daily flow, each reach self-scaled to its own annual range:
 stt-generate nwm --window 2019 --bin 1d --value self-scaled \
-  --output examples/showcase/public/data/nwm-rivers-2019
+  --output data-fleet/nwm-rivers-2019
 
 # Demo 2 — March hourly flood anomaly (reuses the 2019 daily pass for medians):
 stt-generate nwm --window 2019-03 --bin 1h --value log-anomaly \
-  --output examples/showcase/public/data/nwm-rivers-flood-2019-03
+  --output data-fleet/nwm-rivers-flood-2019-03
 ```
-
-**Options:**
-
-- `--flowlines`: NHDPlus flowlines GeoParquet (COMID / StreamOrde / Hydroseq /
-  LevelPathI / Divergence / DnHydroseq / WKB geometry), default
-  `data/nwm/nhd-flowlines-order3.parquet`
-- `--window`: Value window, `YYYY` (full year) or `YYYY-MM` (one month), default `2019`
-- `--bin`: Temporal bucket, `1d` (daily mean) or `1h` (hourly; month windows only), default `1d`
-- `--value`: Value encoding — `self-scaled` (each reach mapped from its own
-  annual [p2, p98] log-discharge onto [0,1] — seasonal variation, not absolute
-  size), `log-q` (log10 absolute discharge) or `log-anomaly` (log2 anomaly vs the
-  reach's 2019 daily median), default `self-scaled`
-- `--output` / `--out`: Output packed dataset directory (or a `*.parquet` path
-  to stop at the intermediate), default `examples/showcase/public/data/nwm-rivers-2019`
-- `--zooms`: Zoom pyramid, `LO-HI` or a single `Z`, default `4-8` (density LOD by
-  stream order — each river is emitted once at full resolution, not decimated per zoom)
-- `--detail-zoom`: Geometry detail — 2-px vertex spacing is targeted at this zoom
-  and kept at every rendered zoom, default 11
-- `--chunk-buckets`: Matrix columns per streamed temporal tile; `0` (default) =
-  auto (~30 columns), which caps the decoded matrix on dense low-zoom tiles
-- `--min-order-override`: Override the per-band Strahler-order threshold
-  (default ladder z≤5 → ≥6, z6–7 → ≥5, z8+ → ≥4)
-- `--max-reach-stripes`: Process only the first N of the 93 reach stripes — cheap
-  smoke tests (most flowlines then count as join misses; not for real builds)
-- `--cache-dir`: Cache directory for compressed zarr chunk objects, default `data/nwm/chrtout-cache`
-- `--reduced-dir`: Directory for persisted per-stripe reduced series, default `data/nwm/reduced`
-- `--skip-download`: Fail if a needed chunk is not already cached instead of downloading
-- `--skip-build`: Write only the intermediate GeoParquet (no stt-build)
 
 ## Custom Data (Using stt-build)
 
-`stt-build`'s primary input is a **GeoParquet** file (`.parquet` /
-`.geoparquet`). For other formats, convert first — see
-[Building from Python](./python.md) for GeoPandas / DuckDB / pyarrow
-recipes, or use `ogr2ogr -f Parquet out.parquet in.geojson`.
+This page covers `stt-generate`, which rebuilds _this repo's_ bundled showcase
+datasets. Building an archive from your **own** data is `stt-build`, documented
+in full elsewhere — nothing here is generator-specific:
 
-Two input constraints are enforced from the GeoParquet `geo` footer:
-
-- **Coordinates must be lon/lat degrees** (`OGC:CRS84` / `EPSG:4326`).
-  Any other declared CRS — e.g. an export in Web Mercator — fails the
-  build with a reproject hint (`gdf.to_crs(4326).to_parquet(...)`).
-- **Line/polygon geometry must be WKB-encoded.** The native geoarrow
-  `linestring`/`polygon`/`multi*` encodings fail with a re-export hint
-  (`gdf.to_parquet(..., geometry_encoding='WKB')`). WKB is the GeoPandas
-  default, so most exports just work.
-
-### From GeoParquet
-
-```bash
-stt-build \
-  --input my-custom-data.parquet \
-  --output my-custom-data.stt \
-  --time-field timestamp \
-  --time-format unix-ms \
-  --auto
-```
-
-`--auto` runs `stt-optimize` over the input and fills in zoom range and
-temporal bucket based on the data's spatial density and temporal
-distribution. Any flag you pass explicitly still wins. (Compression is
-not auto-tuned — the packed format is zstd-only.)
-
-### From a database (PostGIS / DuckDB)
-
-`stt-build` can also read features straight from a live **PostGIS** table/query
-or a **DuckDB** database/file, with no GeoParquet export step — `--postgres`
-or `--duckdb` replaces `--input` and everything downstream (LOD, quantization,
-summary tiers) is identical. Each backend is behind an off-by-default cargo
-feature:
-
-```bash
-cargo build --release -p stt-build --features duckdb   # or: --features postgres
-```
-
-```bash
-# DuckDB, scanning a source file in place (":memory:" opens a scratch DB):
-stt-build --duckdb :memory: \
-  --sql "SELECT ST_Point(lon, lat) AS geom, timestamp, mag FROM read_parquet('quakes.parquet')" \
-  --geom-column geom --time-field timestamp --time-format unix-ms \
-  --output quakes.stt
-
-# PostGIS, reading a table directly:
-stt-build --postgres "$DATABASE_URL" --table hurricane_obs --geom-column geom \
-  --time-field iso_time --time-format iso8601 \
-  --output hurricanes.stt
-```
-
-`--table` and `--sql` are mutually exclusive (provide exactly one), and both
-accept the same `--time-field`/`--time-format`/`--end-time-field` and
-per-vertex list-column flags as the GeoParquet path. `--auto` isn't supported
-here — `stt-optimize` reads a GeoParquet file, so pick zoom range and temporal
-bucket manually for a DB source. See
-[Building from Python](./python.md#2-duckdb--geoparquet-no-python-deps-beyond-duckdb)
-for a worked DuckDB example and the
-[CLI reference](../api/cli-reference.md#stt-build) for the full flag list,
-including `--where` and `--source-srid`.
-
-### Serving tiles on the fly instead of pre-baking an archive
-
-If you don't want to run `stt-build` ahead of time and ship a `.stt` archive,
-`stt-serve` generates the same tiles per-request straight from a live
-PostGIS table/query or DuckDB database — one process, any number of
-datasets, no offline build step:
-
-```bash
-stt-serve --postgres "$DATABASE_URL" --table hurricane_obs --geom-column geom \
-  --time-field iso_time --time-format iso8601 --bind 0.0.0.0:8080
-```
-
-It shares `stt-build`'s tiler and encoder, so a served tile is byte-identical
-to what an offline build of the same fixed bucket would produce — this is a
-runtime alternative to the batch workflow above, not a different format. See
-[the full protocol spec](../spec/stt-serve-protocol.md) for the route shapes,
-multi-dataset `--config` files, and caching semantics, and the
-[CLI reference](../api/cli-reference.md#stt-serve) for the flag list.
-
-### Adding a temporal LOD pyramid
-
-For multi-year datasets you'd otherwise animate at hour-scale, build a
-coarser-bucket pyramid so the reader can pick a tier per zoom:
-
-```bash
-stt-build -i quakes.parquet -o quakes.stt \
-  --time-field time --time-format unix-ms \
-  --temporal-bucket 1h \
-  --temporal-lod 1d@8,30d@4
-```
-
-Each LOD entry must be a strict multiple of `--temporal-bucket`; the
-`@N` suffix clamps the level to zooms ≤ N.
-
-### Adding an H3 summary tier
-
-For 100M+ point datasets, server-aggregate the low zooms so the raw tier
-doesn't ship hundreds of millions of points per frame:
-
-```bash
-stt-build -i quakes.parquet -o quakes.stt \
-  --time-field time --time-format unix-ms \
-  --summary-tier h3 \
-  --summary-min-zoom 0 --summary-max-zoom 4 \
-  --summary-columns magnitude:mean,magnitude:max
-```
-
-The summary tier is built from the loaded features after the raw tier, so it
-works with either the default build or `--streaming`.
-
-### Time Format Options
-
-`--time-format` is a closed vocabulary (a typo is a clap error):
-
-- `iso8601` (default): e.g., `2024-01-15T12:30:00Z`
-- `unix-ms`: milliseconds since epoch
-- `unix-sec`: seconds since epoch
-
-The flag is only consulted for integer (Int64) time columns — Arrow
-Timestamp columns are self-describing and String columns are always
-parsed as ISO 8601. An Int64 column under the default `iso8601` logs a
-warning and is interpreted as unix-ms; pass `unix-ms`/`unix-sec` to make
-the intent explicit.
-
-The build fails on a null or unparseable timestamp by default. The explicit
-`--salvage-invalid-times` mode instead coerces those values to epoch and reports
-the affected count. Pre-1970 (negative) timestamps always fail in both modes —
-the temporal index stores unsigned ms-since-epoch and cannot represent them.
-
-### Bad geometry
-
-The build fails on the first null or unparseable geometry by default. Pass
-`--salvage-invalid-geometry` to skip such rows with a count warning; they have
-no position to tile at and are never placed at (0,0).
+- [CSV → animated map](./csv-quickstart.md) — the shortest end-to-end path.
+- [Building from Python](./python.md) — GeoPandas / DuckDB / pyarrow recipes
+  for getting other formats into GeoParquet.
+- [CLI reference — `stt-build`](../api/cli-reference.md#stt-build) — every flag,
+  including [GeoParquet input requirements](../api/cli-reference.md#input-requirements-geoparquet),
+  [database sources](../api/cli-reference.md#database-input-sources-opt-in),
+  [time formats and strictness](../api/cli-reference.md#time),
+  [temporal bucketing & LOD](../api/cli-reference.md#temporal-bucketing--lod),
+  [the summary tier](../api/cli-reference.md#summary-tier-server-aggregated-low-zoom-tier)
+  and [auto-tuning](../api/cli-reference.md#auto-tuning).
+- [`stt-serve` protocol](../spec/stt-serve-protocol.md) — serving the same tiles
+  per-request from PostGIS/DuckDB instead of pre-baking an archive.
 
 ## AV Scene Bundles (Python extractors)
 
@@ -732,22 +438,7 @@ redistribution, so Waymo bundles stay local. Per-source setup lives in
 
 ## Best Practices
 
-### 1. Choose Appropriate Zoom Levels
-
-- **Global datasets** (earthquakes, hurricanes): `--min-zoom 0 --max-zoom 10`
-- **Regional datasets** (AIS, flights): `--min-zoom 0 --max-zoom 12`
-- **City-level datasets** (taxis, rideshare): `--min-zoom 10 --max-zoom 16`
-
-### 2. Use Temporal Sampling for Dense Data
-
-For high-frequency data (GPS tracks, vessel positions):
-
-```bash
-stt-generate ais --sample-minutes 10  # 1 position per vessel per 10 min
-stt-generate flights --sample-seconds 60  # 1 position per aircraft per minute
-```
-
-### 3. Memory Management
+### Memory Management
 
 For large inputs, `stt-build --streaming` writes tiles as each zoom level
 completes and streams them straight into the `PackWriter`, instead of
@@ -778,13 +469,9 @@ stt-validate my-data/            # the directory stt-build wrote
 stt-validate my-data/ --json     # for CI
 ```
 
-Then try the dataset in the showcase:
-
-```bash
-cp -R my-data examples/showcase/public/data/
-# Update examples/showcase/src/datasets.ts with your dataset config
-cd examples/showcase && pnpm dev
-```
+`stt-generate` writes its archives under `data-fleet/`. The showcase that
+renders them lives in the separate poopdeck.gl repository, where each dataset
+is wired up in the showcase app's dataset config.
 
 ## Troubleshooting
 

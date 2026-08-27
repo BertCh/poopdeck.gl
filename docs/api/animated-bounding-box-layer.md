@@ -108,6 +108,11 @@ Inherits all properties from [`SpatioTemporalLayer`](./spatiotemporal-layer.md).
 | `showLabels`    | `boolean` | `false`      | Draw a per-object `TextLayer` label (sublayer id `labels`) above each active box, billboarded.                                                                                                         |
 | `labelProperty` | `string`  | `'category'` | Column name whose per-feature value is drawn as each object's label when `showLabels` is on. Reads a categorical column the same way box color reads `colorProperty`; a numeric column is stringified. |
 
+Label appearance is fixed — 11 px white glyphs with a 2 px dark SDF outline,
+anchored bottom-center 16 px above the box. Override it through deck's composite
+escape hatch, e.g.
+`_subLayerProps: { labels: { getSize: 14, getColor: [255, 220, 80, 255] } }`.
+
 ### Velocity arrows
 
 | Property                 | Type      | Default               | Description                                                                                                                                                                           |
