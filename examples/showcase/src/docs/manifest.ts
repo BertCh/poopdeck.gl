@@ -69,9 +69,16 @@ export const docSections: DocSection[] = [
       {
         slug: 'intro/choosing',
         file: 'intro/choosing.md',
-        title: 'Choosing STT, a Deployment & Renderer',
+        title: 'Choosing STT & a Deployment',
         blurb:
-          'When STT fits, static versus served deployment, and which renderer or layer to choose.',
+          'When STT fits the data, and whether to publish a packed archive or serve tiles live.',
+      },
+      {
+        slug: 'intro/choosing-a-renderer',
+        file: 'intro/choosing-a-renderer.md',
+        title: 'Choosing a Renderer',
+        blurb:
+          'Which backend, which layer for your data shape, and which playback API.',
       },
       {
         slug: 'intro/status-and-support',
