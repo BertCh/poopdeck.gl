@@ -54,7 +54,8 @@ jobs:
       # run it first so drift fails in seconds instead of after the whole build.
       - name: plugin/skill versions in sync
         run: node scripts/sync-versions.mjs --check
-      # Seam gate: the 23 doc pages, the six conformance vector trees under
+      # Seam gate: the 25 vendored artifacts (20 doc pages + 5 schemas), the
+      # six conformance vector trees under
       # packages/core/test/fixtures/, and the `stt` block of
       # project-status.json are AUTHORED in the STT repository and vendored
       # here. Editing a vendored copy locally is how the two implementations
