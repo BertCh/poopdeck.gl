@@ -141,6 +141,7 @@ interface STTTileLayer {
   arrowIpc?: Uint8Array; // raw per-layer Arrow IPC bytes (cloneable; survives workers)
   arrowIpcProps?: Uint8Array; // the spliced PROPS IPC stream (present iff the layer has property columns)
   tileMeta?: TileMetaJson; // parsed TILE_META (plain JSON; survives workers; re-injected on rehydrate)
+  pathCodec?: Uint8Array; // path-codec layers only: the PATH_CODEC section the rehydrate rebuilds geometry/vertex_time from
   arrowIpcDropped?: boolean; // set when retainArrowIpc dropped the IPC bytes — toGeoArrowTable() then throws
   coordinatesQuantized?: boolean; // true when the geometry leaf is stt:quant Int32 grid indices, not lon/lat
 }
@@ -235,7 +236,7 @@ schema template registry (built from `manifest.schemas`) and the declared
   rejects at open instead. The implemented set is exported as
   `KNOWN_MANIFEST_CAPABILITIES` (currently `'coord-quant'`, `'attr-quant'`,
   `'elevation-fold'`, `'time-delta'`, `'vertex-value-quant'`,
-  `'triangles-partial'`, and `'vertex-time-feature-anchor'`).
+  `'triangles-partial'`, `'vertex-time-feature-anchor'`, and `'path-codec'`).
 - rejects any unrecognized `formatVersion` or `directoryVersion`.
 
 ## Archive options

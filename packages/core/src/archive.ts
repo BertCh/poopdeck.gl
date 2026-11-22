@@ -163,6 +163,12 @@ export const KNOWN_MANIFEST_CAPABILITIES: readonly string[] = [
   // unconditionally, like `triangles-partial` and unlike `additive-partition`:
   // the decoder resolves it and every downstream consumer sees absolute times.
   'vertex-time-feature-anchor',
+  // The layer-frame `PATH_CODEC` section (tag 0x06): LineString coordinates
+  // and vertex times as per-feature predictor residuals. Supported
+  // unconditionally — `decodeTile` rebuilds the classic `geometry` /
+  // absolute-`Int64` `vertex_time` columns (see `path-codec.ts`), so every
+  // consumer downstream of decode sees a non-codec layer.
+  'path-codec',
   // ⚠️ DT-2's `additive-partition` is deliberately NOT here yet, and the reason
   // is the whole point of the capability. This reader CAN union across zooms
   // (`lodMode: 'additive'`), but that mode is an explicit option whose default
@@ -2082,6 +2088,7 @@ export function estimateTileSize(tile: Tile): number {
     // any other buffer.
     add(layer?.arrowIpc);
     add(layer?.arrowIpcProps);
+    add(layer?.pathCodec);
     const f = layer?.features;
     if (!f) continue;
     // Every BinaryFeatures buffer field, via the shared enumeration (same
@@ -4304,6 +4311,7 @@ export class STTArchive {
       }
       layer.arrowIpc = undefined;
       layer.arrowIpcProps = undefined;
+      layer.pathCodec = undefined;
       layer.arrowTable = undefined;
       layer.arrowIpcDropped = true;
     }

@@ -35,7 +35,7 @@ import type { BinaryFeatures, Tile } from './types.js';
  * `vectorProps` before they were re-synced, and `partIndices` shipped
  * unlisted — structured-CLONE-copied across the worker boundary and
  * uncounted against the memory budget — until it was added here). Layer-level
- * extras (`arrowIpc`, `arrowIpcProps`) are NOT features fields — callers that
+ * extras (`arrowIpc`, `arrowIpcProps`, `pathCodec`) are NOT features fields — callers that
  * want them add them themselves.
  *
  * ⚠️ ADDING A BUFFER FIELD TO `BinaryFeatures` MEANS ADDING A `visit()` LINE
@@ -107,6 +107,8 @@ export function collectTransferables(tile: Tile): Transferable[] {
     // structured-clone-copies across the worker boundary.
     addBuffer(layer?.arrowIpc);
     addBuffer(layer?.arrowIpcProps);
+    // The `path-codec` section copy `toGeoArrowTable()` rebuilds from.
+    addBuffer(layer?.pathCodec);
     const f = layer?.features;
     if (!f) continue;
     // Every BinaryFeatures buffer field, via the shared enumeration —

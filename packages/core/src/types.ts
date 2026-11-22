@@ -716,6 +716,14 @@ export interface STTTileLayer {
    */
   tileMeta?: TileMetaJson;
   /**
+   * `path-codec` layers only: a copy of the layer's `PATH_CODEC` frame section
+   * (tag `0x06`). Their {@link arrowIpc} CORE stream carries EMPTY `geometry`
+   * / `vertex_time` lists, so `toGeoArrowTable()` needs these bytes to rebuild
+   * the columns when rehydrating a worker-decoded layer. Transferable, and
+   * dropped together with {@link arrowIpc} under `ArchiveOptions.retainArrowIpc`.
+   */
+  pathCodec?: Uint8Array;
+  /**
    * Set when the archive dropped this layer's {@link arrowIpc} (and
    * {@link arrowTable}) reference per `ArchiveOptions.retainArrowIpc` —
    * distinguishes "dropped to save memory" (a clear, actionable

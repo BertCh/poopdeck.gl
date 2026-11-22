@@ -63,7 +63,11 @@ const chunkBudgets = [
   // (91,472 -> 99,133 B for the same worker source). Arrow is ~79% of
   // this bundle and `tile.ts` needs the barrel (tableFromIPC, Table,
   // Schema, Struct, Field, Type), so there is no subpath to trim to.
-  [/^tile-decoder\.worker-.*\.js$/, 'tile decoder worker', 100],
+  // 100 -> 104: the path-codec decoder (`path-codec.ts` and its column
+  // substitution in `tile.ts`) took the worker from 99,133 B at the last
+  // re-base to 102,987 B gzip. It has to live in the worker: that is where
+  // tiles are decoded.
+  [/^tile-decoder\.worker-.*\.js$/, 'tile decoder worker', 104],
 ];
 const assetNames = fs.readdirSync(assetsDir);
 for (const [pattern, label, maximum] of chunkBudgets) {
