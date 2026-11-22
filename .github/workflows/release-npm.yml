@@ -35,7 +35,7 @@ jobs:
       - name: smoke-pack (pre-publish gate)
         run: node scripts/smoke-pack.mjs
       - name: Version PR or publish
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
           version: pnpm run version-packages
           publish: pnpm run release
