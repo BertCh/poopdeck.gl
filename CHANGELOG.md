@@ -6,6 +6,26 @@ release notes are the historical record for individual artifacts. Changes to the
 **archive format itself** are recorded upstream, in the
 [SpatioTemporal Tiles changelog](https://github.com/BertCh/spatiotemporal-tiles/blob/main/CHANGELOG.md).
 
+## 0.9.0 — 2026-11-22
+
+### Path codec
+
+- `@poopdeck.gl/core` reads archives built with upstream's opt-in
+  `stt-build --path-codec` (SpatioTemporal Tiles 0.9.0, capability
+  `path-codec`). The codec stores a LineString layer's coordinates and
+  per-vertex times as predictor residuals. It is lossless: Float64 coordinates
+  decode bit-exact, and vertex times are exact to the millisecond. On the three
+  measured corpora it roughly halves a default trajectory archive.
+- Nothing changes for a renderer. A codec layer decodes to the same arrays as
+  any other, so no backend was touched.
+- A 0.8.x reader refuses a `path-codec` archive at open. Upgrade to this
+  release before serving an archive built with the flag.
+
+### Fixed
+
+- A dataset whose source has a property column named `id` could not be decoded
+  at all. It now decodes, with both `id` columns intact.
+
 ## 0.8.0 — 2026-08-26
 
 ### Repository split

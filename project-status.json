@@ -1,9 +1,9 @@
 {
   "$schema": "./project-status.schema.json",
   "schemaVersion": 2,
-  "updated": "2026-08-26",
+  "updated": "2026-11-22",
   "release": {
-    "javascript": "0.8.0"
+    "javascript": "0.9.0"
   },
   "toolchain": {
     "node": ">=24.0.0",
@@ -14,43 +14,43 @@
   "packages": [
     {
       "name": "@poopdeck.gl/core",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "stable"
     },
     {
       "name": "@poopdeck.gl/layers",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "stable"
     },
     {
       "name": "@poopdeck.gl/playback",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "stable"
     },
     {
       "name": "@poopdeck.gl/react",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "stable"
     },
     {
       "name": "@poopdeck.gl/three",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "preview"
     },
     {
       "name": "@poopdeck.gl/maplibre",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "preview"
     },
     {
       "name": "@poopdeck.gl/mcp",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "published": true,
       "support": "preview"
     },
