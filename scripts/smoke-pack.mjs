@@ -45,21 +45,30 @@ const PACKAGES = [
 
 // Peers at the workspace's dev-pinned majors. Keep in sync with pnpm.overrides.
 const PEERS = [
-  '@deck.gl/core@9.3.2',
-  '@deck.gl/layers@9.3.2',
-  '@deck.gl/aggregation-layers@9.3.2',
-  '@deck.gl/extensions@9.3.2',
-  '@deck.gl/geo-layers@9.3.2',
-  '@deck.gl/mesh-layers@9.3.2',
-  '@deck.gl/react@9.3.2',
+  '@deck.gl/core@9.3.10',
+  '@deck.gl/layers@9.3.10',
+  '@deck.gl/aggregation-layers@9.3.10',
+  '@deck.gl/extensions@9.3.10',
+  '@deck.gl/geo-layers@9.3.10',
+  '@deck.gl/mesh-layers@9.3.10',
+  '@deck.gl/react@9.3.10',
   // Not imported by anything here, but `@deck.gl/react` peer-depends on it at
-  // `~9.3.0`. Left unpinned, npm resolves the NEWEST patch in that range
-  // (9.3.10), which peer-wants `@luma.gl/core@~9.3.5` and ERESOLVEs against the
-  // 9.3.3 pinned below — a gate failure caused purely by an upstream release,
-  // with nothing in this repo changing. Pinned like every other peer.
-  '@deck.gl/widgets@9.3.2',
-  '@luma.gl/core@9.3.3',
-  '@luma.gl/engine@9.3.3',
+  // `~9.3.0`. Left unpinned, npm resolves the NEWEST patch in that range, whose
+  // luma peer can differ from the one pinned below — a gate failure caused
+  // purely by an upstream release, with nothing in this repo changing. Pinned
+  // like every other peer.
+  '@deck.gl/widgets@9.3.10',
+  '@luma.gl/core@9.3.6',
+  '@luma.gl/engine@9.3.6',
+  // deck 9.3 depends on these with a CARET (`^9.3.5`), so since luma 9.4
+  // shipped a fresh install pairs luma 9.4 webgl/shadertools/gltf with the
+  // 9.3 core above and fails at import ("does not provide an export named
+  // …"). Naming them here hoists one coherent 9.3 set, which deck's own
+  // ranges accept.
+  '@luma.gl/webgl@9.3.6',
+  '@luma.gl/shadertools@9.3.6',
+  '@luma.gl/gltf@9.3.6',
+  '@luma.gl/constants@9.3.6',
   'three@0.184.0',
   'maplibre-gl@4',
   'cesium@1',
