@@ -1,5 +1,12 @@
 # @poopdeck.gl/maplibre
 
+## 0.9.0
+
+### Patch Changes
+
+- Updated dependencies [[`4f49ec4`](https://github.com/BertCh/poopdeck.gl/commit/4f49ec4d75df8b4df7d598047220afdea0e3a5fc), [`4f49ec4`](https://github.com/BertCh/poopdeck.gl/commit/4f49ec4d75df8b4df7d598047220afdea0e3a5fc)]:
+  - @poopdeck.gl/core@0.9.0
+
 ## 0.8.0
 
 ### Minor Changes
