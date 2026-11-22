@@ -34,14 +34,31 @@ jobs:
       # Publish-shape gate: real tarballs, real peers, every exports subpath.
       - name: smoke-pack (pre-publish gate)
         run: node scripts/smoke-pack.mjs
+      # changesets/action v2 (needs Changesets CLI v3, which package.json pins):
+      #   - inputs are kebab-case and the two scripts are `*-script`; the old
+      #     names are a hard error, not a silent no-op.
+      #   - the token comes from the `github-token` input, which defaults to
+      #     the workflow token, and the action hands it to both scripts as
+      #     GITHUB_TOKEN itself — @changesets/changelog-github still gets it.
+      #   - the version branch and the release tags are pushed through the
+      #     GitHub API, not `git push`.
+      #   - which packages were released is read from the CLI's
+      #     CHANGESETS_OUTPUT report, not parsed out of stdout. `pnpm run
+      #     release` ends in `changeset tag`, which inherits that variable and
+      #     writes one event per tag it creates; those are the tags pushed.
+      #   - `push-git-tags: true` is a behaviour change, on purpose. Under v1,
+      #     `createGithubReleases: false` also meant the tags `changeset tag`
+      #     created on the runner were never pushed, and every release's
+      #     `@poopdeck.gl/*@x.y.z` tags reached the remote by hand. v2 splits
+      #     the two switches: tags yes, GitHub Releases no.
       - name: Version PR or publish
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          version: pnpm run version-packages
-          publish: pnpm run release
-          createGithubReleases: false
+          version-script: pnpm run version-packages
+          publish-script: pnpm run release
+          create-github-releases: false
+          push-git-tags: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Bootstrap auth: granular @poopdeck.gl token (secret NPM_TOKEN).
           # After the first publish, configure a Trusted Publisher on each
           # npm package (repo BertCh/spatiotemporal-tiles, workflow
