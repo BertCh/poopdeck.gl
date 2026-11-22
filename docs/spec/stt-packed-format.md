@@ -204,7 +204,7 @@ a loud refusal at open.
   no triangles" rather than as "tessellate this one yourself" — hence
   `triangles-partial`.
 
-Registry (7 entries as of 2026-08-13). The machine-readable copy is the
+Registry (8 entries as of 2026-11-22). The machine-readable copy is the
 top-level `x-stt-capability-registry` array of
 [`manifest.schema.json`](./manifest.schema.json); both reference
 implementations pin their constant lists against that array in CI
@@ -222,6 +222,7 @@ prose.
 | `vertex-value-quant`         | quantized a per-vertex value column (`--quantize-vertex-values`)                                                                                                                                                                                       | `TILE_META.vq` re-types the `vertex_value(_matrix)` list leaf (§5.2.5)                        | 2026-07-26 |
 | `triangles-partial`          | emitted a polygon `triangles` column that MIXES baked and empty per-feature lists (ON by default; `--no-partial-triangles` restores the all-or-nothing shape, and `--pre-tessellate` bakes everything)                                                 | empty per-feature list = "reader earcuts this single ring at decode"                          | 2026-08-11 |
 | `vertex-time-feature-anchor` | emitted per-vertex times anchored to each feature's own `start_time` instead of a layer-wide origin (automatic — tried between the layer-anchored u16 and u32 tiers when the layer span forces too coarse a step; `--vertex-time-precision` bounds it) | `TILE_META.vtf` re-types the `vertex_time` `List<UInt16>` leaf to per-feature deltas (§5.2.6) | 2026-08-13 |
+| `path-codec`                 | stored at least one layer's LineString coordinates + vertex times in the `PATH_CODEC` section (`--path-codec`, OFF by default and not enabled by `--auto`; observation-driven: a build with no eligible layer declares nothing)                        | `PATH_CODEC` (0x06) section; CORE `geometry`/`vertex_time` are all-empty lists (§5.2.7)       | 2026-11-22 |
 
 #### `additive-partition` — declared, and in no reader's registry yet
 
@@ -667,13 +668,19 @@ error**, never a fallback to another frame shape: current readers hard-reject
 **Section tag registry** (unknown tags are SKIPPABLE via their TOC length —
 additive evolution):
 
-| tag  | name                  | content                                             |
-| ---- | --------------------- | --------------------------------------------------- |
-| 0x01 | `INLINE_SCHEMA_CORE`  | full IPC schema prefix (self-contained mode)        |
-| 0x02 | `TILE_META`           | canonical per-tile metadata JSON (§5.2.2)           |
-| 0x03 | `CORE_BATCH`          | IPC tail: dictionary batch(es) + record batch + EOS |
-| 0x04 | `INLINE_SCHEMA_PROPS` | as 0x01, props schema                               |
-| 0x05 | `PROPS_BATCH`         | as 0x03, props schema                               |
+| tag  | name                  | content                                                |
+| ---- | --------------------- | ------------------------------------------------------ |
+| 0x01 | `INLINE_SCHEMA_CORE`  | full IPC schema prefix (self-contained mode)           |
+| 0x02 | `TILE_META`           | canonical per-tile metadata JSON (§5.2.2)              |
+| 0x03 | `CORE_BATCH`          | IPC tail: dictionary batch(es) + record batch + EOS    |
+| 0x04 | `INLINE_SCHEMA_PROPS` | as 0x01, props schema                                  |
+| 0x05 | `PROPS_BATCH`         | as 0x03, props schema                                  |
+| 0x06 | `PATH_CODEC`          | path-codec residuals (§5.2.7); capability `path-codec` |
+
+Unknown tags are skippable, but `0x06` is gated by the `path-codec`
+capability (§3.1): a reader skipping `PATH_CODEC` would decode every codec
+feature as an empty path (silent vanish). A reader that does not implement
+this capability MUST refuse the archive at open.
 
 **CORE / PROPS split.** Reserved columns form the **CORE** batch;
 non-reserved property columns form the **PROPS** batch with its own
@@ -691,7 +698,7 @@ id, start_time, [end_time], geometry,
 `part_offsets` (§5.2.5) is appended **last** precisely so every pre-existing
 layer shape keeps its exact column order and no already-published template
 changes. Column-level types and presence rules are the tile-payload spec's
-([`data-format.md`](../architecture/data-format.md)); §§5.2.4–5.2.6 below
+([`data-format.md`](../architecture/data-format.md)); §§5.2.4–5.2.7 below
 specify only what the frame itself discriminates.
 
 **Frame alignment.** Pads to 8 are derived, never stored; TOC lengths are
@@ -860,6 +867,9 @@ of them.
 | quantized `<prop>`                     | `UInt16` \| `Int32` \| `Float64` (unquantized)  | a `TILE_META.qa` entry for that column                                                                                                     |
 | `vertex_value` / `vertex_value_matrix` | `List<Float32>` \| `List<UInt16>`               | a `TILE_META.vq` entry for that column                                                                                                     |
 
+These vertex-time width selections apply to non-codec layers; `PATH_CODEC`
+layers carry exact times under §5.2.7 instead.
+
 The **`vertex_time` `List<UInt32>` tier is new on 2026-07-26** and sits
 between the u16 tier and the exact-`Int64` fallback: the encoder walks
 `[u16::MAX, u32::MAX]` in order, taking the first width whose smallest
@@ -917,10 +927,210 @@ Both `vq` and the compact-time forms are frame-level: they are discriminated
 by `TILE_META`, which only a frame carries. A layer serialized outside a
 frame (the standalone self-describing IPC shape) MUST NOT use them.
 
+#### 5.2.7 Path codec section (`PATH_CODEC`) — capability `path-codec`
+
+The path codec stores a LineString layer's coordinates and per-vertex times as
+per-feature predictor residuals in a side section of the layer frame, instead of
+as Arrow leaf buffers. It is **lossless**: a decoder reproduces exactly the
+columns a non-codec tile would have carried, with vertex times at full
+millisecond precision (the default build truncates them to a per-tile step).
+
+**Scope and eligibility.**
+
+- Applies per layer, to layers whose geometry is `geoarrow.linestring` with a
+  2-wide coordinate (`FixedSizeList<2>`). `vertex_time` is optional.
+- Any other layer (points, polygons, 3-wide coordinates) is encoded as today.
+  A tile may mix codec and non-codec layers.
+- A layer takes the codec only when its geometry is LineString with a 2-wide
+  coordinate, and its vertex times are either absent or present one per vertex
+  on every feature, all with `|t| < 2^52` ms. Anything else encodes as without
+  the flag. `--vertex-time-precision` does not apply to a codec layer: its times
+  are exact.
+- Opt-in at build time: `stt-build --path-codec`. Off by default. It is not
+  enabled by `--auto`.
+
+**Declaration.**
+
+- **Manifest capability `path-codec`** (must-understand). The writer declares it
+  when at least one layer of the archive carries the section. Declaration is
+  observation-driven: a `--path-codec` build with no eligible layer declares
+  nothing for this capability. A reader that does not implement it refuses the
+  archive at open, as for every other capability.
+- **Layer-frame section tag `0x06` (`PATH_CODEC`)**. Its presence in a layer is
+  what marks that layer as codec-encoded. At most one per layer. Sections stay
+  in ascending tag order.
+
+**What the CORE batch carries.**
+
+The CORE schema template is the one the layer would have had anyway, with two
+fixed choices:
+
+- `geometry` keeps its type and metadata: `List<FixedSizeList<2, Float64>>`, or
+  `List<FixedSizeList<2, Int32>>` with the `stt:quant` field metadata when the
+  build uses `--quantize-coords`.
+- `vertex_time`, when the layer has one, is always `List<Int64>` (absolute
+  Unix ms). No `vt` / `vtf` keys appear in TILE_META for a codec layer.
+
+In the CORE batch both columns are present but **empty**: every list has length
+zero (all offsets zero, no child values). The template does not fork, and the
+batch stays a valid Arrow record batch for its schema.
+
+A decoder replaces both columns with the reconstructed ones before anything
+downstream sees the layer. After that step a codec layer is indistinguishable
+from a non-codec layer whose `vertex_time` is absolute `Int64`.
+
+**Section layout.**
+
+All multi-byte integers are LEB128. `uvarint` is unsigned; `svarint` is the
+zigzag mapping `(v << 1) ^ (v >> 63)` of a signed value, then `uvarint`. A
+varint is at most 10 bytes and its value must fit 64 bits; a non-minimal
+(over-long) encoding is accepted.
+
+```
+u8        version        = 1
+u8        flags          bit 0  TIME     the layer has vertex times
+                         bit 1  DECIMAL  coordinate integers are decimal
+                                         (clear: world-grid indices)
+                         bits 2..7 reserved, MUST be 0
+uvarint   feature_count  MUST equal the CORE batch row count
+uvarint   vertex_count   MUST equal the sum of `counts`
+[DECIMAL] u8      e      decimal exponent, 0..=15
+[TIME]    uvarint unit   U >= 1, in ms
+[TIME]    svarint qbase
+counts    feature_count x uvarint     vertices per feature (0 is allowed)
+tags      feature_count x u8          0 DELTA, 1 CONST_VEL, 2 TIME_VEL
+[TIME] dq   vertex_count x svarint
+[TIME] r    vertex_count x uvarint    each < U
+res       2 * vertex_count x svarint  x then y per vertex, features in row order
+[DECIMAL] uvarint exc_count
+          exc_count x uvarint         flat value indices, delta coded
+          exc_count x (uvarint lo, uvarint hi)   XOR patch, low and high 32 bits
+```
+
+The flags must agree with the schema: TIME is set exactly when the layer has a
+`vertex_time` column, and DECIMAL is set exactly when the geometry leaf is
+`Float64`. `TIME_VEL` is valid only with TIME. A decoder MUST reject a section
+with a wrong version, a reserved flag bit, an unknown tag, a count mismatch, an
+`r >= U`, an exception index out of range or not strictly increasing, a patch
+half above `2^32 - 1`, a value that does not fit its output type, or trailing
+bytes.
+
+**Integer bound (normative).** Every integer a decoder reads or computes —
+each varint value (after the zigzag mapping, for `svarint`), each `q[j]`,
+`q[j] * U`, `t[j]`, each predictor value `pred`, each `TIME_VEL` term
+`floor(v * dt1 / dt0 + 0.5)`, and each `k[i][a]` — MUST lie within
+`±(2^53 - 1)`, and a decoder MUST reject a section where one does not. The two
+exceptions are the patch halves (bounded by `2^32 - 1` above) and the
+intermediates `v`, `dt0`, `dt1` inside the `TIME_VEL` expression, which are
+converted to binary64 as they are. This is what "fits its output type" means
+here, and it is what makes an `i64` decoder and a binary64 (JavaScript)
+decoder accept exactly the same sections and produce exactly the same values;
+every section that follows the encoder rules below is far inside it. In
+world-grid mode `k` must additionally fit `Int32`.
+
+**Context checks (normative).** Before substituting, a decoder MUST also
+reject a codec layer whose `feature_count` differs from the CORE row count,
+whose CORE `geometry` or `vertex_time` column is not all-empty, whose
+`vertex_time` column is not `List<Int64>`, or whose `TILE_META` carries `vt`
+or `vtf`.
+
+**Decoding.**
+
+**Times** (TIME only). Keep `anchor`, initialised to `qbase`. For each feature
+in row order, and each of its vertices `j`:
+
+```
+q[j] = (j == 0 ? anchor : q[j-1]) + dq
+t[j] = q[j] * U + r
+```
+
+After a feature with at least one vertex, `anchor = q[0]` of that feature.
+`t` is absolute Unix ms and is the reconstructed `vertex_time` value. A
+feature with zero vertices gets a **null** `vertex_time` entry (the shape a
+non-codec writer gives it), and an empty, non-null `geometry` list.
+
+**Coordinates.** Keep `first = [0, 0]`. For each feature and each vertex `i`,
+per axis `a`:
+
+```
+i == 0 : k[0][a] = first[a] + res
+i == 1 : k[1][a] = k[0][a] + res                     (any tag)
+i >= 2 : k[i][a] = pred(tag) + res
+```
+
+After a feature with at least one vertex, `first = k[0]` of that feature.
+
+| tag           | `pred` for `i >= 2`, with `v = k[i-1][a] - k[i-2][a]`                       |
+| ------------- | --------------------------------------------------------------------------- |
+| 0 `DELTA`     | `k[i-1][a]`                                                                 |
+| 1 `CONST_VEL` | `k[i-1][a] + v`                                                             |
+| 2 `TIME_VEL`  | `k[i-1][a] + floor(v * dt1 / dt0 + 0.5)` if `dt0 > 0`, else `k[i-1][a] + v` |
+
+with `dt0 = t[i-1] - t[i-2]` and `dt1 = t[i] - t[i-1]`. The `TIME_VEL`
+expression is evaluated in IEEE-754 binary64: convert `v`, `dt1` and `dt0` to
+double, multiply, divide, add `0.5`, floor, in that order, with no fused
+multiply-add. `floor(x + 0.5)` is used instead of a library `round` because
+Rust's `f64::round` and JavaScript's `Math.round` disagree on negative halves.
+
+**Output.**
+
+- World-grid mode (DECIMAL clear): `k` is the Int32 grid index. It is written to
+  the `Int32` leaf, and the `stt:quant` affine applies as for any quantized
+  layer.
+- Decimal mode: the coordinate is `(k as f64) / 10^e` (one IEEE division by the
+  exactly representable `10^e`), and then every listed exception has its bit
+  pattern XORed with `(hi << 32) | lo`. The flat value index of vertex `n`,
+  axis `a` is `2n + a`, with `n` counted across the whole layer. The first
+  stored index is absolute and each later one is the difference from the
+  previous, which is at least 1.
+
+Because the patch is an XOR against whatever `k / 10^e` produced, decimal mode
+is bit-exact for every input, including `-0.0`, NaN and infinities, and for any
+`k` and `e` the encoder picks. A non-decimal source costs bytes, never
+correctness.
+
+**Encoder rules.**
+
+- `|k| < 2^50` and every vertex time strictly within `±2^52` ms
+  (`|t| < 2^52`), so every value in the section stays inside the decoder's
+  `±(2^53 - 1)` bound. A layer whose times fall outside is encoded without the
+  codec. A layer where some feature's vertex-time count differs from its
+  vertex count is also encoded without the codec. A value the encoder cannot
+  represent on the decimal grid (non-finite, or out of range) is stored as
+  `k = 0` with a full patch.
+- `TIME_VEL` MUST NOT be chosen for a feature where any `v * dt1` exceeds
+  `2^52` in magnitude.
+- The output is a pure function of the layer's content, so identical layers
+  still produce identical bytes and content-addressed dedup is unaffected.
+- Recommended, not required:
+  - the predictor per feature is the one with the smallest total varint length
+    (ties to the lowest tag);
+  - `U` is the coarsest of `{86400000, 3600000, 60000, 10000, 1000, 100, 10, 1}`
+    that at least 80 % of the layer's vertex times are a multiple of;
+  - `e` is the smallest exponent in `3..=8` whose exactly-represented value
+    count is within 2 % of the best, or `7` when no value is exact at any of
+    them.
+
+**What it preserves.**
+
+- Standalone tile decode. Nothing references another tile or another bucket.
+- The directory-only time-prune seek. The directory is untouched.
+- Content-addressed dedup and blob-run RLE (determinism under the encoder
+  rules above).
+- Row order and the `sorted` declaration. Features stay in row order.
+- Every other column, TILE_META key and PROPS batch, byte for byte.
+
+Reference implementation: `crates/stt-core/src/arrow_tile/path_codec.rs`
+(section codec); frame integration in `arrow_tile/encode.rs` /
+`arrow_tile/decode.rs` (`substitute_path_codec`); conformance vectors in
+`conformance/vectors/path-codec/` (see its README).
+
 ## 6. Reader flow (identical contract, Rust + TS)
 
 1. `GET manifest.json` → metadata, directory
    `{key,length,encoding?,layout?,rootLength?,rootHash?,pageHashes?}`, `packs[]`.
+   Refuse any capability the reader does not implement (§3.1), including
+   `path-codec`, before opening the archive.
 2. Load the directory, branching on `layout`:
    - **single** (or `layout` absent): `GET <directory.key>` (one whole-object fetch,
      immutable/cached) → validate body length against `directory.length`, unwrap
@@ -945,6 +1155,10 @@ bytes=0-(8+rootLength-1)` for
    gap _within_ each pack (a range can't bridge two pack objects); a concurrency pool runs
    groups in parallel. (Leaf-page reads against the `.sttd` object coalesce the same way.)
 5. Decompress per-blob zstd (fzstd in TS — no dict).
+6. Decode the layer frame (§5.2), splice CORE / PROPS batches, and restore
+   compact columns. For a layer carrying `PATH_CODEC` (`0x06`), validate and
+   reconstruct `geometry` and `vertex_time` per §5.2.7 before exposing the layer
+   to any consumer.
 
 Cold load (single) = 1 manifest + 1 directory + N pack ranges. Cold load (paged) =
 1 manifest + 1 root range + the few leaf ranges the first viewport touches + N pack
@@ -1077,7 +1291,8 @@ rule generalized):
 - **Tile payload** evolves per its own spec
   ([`data-format.md`](../architecture/data-format.md)): new columns and new
   schema-metadata keys are additive; **re-typings of existing columns**
-  (`stt:quant`, `stt:qa`, and the `TILE_META` keys `st`/`et`/`vq`) are the
+  (`stt:quant`, `stt:qa`, and the `TILE_META` keys `st`/`et`/`vq`), and the
+  `PATH_CODEC` replacement of geometry and vertex-time buffers (§5.2.7), are the
   dangerous class — the writer declares each one in `manifest.capabilities`
   (§3.1) so a reader that lacks it refuses at open instead of misdecoding.
 - **What this specification covers:** `formatVersion: 3` with directory v6 —

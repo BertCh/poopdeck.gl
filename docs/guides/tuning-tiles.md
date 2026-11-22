@@ -104,6 +104,10 @@ per-column compressed cost:
   ...
 ```
 
+A codec layer has a separate `[path-codec]` attribution line, with the note
+"path codec section (geometry + vertex_time)"; its empty CORE `geometry` and
+`vertex_time` columns attribute approximately zero bytes.
+
 Costs are leave-one-out **marginals**: a share is what removing that column
 would actually save, not what it would cost re-encoded on its own.
 

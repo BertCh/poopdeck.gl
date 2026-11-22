@@ -79,7 +79,7 @@ both reference implementations pin their constant lists against
 `KNOWN_CAPABILITIES`; the same TS contract test for
 `KNOWN_MANIFEST_CAPABILITIES`), so a registry addition on either side fails
 CI until the schema and both readers agree. Current entries: `attr-quant`,
-`coord-quant`, `elevation-fold`, `time-delta`, `triangles-partial`,
+`coord-quant`, `elevation-fold`, `path-codec`, `time-delta`, `triangles-partial`,
 `vertex-time-feature-anchor`, `vertex-value-quant`.
 
 ### 2.2 Committed golden fixtures
@@ -487,7 +487,7 @@ A conformant writer **MUST**:
   and qualify every directory entry with a declared `variant_id`;
 - declare every required-to-understand feature it used in
   `manifest.capabilities` (registry: `attr-quant`, `coord-quant`,
-  `elevation-fold`, `time-delta`, `triangles-partial`,
+  `elevation-fold`, `path-codec`, `time-delta`, `triangles-partial`,
   `vertex-time-feature-anchor`, `vertex-value-quant` —
   [packed-format §3.1](./stt-packed-format.md#31-required-to-understand-capabilities-capabilities)),
   omitting the key when none were used; additive columns
@@ -496,7 +496,10 @@ A conformant writer **MUST**:
   empty per-feature lists (an empty list means "the reader earcuts this ring");
   `vertex-time-feature-anchor` covers `TILE_META.vtf`, which re-types the
   `vertex_time` leaf to `UInt16` deltas measured from each feature's own
-  `start_time` instead of a layer-wide origin.
+  `start_time` instead of a layer-wide origin. `path-codec` covers the
+  `PATH_CODEC` (`0x06`) section replacing CORE geometry and vertex-time buffers
+  ([packed-format §5.2.7](./stt-packed-format.md#527-path-codec-section-path_codec--capability-path-codec));
+  it is declared only when at least one layer uses the section.
   **Note that `time-delta` applies to a default build** — the compact time
   forms are on unless suppressed, so a writer that emits them without
   declaring the capability is non-conformant even though it "changed
@@ -784,6 +787,12 @@ A conformant reader that accepts **formatVersion 3** additionally **MUST**:
   and skip unknown section tags via their TOC length — while treating an
   unrecognized **value** of a key it does know (`st`, `et`) as a hard decode
   error, never a fallback;
+- if implementing `path-codec`, reconstruct `geometry` and `vertex_time` from
+  `PATH_CODEC` (`0x06`) per
+  [packed-format §5.2.7](./stt-packed-format.md#527-path-codec-section-path_codec--capability-path-codec)
+  before exposing the layer, and reject every malformed section listed there;
+  a reader that does not implement it MUST refuse the archive at open rather
+  than skip the section and silently decode empty paths;
 - support **both** v2 schema modes: template-hash references and
   self-contained inline schema sections;
 - re-inflate the compact time forms to absolute non-null `Int64` before any
