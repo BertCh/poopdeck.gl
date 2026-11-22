@@ -1,7 +1,7 @@
 {
   "$comment": "Vendored-from-STT manifest. These paths are AUTHORED in the SpatioTemporal Tiles repository and copied here so this repo builds, tests and deploys offline. Do not edit them here — land the change upstream and re-run `pnpm stt:sync --ref <sha>`. Enforced by `pnpm stt:check` in CI. `upstreamOnly` lists paths that exist only upstream; `scripts/check-doc-links.mjs` lets a VENDORED page link to one, because that link resolves wherever the corpus is whole — the published site — and rewriting it to an absolute URL would make the site link out of itself. Rationale: docs/roadmap/repo-split-2026-08.md §4.",
   "repo": "BertCh/spatiotemporal-tiles",
-  "ref": "54b00f12f3d77748c5518673743432afa9bf164d",
+  "ref": "c0de32ab0de02082991e716636f545836992c786",
   "docs": [
     "docs/spec/stt-packed-format.md",
     "docs/spec/time-model.md",

@@ -69,7 +69,7 @@
   ],
   "stt": {
     "release": {
-      "rust": "0.8.0"
+      "rust": "0.9.0"
     },
     "toolchain": {
       "rust": "1.88"

@@ -112,6 +112,14 @@ so consumers still see the absolute `Int64` times and `Float32` vertex values
 specified below. Wire shapes: the sections below, and normatively packed spec
 §5.2.4 / §5.2.6.
 
+With opt-in `stt-build --path-codec`, eligible LineString layers instead carry
+coordinates and exact per-vertex times in the `PATH_CODEC` (`0x06`) frame
+section, declaring `path-codec` only when a layer actually uses it. CORE keeps
+all-empty `geometry` / `vertex_time` lists until decode substitutes the
+reconstructed columns. `--vertex-time-precision` does not affect these layers.
+Normative layout, eligibility and rejection rules:
+[packed spec §5.2.7](../spec/stt-packed-format.md#527-path-codec-section-path_codec--capability-path-codec).
+
 **Arrow IPC envelope (normative):**
 
 - **Stream format only.** Each layer's bytes are an Arrow IPC **stream**
@@ -287,7 +295,9 @@ the first capability a default build emits.
 #### `vertex_time` (per-vertex timestamps)
 
 LineString layers built with `--end-time-field` carry a per-vertex time
-column. The writer encodes it as integer **deltas** against an anchor and a
+column. The following tier ladder applies to non-codec layers; `PATH_CODEC`
+layers restore exact `List<Int64>` times under packed spec §5.2.7. The writer
+encodes the non-codec column as integer **deltas** against an anchor and a
 `step`: the absolute time of a vertex is `anchor + delta * step`. The anchor
 is either a per-layer origin (`TILE_META.vt`) or **each feature's own
 `start_time`** (`TILE_META.vtf`) — the two are mutually exclusive, never both
@@ -873,6 +883,7 @@ edge caches, where re-fetching a small gap is cheaper than an extra request.
   | quantized `vertex_value(_matrix)` | `TILE_META.vq`                                              | `vertex-value-quant`         | 0..65534 indices rendered as physical values                                         |
   | feature-anchored `vertex_time`    | `TILE_META.vtf`                                             | `vertex-time-feature-anchor` | deltas resolved against an invented layer origin — every vertex at the wrong instant |
   | partial `triangles`               | an empty per-feature index list in a triangle-bearing layer | `triangles-partial`          | every single-ring polygon silently vanishes                                          |
+  | codec `geometry` / `vertex_time`  | `PATH_CODEC` section (`0x06`, packed spec §5.2.7)           | `path-codec`                 | every codec feature silently vanishes as an empty path                               |
 
   A reader MUST check the key, never infer from the Arrow `DataType` alone.
 
@@ -883,7 +894,10 @@ edge caches, where re-fetching a small gap is cheaper than an extra request.
   old readers that ignore them.
 - Unknown `TILE_META` **keys** and unknown frame **section tags** are
   skippable by design, which is what makes additive frame evolution possible
-  without a version bump (packed spec §5.2).
+  without a version bump (packed spec §5.2). `PATH_CODEC` (`0x06`) is
+  capability-gated: a reader that does not implement `path-codec` MUST refuse
+  the archive at open, because skipping that section would silently empty
+  every codec path.
 
 ## Validating an archive
 

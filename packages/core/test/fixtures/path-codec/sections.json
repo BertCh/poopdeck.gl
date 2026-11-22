@@ -1,0 +1,565 @@
+{
+  "encoding": "section_hex: lowercase hex of the PATH_CODEC section bytes. Decimal coords: 16-hex-digit IEEE-754 bit patterns (big-endian, as u64::to_bits / DataView.getBigUint64). Grid coords: JSON numbers. Times: decimal strings (Unix ms, i64). tags/exception_count are informational.",
+  "format": "stt-path-codec-section-vectors",
+  "reject": [
+    {
+      "name": "trailing-byte",
+      "reason": "trailing bytes after the last field",
+      "section_hex": "0103071705e0d403bf1602060003070104000000000200010002c0cd8b1c0202020202000202780206020e040878780201040000000000000000000000000000000000000011000000c09a0cffb418c80163e7cae20ba4c4e5034c2a502a542a582a5c2aa8b0d60ba38fcd0300140013ffa0d10be0e1c9038840f72300000000000000000000a09c019f9c0193dd02c0b802b405e8079c0a000000051002020111008080808008008080e0ff07008080c0ff07008080c0ff0ff48da19c070000"
+    },
+    {
+      "name": "bad-version",
+      "reason": "version != 1",
+      "section_hex": "0203071705e0d403bf1602060003070104000000000200010002c0cd8b1c0202020202000202780206020e040878780201040000000000000000000000000000000000000011000000c09a0cffb418c80163e7cae20ba4c4e5034c2a502a542a582a5c2aa8b0d60ba38fcd0300140013ffa0d10be0e1c9038840f72300000000000000000000a09c019f9c0193dd02c0b802b405e8079c0a000000051002020111008080808008008080e0ff07008080c0ff07008080c0ff0ff48da19c0700"
+    },
+    {
+      "name": "reserved-flag",
+      "reason": "reserved flag bit 2 set",
+      "section_hex": "0107071705e0d403bf1602060003070104000000000200010002c0cd8b1c0202020202000202780206020e040878780201040000000000000000000000000000000000000011000000c09a0cffb418c80163e7cae20ba4c4e5034c2a502a542a582a5c2aa8b0d60ba38fcd0300140013ffa0d10be0e1c9038840f72300000000000000000000a09c019f9c0193dd02c0b802b405e8079c0a000000051002020111008080808008008080e0ff07008080c0ff07008080c0ff0ff48da19c0700"
+    },
+    {
+      "name": "remainder-ge-unit",
+      "reason": "r >= U (U = 10, r = 10)",
+      "section_hex": "010101010a000100000a0000"
+    },
+    {
+      "name": "unit-zero",
+      "reason": "U = 0",
+      "section_hex": "010101010000010000000000"
+    },
+    {
+      "name": "unknown-tag",
+      "reason": "predictor tag 3",
+      "section_hex": "0100010101030000"
+    },
+    {
+      "name": "time-vel-without-time",
+      "reason": "TIME_VEL tag in a section without TIME",
+      "section_hex": "010001030302000002020202"
+    },
+    {
+      "name": "count-mismatch",
+      "reason": "vertex_count (2) != sum of counts (1)",
+      "section_hex": "01000102010000000000"
+    },
+    {
+      "name": "exception-index-out-of-range",
+      "reason": "exception index 2 with only 2 values",
+      "section_hex": "01020101000100000001020000"
+    },
+    {
+      "name": "exception-index-not-increasing",
+      "reason": "second exception delta is 0",
+      "section_hex": "01020101000100000002000000000000"
+    },
+    {
+      "name": "patch-half-too-large",
+      "reason": "patch low half = 2^32",
+      "section_hex": "0102010100010000000100808080801000"
+    },
+    {
+      "name": "decimal-exponent-16",
+      "reason": "e = 16 (> 15)",
+      "section_hex": "01020101100100000000"
+    },
+    {
+      "name": "grid-int32-overflow",
+      "reason": "world-grid coordinate 2^31 does not fit Int32",
+      "section_hex": "010001010100808080801000"
+    },
+    {
+      "name": "integer-bound",
+      "reason": "a residual of 2^53 is outside ±(2^53 - 1) (packed-format §5.2.7 integer bound)",
+      "section_hex": "0102010100010080808080808080200000"
+    },
+    {
+      "name": "truncated",
+      "reason": "section cut mid-stream",
+      "section_hex": "0103071705e0d403bf1602060003070104000000000200010002c0cd8b1c0202020202000202780206020e040878780201040000000000000000000000000000000000000011000000c09a0cffb418c80163e7cae20ba4c4e5034c2a502a54"
+    },
+    {
+      "name": "count-exceeds-section",
+      "reason": "feature_count larger than the section can hold",
+      "section_hex": "0100ffffff7f00"
+    }
+  ],
+  "spec": "docs/spec/stt-packed-format.md §5.2.7",
+  "valid": [
+    {
+      "exception_count": 0,
+      "expected": {
+        "coords": [
+          [
+            20148920,
+            9796160
+          ],
+          [
+            20149031,
+            9796104
+          ],
+          [
+            6409872,
+            14223902
+          ],
+          [
+            6409915,
+            14223925
+          ],
+          [
+            6409959,
+            14223949
+          ],
+          [
+            6410006,
+            14223972
+          ],
+          [
+            6410055,
+            14223995
+          ],
+          [
+            6410106,
+            14224019
+          ],
+          [
+            6456560,
+            14193300
+          ],
+          [
+            6461124,
+            14190740
+          ],
+          [
+            6474816,
+            14183059
+          ],
+          [
+            6479381,
+            14180498
+          ],
+          [
+            6511329,
+            14162576
+          ],
+          [
+            6520458,
+            14157455
+          ],
+          [
+            6538714,
+            14147214
+          ],
+          [
+            6467692,
+            14182168
+          ],
+          [
+            6442817,
+            14204432
+          ],
+          [
+            6443202,
+            14204989
+          ],
+          [
+            6444315,
+            14205545
+          ],
+          [
+            6445428,
+            14206102
+          ]
+        ],
+        "counts": [
+          2,
+          6,
+          0,
+          7,
+          1,
+          4
+        ],
+        "mode": "grid",
+        "times": [
+          "-86400000",
+          "-86340000",
+          "1767225600000",
+          "1767225660000",
+          "1767225720000",
+          "1767225780000",
+          "1767225840000",
+          "1767225900000",
+          "1767229200000",
+          "1767229260000",
+          "1767229440000",
+          "1767229500000",
+          "1767229920000",
+          "1767230040000",
+          "1767230280000",
+          "1767232800000",
+          "1767236400017",
+          "1767236460000",
+          "1767236400000",
+          "1767236520000"
+        ]
+      },
+      "name": "grid-tracks",
+      "note": "world-grid (Int32) tracks with times: TIME_VEL feature, empty feature, single vertex, unsorted and negative times",
+      "section_hex": "01010614e0d403bf160206000701040000000200010002c0cd8b1c0202020202780206020e040878780201040000000000000000000000000000000011000000f0ca9b1380e9ab09de016fcf908d0dbcbf9c04562e58305e2e622e6630c0d90593de03a847ff27000102010d0a02000302f8ad01f7ad01d58403f0db028206da08b00b010002",
+      "tags": [
+        0,
+        0,
+        0,
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "exception_count": 0,
+      "expected": {
+        "coords": [
+          [
+            11844448,
+            15083860
+          ],
+          [
+            11844782,
+            15083994
+          ],
+          [
+            11845116,
+            15084127
+          ],
+          [
+            11845450,
+            15084261
+          ],
+          [
+            11845784,
+            15084394
+          ],
+          [
+            11855580,
+            15084973
+          ],
+          [
+            11856693,
+            15086086
+          ]
+        ],
+        "counts": [
+          5,
+          0,
+          2
+        ],
+        "mode": "grid",
+        "times": null
+      },
+      "name": "grid-routes-no-time",
+      "note": "world-grid, no TIME flag",
+      "section_hex": "01000307050002010000c0eda50ba8a5b10e9c058c02000100020001f8ad01b211b211b211",
+      "tags": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "exception_count": 5,
+      "expected": {
+        "coords": [
+          [
+            "3ff0000000000000",
+            "c000000000000000"
+          ],
+          [
+            "3ff004189374bc6a",
+            "c000010624dd2f1b"
+          ],
+          [
+            "c05e9ad77318fc50",
+            "4042e32fec56d5d0"
+          ],
+          [
+            "c05e9ad1394317ad",
+            "4042e336cdf266ba"
+          ],
+          [
+            "c05e9acaab8a5ce6",
+            "4042e33daf8df7a5"
+          ],
+          [
+            "c05e9ac3c9eecbfb",
+            "4042e34491298890"
+          ],
+          [
+            "c05e9abc947064ed",
+            "4042e34b72c5197a"
+          ],
+          [
+            "c05e9ab50b0f27bb",
+            "4042e3525460aa65"
+          ],
+          [
+            "8000000000000000",
+            "0000000000000000"
+          ],
+          [
+            "7ff8000000000000",
+            "3f1a36e2eb1c432d"
+          ],
+          [
+            "7ff0000000000000",
+            "fff0000000000000"
+          ],
+          [
+            "c05e800000000000",
+            "4042c00000000000"
+          ],
+          [
+            "c05e7d604189374c",
+            "4042bd0e56041893"
+          ],
+          [
+            "c05e75810624dd2f",
+            "4042b4395810624e"
+          ],
+          [
+            "c05e72e147ae147b",
+            "4042b147ae147ae1"
+          ],
+          [
+            "c05e6083126e978d",
+            "40429cac083126e9"
+          ],
+          [
+            "c05e5b4395810625",
+            "404296c8b4395810"
+          ],
+          [
+            "c05e50c49ba5e354",
+            "40428b020c49ba5e"
+          ],
+          [
+            "c05e79999999999a",
+            "4042b33333333333"
+          ],
+          [
+            "c05e87e6b74dd1ba",
+            "4042cccccccccccd"
+          ],
+          [
+            "c05e87ae147ae148",
+            "4042cd70a3d70a3d"
+          ],
+          [
+            "c05e870a3d70a3d7",
+            "4042ce147ae147ae"
+          ],
+          [
+            "c05e866666666666",
+            "4042ceb851eb851f"
+          ]
+        ],
+        "counts": [
+          2,
+          6,
+          0,
+          3,
+          7,
+          1,
+          4
+        ],
+        "mode": "decimal",
+        "times": [
+          "-86400000",
+          "-86340000",
+          "1767225600000",
+          "1767225660000",
+          "1767225720000",
+          "1767225780000",
+          "1767225840000",
+          "1767225900000",
+          "1767225600000",
+          "1767225660000",
+          "1767225720000",
+          "1767229200000",
+          "1767229260000",
+          "1767229440000",
+          "1767229500000",
+          "1767229920000",
+          "1767230040000",
+          "1767230280000",
+          "1767232800000",
+          "1767236400017",
+          "1767236460000",
+          "1767236400000",
+          "1767236520000"
+        ]
+      },
+      "name": "decimal-tracks",
+      "note": "decimal (Float64) tracks with times: exceptions (clip vertex, -0.0, NaN, ±inf), TIME_VEL feature, empty feature",
+      "section_hex": "0103071705e0d403bf1602060003070104000000000200010002c0cd8b1c0202020202000202780206020e040878780201040000000000000000000000000000000000000011000000c09a0cffb418c80163e7cae20ba4c4e5034c2a502a542a582a5c2aa8b0d60ba38fcd0300140013ffa0d10be0e1c9038840f72300000000000000000000a09c019f9c0193dd02c0b802b405e8079c0a000000051002020111008080808008008080e0ff07008080c0ff07008080c0ff0ff48da19c0700",
+      "tags": [
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "exception_count": 0,
+      "expected": {
+        "coords": [
+          [
+            "c052666666666666",
+            "4046c00000000000"
+          ],
+          [
+            "c05266353f7ced91",
+            "4046c027525460aa"
+          ],
+          [
+            "c0526604189374bc",
+            "4046c04ea4a8c155"
+          ],
+          [
+            "c05265d2f1a9fbe7",
+            "4046c075f6fd21ff"
+          ],
+          [
+            "c05265a1cac08312",
+            "4046c09d495182aa"
+          ],
+          [
+            "c052600000000000",
+            "4046c147ae147ae1"
+          ],
+          [
+            "c0525f5c28f5c28f",
+            "4046c28f5c28f5c3"
+          ]
+        ],
+        "counts": [
+          5,
+          0,
+          2
+        ],
+        "mode": "decimal",
+        "times": null
+      },
+      "name": "decimal-routes-no-time",
+      "note": "decimal, no TIME flag",
+      "section_hex": "0102030704050002000000ffeb59b0c5373c183c183c183c18d00fc801c801c80100",
+      "tags": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "exception_count": 12,
+      "expected": {
+        "coords": [
+          [
+            "400921fb54442d18",
+            "bfdcb91f3bbba140"
+          ],
+          [
+            "4011c5831add62e4",
+            "bfe44f71434627e0"
+          ],
+          [
+            "4015c3fddc92b2dd",
+            "bfe8dffd8e5e8346"
+          ],
+          [
+            "401921fb54442d18",
+            "bfecb91f3bbba140"
+          ],
+          [
+            "401c196908691da7",
+            "bff00e852960a33b"
+          ],
+          [
+            "401ec7fc74c0da7b",
+            "bff196d96749a16b"
+          ]
+        ],
+        "counts": [
+          2,
+          0,
+          4
+        ],
+        "mode": "decimal",
+        "times": [
+          "5",
+          "4",
+          "-3",
+          "-3",
+          "1000000007",
+          "2"
+        ]
+      },
+      "name": "decimal-all-exceptions",
+      "note": "no value is decimal at any exponent: e = 7 and every value carries a patch",
+      "section_hex": "0103030607010a02000400000100010f0094a8d6b90789a8d6b907000000000000eef9fa1debeca304ccbeb40cd3f6e201ccb0f715f7869103a0c98308f1e59201d3a17ad4bb11b5ec568ab40c0c0001010101010101010101018ff9eb7100addc94db0400fbecc21400c8aef4a00100b2c48a0c00dfee9ec60100e9f3b33c00f796d40400bf95eb7100cfc8c6d60100e1bc9c1600c7cec23800",
+      "tags": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "exception_count": 0,
+      "expected": {
+        "coords": [
+          [
+            -2147483648,
+            2147483647
+          ],
+          [
+            2147483647,
+            -2147483648
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            -1,
+            1
+          ]
+        ],
+        "counts": [
+          4
+        ],
+        "mode": "grid",
+        "times": null
+      },
+      "name": "grid-int32-extremes",
+      "note": "world-grid indices at the Int32 extremes (residuals up to ±2^32)",
+      "section_hex": "010001040400ffffffff0ffeffffff0ffeffffff1ffdffffff1ffdffffff0f80808080100102",
+      "tags": [
+        0
+      ]
+    },
+    {
+      "exception_count": 0,
+      "expected": {
+        "coords": [],
+        "counts": [],
+        "mode": "grid",
+        "times": []
+      },
+      "name": "empty-layer",
+      "note": "zero features",
+      "section_hex": "0101000080b8992900",
+      "tags": []
+    }
+  ],
+  "version": 1
+}

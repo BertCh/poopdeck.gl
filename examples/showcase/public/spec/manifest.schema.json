@@ -18,6 +18,7 @@
     "attr-quant",
     "coord-quant",
     "elevation-fold",
+    "path-codec",
     "time-delta",
     "triangles-partial",
     "vertex-time-feature-anchor",
