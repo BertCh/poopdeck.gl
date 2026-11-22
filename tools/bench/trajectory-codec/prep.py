@@ -7,6 +7,7 @@ silently bridged by a straight line.
 
     python prep.py ais      <AIS_YYYY_MM_DD.csv>        <out.parquet>
     python prep.py drifters <drifters-hourly-*.csv ...>  <out.parquet>
+    python prep.py adsb     <heatmap/NN.bin.ttf ...>     <out.parquet>
     python prep.py export   <in.parquet> <out.bin> [--underway]
 
 `export` writes the flat binary the Rust `trajectory-lossy` example reads:
@@ -132,6 +133,52 @@ def drifters(srcs, out):
     write(out, rows)
 
 
+def adsb(srcs, out, bbox=(-125.0, 25.0, -65.0, 50.0)):
+    """readsb `heatmap/NN.bin.ttf` half-hour files (adsb.lol globe_history).
+
+    Each file is gzip'd little-endian int32 quads. A leading index block, then
+    10 s slices: a magic row (0x0e7f7c9d, now_ms hi, now_ms lo, interval_ms)
+    followed by (hex, lat*1e6, lon*1e6, alt|gs) rows. Rows whose lat field is
+    >= 2^30 carry callsign/type info, not a position. Kept to a bbox (CONUS
+    by default) so the archive stays comparable in size to the AIS day.
+    """
+    import gzip
+
+    MAGIC = 0x0E7F7C9D
+    hx, ts, xs, ys = [], [], [], []
+    for src in sorted(srcs):
+        a = np.frombuffer(gzip.decompress(open(src, "rb").read()), dtype="<i4").reshape(-1, 4)
+        u = a.view("<u4")
+        is_magic = a[:, 0] == MAGIC
+        first = np.flatnonzero(is_magic)[0]
+        a, u, is_magic = a[first:], u[first:], is_magic[first:]
+        now = (u[:, 1].astype(np.int64) << 32) | u[:, 2].astype(np.int64)
+        # Each row takes the timestamp of the last magic row before it.
+        slice_id = np.cumsum(is_magic) - 1
+        t = now[is_magic][slice_id]
+        keep = ~is_magic & (a[:, 1] < (1 << 30))
+        lat = a[keep, 1] / 1e6
+        lon = a[keep, 2] / 1e6
+        inb = (lon >= bbox[0]) & (lon <= bbox[2]) & (lat >= bbox[1]) & (lat <= bbox[3])
+        hx.append(a[keep, 0][inb]); ts.append(t[keep][inb]); xs.append(lon[inb]); ys.append(lat[inb])
+    hx = np.concatenate(hx); t = np.concatenate(ts); x = np.concatenate(xs); y = np.concatenate(ys)
+    order = np.lexsort((t, hx))
+    hx, t, x, y = hx[order], t[order], x[order], y[order]
+    dup = np.zeros(len(hx), dtype=bool)
+    dup[1:] = (hx[1:] == hx[:-1]) & (t[1:] == t[:-1])
+    hx, t, x, y = hx[~dup], t[~dup], x[~dup], y[~dup]
+    out_ids, geoms, t0, t1, vts = [], [], [], [], []
+    # 120 s = 12 missed slices: bridges a short reception dropout, splits a
+    # missing half-hour file or a coverage hole.
+    for s, e in runs(hx, t, 120_000):
+        if e - s < 2:
+            continue
+        out_ids.append(f"{int(hx[s]) & 0xFFFFFFFF:07x}-{t[s]}")
+        geoms.append(wkb_linestring(x[s:e], y[s:e]))
+        t0.append(int(t[s])); t1.append(int(t[e - 1])); vts.append(t[s:e].tolist())
+    write(out, (out_ids, geoms, t0, t1, vts, {}))
+
+
 def export(src, out, underway=False):
     t = pq.read_table(src, columns=["geometry", "vertex_timestamps"])
     offs, xs, ys, ts = [0], [], [], []
@@ -168,5 +215,7 @@ if __name__ == "__main__":
         export(args[0], args[1], underway="--underway" in args)
     elif kind == "drifters":
         drifters(args[:-1], args[-1])
+    elif kind == "adsb":
+        adsb(args[:-1], args[-1])
     else:
         sys.exit(f"unknown kind {kind}")

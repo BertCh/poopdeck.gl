@@ -36,14 +36,16 @@ measurements live upstream, because the format is upstream:
 
 ## Files
 
-| file               | what                                                                                                                                                                                                              |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prep.py`          | Raw AIS / GDP-drifter CSV → trajectory GeoParquet for `stt-build` (runs split at gaps, never bridged); `export` writes the flat binary the lossy harness and the decode bench read. Needs duckdb, pyarrow, numpy. |
-| `decode-bench.mjs` | Reader cost of the per-feature predictor + varint decode against the current Int32 world-grid affine. Checks the round trip before timing.                                                                        |
+| file                   | what                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prep.py`              | Raw AIS / GDP-drifter CSV → trajectory GeoParquet for `stt-build` (runs split at gaps, never bridged); `export` writes the flat binary the lossy harness and the decode bench read. Needs duckdb, pyarrow, numpy.                                                                                                                                                                                     |
+| `decode-bench.mjs`     | Reader cost of the per-feature predictor + varint decode against the current Int32 world-grid affine. Checks the round trip before timing.                                                                                                                                                                                                                                                            |
+| `path-codec-bench.mjs` | Cost of the SHIPPED `path-codec` reader (`packages/core/src/path-codec.ts`, via `dist/`): the column stage and the whole `decodeTile`, decimal and world-grid modes, against plain f64 and quantized layers built from the same tracks. Sections come from the test-only reference encoder; every codec layer is checked against its plain twin first. Needs `pnpm --filter @poopdeck.gl/core build`. |
 
 ```bash
 python prep.py ais      AIS_2023_01_09.csv ais.parquet
 python prep.py drifters drifters-hourly-2021-0{1,2,3}.csv drifters.parquet
 python prep.py export   ais.parquet ais.bin            # add --underway for the smooth subset
 node decode-bench.mjs ais.bin 1                         # quant step in metres
+node path-codec-bench.mjs ais.bin 2000000 1             # vertices to sample, quant step in metres
 ```
